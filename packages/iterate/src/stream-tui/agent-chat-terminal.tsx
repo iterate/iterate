@@ -34,7 +34,7 @@ import {
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { sendAgentMessage } from "./agent-message-command.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
-import { readAgentFeedHistory } from "./agent-feed-query.ts";
+import { ensureAgentFeedReady, readAgentFeedHistory } from "./agent-feed-query.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
 import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
 import { COLORS } from "./chat-colors.ts";
@@ -67,12 +67,6 @@ async function openAgentFeedSubscription(input: {
   // handle on dependency changes, reconnect, and unmount.
   const agent = input.itx.agents.get(args.agentPath);
   try {
-    if (args.agentPath === ONBOARDING_AGENT_PATH) {
-      await ensureOnboardingAgentReady({ agent });
-    } else {
-      const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create();
-    }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {
         if (input.model.applyEvents(batch.events)) input.publishFeed();
@@ -91,7 +85,13 @@ function AgentChatApp() {
   // closes the read→subscribe race with replay, then owns the tail.
   const history = useItxQuery({
     key: historyQueryKey,
-    query: (itx) => readAgentFeedHistory(itx, args.agentPath),
+    query: (itx) =>
+      readAgentFeedHistory(itx, args.agentPath, {
+        initialize: (agent) =>
+          args.agentPath === ONBOARDING_AGENT_PATH
+            ? ensureOnboardingAgentReady({ agent })
+            : ensureAgentFeedReady(agent),
+      }),
   });
   const [model] = useState(() => {
     const next = createAgentFeedModel();
@@ -105,12 +105,12 @@ function AgentChatApp() {
   const publishFeed = useCallback(() => setFeed(model.snapshot()), [model]);
 
   /**
-   * Establish the live agent feed on the shared socket: ensure the agent
-   * exists, then subscribe from the query-seeded model's resume cursor. The
-   * onboarding agent is deliberately not born at project bootstrap (a birth
-   * costs a real LLM turn); opening either browser or terminal chat births it
-   * with the same explicit batch. Recovery rereads the current cursor and the
-   * model folds replay overlap out by offset.
+   * Establish the live agent feed on the shared socket from the query-seeded
+   * model's resume cursor. The finite query above owns one-time agent birth and
+   * durable history. That keeps potentially slow creation outside the live
+   * subscription's transport watchdog, whose timer now covers only subscribe.
+   * Recovery rereads the current cursor and the model folds replay overlap out
+   * by offset.
    */
   const subscribeAgentFeed = useCallback(
     (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed }),

@@ -9,7 +9,7 @@ export type TodoListState = { todos: Todo[] };
 /** What the browser holds after authenticating the /api Cap'n Web session. */
 export type TodoSessionApi = {
   liveState: LiveStateRpc<TodoListState>;
-  add(title: string): Promise<void>;
+  add(title: string): Promise<string | undefined>;
   setDone(id: string, done: boolean): Promise<void>;
   rename(id: string, title: string): Promise<void>;
   remove(id: string): Promise<void>;

@@ -36,7 +36,7 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
-  run,
+  runAsync,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
@@ -149,7 +149,7 @@ export default async function deploy(
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
     buildEnv: (ctx) => posthogBuildEnv(ctx.secrets),
-    prepare: async (ctx, secretValues, credentials) => {
+    prepare: async (ctx, secretValues) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current
       // Worker before any sidecar or OS version can be deployed.
@@ -223,31 +223,48 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // Prebuild the deterministic project template's root worker and Vite
-      // app under trusted content-only keys. Fresh projects then avoid
-      // request-scoped container builds; edited projects get new keys and
-      // continue through the project-scoped runtime builder.
-      await seedTemplateWorkerArtifacts({
-        accountId: ctx.env.cloudflareAccountId,
-        apiToken: credentials.CLOUDFLARE_API_TOKEN!,
-        iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
-        kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
-      });
-
-      // The typechecker sidecar deploys FIRST: the os worker's TYPECHECKER
-      // service binding is by name, and a binding to a not-yet-existing
-      // script fails the deploy. The sidecar has no secrets and no vite
-      // build — wrangler bundles its entry directly (the compiler wasm rides
-      // as a wasm module).
+      // Materialize the sidecar config before the independent build lane
+      // starts. The main Vite build also regenerates this file, but doing it
+      // here avoids racing that write with the sidecar's Wrangler process.
       writeWranglerConfig();
-      run(
-        "pnpm",
-        ["exec", "wrangler", "deploy", "--config", "wrangler.typechecker.jsonc", "--env", ctx.name],
-        {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
-          env: credentials,
-        },
-      );
+    },
+    // Deploy the typechecker sidecar and prebuild the deterministic project
+    // template artifacts while the OS Vite build runs. Both are independent
+    // prerequisites, and deployApp joins every lane before uploading the main
+    // Worker: its TYPECHECKER binding can never target a missing script, and
+    // fresh projects can never observe a version before its artifacts exist.
+    concurrentBuildWork: async (ctx, secretValues, credentials) => {
+      const results = await Promise.allSettled([
+        runAsync(
+          "pnpm",
+          [
+            "exec",
+            "wrangler",
+            "deploy",
+            "--config",
+            "wrangler.typechecker.jsonc",
+            "--env",
+            ctx.name,
+          ],
+          {
+            cwd: fileURLToPath(new URL("..", import.meta.url)),
+            env: credentials,
+          },
+        ),
+        seedTemplateWorkerArtifacts({
+          accountId: ctx.env.cloudflareAccountId,
+          apiToken: credentials.CLOUDFLARE_API_TOKEN!,
+          iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+          kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
+        }),
+      ]);
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason);
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Typechecker deploy and template seeding both failed");
+      }
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {

@@ -228,3 +228,162 @@ test(
     }
   },
 );
+
+test(
+  "Stateful stale-while-rebuild reuses a live facet before loading its old artifact",
+  { timeout: 120_000 },
+  async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `swr-live-${crypto.randomUUID().slice(0, 8)}` });
+    await project.__describe();
+
+    const durableWorkerKey = `swr-live-${crypto.randomUUID().slice(0, 8)}`;
+    const common = {
+      className: "SwrLiveProbe",
+      durableWorkerKey,
+      path: "/",
+      type: "stateful",
+      updatePolicy: "stale-while-rebuild",
+    } as const;
+    using v1 = project.workers.get({
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.js": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrLiveProbe extends DurableObject {",
+              '  version() { return "v1"; }',
+              "}",
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        // Loader-ready inline modules deliberately never enter the artifact
+        // store. A reconnect can reuse the live facet, but cannot reload v1
+        // from the artifact cache — exactly the ordering this test proves.
+        options: { bundle: false, entryPoint: "worker.js" },
+      },
+    }) as unknown as { version(): Promise<string> } & Disposable;
+    expect(await v1.version()).toBe("v1");
+
+    using v2 = project.workers.get({
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.ts": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrLiveProbe extends DurableObject {",
+              '  version(): string { return "v2"; }',
+              "}",
+              `// cold build salt ${crypto.randomUUID()}`,
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        options: { entryPoint: "worker.ts" },
+      },
+    }) as unknown as { version(): Promise<string> } & Disposable;
+
+    // The active facet answers first. An eager old-artifact lookup would miss
+    // (v1 was loader-ready), block on the v2 build, and return v2 here.
+    expect(await v2.version()).toBe("v1");
+
+    const deadline = Date.now() + 60_000;
+    for (;;) {
+      const version = await v2.version();
+      if (version === "v2") break;
+      if (Date.now() > deadline) throw new Error("live-facet SWR never swapped to v2");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  },
+);
+
+test(
+  "Stateful stale-while-rebuild makes every concurrent cache miss fall through to the blocking load",
+  { timeout: 120_000 },
+  async () => {
+    using session = withItxSession();
+    using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = itx.projects.create({ slug: `swr-miss-${crypto.randomUUID().slice(0, 8)}` });
+    await project.__describe();
+
+    const durableWorkerKey = `swr-miss-${crypto.randomUUID().slice(0, 8)}`;
+    const common = {
+      className: "SwrMissProbe",
+      durableWorkerKey,
+      path: "/",
+      type: "stateful",
+      updatePolicy: "stale-while-rebuild",
+    } as const;
+    using v1 = project.workers.get({
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.js": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrMissProbe extends DurableObject {",
+              '  version() { return "v1"; }',
+              "}",
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        // Loader-ready modules mount directly and are not stored as an
+        // artifact. Killing the host leaves a durable version marker whose
+        // old class is deliberately unavailable to the next incarnation.
+        options: { bundle: false, entryPoint: "worker.js" },
+      },
+    }) as unknown as { kill(): Promise<void>; version(): Promise<string> } & Disposable;
+    expect(await v1.version()).toBe("v1");
+    await v1.kill().catch(() => undefined);
+
+    const v2Ref = {
+      ...common,
+      source: {
+        files: {
+          files: {
+            "worker.ts": [
+              'import { DurableObject } from "cloudflare:workers";',
+              "export class SwrMissProbe extends DurableObject {",
+              '  version(): string { return "v2"; }',
+              "  readonly bootId = crypto.randomUUID();",
+              '  snapshot(): { bootId: string; version: string } { return { bootId: this.bootId, version: "v2" }; }',
+              "}",
+              `// cold build salt ${crypto.randomUUID()}`,
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+        options: { entryPoint: "worker.ts" },
+      },
+    } as const;
+    using first = project.workers.get(v2Ref) as unknown as {
+      snapshot(): Promise<{ bootId: string; version: string }>;
+      version(): Promise<string>;
+    } & Disposable;
+    using second = project.workers.get(v2Ref) as unknown as {
+      snapshot(): Promise<{ bootId: string; version: string }>;
+      version(): Promise<string>;
+    } & Disposable;
+
+    // Both requests share the same rejected lazy facet initialization. Every
+    // waiter must classify that expected miss and join/fall through to the
+    // blocking v2 build; none may leak the initializer's sentinel rejection.
+    await expect(Promise.all([first.version(), second.version()])).resolves.toEqual(["v2", "v2"]);
+
+    // The source-key refresh started before the stale initializer discovered
+    // its miss. It must not later abort the facet that recovery mounted while
+    // that refresh awaited: all callers stay on the same recovered boot.
+    const [firstSnapshot, secondSnapshot] = await Promise.all([
+      first.snapshot(),
+      second.snapshot(),
+    ]);
+    expect(firstSnapshot).toEqual(secondSnapshot);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await first.snapshot()).toEqual(firstSnapshot);
+  },
+);

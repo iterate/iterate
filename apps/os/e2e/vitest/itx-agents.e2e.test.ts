@@ -174,6 +174,10 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     predicate: (event) => event.payload?.message === "string form with files",
     timeoutMs: 30_000,
   });
+  const scriptSettled = agent.stream.waitForEvent({
+    eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
+    timeoutMs: 30_000,
+  });
 
   const { llmRequestOffset } = await appendSyntheticProviderOutput(
     agent.stream,
@@ -203,6 +207,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
       files: [{ contentType: "text/plain", filename: "note.txt", size: 5 }],
     },
   });
+  await scriptSettled;
 
   const events = await agent.stream.getEvents();
   expect(events).toEqual(

@@ -182,6 +182,7 @@ import {
   isDurableObjectLifecycleError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
+  retryStreamUnavailableOnce,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -5076,39 +5077,48 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
 
     const creatorEmail = userPrincipalOf(this.props.auth)?.email;
     const appendRootEvents = () =>
-      stream.append(
-        {
-          type: "events.iterate.com/project/created",
-          idempotencyKey: `project-created:${registered.projectId}`,
-          payload: {
-            config: {
-              onboardingActive: true,
-              slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+      retryStreamUnavailableOnce(
+        () =>
+          stream.append(
+            {
+              type: "events.iterate.com/project/created",
+              idempotencyKey: `project-created:${registered.projectId}`,
+              payload: {
+                config: {
+                  onboardingActive: true,
+                  slug: registered.slug,
+                  ...(creatorEmail === undefined ? {} : { creatorEmail }),
+                },
+              },
             },
-          },
+            NotificationProcessorContract.buildEvent({
+              type: "events.iterate.com/notification/created",
+              idempotencyKey: `notification-created:${registered.projectId}`,
+              payload: { config: {} },
+            }),
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: streamDurableObjectName({
+                projectId: registered.projectId,
+                path: "/",
+              }),
+              processor: ["processor"],
+              processorSlug: ProjectProcessorContract.slug,
+            }),
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: streamDurableObjectName({
+                projectId: registered.projectId,
+                path: "/",
+              }),
+              processor: ["notificationProcessor"],
+              processorSlug: NotificationProcessorContract.slug,
+            }),
+          ),
+        (error) => {
+          console.info("project create: root stream lifecycle reset; replaying birth batch once", {
+            projectId: registered.projectId,
+            message: error instanceof Error ? error.message : String(error),
+          });
         },
-        NotificationProcessorContract.buildEvent({
-          type: "events.iterate.com/notification/created",
-          idempotencyKey: `notification-created:${registered.projectId}`,
-          payload: { config: {} },
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
-          processor: ["processor"],
-          processorSlug: ProjectProcessorContract.slug,
-        }),
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
-            projectId: registered.projectId,
-            path: "/",
-          }),
-          processor: ["notificationProcessor"],
-          processorSlug: NotificationProcessorContract.slug,
-        }),
       );
     const [created, subscription] = await timedStep(
       "create-timing",

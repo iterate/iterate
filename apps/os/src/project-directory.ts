@@ -8,10 +8,14 @@
  * Layering per lookup: KV first (global, no expiry — slugs are immutable,
  * create overwrites its keys, and admin-lane projects have no auth-side row
  * so the cache is their only directory), then the auth worker behind a
- * short in-isolate negative memo (the only place negatives are cached; it
- * shields the auth worker from lookup storms without ever hiding a KV
- * prime from another isolate). Hits are written back, and `projects.create`
- * primes the cache eagerly so the post-create navigation never misses.
+ * short in-isolate negative memo plus a bounded shared negative marker. The
+ * positive KV key is ALWAYS checked first, and every authoritative positive
+ * write also deletes an older miss marker. That shared marker matters for
+ * canonical `<app>--<project>` hosts: the whole label is a legitimate
+ * project-slug candidate, but its expected miss must not make each fresh
+ * ingress isolate round-trip through the auth worker. Hits are written back,
+ * and `projects.create` primes the cache eagerly so the post-create navigation
+ * never misses.
  */
 import { itxEnv } from "./env.ts";
 
@@ -35,6 +39,11 @@ export type ProjectIdentity = {
 };
 
 const MEMO_TTL_MS = 15_000;
+// Cloudflare KV requires expirationTtl >= 60s. Reads check the separate
+// positive `slug:` key first, and every positive cache write invalidates this
+// marker; it exists only to suppress repeated authoritative misses.
+const SHARED_NEGATIVE_TTL_SECONDS = 60;
+const SHARED_NEGATIVE_MARKER = "missing";
 // These writes are exact and idempotent. One retry absorbs a transient KV
 // stall while two short windows keep this required create step bounded.
 const REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS = 10_000;
@@ -49,6 +58,10 @@ function slugKey(slug: string) {
 
 function projectKey(projectId: string) {
   return `project:${projectId}`;
+}
+
+function missingSlugKey(slug: string) {
+  return `missing-slug:${slug}`;
 }
 
 /** Resolve a slug (or a `prj_` id, passed through) to a project id. */
@@ -67,7 +80,9 @@ export async function readProjectBySlug(
   slug: string,
 ): Promise<ProjectDirectoryRecord | null> {
   const memoized = slugMemo.get(slug);
-  if (memoized && memoized.expiresAt > Date.now()) return memoized.record;
+  if (memoized && memoized.expiresAt > Date.now() && memoized.record !== null) {
+    return memoized.record;
+  }
 
   const cached = await directory
     .get<ProjectDirectoryRecord>(slugKey(slug), "json")
@@ -75,6 +90,19 @@ export async function readProjectBySlug(
   if (cached) {
     memoize(slug, cached);
     return cached;
+  }
+
+  // Unlike a positive memo, an isolate-local negative never outranks KV: a
+  // create in another isolate may have primed this slug since the miss.
+  if (memoized && memoized.expiresAt > Date.now()) return null;
+
+  // A positive record always outranks this marker. In particular, a project
+  // created after an earlier miss becomes routable as soon as its ordinary KV
+  // prime is visible; no stale negative entry can mask it.
+  const sharedMiss = await directory.get(missingSlugKey(slug)).catch(() => null);
+  if (sharedMiss === SHARED_NEGATIVE_MARKER) {
+    memoize(slug, null);
+    return null;
   }
 
   // RPC failures propagate as dependency failures. Only a successful null
@@ -99,6 +127,18 @@ export async function readProjectBySlug(
       // Auth is authoritative for this lane. A cache-fill failure is a
       // bounded, observable degradation, not a reason to discard its answer.
       console.warn("[project-directory] cache fill failed; using auth result", {
+        reason: errorMessage(error),
+      });
+    }
+  } else {
+    try {
+      await directory.put(missingSlugKey(slug), SHARED_NEGATIVE_MARKER, {
+        expirationTtl: SHARED_NEGATIVE_TTL_SECONDS,
+      });
+    } catch (error) {
+      // Auth already supplied the authoritative answer. A failed optional
+      // marker only means later isolates may repeat that lookup.
+      console.warn("[project-directory] negative cache fill failed; using auth result", {
         reason: errorMessage(error),
       });
     }
@@ -145,7 +185,8 @@ export async function listProjectDirectory(
   return records;
 }
 
-/** Eagerly cache a project the caller just created or resolved. */
+/** Eagerly cache a project the caller just created or resolved, invalidating
+ * any shared miss that predates the authoritative positive record. */
 export async function primeProjectDirectory(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
@@ -169,7 +210,9 @@ async function writeThrough(
   // No expiration: slugs are immutable and `projects.create` overwrites the
   // keys it primes, so entries never go stale — and admin-lane projects
   // (auth mints only an id, no directory row) have NO auth fallback, so an
-  // expiring cache would break their slug ingress after the TTL.
+  // expiring cache would break their slug ingress after the TTL. Clearing the
+  // negative marker is part of the same required write attempt: a positive
+  // prime must not leave a stale shared miss behind.
   const body = JSON.stringify(record);
   let lastError: unknown;
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
@@ -203,6 +246,7 @@ async function writeDirectoryRecord(
   const write = Promise.all([
     directory.put(slugKey(record.slug), body),
     directory.put(projectKey(record.id), body),
+    directory.delete(missingSlugKey(record.slug)),
   ]);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

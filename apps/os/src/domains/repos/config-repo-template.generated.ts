@@ -222,34 +222,243 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "apps/guestbook/src/guestbook-app.ts",
+    content:
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import {\n" +
+      "  type StreamEventInput,\n" +
+      "  type StreamSubscriberWakeRequest,\n" +
+      "  type StreamSubscriberWakeResponse,\n" +
+      "} from \"iterate/processors\";\n" +
+      "import {\n" +
+      "  createStreamProcessorRegistry,\n" +
+      "  type StreamProcessorRegistry,\n" +
+      "} from \"iterate/processors/cloudflare\";\n" +
+      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
+      "import {\n" +
+      "  guestbookCreationEvents,\n" +
+      "  guestbookStreamPath,\n" +
+      "  guestbookSubscriptionConfigVersion,\n" +
+      "} from \"./guestbook-ref.ts\";\n" +
+      "import { GuestbookProcessor, type GuestbookFoldState } from \"./guestbook.ts\";\n" +
+      "\n" +
+      "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
+      "\n" +
+      "// The small, stateful half of the guestbook. It has its own Wrangler entry so\n" +
+      "// a cold /api WebSocket loads only the processor host and Cap'n Web runtime,\n" +
+      "// never the unrelated TanStack SSR bundle in worker.ts.\n" +
+      "export class GuestbookApp extends IterateDurableObject {\n" +
+      "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
+      "  #configurationInFlight: Promise<void> | undefined;\n" +
+      "\n" +
+      "  // Hosting is constructed lazily, not in the constructor: the registry and\n" +
+      "  // the processor's provenance stamps need the owning project's id, which\n" +
+      "  // arrives with the wake request or is read from the project stub on first\n" +
+      "  // fetch — and is cached durably so an alarm fire needs no dial.\n" +
+      "  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {\n" +
+      "    if (this.#host === undefined) {\n" +
+      "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
+      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
+      "      // getLiveState reads `reads`, which is built from this registry after\n" +
+      "      // register — the closure runs lazily, on refreshes the registry itself\n" +
+      "      // schedules, so the assignment below always wins the race. The\n" +
+      "      // explicit return type makes the registry a\n" +
+      "      // LiveState<GuestbookFoldState> (the platform's secret DO establishes\n" +
+      "      // this exact shape).\n" +
+      "      let reads: { currentState: GuestbookFoldState } | undefined;\n" +
+      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
+      "        path: guestbookStreamPath,\n" +
+      "        projectId,\n" +
+      "        stream,\n" +
+      "        // The worker's own build identity: a version change resets a\n" +
+      "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
+      "        // worker recovers on its next build (the antidote deploy).\n" +
+      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
+      "        // The fold IS the live state — nothing to redact, nothing to mirror.\n" +
+      "        getLiveState: (): GuestbookFoldState => reads!.currentState,\n" +
+      "      });\n" +
+      "      const guestbook = registry.register(\n" +
+      "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
+      "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
+      "        // work (a milestone append), the alarm fires, the keepalive journals\n" +
+      "        // a revival fact, and its wake delivery re-runs the at-head\n" +
+      "        // reconcile.\n" +
+      "        { recovery: true },\n" +
+      "      );\n" +
+      "      reads = registry.reads(guestbook);\n" +
+      "      this.#host = { registry };\n" +
+      "    }\n" +
+      "    return this.#host;\n" +
+      "  }\n" +
+      "\n" +
+      "  /** Construct the host without a wake request in hand: any prior contact\n" +
+      "   * cached the project id durably; only the very first ever needs a dial. */\n" +
+      "  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {\n" +
+      "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
+      "    if (projectId === undefined) {\n" +
+      "      using project = await this.env.ITX.get();\n" +
+      "      projectId = await project.projectId;\n" +
+      "    }\n" +
+      "    return this.#ensureHost(projectId);\n" +
+      "  }\n" +
+      "\n" +
+      "  /** The hosting Durable Object's alarm fire, delivered here like a native\n" +
+      "   * one. Route it to the registry: each keepalive self-gates on its own\n" +
+      "   * persisted record, so a stale fire is a no-op. */\n" +
+      "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
+      "    const { registry } = await this.#freshHost();\n" +
+      "    await registry.handleAlarm(alarmInfo);\n" +
+      "  }\n" +
+      "\n" +
+      "  /** Append through the one stream lane and record only a successful current\n" +
+      "   * subscription offer. The creation/config events are idempotent; entries\n" +
+      "   * supplied by a caller retain their own keys. */\n" +
+      "  async #appendWithCurrentSubscription(...events: StreamEventInput[]): Promise<void> {\n" +
+      "    using project = await this.env.ITX.get();\n" +
+      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
+      "    this.ctx.storage.kv.put(SUBSCRIPTION_VERSION_STORAGE_KEY, guestbookSubscriptionConfigVersion);\n" +
+      "  }\n" +
+      "\n" +
+      "  /** A read-only visit must migrate the persisted wake target too. Waiting\n" +
+      "   * here is bounded by the ordinary append call; delivery itself starts in\n" +
+      "   * the stream's native alarm turn, so this cannot form an app↔stream actor\n" +
+      "   * cycle. The durable version makes the extra RPC once per config revision. */\n" +
+      "  async #ensureCurrentSubscription(): Promise<void> {\n" +
+      "    if (\n" +
+      "      this.ctx.storage.kv.get<number>(SUBSCRIPTION_VERSION_STORAGE_KEY) ===\n" +
+      "      guestbookSubscriptionConfigVersion\n" +
+      "    ) {\n" +
+      "      return;\n" +
+      "    }\n" +
+      "    if (this.#configurationInFlight === undefined) {\n" +
+      "      this.#configurationInFlight = this.#appendWithCurrentSubscription();\n" +
+      "    }\n" +
+      "    const pending = this.#configurationInFlight;\n" +
+      "    try {\n" +
+      "      await pending;\n" +
+      "    } finally {\n" +
+      "      if (this.#configurationInFlight === pending) this.#configurationInFlight = undefined;\n" +
+      "    }\n" +
+      "  }\n" +
+      "\n" +
+      "  /** The wake door the stream spine dials — the subscription's persisted\n" +
+      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which\n" +
+      "   * the platform's dynamic capability dispatch flattens into an\n" +
+      "   * invokeCapability walk that lands here. The request carries the stream's\n" +
+      "   * coordinates, so the host can construct itself before answering the\n" +
+      "   * handshake (checkpoint + a live sink the stream then delivers frames to). */\n" +
+      "  get processor() {\n" +
+      "    return {\n" +
+      "      wakeStreamSubscriber: async (\n" +
+      "        request: StreamSubscriberWakeRequest,\n" +
+      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
+      "        if (request.stream.projectId === null) {\n" +
+      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
+      "        }\n" +
+      "        const { registry } = this.#ensureHost(request.stream.projectId);\n" +
+      "        return await registry.wakeStreamSubscriber(request);\n" +
+      "      },\n" +
+      "    };\n" +
+      "  }\n" +
+      "\n" +
+      "  /** Signing IS appending: the idempotency-keyed creation batch (birth +\n" +
+      "   * current wake-subscription config — every signer offers it; the stream\n" +
+      "   * collapses each version and replaces older config at the same subscription\n" +
+      "   * key) plus this entry. The spine delivers the append back into this\n" +
+      "   * object's runner, the fold absorbs it, and the registry republishes the\n" +
+      "   * live state to every subscribed tab — nothing else to do here. */\n" +
+      "  async sign(name: string, message: string): Promise<void> {\n" +
+      "    const trimmedName = name.trim().slice(0, 80);\n" +
+      "    const trimmedMessage = message.trim().slice(0, 500);\n" +
+      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
+      "    await this.#appendWithCurrentSubscription({\n" +
+      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
+      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
+      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
+      "  /** The Cap'n Web door: every /api WebSocket upgrade terminates here. The\n" +
+      "   * guestbook is deliberately public — same as its signing lane always was —\n" +
+      "   * so the root target needs no authenticate step. */\n" +
+      "  async fetch(request: Request): Promise<Response> {\n" +
+      "    await this.#ensureCurrentSubscription();\n" +
+      "    const { registry } = await this.#freshHost();\n" +
+      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "// What every browser holds: the fold as live state (read-only by\n" +
+      "// construction) and one verb.\n" +
+      "class PublicGuestbookApi extends RpcTarget {\n" +
+      "  constructor(\n" +
+      "    private readonly app: GuestbookApp,\n" +
+      "    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpc<GuestbookFoldState> {\n" +
+      "    // The registry is a refreshing live-state source: the target loads\n" +
+      "    // committed runner progress before the first read, so a cold object's\n" +
+      "    // first snapshot is the real fold, not the schema default.\n" +
+      "    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);\n" +
+      "  }\n" +
+      "\n" +
+      "  async sign(name: string, message: string): Promise<void> {\n" +
+      "    await this.app.sign(name, message);\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
     path: "apps/guestbook/src/guestbook-ref.ts",
     content:
       "// The guestbook's shared IDENTITY, dependency-free on purpose (type-only\n" +
       "// imports bundle to pure data): the repo root's worker.ts imports this module\n" +
-      "// for its HTTP route, the app's worker.ts for its sign verb, and the wake\n" +
+      "// for its HTTP route, guestbook-app.ts for its sign verb, and the wake\n" +
       "// subscription persists the same ref — so ingress, spine delivery, and the\n" +
       "// creation batch can never disagree about which Durable Object (and which\n" +
       "// build) the guestbook is.\n" +
-      "import type { DynamicWorkerRef } from \"iterate/sdk\";\n" +
       "import type { StreamEventInput } from \"iterate/processors\";\n" +
+      "import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
       "\n" +
       "export const guestbookStreamPath = \"/guestbook\";\n" +
+      "export const guestbookSubscriptionConfigVersion = 3;\n" +
+      "\n" +
+      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
+      "\n" +
+      "/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */\n" +
+      "export const guestbookPageSource = {\n" +
+      "  files: repoFiles,\n" +
+      "  options: { pipeline: \"vite\", rootDir: \"apps/guestbook\" },\n" +
+      "} satisfies DynamicWorkerSource;\n" +
       "\n" +
       "// One declarative ref for the guestbook host, shared by the HTTP routes and\n" +
       "// the wake subscription below — the same Durable Object either way, addressed\n" +
-      "// by its durableWorkerKey. The source is this app's own Vite build: the\n" +
-      "// platform's \"vite\" pipeline runs `npm run build` under apps/guestbook and\n" +
-      "// hosts the built worker, Durable Object class included.\n" +
+      "// by its durableWorkerKey. Its small Wrangler entry excludes the independent\n" +
+      "// TanStack SSR build. The stale policy lets a still-running facet answer while\n" +
+      "// the host checks for a newer repo version in the background; a cold facet\n" +
+      "// mounts this exact cached artifact.\n" +
       "export const guestbookAppRef = {\n" +
       "  type: \"stateful\",\n" +
       "  path: \"/\",\n" +
       "  className: \"GuestbookApp\",\n" +
-      "  durableWorkerKey: \"app-guestbook\",\n" +
+      "  // The split app cannot share the legacy host: that host's persisted wake\n" +
+      "  // recipe can resolve today's page-only Vite build, which no longer exports\n" +
+      "  // GuestbookApp, and poison its live facet before the new ref arrives. The\n" +
+      "  // fold's truth is the stream, so this new host safely rebuilds by replay.\n" +
+      "  durableWorkerKey: \"app-guestbook-v2\",\n" +
+      "  updatePolicy: \"stale-while-rebuild\",\n" +
       "  source: {\n" +
-      "    files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "    options: { pipeline: \"vite\", rootDir: \"apps/guestbook\" },\n" +
+      "    files: repoFiles,\n" +
+      "    options: {\n" +
+      "      entryPoint: \"src/guestbook-app.ts\",\n" +
+      "      minify: true,\n" +
+      "      rootDir: \"apps/guestbook\",\n" +
+      "    },\n" +
       "  },\n" +
-      "} satisfies DynamicWorkerRef;\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
       "\n" +
       "/**\n" +
       " * The guestbook's creation batch: the birth certificate plus the durable\n" +
@@ -259,9 +468,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       " * via the dynamic capability fallback into the app's `processor` getter),\n" +
       " * performs the wake handshake, and pushes event frames straight into the\n" +
       " * registry's runner. Same machinery, same lane as the platform's own\n" +
-      " * domain processors. Both events are idempotency-keyed, so every creator\n" +
-      " * (the app's sign verb, a script, a test) offers this same batch and\n" +
-      " * the stream collapses it to one birth and one subscription.\n" +
+      " * domain processors. Every creator (the app's sign verb, a script, a test)\n" +
+      " * offers this same batch. The birth key is permanent; the subscription event\n" +
+      " * key is versioned whenever its persisted expression changes. Its stable\n" +
+      " * subscriptionKey then replaces the old config without resetting its cursor.\n" +
       " */\n" +
       "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
       "  return [\n" +
@@ -273,6 +483,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    {\n" +
       "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
       "      payload: {\n" +
+      "        // Deliberately stable across the host migration: latest config for a\n" +
+      "        // subscriptionKey replaces the old target without leaving two wakes.\n" +
       "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
       "        delivery: {\n" +
       "          mode: \"wake\",\n" +
@@ -280,7 +492,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          processorSlug: \"guestbook\",\n" +
       "        },\n" +
       "      },\n" +
-      "      idempotencyKey: \"guestbook/subscription\",\n" +
+      "      // A new append key lets this config reach the replacement reducer. Bump\n" +
+      "      // the version whenever the persisted delivery expression changes.\n" +
+      "      idempotencyKey: `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,\n" +
       "    },\n" +
       "  ];\n" +
       "}\n",
@@ -298,9 +512,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// and replay rebuilds it, and every consequential outcome is an event you\n" +
       "// can read back.\n" +
       "//\n" +
-      "// GuestbookApp in worker.ts is the hosting half: a Durable Object registry\n" +
-      "// over an itx-dialed stream handle, woken by the durable wake subscription\n" +
-      "// the creation batch (guestbook-ref.ts) configures.\n" +
+      "// GuestbookApp in guestbook-app.ts is the hosting half: a Durable Object\n" +
+      "// registry over an itx-dialed stream handle, woken by the durable wake\n" +
+      "// subscription the creation batch (guestbook-ref.ts) configures.\n" +
       "import { z } from \"zod\";\n" +
       "import {\n" +
       "  defineProcessorContract,\n" +
@@ -363,7 +577,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      ],\n" +
       "    },\n" +
       "  },\n" +
-      "  // Required by `{ recovery: true }` (see worker.ts): a recovery-wired\n" +
+      "  // Required by `{ recovery: true }` (see guestbook-app.ts): a recovery-wired\n" +
       "  // contract must consume the platform revival fact.\n" +
       "  processorDeps: [PLATFORM_STREAM_EVENTS],\n" +
       "  consumes: [\n" +
@@ -654,9 +868,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "export const Route = createFileRoute(\"/\")({ component: Guestbook });\n" +
       "\n" +
       "// The project's public guestbook. Its state is a stream-processor fold on the\n" +
-      "// project stream at /guestbook (src/worker.ts hosts the processor); this page\n" +
-      "// hydrates, opens /api, and stays live — every open tab repaints the moment\n" +
-      "// anyone signs, and every fifth signature earns a milestone from the\n" +
+      "// project stream at /guestbook (src/guestbook-app.ts hosts the processor);\n" +
+      "// this page hydrates, opens /api, and stays live — every open tab repaints the\n" +
+      "// moment anyone signs, and every fifth signature earns a milestone from the\n" +
       "// processor's at-head reconcile.\n" +
       "function Guestbook() {\n" +
       "  const { guestbook, api, error } = useGuestbook();\n" +
@@ -793,165 +1007,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/src/worker.ts",
     content:
       "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
-      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import {\n" +
-      "  type StreamSubscriberWakeRequest,\n" +
-      "  type StreamSubscriberWakeResponse,\n" +
-      "} from \"iterate/processors\";\n" +
-      "import {\n" +
-      "  createStreamProcessorRegistry,\n" +
-      "  type StreamProcessorRegistry,\n" +
-      "} from \"iterate/processors/cloudflare\";\n" +
-      "import { GuestbookProcessor, type GuestbookFoldState } from \"./guestbook.ts\";\n" +
-      "import { guestbookCreationEvents, guestbookStreamPath } from \"./guestbook-ref.ts\";\n" +
       "\n" +
-      "// The app's worker: the default export serves the Vite-built TanStack pages\n" +
-      "// (and their client assets, via the platform's wrapper), while GuestbookApp\n" +
-      "// is the app's DURABLE OBJECT — hosted statefully by the project worker\n" +
-      "// (worker.ts at the repo root routes /api here). The whole app is three\n" +
-      "// moves: a stream processor folds /guestbook (guestbook.ts), the registry\n" +
-      "// exposes that fold AS the live state (a committed change republishes it\n" +
-      "// automatically), and signing is appending an event. The rest — wake\n" +
-      "// delivery, catch-up, cold-start loads, pushing patches to every open tab —\n" +
-      "// is the platform's processor machinery.\n" +
-      "\n" +
+      "// Page worker only. The stateful /api entry lives in guestbook-app.ts so\n" +
+      "// waking the guestbook never has to load the TanStack server-rendering bundle.\n" +
       "export default createServerEntry({\n" +
       "  fetch(request) {\n" +
       "    return handler.fetch(request);\n" +
       "  },\n" +
-      "});\n" +
-      "\n" +
-      "export class GuestbookApp extends IterateDurableObject {\n" +
-      "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
-      "\n" +
-      "  // Hosting is constructed lazily, not in the constructor: the registry and\n" +
-      "  // the processor's provenance stamps need the owning project's id, which\n" +
-      "  // arrives with the wake request or is read from the project stub on first\n" +
-      "  // fetch — and is cached durably so an alarm fire needs no dial.\n" +
-      "  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {\n" +
-      "    if (this.#host === undefined) {\n" +
-      "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
-      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
-      "      // getLiveState reads `reads`, which is built from this registry after\n" +
-      "      // register — the closure runs lazily, on refreshes the registry itself\n" +
-      "      // schedules, so the assignment below always wins the race. The\n" +
-      "      // explicit return type makes the registry a\n" +
-      "      // LiveState<GuestbookFoldState> (the platform's secret DO establishes\n" +
-      "      // this exact shape).\n" +
-      "      let reads: { currentState: GuestbookFoldState } | undefined;\n" +
-      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
-      "        path: guestbookStreamPath,\n" +
-      "        projectId,\n" +
-      "        stream,\n" +
-      "        // The worker's own build identity: a version change resets a\n" +
-      "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
-      "        // worker recovers on its next build (the antidote deploy).\n" +
-      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "        // The fold IS the live state — nothing to redact, nothing to mirror.\n" +
-      "        getLiveState: (): GuestbookFoldState => reads!.currentState,\n" +
-      "      });\n" +
-      "      const guestbook = registry.register(\n" +
-      "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
-      "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
-      "        // work (a milestone append), the alarm fires, the keepalive journals\n" +
-      "        // a revival fact, and its wake delivery re-runs the at-head\n" +
-      "        // reconcile.\n" +
-      "        { recovery: true },\n" +
-      "      );\n" +
-      "      reads = registry.reads(guestbook);\n" +
-      "      this.#host = { registry };\n" +
-      "    }\n" +
-      "    return this.#host;\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Construct the host without a wake request in hand: any prior contact\n" +
-      "   * cached the project id durably; only the very first ever needs a dial. */\n" +
-      "  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {\n" +
-      "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
-      "    if (projectId === undefined) {\n" +
-      "      using project = await this.env.ITX.get();\n" +
-      "      projectId = await project.projectId;\n" +
-      "    }\n" +
-      "    return this.#ensureHost(projectId);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The hosting Durable Object's alarm fire, delivered here like a native\n" +
-      "   * one. Route it to the registry: each keepalive self-gates on its own\n" +
-      "   * persisted record, so a stale fire is a no-op. */\n" +
-      "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    await registry.handleAlarm(alarmInfo);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The wake door the stream spine dials — the subscription's persisted\n" +
-      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which\n" +
-      "   * the platform's dynamic capability dispatch flattens into an\n" +
-      "   * invokeCapability walk that lands here. The request carries the stream's\n" +
-      "   * coordinates, so the host can construct itself before answering the\n" +
-      "   * handshake (checkpoint + a live sink the stream then delivers frames to). */\n" +
-      "  get processor() {\n" +
-      "    return {\n" +
-      "      wakeStreamSubscriber: async (\n" +
-      "        request: StreamSubscriberWakeRequest,\n" +
-      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
-      "        if (request.stream.projectId === null) {\n" +
-      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
-      "        }\n" +
-      "        const { registry } = this.#ensureHost(request.stream.projectId);\n" +
-      "        return await registry.wakeStreamSubscriber(request);\n" +
-      "      },\n" +
-      "    };\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Signing IS appending: the idempotency-keyed creation batch (birth +\n" +
-      "   * wake subscription — every signer offers it; the stream collapses it to\n" +
-      "   * one of each) plus this entry. The spine delivers the append back into\n" +
-      "   * this object's runner, the fold absorbs it, and the registry republishes\n" +
-      "   * the live state to every subscribed tab — nothing else to do here. */\n" +
-      "  async sign(name: string, message: string): Promise<void> {\n" +
-      "    const trimmedName = name.trim().slice(0, 80);\n" +
-      "    const trimmedMessage = message.trim().slice(0, 500);\n" +
-      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
-      "    using project = await this.env.ITX.get();\n" +
-      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {\n" +
-      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
-      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
-      "    });\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The Cap'n Web door: every /api WebSocket upgrade terminates here. The\n" +
-      "   * guestbook is deliberately public — same as its signing lane always was —\n" +
-      "   * so the root target needs no authenticate step. */\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "// What every browser holds: the fold as live state (read-only by\n" +
-      "// construction) and one verb.\n" +
-      "class PublicGuestbookApi extends RpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly app: GuestbookApp,\n" +
-      "    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpc<GuestbookFoldState> {\n" +
-      "    // The registry is a refreshing live-state source: the target loads\n" +
-      "    // committed runner progress before the first read, so a cold object's\n" +
-      "    // first snapshot is the real fold, not the schema default.\n" +
-      "    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);\n" +
-      "  }\n" +
-      "\n" +
-      "  async sign(name: string, message: string): Promise<void> {\n" +
-      "    await this.app.sign(name, message);\n" +
-      "  }\n" +
-      "}\n",
+      "});\n",
   },
   {
     path: "apps/guestbook/tsconfig.json",
@@ -1048,7 +1111,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "/** What the browser holds after authenticating the /api Cap'n Web session. */\n" +
       "export type TodoSessionApi = {\n" +
       "  liveState: LiveStateRpc<TodoListState>;\n" +
-      "  add(title: string): Promise<void>;\n" +
+      "  add(title: string): Promise<string | undefined>;\n" +
       "  setDone(id: string, done: boolean): Promise<void>;\n" +
       "  rename(id: string, title: string): Promise<void>;\n" +
       "  remove(id: string): Promise<void>;\n" +
@@ -1254,18 +1317,51 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/tanstack/src/routes/index.tsx",
     content:
       "import { createFileRoute } from \"@tanstack/react-router\";\n" +
-      "import { useState } from \"react\";\n" +
+      "import { useEffect, useState } from \"react\";\n" +
       "import { useTodos } from \"../lib/use-todos.ts\";\n" +
       "\n" +
       "export const Route = createFileRoute(\"/\")({ component: Todos });\n" +
       "\n" +
       "// The project's shared todo list. Rows live in the app's Durable Object\n" +
-      "// SQLite (src/worker.ts); this page hydrates, authenticates /api from the\n" +
+      "// SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the\n" +
       "// app cookie, and stays live — every project member's tab converges.\n" +
-      "function Todos() {\n" +
+      "export function Todos() {\n" +
       "  const { todos, api, error } = useTodos();\n" +
       "  const [draft, setDraft] = useState(\"\");\n" +
+      "  const [pendingAdd, setPendingAdd] = useState<{\n" +
+      "    acceptNewMatchingTodo: boolean;\n" +
+      "    existingTodoIds: readonly string[];\n" +
+      "    id: string | null;\n" +
+      "    title: string;\n" +
+      "  } | null>(null);\n" +
+      "  const [mutationError, setMutationError] = useState<string | null>(null);\n" +
       "  const remaining = todos?.filter((todo) => !todo.done).length ?? 0;\n" +
+      "  const visibleError = error ?? mutationError;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    if (pendingAdd === null || todos === undefined) return;\n" +
+      "    const observed =\n" +
+      "      (pendingAdd.id !== null && todos.some((todo) => todo.id === pendingAdd.id)) ||\n" +
+      "      (pendingAdd.acceptNewMatchingTodo &&\n" +
+      "        todos.some(\n" +
+      "          (todo) =>\n" +
+      "            todo.title === pendingAdd.title && !pendingAdd.existingTodoIds.includes(todo.id),\n" +
+      "        ));\n" +
+      "    if (observed) {\n" +
+      "      setPendingAdd(null);\n" +
+      "      setMutationError(null);\n" +
+      "    }\n" +
+      "  }, [pendingAdd, todos]);\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    if (pendingAdd === null) return;\n" +
+      "    const timeout = window.setTimeout(() => {\n" +
+      "      // The RPC cannot be cancelled. Keep the composer locked so a late\n" +
+      "      // success cannot leave a stale error or allow a duplicate submission.\n" +
+      "      setMutationError(\"Adding this todo is taking too long. Reload before retrying.\");\n" +
+      "    }, 15_000);\n" +
+      "    return () => window.clearTimeout(timeout);\n" +
+      "  }, [pendingAdd]);\n" +
       "\n" +
       "  return (\n" +
       "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
@@ -1287,9 +1383,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              : `${remaining} of ${todos.length} left`}\n" +
       "      </p>\n" +
       "\n" +
-      "      {error !== null ? (\n" +
-      "        <p className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\">\n" +
-      "          {error}\n" +
+      "      {visibleError !== null ? (\n" +
+      "        <p\n" +
+      "          className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\"\n" +
+      "          data-type=\"error\"\n" +
+      "        >\n" +
+      "          {visibleError}\n" +
       "        </p>\n" +
       "      ) : null}\n" +
       "\n" +
@@ -1297,10 +1396,38 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        className=\"mt-8 flex gap-3\"\n" +
       "        onSubmit={(event) => {\n" +
       "          event.preventDefault();\n" +
-      "          if (api && draft.trim()) {\n" +
-      "            void api.add(draft);\n" +
-      "            setDraft(\"\");\n" +
-      "          }\n" +
+      "          const title = draft.trim().slice(0, 500);\n" +
+      "          if (api === null || todos === undefined || title === \"\" || pendingAdd !== null) return;\n" +
+      "          setMutationError(null);\n" +
+      "          setPendingAdd({\n" +
+      "            acceptNewMatchingTodo: false,\n" +
+      "            existingTodoIds: todos.map((todo) => todo.id),\n" +
+      "            id: null,\n" +
+      "            title,\n" +
+      "          });\n" +
+      "          setDraft(\"\");\n" +
+      "          void api\n" +
+      "            .add(title)\n" +
+      "            .then((id) => {\n" +
+      "              // The pre-return-id API can answer briefly while its\n" +
+      "              // stale-while-rebuild facet swaps. Its void response still\n" +
+      "              // confirms success; identify that call by the first new\n" +
+      "              // equal-title live-state row instead of inviting a duplicate.\n" +
+      "              setPendingAdd((current) =>\n" +
+      "                current === null\n" +
+      "                  ? null\n" +
+      "                  : id === undefined\n" +
+      "                    ? { ...current, acceptNewMatchingTodo: true }\n" +
+      "                    : { ...current, id },\n" +
+      "              );\n" +
+      "            })\n" +
+      "            .catch((thrown: unknown) => {\n" +
+      "              // A transport rejection can lose a successful call's ack. Keep\n" +
+      "              // the composer locked until live state confirms the row (or a\n" +
+      "              // reload proves otherwise), so retry cannot duplicate it.\n" +
+      "              const message = thrown instanceof Error ? thrown.message : String(thrown);\n" +
+      "              setMutationError(`${message} Reload before retrying.`);\n" +
+      "            });\n" +
       "        }}\n" +
       "      >\n" +
       "        <input\n" +
@@ -1309,16 +1436,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          onChange={(event) => setDraft(event.target.value)}\n" +
       "          placeholder=\"add a todo\"\n" +
       "          aria-label=\"add a todo\"\n" +
-      "          disabled={api === null}\n" +
+      "          disabled={api === null || todos === undefined || pendingAdd !== null}\n" +
       "        />\n" +
       "        <button\n" +
       "          type=\"submit\"\n" +
       "          className=\"rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "          disabled={api === null || draft.trim() === \"\"}\n" +
+      "          disabled={\n" +
+      "            api === null || todos === undefined || draft.trim() === \"\" || pendingAdd !== null\n" +
+      "          }\n" +
       "        >\n" +
       "          add\n" +
       "        </button>\n" +
       "      </form>\n" +
+      "\n" +
+      "      {pendingAdd !== null && mutationError === null ? (\n" +
+      "        <p className=\"mt-2 text-sm text-slate-500\" data-spinner=\"true\" aria-live=\"polite\">\n" +
+      "          adding “{pendingAdd.title}”…\n" +
+      "        </p>\n" +
+      "      ) : null}\n" +
       "\n" +
       "      {todos !== undefined && todos.length > 0 ? (\n" +
       "        <ul className=\"mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-sm\">\n" +
@@ -1365,27 +1500,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "@import \"tailwindcss\";\n",
   },
   {
-    path: "apps/tanstack/src/worker.ts",
+    path: "apps/tanstack/src/todos-app.ts",
     content:
-      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
-      "import { IterateDurableObject, type ProjectAuthCredentials } from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import { IterateDurableObject, type ProjectAuthCredentials } from \"iterate/sdk\";\n" +
       "import { createDurableObjectClient, defineConfig, sql } from \"sqlfu\";\n" +
       "import type { Todo, TodoListState } from \"./lib/state.ts\";\n" +
       "\n" +
-      "// The app's worker: the default export serves the Vite-built TanStack pages\n" +
-      "// (and their client assets, via the platform's wrapper), while TanstackTodos\n" +
-      "// is the app's DURABLE OBJECT — hosted statefully by the project worker\n" +
-      "// (worker.ts at the repo root routes /api here), rows in its embedded SQLite\n" +
-      "// through sqlfu, fanned out to every open tab over Cap'n Web live state.\n" +
-      "\n" +
-      "export default createServerEntry({\n" +
-      "  fetch(request) {\n" +
-      "    return handler.fetch(request);\n" +
-      "  },\n" +
-      "});\n" +
-      "\n" +
+      "// The small, stateful half of the todo app. It has its own Wrangler entry so\n" +
+      "// a cold /api WebSocket loads only the Durable Object and its data/runtime\n" +
+      "// dependencies, never the unrelated TanStack SSR bundle in worker.ts.\n" +
       "export class TanstackTodos extends IterateDurableObject {\n" +
       "  static db = defineConfig({\n" +
       "    // The desired schema now (`sqlfu draft` diffs new migrations against it).\n" +
@@ -1454,15 +1579,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    this.#live.setState({ todos: this.#load() });\n" +
       "  }\n" +
       "\n" +
-      "  addTodo(title: string): void {\n" +
+      "  addTodo(title: string): string | undefined {\n" +
       "    const trimmed = title.trim().slice(0, 500);\n" +
       "    if (trimmed.length === 0) return;\n" +
+      "    const id = crypto.randomUUID();\n" +
       "    this.#db.insert({\n" +
-      "      id: crypto.randomUUID(),\n" +
+      "      id,\n" +
       "      title: trimmed,\n" +
       "      createdAt: new Date().toISOString(),\n" +
       "    });\n" +
       "    this.#refresh();\n" +
+      "    return id;\n" +
       "  }\n" +
       "\n" +
       "  setTodoDone(id: string, done: boolean): void {\n" +
@@ -1522,8 +1649,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return this.app.liveStateTarget();\n" +
       "  }\n" +
       "\n" +
-      "  async add(title: string): Promise<void> {\n" +
-      "    this.app.addTodo(title);\n" +
+      "  async add(title: string): Promise<string | undefined> {\n" +
+      "    return this.app.addTodo(title);\n" +
       "  }\n" +
       "\n" +
       "  async setDone(id: string, done: boolean): Promise<void> {\n" +
@@ -1538,6 +1665,53 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    this.app.removeTodo(id);\n" +
       "  }\n" +
       "}\n",
+  },
+  {
+    path: "apps/tanstack/src/todos-ref.ts",
+    content:
+      "import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
+      "\n" +
+      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
+      "\n" +
+      "/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */\n" +
+      "export const tanstackPageSource = {\n" +
+      "  files: repoFiles,\n" +
+      "  options: { pipeline: \"vite\", rootDir: \"apps/tanstack\" },\n" +
+      "} satisfies DynamicWorkerSource;\n" +
+      "\n" +
+      "/** The todo API's durable identity and deliberately small build. The stale\n" +
+      " * policy lets a still-running facet answer while the host checks for a newer\n" +
+      " * repo version in the background; a cold facet mounts this exact cached\n" +
+      " * artifact. */\n" +
+      "export const tanstackTodosRef = {\n" +
+      "  type: \"stateful\",\n" +
+      "  path: \"/\",\n" +
+      "  className: \"TanstackTodos\",\n" +
+      "  durableWorkerKey: \"app-tanstack\",\n" +
+      "  updatePolicy: \"stale-while-rebuild\",\n" +
+      "  source: {\n" +
+      "    files: repoFiles,\n" +
+      "    options: {\n" +
+      "      entryPoint: \"src/todos-app.ts\",\n" +
+      "      minify: true,\n" +
+      "      rootDir: \"apps/tanstack\",\n" +
+      "    },\n" +
+      "  },\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n",
+  },
+  {
+    path: "apps/tanstack/src/worker.ts",
+    content:
+      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
+      "\n" +
+      "// Page worker only. The stateful /api entry lives in todos-app.ts so waking a\n" +
+      "// todo Durable Object never has to load the TanStack server-rendering bundle.\n" +
+      "\n" +
+      "export default createServerEntry({\n" +
+      "  fetch(request) {\n" +
+      "    return handler.fetch(request);\n" +
+      "  },\n" +
+      "});\n",
   },
   {
     path: "apps/tanstack/tsconfig.json",
@@ -1640,7 +1814,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
-      "import { guestbookAppRef } from \"./apps/guestbook/src/guestbook-ref.ts\";\n" +
+      "import { guestbookAppRef, guestbookPageSource } from \"./apps/guestbook/src/guestbook-ref.ts\";\n" +
+      "import { tanstackPageSource, tanstackTodosRef } from \"./apps/tanstack/src/todos-ref.ts\";\n" +
       "\n" +
       "// This is ordinary project policy. Every GitHub-linked project repository is\n" +
       "// in scope; no platform GitHub code knows that pull-request agents exist.\n" +
@@ -1738,19 +1913,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // over Cap'n Web). Pages are gated to project members HERE; /api is\n" +
       "      // the unauthenticated Cap'n Web root that authenticates in-band from\n" +
       "      // the app cookie, exactly like the internal app.\n" +
-      "      const tanstackSource = {\n" +
-      "        files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "        options: { pipeline: \"vite\", rootDir: \"apps/tanstack\" },\n" +
-      "      } as const;\n" +
       "      const url = new URL(req.url);\n" +
       "      if (url.pathname === \"/api\") {\n" +
-      "        return this.fetchDynamicWorker(req, {\n" +
-      "          type: \"stateful\",\n" +
-      "          path: \"/\",\n" +
-      "          className: \"TanstackTodos\",\n" +
-      "          durableWorkerKey: \"app-tanstack\",\n" +
-      "          source: tanstackSource,\n" +
-      "        });\n" +
+      "        return this.fetchDynamicWorker(req, tanstackTodosRef);\n" +
       "      }\n" +
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
@@ -1758,7 +1923,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      return this.fetchDynamicWorker(req, {\n" +
       "        type: \"stateless\",\n" +
       "        path: \"/\",\n" +
-      "        source: tanstackSource,\n" +
+      "        source: tanstackPageSource,\n" +
       "      });\n" +
       "    }\n" +
       "    if (app === \"counter\") {\n" +
@@ -1789,7 +1954,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      return this.fetchDynamicWorker(req, {\n" +
       "        type: \"stateless\",\n" +
       "        path: \"/\",\n" +
-      "        source: guestbookAppRef.source,\n" +
+      "        source: guestbookPageSource,\n" +
       "      });\n" +
       "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +

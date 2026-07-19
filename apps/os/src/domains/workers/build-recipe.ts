@@ -392,14 +392,20 @@ export function collectRecipeOutputs(
 /**
  * Shape the vite lane's collected `dist/` tree into loader-ready modules:
  * `dist/server/**` JavaScript is kept verbatim (path-preserved, so the built
- * entry's relative chunk imports keep resolving), `dist/client/**` becomes a
- * generated assets module, and a generated wrapper entry serves those assets
- * ahead of the built worker's own fetch while re-exporting its named exports
- * (Durable Object classes included) for stateful hosting.
+ * entry's relative chunk imports keep resolving), browser-facing text assets
+ * from BOTH `dist/server/**` and `dist/client/**` become a generated assets
+ * module, and a generated wrapper entry serves those assets ahead of the
+ * built worker's own fetch while re-exporting its named exports (Durable
+ * Object classes included) for stateful hosting. TanStack's SSR output can
+ * link CSS emitted only under `dist/server`, so dropping those files renders
+ * a valid-looking document with a guaranteed 404.
  *
  * Text assets only: the worker loader stores text modules, so a binary
  * client asset (png/ico/woff) is a build failure with a clear message — the
  * minimal seeded app ships none, and real ones belong in project files/R2.
+ * Unknown non-JS files under dist/server retain Vite's former collection
+ * behavior and are skipped: they may be server-only support outputs, not
+ * browser assets, and this string-only transfer cannot decode them safely.
  */
 export function collectViteRecipeOutputs(outputs: Record<string, string>): {
   mainModule: string;
@@ -408,26 +414,38 @@ export function collectViteRecipeOutputs(outputs: Record<string, string>): {
   const SERVER_ENTRY = "dist/server/index.js";
   const modules: Record<string, string> = {};
   const assets: Record<string, { contentType: string; body: string }> = {};
+  const collectTextAsset = (name: string, path: string, content: string): void => {
+    const contentType = textAssetContentType(name);
+    if (contentType === undefined) {
+      throw new Error(
+        `Vite asset "${name}" is not a text type the dynamic worker lane can serve; ` +
+          `text assets only (js, css, html, svg, json, txt).`,
+      );
+    }
+    const existing = assets[path];
+    if (
+      existing !== undefined &&
+      (existing.contentType !== contentType || existing.body !== content)
+    ) {
+      throw new Error(`Vite build emitted conflicting browser assets for "${path}".`);
+    }
+    assets[path] = { contentType, body: content };
+  };
   for (const [name, content] of Object.entries(outputs)) {
     if (name.startsWith("dist/server/")) {
       if (name.endsWith(".map") || name.includes("/.vite/") || name.endsWith("wrangler.json")) {
         continue;
       }
-      if (!name.endsWith(".js") && !name.endsWith(".mjs")) continue;
-      modules[name] = content;
+      if (name.endsWith(".js") || name.endsWith(".mjs")) modules[name] = content;
+      else if (textAssetContentType(name) !== undefined) {
+        collectTextAsset(name, name.slice("dist/server".length), content);
+      }
       continue;
     }
     if (name.startsWith("dist/client/")) {
       const path = name.slice("dist/client".length);
       if (path === "/.assetsignore" || name.endsWith(".map")) continue;
-      const contentType = ASSET_CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)];
-      if (contentType === undefined) {
-        throw new Error(
-          `Client asset "${name}" is not a text type the dynamic worker lane can serve; ` +
-            `text assets only (js, css, html, svg, json, txt).`,
-        );
-      }
-      assets[path] = { contentType, body: content };
+      collectTextAsset(name, path, content);
     }
   }
   if (!(SERVER_ENTRY in modules)) {
@@ -472,6 +490,10 @@ const ASSET_CONTENT_TYPES: Record<string, string> = {
   txt: "text/plain; charset=utf-8",
   webmanifest: "application/manifest+json",
 };
+
+function textAssetContentType(name: string): string | undefined {
+  return ASSET_CONTENT_TYPES[name.slice(name.lastIndexOf(".") + 1)];
+}
 
 /** Wrangler emits the entry under its own base name with a `.js` extension
  * (nested entry directories do not survive into the outdir). */

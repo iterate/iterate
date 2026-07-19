@@ -15,23 +15,28 @@ const record: ProjectDirectoryRecord = {
   name: "Alpha",
 };
 
-function directoryWithPut(put: ReturnType<typeof vi.fn>): KVNamespace {
-  return { put } as unknown as KVNamespace;
+function directoryWithPut(
+  put: ReturnType<typeof vi.fn>,
+  deleteKey = vi.fn().mockResolvedValue(undefined),
+): KVNamespace {
+  return { delete: deleteKey, put } as unknown as KVNamespace;
 }
 
 describe("primeProjectDirectory", () => {
   beforeEach(() => auth.getProjectBySlug.mockReset());
 
-  it("writes both durable lookup keys", async () => {
+  it("writes both durable lookup keys and clears a stale shared miss", async () => {
     const put = vi.fn().mockResolvedValue(undefined);
+    const deleteKey = vi.fn().mockResolvedValue(undefined);
 
-    await primeProjectDirectory(directoryWithPut(put), record);
+    await primeProjectDirectory(directoryWithPut(put, deleteKey), record);
 
     const body = JSON.stringify(record);
     expect(put.mock.calls).toEqual([
       ["slug:alpha", body],
       ["project:prj_alpha", body],
     ]);
+    expect(deleteKey).toHaveBeenCalledExactlyOnceWith("missing-slug:alpha");
   });
 
   it("recovers from one timed-out attempt and observes its late rejection", async () => {
@@ -111,6 +116,66 @@ describe("primeProjectDirectory", () => {
 describe("readProjectBySlug", () => {
   beforeEach(() => auth.getProjectBySlug.mockReset());
 
+  it("shares an authoritative miss through bounded KV without another auth RPC", async () => {
+    const get = vi.fn(async (key: string) =>
+      key === "missing-slug:shared-miss" ? "missing" : null,
+    );
+    const directory = { get, put: vi.fn() } as unknown as KVNamespace;
+
+    await expect(readProjectBySlug(directory, "shared-miss")).resolves.toBeNull();
+
+    expect(get.mock.calls).toEqual([["slug:shared-miss", "json"], ["missing-slug:shared-miss"]]);
+    expect(auth.getProjectBySlug).not.toHaveBeenCalled();
+  });
+
+  it("checks the positive directory key before a shared miss marker", async () => {
+    const positive = { ...record, id: "prj_late", slug: "late-positive" };
+    const get = vi.fn(async (key: string) => (key === "slug:late-positive" ? positive : "missing"));
+    const directory = { get, put: vi.fn() } as unknown as KVNamespace;
+
+    await expect(readProjectBySlug(directory, positive.slug)).resolves.toEqual(positive);
+
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("slug:late-positive", "json");
+    expect(auth.getProjectBySlug).not.toHaveBeenCalled();
+  });
+
+  it("lets a later positive KV prime outrank this isolate's negative memo", async () => {
+    const positive = { ...record, id: "prj_just_created", slug: "just-created" };
+    let created = false;
+    const get = vi.fn(async (key: string) =>
+      key === "slug:just-created" && created ? positive : null,
+    );
+    auth.getProjectBySlug.mockResolvedValue(null);
+    const directory = {
+      get,
+      put: vi.fn().mockResolvedValue(undefined),
+    } as unknown as KVNamespace;
+
+    await expect(readProjectBySlug(directory, positive.slug)).resolves.toBeNull();
+    created = true;
+    await expect(readProjectBySlug(directory, positive.slug)).resolves.toEqual(positive);
+
+    expect(auth.getProjectBySlug).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenLastCalledWith("slug:just-created", "json");
+  });
+
+  it("writes a bounded shared marker after an authoritative miss", async () => {
+    auth.getProjectBySlug.mockResolvedValue(null);
+    const put = vi.fn().mockResolvedValue(undefined);
+    const directory = {
+      get: vi.fn().mockResolvedValue(null),
+      put,
+    } as unknown as KVNamespace;
+
+    await expect(readProjectBySlug(directory, "new-miss")).resolves.toBeNull();
+
+    expect(auth.getProjectBySlug).toHaveBeenCalledWith({ projectSlug: "new-miss" });
+    expect(put).toHaveBeenCalledWith("missing-slug:new-miss", "missing", {
+      expirationTtl: 60,
+    });
+  });
+
   it("returns the authoritative auth result when its optional cache fill times out", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -118,6 +183,7 @@ describe("readProjectBySlug", () => {
       const authRecord = { ...record, id: "prj_auth", slug: "auth-only" };
       auth.getProjectBySlug.mockResolvedValue(authRecord);
       const directory = {
+        delete: vi.fn().mockResolvedValue(undefined),
         get: vi.fn().mockResolvedValue(null),
         put: vi.fn(() => new Promise<void>(() => {})),
       } as unknown as KVNamespace;

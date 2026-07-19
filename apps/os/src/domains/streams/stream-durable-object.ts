@@ -45,6 +45,15 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
+
+function isStreamPausedError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(STREAM_PAUSED_ERROR_PREFIX)
+  );
+}
 
 /**
  * Observe fire-and-forget stream-core work without handing a rejected promise
@@ -56,6 +65,12 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
   try {
     await work();
   } catch (error) {
+    if (isStreamPausedError(error)) {
+      console.info("stream core background work reached a paused stream", {
+        message: error.message,
+      });
+      return;
+    }
     if (isDurableObjectLifecycleError(error)) {
       console.info("stream core background work interrupted by durable object lifecycle", {
         message: error instanceof Error ? error.message : String(error),
@@ -63,6 +78,103 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
       return;
     }
     console.error("stream core background work failed", error);
+  }
+}
+
+/**
+ * Cuts durable delivery out of the append request's actor-drain tree.
+ *
+ * A Stream append can itself be nested inside a subscriber processor. If its
+ * post-commit delivery is attached to that append with `ctx.waitUntil`, a
+ * delivery back to the caller closes a cycle: caller waits for append, append
+ * waits for delivery, and delivery waits for caller. Outside an alarm turn we
+ * therefore retain only the short `setAlarm(now)` operation. The alarm starts
+ * a fresh invocation, re-derives owed work from durable cursors, and may then
+ * retain the delivery attempt without holding any append caller open.
+ *
+ * The work closure is deliberately NOT remembered between turns. Its durable
+ * representation is the subscription cursor lag; `onAlarm()` reconciles that
+ * state and supplies a fresh closure even after isolate eviction.
+ */
+type StreamDeliveryAlarmBoundaryHooks = {
+  armAlarm(atMs: number): void;
+  now(): number;
+  waitUntil(work: Promise<unknown>): void;
+};
+
+type StreamAlarmStorage = {
+  setAlarm(atMs: number): Promise<void>;
+};
+
+/**
+ * Issues the native alarm write in the same synchronous storage turn as the
+ * cursor/event write that made delivery necessary. Durable Object output
+ * gates make that load-bearing: a failed setAlarm resets the object and
+ * suppresses its outgoing response, so cursor lag cannot commit as an
+ * acknowledged success without its wakeup.
+ *
+ * Do not add a getAlarm/await before setAlarm. Multiple writes made without
+ * an intervening await coalesce into one implicit transaction. A fresh Stream
+ * incarnation appends `woken`, so its first useful arm is immediate and may
+ * safely replace an inherited later alarm.
+ *
+ * https://developers.cloudflare.com/durable-objects/reference/glossary/#output-gate
+ * https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#understand-how-input-and-output-gates-work
+ */
+export class StreamAlarmArmer {
+  readonly #storage: StreamAlarmStorage;
+  #armedForMs: number | null = null;
+
+  constructor(storage: StreamAlarmStorage) {
+    this.#storage = storage;
+  }
+
+  armNoLaterThan(atMs: number): void {
+    const previous = this.#armedForMs;
+    if (previous !== null && previous <= atMs) return;
+    this.#armedForMs = atMs;
+    try {
+      // Deliberately not awaited or caught: the native output gate owns the
+      // write and turns an asynchronous failure into an invocation failure.
+      void this.#storage.setAlarm(atMs);
+    } catch (cause) {
+      this.#armedForMs = previous;
+      throw new Error("stream alarm arming failed", { cause });
+    }
+  }
+
+  markFired(): void {
+    this.#armedForMs = null;
+  }
+}
+
+export class StreamDeliveryAlarmBoundary {
+  readonly #hooks: StreamDeliveryAlarmBoundaryHooks;
+  #inAlarmTurn = false;
+
+  constructor(hooks: StreamDeliveryAlarmBoundaryHooks) {
+    this.#hooks = hooks;
+  }
+
+  scheduleOrRun(work: () => Promise<unknown>): void {
+    if (this.#inAlarmTurn) {
+      this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
+      return;
+    }
+    // setAlarm is itself an output-gated storage write. Issue it directly in
+    // this append turn: wrapping it in a settling waitUntil would cross the
+    // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#hooks.armAlarm(this.#hooks.now());
+  }
+
+  runAlarmTurn(work: () => void): void {
+    const wasInAlarmTurn = this.#inAlarmTurn;
+    this.#inAlarmTurn = true;
+    try {
+      work();
+    } finally {
+      this.#inAlarmTurn = wasInAlarmTurn;
+    }
   }
 }
 
@@ -115,6 +227,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
+  readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
+    armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+    now: () => Date.now(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -165,7 +283,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       runtimeChanged: () => this.#refreshLiveState(),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
@@ -231,32 +350,14 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
-    this.#alarmArmedForMs = null;
+    this.#alarmArmer.markFired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#flushCoreProcessorState();
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
+    this.#deliveryAlarmBoundary.runAlarmTurn(() => {
+      this.#subscribers.onAlarm();
+      this.#flushCoreProcessorState();
+    });
   }
 
   // ===========================================================================
@@ -383,10 +484,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
     );
 
-    // Re-arm (or clear) the idle timer against the post-append connection set,
+    // Re-arm (or clear) idle teardown against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
-    // and lets both DOs hibernate.
-    this.#subscribers.armOrClearIdleTimer();
+    // and lets both DOs hibernate. This uses the native DO alarm, never an
+    // actor setTimeout that would retain the current JS-RPC invocation.
+    this.#subscribers.armOrClearIdleAlarm();
 
     return events;
   }
@@ -530,7 +632,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-parked":
         return;
       default:
-        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
+        throw new Error(
+          `${STREAM_PAUSED_ERROR_PREFIX}${args.state.pauseReason ?? "unknown reason"}`,
+        );
     }
   }
 
