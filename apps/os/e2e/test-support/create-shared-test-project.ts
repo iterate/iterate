@@ -1,5 +1,8 @@
 import type { RpcStub } from "capnweb";
-import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import {
+  resolveReusableProjectGeneration,
+  reusableProjectIdentity,
+} from "@iterate-com/shared/test-support/reusable-project-identity";
 import type { Session } from "../../src/itx-api.generated.ts";
 
 type ProjectPoolState = {
@@ -13,13 +16,16 @@ export type TestProjectLease = {
 };
 
 /**
- * Lazily create one project for an isolation-safe test family in this Vitest
- * worker, then vend a fresh capability handle to that project for each test.
+ * Lazily create one generation-scoped project for an isolation-safe test
+ * family, then vend a fresh capability handle to that project for each test.
+ * Parallel workers, retries, and marathon rounds converge on the same
+ * deterministic identity instead of repeating project bootstrap.
  *
  * Callers must give every mutable resource (stream path, capability mount,
  * repository path, agent path, and so on) a per-test identity. Project birth
  * and project isolation tests must continue to create fresh projects instead.
- * A failed birth is never memoized, so a retry can provision a replacement.
+ * A failed birth is never memoized, so a retry re-drives the same idempotent
+ * bootstrap and preserves the Durable Object evidence from the first failure.
  */
 export function createSharedTestProjectId(opts: { slugPrefix: string }) {
   let projectIdPromise: Promise<string> | undefined;
@@ -96,9 +102,19 @@ function checkout(state: ProjectPoolState): Promise<string> {
 }
 
 async function createProject(session: RpcStub<Session>, slugPrefix: string): Promise<string> {
-  const slug = uniqueFixtureSlug(slugPrefix, { maxPrefixLength: 20 });
-  using project = session.projects.create({ slug });
-  const { projectId } = await project.__describe();
-  console.log(`[project-reuse] created family project ${slug} (${projectId})`);
-  return projectId;
+  const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!baseUrl) throw new Error("APP_CONFIG_BASE_URL is required for reusable e2e projects.");
+  const generation = resolveReusableProjectGeneration(process.env);
+  const identity = reusableProjectIdentity({ baseUrl, family: slugPrefix, generation });
+  using project = session.projects.create({ projectId: identity.id, slug: identity.slug });
+  const canonical = await project.identity();
+  if (canonical.projectId !== identity.id || canonical.slug !== identity.slug) {
+    throw new Error(
+      `Reusable project identity drifted: expected ${identity.slug} (${identity.id}), got ${canonical.slug} (${canonical.projectId}).`,
+    );
+  }
+  console.log(
+    `[project-reuse] using Vitest family project ${identity.slug} (${identity.id}) for generation ${generation}`,
+  );
+  return identity.id;
 }

@@ -3,7 +3,11 @@ import { spinnerWaiter } from "middlewright";
 import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
-import { connectAdminItx, createAdminProject } from "./test-support/forged-session.ts";
+import {
+  connectAdminItx,
+  createReusableAdminProject,
+  type ProjectIdentity,
+} from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
@@ -16,22 +20,18 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
 });
 
 test.describe("itx REPL catalogue examples", () => {
-  let workerProject: Awaited<ReturnType<typeof createAdminProject>> | undefined;
+  let catalogueProject: ProjectIdentity | undefined;
 
-  // With fullyParallel Playwright runs this hook executes once in each worker
-  // process. Examples in a worker run sequentially against one project, while
-  // unique markers/paths in example-cases.ts isolate all durable writes. A
-  // failed test restarts its worker and therefore gets a fresh project.
-  test.beforeAll(async ({ baseURL }) => {
+  // Fixed capability mounts and config-repo edits make concurrent examples
+  // require exclusive projects. Keep one project per Playwright parallel slot,
+  // but make that bounded pool generation-scoped: worker restarts, retries,
+  // and marathon rounds reuse their slot instead of repeating bootstrap.
+  test.beforeAll(async ({ baseURL }, workerInfo) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
-    workerProject = await createAdminProject({
+    catalogueProject = await createReusableAdminProject({
       baseUrl: baseURL,
-      slug: `repl-worker-${crypto.randomUUID().slice(0, 8)}`,
+      family: `repl-catalogue-${workerInfo.parallelIndex + 1}`,
     });
-  });
-
-  test.afterAll(async () => {
-    await workerProject?.[Symbol.asyncDispose]();
   });
 
   for (const { example, exampleCase } of REPL_EXAMPLES) {
@@ -42,9 +42,9 @@ test.describe("itx REPL catalogue examples", () => {
       if (exampleCase.completionTimeoutMs) {
         test.setTimeout(exampleCase.completionTimeoutMs + 60_000);
       }
-      if (!workerProject) throw new Error("REPL worker project was not initialized.");
+      if (!catalogueProject) throw new Error("REPL catalogue project was not initialized.");
       await using fixture = await helpers.createFixture(`repl-${example.id}`, {
-        project: workerProject.project,
+        project: catalogueProject,
       });
       await page.goto(`/projects/${fixture.project.slug}/repl`);
       // exact: the project slug can contain "run", which substring-matches sidebar buttons

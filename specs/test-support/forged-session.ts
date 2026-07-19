@@ -5,13 +5,13 @@ import type {
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import {
+  resolveReusableProjectGeneration,
+  reusableProjectIdentity,
+} from "@iterate-com/shared/test-support/reusable-project-identity";
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
-import {
-  resolveReusableAdminProjectGeneration,
-  reusableAdminProjectIdentity,
-} from "./reusable-project-identity.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
@@ -173,12 +173,12 @@ export async function createReusableAdminProject(input: {
   family: string;
 }): Promise<ProjectIdentity> {
   const config = await resolveOsPlaywrightAuthConfig();
-  const generation = resolveReusableAdminProjectGeneration(process.env);
+  const generation = resolveReusableProjectGeneration(process.env);
   const {
     id: projectId,
     origin,
     slug,
-  } = reusableAdminProjectIdentity({
+  } = reusableProjectIdentity({
     ...input,
     generation,
   });

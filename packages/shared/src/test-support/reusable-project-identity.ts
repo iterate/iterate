@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 const reusableProjectFamilyPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
- * Stable inside one test generation, different across deployments/workflow
- * attempts. This lets parallel workers converge without sending a new Worker
- * version's first traffic through Durable Objects created by an older one.
+ * Derive one project identity that all test workers in a generation can use.
+ * The deployment origin prevents preview slots from sharing an Auth identity;
+ * the generation rotates identities when a new deployment/workflow needs
+ * fresh Durable Objects.
  */
-export function reusableAdminProjectIdentity(input: {
+export function reusableProjectIdentity(input: {
   baseUrl: string;
   family: string;
   generation: string;
@@ -34,8 +35,8 @@ export function reusableAdminProjectIdentity(input: {
   };
 }
 
-/** Direct Playwright invocations do not pass through `preview test`. */
-export function resolveReusableAdminProjectGeneration(env: NodeJS.ProcessEnv): string {
+/** Direct Playwright/Vitest invocations do not pass through `preview test`. */
+export function resolveReusableProjectGeneration(env: NodeJS.ProcessEnv): string {
   const explicit = env.PREVIEW_TEST_GENERATION?.trim();
   if (explicit) return explicit;
 

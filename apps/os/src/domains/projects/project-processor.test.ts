@@ -22,6 +22,7 @@ function makeHarness(
   } = {},
 ) {
   const network = new MemoryStreamNetwork();
+  let searchEnsureCalls = 0;
   let workerFetchCalls = 0;
   const processorWaits: { offset: number; processor: string }[] = [];
   const processorWaitTimeouts: (number | undefined)[] = [];
@@ -55,7 +56,12 @@ function makeHarness(
         return response ?? new Response(null, { status: 204 });
       },
     },
-    search: { ensureIndex: async () => ({ created: true }) },
+    search: {
+      ensureIndex: async () => {
+        searchEnsureCalls += 1;
+        return { created: true };
+      },
+    },
   } as unknown as ProjectRpcTarget;
   const stream = network.get("/");
   const processor = new ProjectProcessor({
@@ -70,6 +76,7 @@ function makeHarness(
     processorWaits,
     processorWaitStarted,
     processorWaitTimeouts,
+    searchEnsureCalls: () => searchEnsureCalls,
     stream,
     workerFetchCalls: () => workerFetchCalls,
   };
@@ -80,6 +87,15 @@ type ProcessorName = "capability-host" | "email" | "repo" | "scheduler";
 afterEach(() => vi.restoreAllMocks());
 
 describe("ProjectProcessor bootstrap", () => {
+  it("does not consume account-wide search capacity during generic project birth", async () => {
+    const { driver, searchEnsureCalls, stream } = makeHarness();
+
+    await stream.append(PROJECT_CREATED);
+    await driver.deliver();
+
+    expect(searchEnsureCalls()).toBe(0);
+  });
+
   it("creates each required sibling processor explicitly", async () => {
     const { driver, network, stream } = makeHarness();
 

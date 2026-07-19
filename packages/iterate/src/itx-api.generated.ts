@@ -950,16 +950,16 @@ export interface SandboxCollection {
  * semantic + keyword retrieval. Every hit carries a `ref` expression that
  * fetches the exact source back, so a result is never a dead end.
  *
- * Mechanics: one Cloudflare AI Search instance per project (born with the
- * project), indexing only that project's slice of the deployment's corpus
- * bucket — tenancy is structural, not a query filter.
+ * Mechanics: one Cloudflare AI Search instance per project, created on first
+ * search use and indexing only that project's slice of the deployment's
+ * corpus bucket — tenancy is structural, not a query filter.
  */
 export interface Search {
   __describe(): Promise<Description>;
   /**
-   * Ensure this project's search instance exists (idempotent). The project
-   * CREATE SAGA calls this so search is warm from birth; the lazy
-   * query/index paths remain as self-heal for projects that predate it.
+   * Ensure this project's search instance exists (idempotent). Search query
+   * and index paths call the same provisioning path on first use; this verb is
+   * available for callers that want to start the initial sync explicitly.
    * Safe to call any time — an existing instance is a no-op.
    */
   ensureIndex(): Promise<{ created: boolean }>;

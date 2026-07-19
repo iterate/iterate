@@ -121,18 +121,11 @@ export class ProjectProcessor extends StreamProcessor<
           // email router are explicit sibling processors created by the
           // project's birth saga. A physical child stream never implies any
           // processor identity.
-          // The project's AI Search instance is born WITH the project so
-          // itx.search works from the first query instead of warming lazily
-          // (Jonas, 2026-07-13). Fire-and-forget, NOT awaited in the saga:
-          // it's a third-party management API call whose latency must never
-          // gate project creation or block this processor's delivery (e2e
-          // fixture churn showed exactly that). Failure or cancellation is
-          // fine — the query/index paths lazily self-heal.
-          void this.deps.itx.search.ensureIndex().catch((error: unknown) => {
-            console.warn(
-              `project create: search instance ensure failed (lazy self-heal remains): ${String(error).slice(0, 200)}`,
-            );
-          });
+          // AI Search is provisioned on first search use, not on generic
+          // project birth. Most projects never search, and eager provisioning
+          // made a burst of otherwise-independent creates consume the
+          // account-wide instance quota. query/index already implement the
+          // explicit first-touch create-and-warm contract.
           const rootCapabilityHostDurableObjectName = DurableObjectNameCodec.stringify({
             projectId: this.deps.itx.projectId,
             path: "/",

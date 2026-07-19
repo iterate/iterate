@@ -897,7 +897,7 @@ return await itx.projects.get(pid).__describe();
   >({
     id: "search-query-and-resolve-ref",
     // Not in the unattended matrix: on a fresh fixture project the instance
-    // (born with the project) has not finished its first sync, so the corpus
+    // (created on first search use) has not finished its first sync, so the corpus
     // lane is empty-but-warming — the assertion would race the index.
     e2eProven: false,
     title: "Search the project, then follow a hit's ref to the real object",
