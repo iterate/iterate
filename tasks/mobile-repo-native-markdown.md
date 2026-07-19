@@ -9,7 +9,7 @@ replaces: https://github.com/iterate/iterate/pull/2065
 
 ## Status
 
-The native repo collection, working-tree editor, Markdown preview, and chat rendering are implemented. Unit/type/export/prebuild verification passes; a fresh EAS development build and physical-device interaction pass remain because the Markdown renderer adds native code to the client binary.
+The native repo collection, working-tree editor, Markdown preview, and chat rendering are implemented. Unit/type/export/prebuild verification and EAS development build `b783b444-28f5-45c0-b632-e6fd447608a0` pass; the physical-device interaction pass remains.
 
 ## Outcome
 
@@ -25,7 +25,7 @@ This supersedes the Expo Go proof of concept in #2065. It must build on the nati
 - [x] Preserve a lossless source editor for Markdown and other text files, including dirty-file and deletion tracking and remote-head conflict detection. _`repo-working-tree.ts` keeps source buffers and blocks commits after a head change._
 - [x] Add `react-native-enriched-markdown` at a React Native 0.81-compatible version and use its viewer for Markdown file preview. _Pinned to 0.5.0 with math disabled in the Expo config plugin._
 - [x] Render assistant chat messages with the enriched Markdown viewer while retaining selectable plain text for user messages. _Shared `Markdown` renders assistant output; user bubbles remain `Text`._
-- [ ] Test the working-tree behavior, mobile typecheck/tests, web export/e2e surface, and native prebuild/autolinking. _41 unit tests, typecheck, web export, mobile Playwright, and iOS prebuild pass; physical-device/EAS verification remains._
+- [ ] Test the working-tree behavior, mobile typecheck/tests, web export/e2e surface, and native prebuild/autolinking. _41 unit tests, typecheck, web export, mobile Playwright, iOS prebuild, and the signed EAS development build pass; physical-device interaction remains._
 - [x] Document that this native dependency requires installing a newly built development client before physical-device testing. _Added to the mobile README and replacement PR body._
 - [x] Close #2065 with a note pointing to the replacement PR after the replacement is open. _Closed with a supersession note linking #2143._
 
