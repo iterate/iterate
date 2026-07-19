@@ -35,6 +35,13 @@ class WorkerBuildInProgressError extends Error {
   override readonly name = "WorkerBuildInProgressError";
 }
 
+/** All authoritative Repo DO reads for a late-bound branch failed to answer
+ * inside their bounded window. Named so the RPC boundary and telemetry retain
+ * the distinction from a source/build failure. */
+class RepoHeadResolutionDeadlineError extends Error {
+  override readonly name = "RepoHeadResolutionDeadlineError";
+}
+
 /** Name-based, because the error crosses Workers RPC (which preserves
  * `error.name` but not class identity). */
 export function isWorkerBuildInProgressError(error: unknown): boolean {
@@ -68,6 +75,21 @@ export type WorkerBindings = Record<string, unknown>;
 // per-isolate memo removes the KV manifest+module reads from warm loads.
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
+
+type RepoHead = { branch: string; commitOid: string; contentHash: string };
+
+// Repo head reads are normally sub-second. Production trace a5446491 showed
+// one native Workers RPC strand for 101.6s while later calls to the SAME Repo
+// DO completed in 19-394ms. A sparse hedge is therefore safer than letting a
+// single transport call consume the caller's entire runtime deadline. The
+// hedges still hit the one authoritative Repo DO; its cold clone path already
+// single-flights, so this neither caches mutable state elsewhere nor forks
+// source identity.
+const REPO_HEAD_ATTEMPT_TIMEOUTS_MS = [5_000, 10_000, 15_000] as const;
+const REPO_HEAD_DEADLINE_MS = REPO_HEAD_ATTEMPT_TIMEOUTS_MS.reduce(
+  (total, timeoutMs) => total + timeoutMs,
+  0,
+);
 
 export async function resolveWorkerSource({
   buildBudgetMs,
@@ -619,12 +641,16 @@ async function resolveFileSource({
   // worker at this repo path", not a frozen commit, so source changes are
   // visible on next use. The repo answers branch -> head from its durable
   // head cache.
-  const repo = env.REPO.getByName(
-    DurableObjectNameCodec.stringify({ path: source.files.repoPath, projectId }),
-  );
-  const head = await repo.getHead(
-    source.files.ref === undefined ? {} : { branch: source.files.ref.branch },
-  );
+  const repoName = DurableObjectNameCodec.stringify({ path: source.files.repoPath, projectId });
+  const headInput = source.files.ref === undefined ? {} : { branch: source.files.ref.branch };
+  const head = await resolveRepoHead({
+    projectId,
+    // A hedge gets a fresh stub. Production showed later calls reaching the
+    // same DO while one native RPC remained stranded; reusing that RPC
+    // channel would defeat the point of the hedge.
+    readHead: () => env.REPO.getByName(repoName).getHead(headInput),
+    repoPath: source.files.repoPath,
+  });
   return {
     branch: head.branch,
     commitOid: head.commitOid,
@@ -634,6 +660,68 @@ async function resolveFileSource({
     repoPath: source.files.repoPath,
     type: "repo",
   };
+}
+
+/**
+ * Read a late-bound repo head with sparse, bounded hedges. A call that rejects
+ * keeps its original semantics and is not retried. A call that does not settle
+ * inside its window gets a fresh-stub successor; the timed-out Promise remains
+ * observed by Promise.race, so a later RPC rejection cannot become unhandled.
+ */
+async function resolveRepoHead({
+  projectId,
+  readHead,
+  repoPath,
+}: {
+  projectId: string;
+  readHead: () => Promise<RepoHead>;
+  repoPath: string;
+}): Promise<RepoHead> {
+  const startedAt = Date.now();
+  for (const [index, timeoutMs] of REPO_HEAD_ATTEMPT_TIMEOUTS_MS.entries()) {
+    const attempt = index + 1;
+    const timeout = Symbol("repo-head-attempt-timeout");
+    const call = Promise.resolve().then(readHead);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      call,
+      new Promise<typeof timeout>((resolve) => {
+        timer = setTimeout(() => resolve(timeout), timeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (outcome !== timeout) {
+      if (attempt > 1) {
+        console.warn("repo head RPC completed after a bounded hedge", {
+          attempt,
+          elapsedMs: Date.now() - startedAt,
+          projectId,
+          repoPath,
+        });
+      }
+      return outcome;
+    }
+    if (attempt < REPO_HEAD_ATTEMPT_TIMEOUTS_MS.length) {
+      console.warn("repo head RPC exceeded its hedge threshold", {
+        attempt: attempt + 1,
+        attemptTimeoutMs: timeoutMs,
+        elapsedMs: Date.now() - startedAt,
+        projectId,
+        repoPath,
+      });
+      continue;
+    }
+  }
+
+  const error = new RepoHeadResolutionDeadlineError(
+    `Repo head resolution exceeded ${REPO_HEAD_DEADLINE_MS}ms for ${repoPath}.`,
+  );
+  console.error("repo head RPC exhausted its bounded deadline", {
+    attempts: REPO_HEAD_ATTEMPT_TIMEOUTS_MS.length,
+    elapsedMs: Date.now() - startedAt,
+    projectId,
+    repoPath,
+  });
+  throw error;
 }
 
 export function loadResolvedWorker({

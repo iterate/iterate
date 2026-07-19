@@ -30,6 +30,11 @@ const h = vi.hoisted(() => {
     failTransport: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
+    headCalls: 0,
+    headOutcomes: [] as Array<
+      | Promise<{ branch: string; commitOid: string; contentHash: string }>
+      | { branch: string; commitOid: string; contentHash: string }
+    >,
   };
   const executeWorkerBuild = async (input: { buildKey: string; files: Record<string, string> }) => {
     state.buildCalls.push(input.buildKey);
@@ -53,7 +58,10 @@ const h = vi.hoisted(() => {
     REPO: {
       getByName: () => ({
         getFilesSnapshot: async () => ({ files: state.files }),
-        getHead: async () => state.head,
+        getHead: async () => {
+          state.headCalls += 1;
+          return await (state.headOutcomes.shift() ?? state.head);
+        },
       }),
     },
     WORKER_BUILD_CACHE: kv,
@@ -86,6 +94,73 @@ function setCommit(commitOid: string, contentHash: string, workerTs: string) {
 }
 
 describe("resolveWorkerSource serve matrix", () => {
+  test("a stranded repo-head RPC is rescued by one bounded hedge", async () => {
+    setCommit("c1", "repo-head-hedge-v1", "HEAD HEDGE");
+    const callsBefore = h.state.headCalls;
+    h.state.headOutcomes.push(new Promise(() => {}));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      const resolving = resolveWorkerSource({
+        projectId: "prj_head_hedge",
+        source: repoSource("/repos/head-hedge"),
+        waitUntil,
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(h.state.headCalls).toBe(callsBefore + 1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const resolved = await resolving;
+      expect(h.state.headCalls).toBe(callsBefore + 2);
+      expect(resolved.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+      expect(warning).toHaveBeenCalledWith(
+        "repo head RPC exceeded its hedge threshold",
+        expect.objectContaining({ attempt: 2, projectId: "prj_head_hedge" }),
+      );
+    } finally {
+      h.state.headOutcomes.length = 0;
+      await Promise.allSettled(pending.splice(0));
+      h.kv.data.clear();
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("repo-head resolution fails explicitly after its bounded hedge deadline", async () => {
+    setCommit("c1", "repo-head-deadline-v1", "HEAD DEADLINE");
+    const callsBefore = h.state.headCalls;
+    const never = () => new Promise<never>(() => {});
+    h.state.headOutcomes.push(never(), never(), never());
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      const resolving = resolveWorkerSource({
+        projectId: "prj_head_deadline",
+        source: repoSource("/repos/head-deadline"),
+        waitUntil,
+      });
+      const rejected = expect(resolving).rejects.toMatchObject({
+        message: expect.stringContaining("exceeded 30000ms"),
+        name: "RepoHeadResolutionDeadlineError",
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejected;
+      expect(h.state.headCalls).toBe(callsBefore + 3);
+      expect(error).toHaveBeenCalledWith(
+        "repo head RPC exhausted its bounded deadline",
+        expect.objectContaining({ attempts: 3, projectId: "prj_head_deadline" }),
+      );
+    } finally {
+      h.state.headOutcomes.length = 0;
+      warning.mockRestore();
+      error.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   test("a blocking build returns fresh serve info and records the last-good pointer", async () => {
     setCommit("c1", "repo-a-v1", "A1");
     const resolved = await resolveWorkerSource({

@@ -45,7 +45,8 @@ jobs:
     name: Preview e2e marathon
     # Match cloudflare-previews.yml exactly: this is the immutable-head proof
     # for that same fully parallel test lane, including its host-CPU profile.
-    runs-on: depot-ubuntu-24.04-16
+    runs-on:
+      size: 8x32
     # A 25-run marathon of a ~2-4 min lane is over an hour; give it real
     # headroom above that but bounded (a wedged run is caught by the loop's own
     # fail-fast watchdog long before this).
