@@ -20,23 +20,40 @@ export async function openRepoTreeFile(page: Page, path: string) {
         if ((await row.count()) === 0) {
           // Page the tree's virtualized viewport one screen down — wrapping
           // back to the top at the end — until the row exists. Pierre keeps
-          // the actual scroller INSIDE its shadow root, so search
-          // descendants (crossing shadow boundaries), not ancestors.
+          // the actual scroller INSIDE its shadow root today, so search
+          // descendants first (crossing shadow boundaries); fall back to the
+          // tree's ancestor chain (crossing host boundaries) in case a
+          // future pierre scrolls at the host instead.
           await tree.evaluate((node) => {
+            const scrolls = (el: HTMLElement) => {
+              if (el.scrollHeight <= el.clientHeight + 2) return false;
+              const overflowY = getComputedStyle(el).overflowY;
+              return overflowY === "auto" || overflowY === "scroll";
+            };
             const findScroller = (root: ParentNode): HTMLElement | null => {
               for (const child of root.querySelectorAll("*")) {
                 const el = child as HTMLElement;
-                if (el.scrollHeight > el.clientHeight + 2) {
-                  const overflowY = getComputedStyle(el).overflowY;
-                  if (overflowY === "auto" || overflowY === "scroll") return el;
-                }
+                if (scrolls(el)) return el;
                 const inner = el.shadowRoot === null ? null : findScroller(el.shadowRoot);
                 if (inner !== null) return inner;
               }
               return null;
             };
+            const findAncestorScroller = (start: Element): HTMLElement | null => {
+              let el: Element | null = start;
+              while (el !== null) {
+                if (el instanceof HTMLElement && scrolls(el)) return el;
+                el =
+                  el.parentElement ??
+                  (el.getRootNode() as ShadowRoot | (Document & { host?: Element })).host ??
+                  null;
+              }
+              return null;
+            };
             const scroller =
-              findScroller(node) ?? findScroller(node.getRootNode() as ShadowRoot | Document);
+              findScroller(node) ??
+              findScroller(node.getRootNode() as ShadowRoot | Document) ??
+              findAncestorScroller(node);
             if (scroller !== null) {
               const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
               scroller.scrollTop = atEnd ? 0 : scroller.scrollTop + scroller.clientHeight;

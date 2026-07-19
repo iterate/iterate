@@ -10,6 +10,7 @@ import {
 } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import { guestbookAppRef } from "./apps/guestbook/src/guestbook-ref.ts";
 
 // This is ordinary project policy. Every GitHub-linked project repository is
 // in scope; no platform GitHub code knows that pull-request agents exist.
@@ -146,30 +147,19 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       // A second TanStack Start app at apps/guestbook, and a second SHAPE of
       // state: where the tanstack todo app keeps rows in its Durable Object's
       // SQLite, the guestbook's state is a stream-processor FOLD of durable
-      // events at /guestbook (the processor, its contract, and this same
-      // source ref live in apps/guestbook/src/guestbook.ts — the stream
-      // spine's wake subscription dials the very same Durable Object this
-      // route does). The guestbook is deliberately public: anyone can read
-      // and sign, so no auth partial gates the pages and /api needs no
-      // authenticate step.
-      const guestbookSource = {
-        files: { type: "repo", repoPath: "/repos/config" },
-        options: { pipeline: "vite", rootDir: "apps/guestbook" },
-      } as const;
+      // events at /guestbook. The imported ref is the ONE identity the wake
+      // subscription persists too (guestbook-ref.ts), so ingress and the
+      // stream spine always dial the same Durable Object and the same build.
+      // The guestbook is deliberately public: anyone can read and sign, so
+      // no auth partial gates the pages and /api needs no authenticate step.
       const url = new URL(req.url);
       if (url.pathname === "/api") {
-        return this.fetchDynamicWorker(req, {
-          type: "stateful",
-          path: "/",
-          className: "GuestbookApp",
-          durableWorkerKey: "app-guestbook",
-          source: guestbookSource,
-        });
+        return this.fetchDynamicWorker(req, guestbookAppRef);
       }
       return this.fetchDynamicWorker(req, {
         type: "stateless",
         path: "/",
-        source: guestbookSource,
+        source: guestbookAppRef.source,
       });
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });

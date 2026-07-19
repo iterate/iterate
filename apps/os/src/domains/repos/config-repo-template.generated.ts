@@ -222,38 +222,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/guestbook/src/guestbook.ts",
+    path: "apps/guestbook/src/guestbook-ref.ts",
     content:
-      "// A stream-processor-backed domain object in project userspace: the guestbook\n" +
-      "// is a fold of durable events on the project stream at /guestbook, processed\n" +
-      "// by the SAME machinery that runs the platform's own domain objects\n" +
-      "// (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in\n" +
-      "// the repo root's worker.ts, which keeps its number in Durable Object\n" +
-      "// storage: this state is a disposable cache of `reduce` over the journal —\n" +
-      "// delete it and replay rebuilds it, and every consequential outcome is an\n" +
-      "// event you can read back.\n" +
-      "//\n" +
-      "// GuestbookApp in worker.ts is the hosting half: a Durable Object registry\n" +
-      "// over an itx-dialed stream handle, woken by the durable wake subscription\n" +
-      "// the creation batch below configures.\n" +
-      "import { z } from \"zod\";\n" +
-      "import {\n" +
-      "  defineProcessorContract,\n" +
-      "  PLATFORM_STREAM_EVENTS,\n" +
-      "  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
-      "  StreamProcessor,\n" +
-      "  type StreamEventInput,\n" +
-      "} from \"iterate/processors\";\n" +
+      "// The guestbook's shared IDENTITY, dependency-free on purpose (type-only\n" +
+      "// imports bundle to pure data): the repo root's worker.ts imports this module\n" +
+      "// for its HTTP route, the app's worker.ts for its sign verb, and the wake\n" +
+      "// subscription persists the same ref — so ingress, spine delivery, and the\n" +
+      "// creation batch can never disagree about which Durable Object (and which\n" +
+      "// build) the guestbook is.\n" +
       "import type { DynamicWorkerRef } from \"iterate/sdk\";\n" +
+      "import type { StreamEventInput } from \"iterate/processors\";\n" +
       "\n" +
       "export const guestbookStreamPath = \"/guestbook\";\n" +
       "\n" +
-      "// One declarative ref for the guestbook host, shared by the HTTP route\n" +
-      "// (fetchDynamicWorker in the repo root's worker.ts) and the wake subscription\n" +
-      "// below — the same Durable Object either way, addressed by its\n" +
-      "// durableWorkerKey. The source is this app's own Vite build: the platform's\n" +
-      "// \"vite\" pipeline runs `npm run build` under apps/guestbook and hosts the\n" +
-      "// built worker, Durable Object class included.\n" +
+      "// One declarative ref for the guestbook host, shared by the HTTP routes and\n" +
+      "// the wake subscription below — the same Durable Object either way, addressed\n" +
+      "// by its durableWorkerKey. The source is this app's own Vite build: the\n" +
+      "// platform's \"vite\" pipeline runs `npm run build` under apps/guestbook and\n" +
+      "// hosts the built worker, Durable Object class included.\n" +
       "export const guestbookAppRef = {\n" +
       "  type: \"stateful\",\n" +
       "  path: \"/\",\n" +
@@ -297,7 +283,33 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      idempotencyKey: \"guestbook/subscription\",\n" +
       "    },\n" +
       "  ];\n" +
-      "}\n" +
+      "}\n",
+  },
+  {
+    path: "apps/guestbook/src/guestbook.ts",
+    content:
+      "// A stream-processor-backed domain object in project userspace: the guestbook\n" +
+      "// is a fold of durable events on the project stream at /guestbook, processed\n" +
+      "// by the SAME machinery that runs the platform's own domain objects\n" +
+      "// (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in\n" +
+      "// the repo root's worker.ts, which keeps its number in Durable Object\n" +
+      "// storage, and the tanstack todo app, which keeps rows in its own SQLite:\n" +
+      "// this state is a disposable cache of `reduce` over the journal — delete it\n" +
+      "// and replay rebuilds it, and every consequential outcome is an event you\n" +
+      "// can read back.\n" +
+      "//\n" +
+      "// GuestbookApp in worker.ts is the hosting half: a Durable Object registry\n" +
+      "// over an itx-dialed stream handle, woken by the durable wake subscription\n" +
+      "// the creation batch (guestbook-ref.ts) configures.\n" +
+      "import { z } from \"zod\";\n" +
+      "import {\n" +
+      "  defineProcessorContract,\n" +
+      "  PLATFORM_STREAM_EVENTS,\n" +
+      "  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
+      "  StreamProcessor,\n" +
+      "} from \"iterate/processors\";\n" +
+      "\n" +
+      "export { guestbookAppRef, guestbookCreationEvents, guestbookStreamPath } from \"./guestbook-ref.ts\";\n" +
       "\n" +
       "export const GuestbookProcessorContract = defineProcessorContract({\n" +
       "  slug: \"guestbook\",\n" +
@@ -368,14 +380,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {\n" +
       "  readonly contract = GuestbookProcessorContract;\n" +
       "\n" +
-      "  /**\n" +
-      "   * Wired by the hosting Durable Object (worker.ts): called with the at-head\n" +
-      "   * fold after every caught-up delivery, so the host can mirror the fresh\n" +
-      "   * state into its live-state channel and every open tab repaints. Purely an\n" +
-      "   * observation hook — the fold and the journal never depend on it.\n" +
-      "   */\n" +
-      "  onAtHead?: (state: GuestbookFoldState) => void;\n" +
-      "\n" +
       "  protected override reduce({\n" +
       "    event,\n" +
       "    state,\n" +
@@ -407,7 +411,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    delivery,\n" +
       "    state,\n" +
       "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"processEvent\"]>[0]): undefined {\n" +
-      "    if (delivery.caughtUp) this.onAtHead?.(state);\n" +
       "    // At-head reconcile: derive milestones from the WHOLE fold, never from\n" +
       "    // event-time state — a refold replays every historical event, and only\n" +
       "    // the at-head state has absorbed the milestones already journaled. One\n" +
@@ -436,21 +439,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/src/lib/state.ts",
     content:
       "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import type { GuestbookFoldState } from \"../guestbook.ts\";\n" +
       "\n" +
-      "/** One signature, exactly as the processor's fold carries it. */\n" +
-      "export type GuestbookEntry = { name: string; message: string; signedAt: string };\n" +
-      "\n" +
-      "/** The live-state value every connected browser mirrors: the guestbook fold\n" +
-      " * projected for display (title unwrapped from the birth certificate). */\n" +
-      "export type GuestbookState = {\n" +
-      "  title: string;\n" +
-      "  entries: GuestbookEntry[];\n" +
-      "  lastMilestone: number;\n" +
-      "};\n" +
+      "// The browser mirrors the processor's fold VERBATIM — the live state IS the\n" +
+      "// domain state, no projection layer in between.\n" +
+      "export type { GuestbookFoldState };\n" +
       "\n" +
       "/** The Cap'n Web root at /api — public, so no authenticate step. */\n" +
       "export type GuestbookApi = {\n" +
-      "  liveState: LiveStateRpc<GuestbookState>;\n" +
+      "  liveState: LiveStateRpc<GuestbookFoldState>;\n" +
       "  sign(name: string, message: string): Promise<void>;\n" +
       "};\n",
   },
@@ -460,20 +457,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { newWebSocketRpcSession } from \"@iterate-com/capnweb\";\n" +
       "import { createLiveStateStore } from \"iterate/live-state\";\n" +
       "import { useEffect, useRef, useState, useSyncExternalStore } from \"react\";\n" +
-      "import type { GuestbookApi, GuestbookState } from \"./state.ts\";\n" +
+      "import type { GuestbookApi, GuestbookFoldState } from \"./state.ts\";\n" +
       "\n" +
       "/**\n" +
       " * The whole client: one Cap'n Web WebSocket to /api (public — the root\n" +
-      " * target needs no authenticate step), its live state folded into the\n" +
+      " * target needs no authenticate step), the processor's fold folded into the\n" +
       " * platform's `createLiveStateStore` (snapshot + patches) and read with\n" +
-      " * `useSyncExternalStore`. Signing is a plain call on the root — the Durable\n" +
-      " * Object folds the appended event and republishes its one LiveState, and\n" +
-      " * every open tab, this one included, repaints from the pushed patch.\n" +
+      " * `useSyncExternalStore`. Signing is a plain call on the root — the append\n" +
+      " * flows through the stream's wake spine back into the fold, and every open\n" +
+      " * tab, this one included, repaints from the pushed patch.\n" +
       " */\n" +
       "export function useGuestbook() {\n" +
       "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
       "  const [error, setError] = useState<string | null>(null);\n" +
-      "  const storeRef = useRef(createLiveStateStore<GuestbookState>());\n" +
+      "  const storeRef = useRef(createLiveStateStore<GuestbookFoldState>());\n" +
       "  const store = storeRef.current;\n" +
       "\n" +
       "  useEffect(() => {\n" +
@@ -670,7 +667,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  return (\n" +
       "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
       "      <header className=\"flex items-baseline justify-between gap-4\">\n" +
-      "        <h1 className=\"text-3xl font-semibold tracking-tight\">{guestbook?.title ?? \"Guestbook\"}</h1>\n" +
+      "        <h1 className=\"text-3xl font-semibold tracking-tight\">\n" +
+      "          {guestbook?.birthCertificate?.config.title ?? \"Guestbook\"}\n" +
+      "        </h1>\n" +
       "        {guestbook !== undefined ? (\n" +
       "          <p className=\"text-sm text-stone-500\">\n" +
       "            {guestbook.entries.length === 0\n" +
@@ -742,37 +741,43 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            Nobody has signed yet — be the first.\n" +
       "          </p>\n" +
       "        ) : (\n" +
-      "          [...guestbook.entries].reverse().map((entry, index) => (\n" +
-      "            <article\n" +
-      "              key={`${entry.signedAt}:${index}`}\n" +
-      "              className=\"flex gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm\"\n" +
-      "            >\n" +
-      "              <span\n" +
-      "                aria-hidden\n" +
-      "                className=\"flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-800\"\n" +
+      "          guestbook.entries\n" +
+      "            .map((entry, index) => ({ entry, index }))\n" +
+      "            .reverse()\n" +
+      "            // The pre-reverse index: entries are append-only in the fold, so\n" +
+      "            // it identifies a row for its whole lifetime — a new signature\n" +
+      "            // inserts one element instead of remounting the list.\n" +
+      "            .map(({ entry, index }) => (\n" +
+      "              <article\n" +
+      "                key={index}\n" +
+      "                className=\"flex gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm\"\n" +
       "              >\n" +
-      "                {entry.name.slice(0, 1).toUpperCase()}\n" +
-      "              </span>\n" +
-      "              <div className=\"min-w-0\">\n" +
-      "                <p className=\"flex items-baseline gap-2\">\n" +
-      "                  <span className=\"truncate font-medium\">{entry.name}</span>\n" +
-      "                  <time\n" +
-      "                    className=\"shrink-0 text-xs text-stone-400\"\n" +
-      "                    dateTime={entry.signedAt}\n" +
-      "                    title={entry.signedAt}\n" +
-      "                  >\n" +
-      "                    {new Date(entry.signedAt).toLocaleString(undefined, {\n" +
-      "                      month: \"short\",\n" +
-      "                      day: \"numeric\",\n" +
-      "                      hour: \"numeric\",\n" +
-      "                      minute: \"2-digit\",\n" +
-      "                    })}\n" +
-      "                  </time>\n" +
-      "                </p>\n" +
-      "                <p className=\"mt-0.5 break-words text-sm text-stone-600\">{entry.message}</p>\n" +
-      "              </div>\n" +
-      "            </article>\n" +
-      "          ))\n" +
+      "                <span\n" +
+      "                  aria-hidden\n" +
+      "                  className=\"flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-800\"\n" +
+      "                >\n" +
+      "                  {entry.name.slice(0, 1).toUpperCase()}\n" +
+      "                </span>\n" +
+      "                <div className=\"min-w-0\">\n" +
+      "                  <p className=\"flex items-baseline gap-2\">\n" +
+      "                    <span className=\"truncate font-medium\">{entry.name}</span>\n" +
+      "                    <time\n" +
+      "                      className=\"shrink-0 text-xs text-stone-400\"\n" +
+      "                      dateTime={entry.signedAt}\n" +
+      "                      title={entry.signedAt}\n" +
+      "                    >\n" +
+      "                      {new Date(entry.signedAt).toLocaleString(undefined, {\n" +
+      "                        month: \"short\",\n" +
+      "                        day: \"numeric\",\n" +
+      "                        hour: \"numeric\",\n" +
+      "                        minute: \"2-digit\",\n" +
+      "                      })}\n" +
+      "                    </time>\n" +
+      "                  </p>\n" +
+      "                  <p className=\"mt-0.5 break-words text-sm text-stone-600\">{entry.message}</p>\n" +
+      "                </div>\n" +
+      "              </article>\n" +
+      "            ))\n" +
       "        )}\n" +
       "      </section>\n" +
       "    </main>\n" +
@@ -788,10 +793,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/src/worker.ts",
     content:
       "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
-      "import { IterateDurableObject } from \"iterate/sdk\";\n" +
+      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import { itxProjectStream } from \"iterate/sdk\";\n" +
+      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
       "import {\n" +
       "  type StreamSubscriberWakeRequest,\n" +
       "  type StreamSubscriberWakeResponse,\n" +
@@ -800,23 +804,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  createStreamProcessorRegistry,\n" +
       "  type StreamProcessorRegistry,\n" +
       "} from \"iterate/processors/cloudflare\";\n" +
-      "import {\n" +
-      "  guestbookCreationEvents,\n" +
-      "  GuestbookProcessor,\n" +
-      "  guestbookStreamPath,\n" +
-      "  type GuestbookFoldState,\n" +
-      "} from \"./guestbook.ts\";\n" +
-      "import type { GuestbookState } from \"./lib/state.ts\";\n" +
+      "import { GuestbookProcessor, type GuestbookFoldState } from \"./guestbook.ts\";\n" +
+      "import { guestbookCreationEvents, guestbookStreamPath } from \"./guestbook-ref.ts\";\n" +
       "\n" +
       "// The app's worker: the default export serves the Vite-built TanStack pages\n" +
       "// (and their client assets, via the platform's wrapper), while GuestbookApp\n" +
       "// is the app's DURABLE OBJECT — hosted statefully by the project worker\n" +
-      "// (worker.ts at the repo root routes /api here). Where the tanstack todo\n" +
-      "// app's rows live in Durable Object SQLite, the guestbook's state is a FOLD\n" +
-      "// of durable events on the project stream at /guestbook (the processor and\n" +
-      "// its contract live in guestbook.ts): this object only HOSTS the fold and\n" +
-      "// mirrors it into Cap'n Web live state, so every open tab repaints the\n" +
-      "// moment the stream's wake spine delivers a new signature.\n" +
+      "// (worker.ts at the repo root routes /api here). The whole app is three\n" +
+      "// moves: a stream processor folds /guestbook (guestbook.ts), the registry\n" +
+      "// exposes that fold AS the live state (a committed change republishes it\n" +
+      "// automatically), and signing is appending an event. The rest — wake\n" +
+      "// delivery, catch-up, cold-start loads, pushing patches to every open tab —\n" +
+      "// is the platform's processor machinery.\n" +
       "\n" +
       "export default createServerEntry({\n" +
       "  fetch(request) {\n" +
@@ -825,30 +824,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "});\n" +
       "\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
-      "  #host: { guestbook: GuestbookProcessor; registry: StreamProcessorRegistry } | undefined;\n" +
-      "  // The live mirror of the fold. Constructed empty: every browser-facing\n" +
-      "  // path catches the runner up and republishes before the first snapshot\n" +
-      "  // leaves this object, so nobody ever reads this placeholder.\n" +
-      "  readonly #live = new LiveState<GuestbookState>({\n" +
-      "    title: \"Guestbook\",\n" +
-      "    entries: [],\n" +
-      "    lastMilestone: 0,\n" +
-      "  });\n" +
+      "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
       "\n" +
       "  // Hosting is constructed lazily, not in the constructor: the registry and\n" +
       "  // the processor's provenance stamps need the owning project's id, which\n" +
       "  // arrives with the wake request or is read from the project stub on first\n" +
       "  // fetch — and is cached durably so an alarm fire needs no dial.\n" +
-      "  #ensureHost(projectId: string): {\n" +
-      "    guestbook: GuestbookProcessor;\n" +
-      "    registry: StreamProcessorRegistry;\n" +
-      "  } {\n" +
+      "  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {\n" +
       "    if (this.#host === undefined) {\n" +
       "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
       "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
-      "      // this.ctx carries working durable alarms (IterateDurableObject routes\n" +
-      "      // them through the platform Durable Object hosting this facet), so the\n" +
-      "      // registry's keepalive can arm; its fire calls `alarm()` below.\n" +
+      "      // getLiveState reads `reads`, which is built from this registry after\n" +
+      "      // register — the closure runs lazily, on refreshes the registry itself\n" +
+      "      // schedules, so the assignment below always wins the race. The\n" +
+      "      // explicit return type makes the registry a\n" +
+      "      // LiveState<GuestbookFoldState> (the platform's secret DO establishes\n" +
+      "      // this exact shape).\n" +
+      "      let reads: { currentState: GuestbookFoldState } | undefined;\n" +
       "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
       "        path: guestbookStreamPath,\n" +
       "        projectId,\n" +
@@ -857,58 +849,32 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
       "        // worker recovers on its next build (the antidote deploy).\n" +
       "        version: this.env.ITERATE_WORKER_VERSION,\n" +
+      "        // The fold IS the live state — nothing to redact, nothing to mirror.\n" +
+      "        getLiveState: (): GuestbookFoldState => reads!.currentState,\n" +
       "      });\n" +
-      "      const processor = new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream });\n" +
-      "      // The realtime lane: every caught-up delivery — a wake push from the\n" +
-      "      // stream spine or an explicit catch-up below — republishes the fold\n" +
-      "      // into the live mirror, and Cap'n Web pushes the patch to every tab.\n" +
-      "      processor.onAtHead = (state) => this.#publish(state);\n" +
       "      const guestbook = registry.register(\n" +
-      "        processor,\n" +
+      "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
       "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
-      "        // work, the alarm fires, the keepalive journals a revival fact, and\n" +
-      "        // its wake delivery re-runs the at-head reconcile.\n" +
+      "        // work (a milestone append), the alarm fires, the keepalive journals\n" +
+      "        // a revival fact, and its wake delivery re-runs the at-head\n" +
+      "        // reconcile.\n" +
       "        { recovery: true },\n" +
       "      );\n" +
-      "      this.#host = { guestbook, registry };\n" +
+      "      reads = registry.reads(guestbook);\n" +
+      "      this.#host = { registry };\n" +
       "    }\n" +
       "    return this.#host;\n" +
       "  }\n" +
       "\n" +
-      "  #publish(state: GuestbookFoldState): void {\n" +
-      "    this.#live.setState({\n" +
-      "      title: state.birthCertificate?.config.title ?? \"Guestbook\",\n" +
-      "      entries: state.entries,\n" +
-      "      lastMilestone: state.lastMilestone,\n" +
-      "    });\n" +
-      "  }\n" +
-      "\n" +
       "  /** Construct the host without a wake request in hand: any prior contact\n" +
       "   * cached the project id durably; only the very first ever needs a dial. */\n" +
-      "  async #freshHost(): Promise<{\n" +
-      "    guestbook: GuestbookProcessor;\n" +
-      "    registry: StreamProcessorRegistry;\n" +
-      "  }> {\n" +
+      "  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {\n" +
       "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
       "    if (projectId === undefined) {\n" +
       "      using project = await this.env.ITX.get();\n" +
       "      projectId = await project.projectId;\n" +
       "    }\n" +
       "    return this.#ensureHost(projectId);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Read-your-writes: pull the runner to head and republish. Two passes —\n" +
-      "   * a milestone the first pass's at-head reconcile journals lands AFTER the\n" +
-      "   * scan that pass already finished, so only the second pass folds it. One\n" +
-      "   * extra pass is a fixed point: folding a milestone never emits another.\n" +
-      "   * The explicit snapshot publish covers the already-at-head case, where a\n" +
-      "   * catch-up has no event to deliver and onAtHead never fires. */\n" +
-      "  async #catchUpAndPublish(): Promise<void> {\n" +
-      "    const { guestbook, registry } = await this.#freshHost();\n" +
-      "    await registry.catchUp(\"guestbook\");\n" +
-      "    await registry.catchUp(\"guestbook\");\n" +
-      "    const { state } = await registry.reads(guestbook).snapshot();\n" +
-      "    this.#publish(state);\n" +
       "  }\n" +
       "\n" +
       "  /** The hosting Durable Object's alarm fire, delivered here like a native\n" +
@@ -939,51 +905,47 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    };\n" +
       "  }\n" +
       "\n" +
-      "  liveStateTarget(): LiveStateRpcTarget<GuestbookState> {\n" +
-      "    return new LiveStateRpcTarget(this.#live);\n" +
-      "  }\n" +
-      "\n" +
+      "  /** Signing IS appending: the idempotency-keyed creation batch (birth +\n" +
+      "   * wake subscription — every signer offers it; the stream collapses it to\n" +
+      "   * one of each) plus this entry. The spine delivers the append back into\n" +
+      "   * this object's runner, the fold absorbs it, and the registry republishes\n" +
+      "   * the live state to every subscribed tab — nothing else to do here. */\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
       "    const trimmedName = name.trim().slice(0, 80);\n" +
       "    const trimmedMessage = message.trim().slice(0, 500);\n" +
       "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
-      "    // One atomic batch: the idempotency-keyed creation events (birth + wake\n" +
-      "    // subscription — every signer offers them; the stream dedupes to one of\n" +
-      "    // each) plus this entry. Raw appends — the app is the CREATOR here; the\n" +
-      "    // processor only ever emits milestone facts.\n" +
       "    using project = await this.env.ITX.get();\n" +
       "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {\n" +
       "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
       "      payload: { message: trimmedMessage, name: trimmedName },\n" +
       "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
       "    });\n" +
-      "    // Wake delivery is asynchronous; this explicit catch-up republishes the\n" +
-      "    // fold NOW, so the signer's own tab (and everyone else's) repaints\n" +
-      "    // without waiting on the spine.\n" +
-      "    await this.#catchUpAndPublish();\n" +
       "  }\n" +
       "\n" +
       "  /** The Cap'n Web door: every /api WebSocket upgrade terminates here. The\n" +
       "   * guestbook is deliberately public — same as its signing lane always was —\n" +
       "   * so the root target needs no authenticate step. */\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
-      "    // Catch up before the socket opens: the subscribe that follows leads\n" +
-      "    // with a snapshot of the real fold, never the constructor placeholder.\n" +
-      "    await this.#catchUpAndPublish();\n" +
-      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this));\n" +
+      "    const { registry } = await this.#freshHost();\n" +
+      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
       "  }\n" +
       "}\n" +
       "\n" +
-      "// What every browser holds: the live fold (read-only by construction) and\n" +
-      "// one verb. Every signature refreshes the one LiveState, so every open tab\n" +
-      "// repaints from the pushed patch — that IS the multiplayer.\n" +
+      "// What every browser holds: the fold as live state (read-only by\n" +
+      "// construction) and one verb.\n" +
       "class PublicGuestbookApi extends RpcTarget {\n" +
-      "  constructor(private readonly app: GuestbookApp) {\n" +
+      "  constructor(\n" +
+      "    private readonly app: GuestbookApp,\n" +
+      "    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,\n" +
+      "  ) {\n" +
       "    super();\n" +
       "  }\n" +
       "\n" +
-      "  get liveState(): LiveStateRpc<GuestbookState> {\n" +
-      "    return this.app.liveStateTarget();\n" +
+      "  get liveState(): LiveStateRpc<GuestbookFoldState> {\n" +
+      "    // The registry is a refreshing live-state source: the target loads\n" +
+      "    // committed runner progress before the first read, so a cold object's\n" +
+      "    // first snapshot is the real fold, not the schema default.\n" +
+      "    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);\n" +
       "  }\n" +
       "\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
@@ -1678,6 +1640,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
+      "import { guestbookAppRef } from \"./apps/guestbook/src/guestbook-ref.ts\";\n" +
       "\n" +
       "// This is ordinary project policy. Every GitHub-linked project repository is\n" +
       "// in scope; no platform GitHub code knows that pull-request agents exist.\n" +
@@ -1814,30 +1777,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // A second TanStack Start app at apps/guestbook, and a second SHAPE of\n" +
       "      // state: where the tanstack todo app keeps rows in its Durable Object's\n" +
       "      // SQLite, the guestbook's state is a stream-processor FOLD of durable\n" +
-      "      // events at /guestbook (the processor, its contract, and this same\n" +
-      "      // source ref live in apps/guestbook/src/guestbook.ts — the stream\n" +
-      "      // spine's wake subscription dials the very same Durable Object this\n" +
-      "      // route does). The guestbook is deliberately public: anyone can read\n" +
-      "      // and sign, so no auth partial gates the pages and /api needs no\n" +
-      "      // authenticate step.\n" +
-      "      const guestbookSource = {\n" +
-      "        files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "        options: { pipeline: \"vite\", rootDir: \"apps/guestbook\" },\n" +
-      "      } as const;\n" +
+      "      // events at /guestbook. The imported ref is the ONE identity the wake\n" +
+      "      // subscription persists too (guestbook-ref.ts), so ingress and the\n" +
+      "      // stream spine always dial the same Durable Object and the same build.\n" +
+      "      // The guestbook is deliberately public: anyone can read and sign, so\n" +
+      "      // no auth partial gates the pages and /api needs no authenticate step.\n" +
       "      const url = new URL(req.url);\n" +
       "      if (url.pathname === \"/api\") {\n" +
-      "        return this.fetchDynamicWorker(req, {\n" +
-      "          type: \"stateful\",\n" +
-      "          path: \"/\",\n" +
-      "          className: \"GuestbookApp\",\n" +
-      "          durableWorkerKey: \"app-guestbook\",\n" +
-      "          source: guestbookSource,\n" +
-      "        });\n" +
+      "        return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "      }\n" +
       "      return this.fetchDynamicWorker(req, {\n" +
       "        type: \"stateless\",\n" +
       "        path: \"/\",\n" +
-      "        source: guestbookSource,\n" +
+      "        source: guestbookAppRef.source,\n" +
       "      });\n" +
       "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +

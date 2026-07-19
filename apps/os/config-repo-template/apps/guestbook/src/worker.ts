@@ -1,8 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
-import { IterateDurableObject } from "iterate/sdk";
+import { IterateDurableObject, itxProjectStream } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
-import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from "iterate/live-state";
-import { itxProjectStream } from "iterate/sdk";
+import { LiveStateRpcTarget, type LiveStateRpc } from "iterate/live-state";
 import {
   type StreamSubscriberWakeRequest,
   type StreamSubscriberWakeResponse,
@@ -11,23 +10,18 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
-import {
-  guestbookCreationEvents,
-  GuestbookProcessor,
-  guestbookStreamPath,
-  type GuestbookFoldState,
-} from "./guestbook.ts";
-import type { GuestbookState } from "./lib/state.ts";
+import { GuestbookProcessor, type GuestbookFoldState } from "./guestbook.ts";
+import { guestbookCreationEvents, guestbookStreamPath } from "./guestbook-ref.ts";
 
 // The app's worker: the default export serves the Vite-built TanStack pages
 // (and their client assets, via the platform's wrapper), while GuestbookApp
 // is the app's DURABLE OBJECT — hosted statefully by the project worker
-// (worker.ts at the repo root routes /api here). Where the tanstack todo
-// app's rows live in Durable Object SQLite, the guestbook's state is a FOLD
-// of durable events on the project stream at /guestbook (the processor and
-// its contract live in guestbook.ts): this object only HOSTS the fold and
-// mirrors it into Cap'n Web live state, so every open tab repaints the
-// moment the stream's wake spine delivers a new signature.
+// (worker.ts at the repo root routes /api here). The whole app is three
+// moves: a stream processor folds /guestbook (guestbook.ts), the registry
+// exposes that fold AS the live state (a committed change republishes it
+// automatically), and signing is appending an event. The rest — wake
+// delivery, catch-up, cold-start loads, pushing patches to every open tab —
+// is the platform's processor machinery.
 
 export default createServerEntry({
   fetch(request) {
@@ -36,30 +30,23 @@ export default createServerEntry({
 });
 
 export class GuestbookApp extends IterateDurableObject {
-  #host: { guestbook: GuestbookProcessor; registry: StreamProcessorRegistry } | undefined;
-  // The live mirror of the fold. Constructed empty: every browser-facing
-  // path catches the runner up and republishes before the first snapshot
-  // leaves this object, so nobody ever reads this placeholder.
-  readonly #live = new LiveState<GuestbookState>({
-    title: "Guestbook",
-    entries: [],
-    lastMilestone: 0,
-  });
+  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;
 
   // Hosting is constructed lazily, not in the constructor: the registry and
   // the processor's provenance stamps need the owning project's id, which
   // arrives with the wake request or is read from the project stub on first
   // fetch — and is cached durably so an alarm fire needs no dial.
-  #ensureHost(projectId: string): {
-    guestbook: GuestbookProcessor;
-    registry: StreamProcessorRegistry;
-  } {
+  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {
     if (this.#host === undefined) {
       this.ctx.storage.kv.put("guestbook:project-id", projectId);
       const stream = itxProjectStream(this.env, guestbookStreamPath);
-      // this.ctx carries working durable alarms (IterateDurableObject routes
-      // them through the platform Durable Object hosting this facet), so the
-      // registry's keepalive can arm; its fire calls `alarm()` below.
+      // getLiveState reads `reads`, which is built from this registry after
+      // register — the closure runs lazily, on refreshes the registry itself
+      // schedules, so the assignment below always wins the race. The
+      // explicit return type makes the registry a
+      // LiveState<GuestbookFoldState> (the platform's secret DO establishes
+      // this exact shape).
+      let reads: { currentState: GuestbookFoldState } | undefined;
       const registry = createStreamProcessorRegistry(this.ctx, {
         path: guestbookStreamPath,
         projectId,
@@ -68,58 +55,32 @@ export class GuestbookApp extends IterateDurableObject {
         // crash-looping keepalive's backoff budget, so a broken-then-fixed
         // worker recovers on its next build (the antidote deploy).
         version: this.env.ITERATE_WORKER_VERSION,
+        // The fold IS the live state — nothing to redact, nothing to mirror.
+        getLiveState: (): GuestbookFoldState => reads!.currentState,
       });
-      const processor = new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream });
-      // The realtime lane: every caught-up delivery — a wake push from the
-      // stream spine or an explicit catch-up below — republishes the fold
-      // into the live mirror, and Cap'n Web pushes the patch to every tab.
-      processor.onAtHead = (state) => this.#publish(state);
       const guestbook = registry.register(
-        processor,
+        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
         // Keepalive recovery: if an eviction kills this object while it owes
-        // work, the alarm fires, the keepalive journals a revival fact, and
-        // its wake delivery re-runs the at-head reconcile.
+        // work (a milestone append), the alarm fires, the keepalive journals
+        // a revival fact, and its wake delivery re-runs the at-head
+        // reconcile.
         { recovery: true },
       );
-      this.#host = { guestbook, registry };
+      reads = registry.reads(guestbook);
+      this.#host = { registry };
     }
     return this.#host;
   }
 
-  #publish(state: GuestbookFoldState): void {
-    this.#live.setState({
-      title: state.birthCertificate?.config.title ?? "Guestbook",
-      entries: state.entries,
-      lastMilestone: state.lastMilestone,
-    });
-  }
-
   /** Construct the host without a wake request in hand: any prior contact
    * cached the project id durably; only the very first ever needs a dial. */
-  async #freshHost(): Promise<{
-    guestbook: GuestbookProcessor;
-    registry: StreamProcessorRegistry;
-  }> {
+  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {
     let projectId = this.ctx.storage.kv.get<string>("guestbook:project-id");
     if (projectId === undefined) {
       using project = await this.env.ITX.get();
       projectId = await project.projectId;
     }
     return this.#ensureHost(projectId);
-  }
-
-  /** Read-your-writes: pull the runner to head and republish. Two passes —
-   * a milestone the first pass's at-head reconcile journals lands AFTER the
-   * scan that pass already finished, so only the second pass folds it. One
-   * extra pass is a fixed point: folding a milestone never emits another.
-   * The explicit snapshot publish covers the already-at-head case, where a
-   * catch-up has no event to deliver and onAtHead never fires. */
-  async #catchUpAndPublish(): Promise<void> {
-    const { guestbook, registry } = await this.#freshHost();
-    await registry.catchUp("guestbook");
-    await registry.catchUp("guestbook");
-    const { state } = await registry.reads(guestbook).snapshot();
-    this.#publish(state);
   }
 
   /** The hosting Durable Object's alarm fire, delivered here like a native
@@ -150,51 +111,47 @@ export class GuestbookApp extends IterateDurableObject {
     };
   }
 
-  liveStateTarget(): LiveStateRpcTarget<GuestbookState> {
-    return new LiveStateRpcTarget(this.#live);
-  }
-
+  /** Signing IS appending: the idempotency-keyed creation batch (birth +
+   * wake subscription — every signer offers it; the stream collapses it to
+   * one of each) plus this entry. The spine delivers the append back into
+   * this object's runner, the fold absorbs it, and the registry republishes
+   * the live state to every subscribed tab — nothing else to do here. */
   async sign(name: string, message: string): Promise<void> {
     const trimmedName = name.trim().slice(0, 80);
     const trimmedMessage = message.trim().slice(0, 500);
     if (trimmedName.length === 0 || trimmedMessage.length === 0) return;
-    // One atomic batch: the idempotency-keyed creation events (birth + wake
-    // subscription — every signer offers them; the stream dedupes to one of
-    // each) plus this entry. Raw appends — the app is the CREATOR here; the
-    // processor only ever emits milestone facts.
     using project = await this.env.ITX.get();
     await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), {
       type: "events.iterate.com/guestbook/entry-signed",
       payload: { message: trimmedMessage, name: trimmedName },
       idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
     });
-    // Wake delivery is asynchronous; this explicit catch-up republishes the
-    // fold NOW, so the signer's own tab (and everyone else's) repaints
-    // without waiting on the spine.
-    await this.#catchUpAndPublish();
   }
 
   /** The Cap'n Web door: every /api WebSocket upgrade terminates here. The
    * guestbook is deliberately public — same as its signing lane always was —
    * so the root target needs no authenticate step. */
   async fetch(request: Request): Promise<Response> {
-    // Catch up before the socket opens: the subscribe that follows leads
-    // with a snapshot of the real fold, never the constructor placeholder.
-    await this.#catchUpAndPublish();
-    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this));
+    const { registry } = await this.#freshHost();
+    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));
   }
 }
 
-// What every browser holds: the live fold (read-only by construction) and
-// one verb. Every signature refreshes the one LiveState, so every open tab
-// repaints from the pushed patch — that IS the multiplayer.
+// What every browser holds: the fold as live state (read-only by
+// construction) and one verb.
 class PublicGuestbookApi extends RpcTarget {
-  constructor(private readonly app: GuestbookApp) {
+  constructor(
+    private readonly app: GuestbookApp,
+    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,
+  ) {
     super();
   }
 
-  get liveState(): LiveStateRpc<GuestbookState> {
-    return this.app.liveStateTarget();
+  get liveState(): LiveStateRpc<GuestbookFoldState> {
+    // The registry is a refreshing live-state source: the target loads
+    // committed runner progress before the first read, so a cold object's
+    // first snapshot is the real fold, not the schema default.
+    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);
   }
 
   async sign(name: string, message: string): Promise<void> {

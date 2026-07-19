@@ -18,7 +18,9 @@ function Guestbook() {
   return (
     <main className="mx-auto max-w-xl px-4 py-12">
       <header className="flex items-baseline justify-between gap-4">
-        <h1 className="text-3xl font-semibold tracking-tight">{guestbook?.title ?? "Guestbook"}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">
+          {guestbook?.birthCertificate?.config.title ?? "Guestbook"}
+        </h1>
         {guestbook !== undefined ? (
           <p className="text-sm text-stone-500">
             {guestbook.entries.length === 0
@@ -90,37 +92,43 @@ function Guestbook() {
             Nobody has signed yet — be the first.
           </p>
         ) : (
-          [...guestbook.entries].reverse().map((entry, index) => (
-            <article
-              key={`${entry.signedAt}:${index}`}
-              className="flex gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"
-            >
-              <span
-                aria-hidden
-                className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-800"
+          guestbook.entries
+            .map((entry, index) => ({ entry, index }))
+            .reverse()
+            // The pre-reverse index: entries are append-only in the fold, so
+            // it identifies a row for its whole lifetime — a new signature
+            // inserts one element instead of remounting the list.
+            .map(({ entry, index }) => (
+              <article
+                key={index}
+                className="flex gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm"
               >
-                {entry.name.slice(0, 1).toUpperCase()}
-              </span>
-              <div className="min-w-0">
-                <p className="flex items-baseline gap-2">
-                  <span className="truncate font-medium">{entry.name}</span>
-                  <time
-                    className="shrink-0 text-xs text-stone-400"
-                    dateTime={entry.signedAt}
-                    title={entry.signedAt}
-                  >
-                    {new Date(entry.signedAt).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                    })}
-                  </time>
-                </p>
-                <p className="mt-0.5 break-words text-sm text-stone-600">{entry.message}</p>
-              </div>
-            </article>
-          ))
+                <span
+                  aria-hidden
+                  className="flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-800"
+                >
+                  {entry.name.slice(0, 1).toUpperCase()}
+                </span>
+                <div className="min-w-0">
+                  <p className="flex items-baseline gap-2">
+                    <span className="truncate font-medium">{entry.name}</span>
+                    <time
+                      className="shrink-0 text-xs text-stone-400"
+                      dateTime={entry.signedAt}
+                      title={entry.signedAt}
+                    >
+                      {new Date(entry.signedAt).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </time>
+                  </p>
+                  <p className="mt-0.5 break-words text-sm text-stone-600">{entry.message}</p>
+                </div>
+              </article>
+            ))
         )}
       </section>
     </main>
