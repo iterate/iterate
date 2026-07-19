@@ -575,15 +575,29 @@ export class InternalApp extends IterateWorkerEntrypoint {
                 const session = await publicApi.authenticate({ type: "from-server-cookie" });
                 const me = await session.me;
                 identity.textContent = "authenticated as " + me.userId;
+                let refreshPending = false;
+                const finishRefresh = () => {
+                  refreshPending = false;
+                  refresh.disabled = false;
+                  refresh.textContent = "refresh over Cap'n Web";
+                };
+                const reportRefreshError = (error) => {
+                  finishRefresh();
+                  showError(error);
+                };
                 const render = async () => {
                   events.textContent = JSON.stringify(await session.liveState.get(), null, 2);
+                  if (refreshPending) finishRefresh();
                 };
                 const subscription = await session.liveState.subscribe(() => {
-                  void render().catch(showError);
+                  void render().catch(reportRefreshError);
                 });
                 refresh.disabled = false;
                 refresh.onclick = () => {
-                  void session.refresh().catch(showError);
+                  refreshPending = true;
+                  refresh.disabled = true;
+                  refresh.textContent = "refreshing…";
+                  void session.refresh().catch(reportRefreshError);
                 };
                 addEventListener("pagehide", () => {
                   subscription[Symbol.dispose]();

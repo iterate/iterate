@@ -1552,15 +1552,29 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
       "                const me = await session.me;\n" +
       "                identity.textContent = \"authenticated as \" + me.userId;\n" +
+      "                let refreshPending = false;\n" +
+      "                const finishRefresh = () => {\n" +
+      "                  refreshPending = false;\n" +
+      "                  refresh.disabled = false;\n" +
+      "                  refresh.textContent = \"refresh over Cap'n Web\";\n" +
+      "                };\n" +
+      "                const reportRefreshError = (error) => {\n" +
+      "                  finishRefresh();\n" +
+      "                  showError(error);\n" +
+      "                };\n" +
       "                const render = async () => {\n" +
       "                  events.textContent = JSON.stringify(await session.liveState.get(), null, 2);\n" +
+      "                  if (refreshPending) finishRefresh();\n" +
       "                };\n" +
       "                const subscription = await session.liveState.subscribe(() => {\n" +
-      "                  void render().catch(showError);\n" +
+      "                  void render().catch(reportRefreshError);\n" +
       "                });\n" +
       "                refresh.disabled = false;\n" +
       "                refresh.onclick = () => {\n" +
-      "                  void session.refresh().catch(showError);\n" +
+      "                  refreshPending = true;\n" +
+      "                  refresh.disabled = true;\n" +
+      "                  refresh.textContent = \"refreshing…\";\n" +
+      "                  void session.refresh().catch(reportRefreshError);\n" +
       "                };\n" +
       "                addEventListener(\"pagehide\", () => {\n" +
       "                  subscription[Symbol.dispose]();\n" +
