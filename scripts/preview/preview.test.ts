@@ -210,6 +210,17 @@ describe("preview workflow scope", () => {
     ).toContain("- apps/dummy-petshop/**");
   });
 
+  test("holds streams tests until its Durable Object namespace serves the exact deployment", () => {
+    expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
+      previewReadyUrlPath: "/api/__internal/health",
+      previewReadyWorkerVersion: {
+        probeQueryParam: "deployment-probe",
+        probeWaveCount: 10,
+        stableForMs: 10_000,
+      },
+    });
+  });
+
   test("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {
     const headSha = "abc1234";
     const os = cloudflarePreviewApps.os;

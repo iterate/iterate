@@ -1783,6 +1783,16 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
+    previewReadyUrlPath: "/api/__internal/health",
+    // This worker owns its own Stream Durable Object namespace. A plain 200
+    // health check let the first random test stream absorb Cloudflare's
+    // code-update reset. Exercise the namespace's finite placement waves and
+    // hold the exact edge/DO version stable before the e2e lanes begin.
+    previewReadyWorkerVersion: {
+      probeQueryParam: "deployment-probe",
+      probeWaveCount: 10,
+      stableForMs: 10_000,
+    },
     previewTestBaseUrlEnvVar: "WORKER_URL",
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3

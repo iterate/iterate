@@ -10,6 +10,7 @@
     "destroy": "tsx ./scripts/erase-data.ts",
     "erase-data": "tsx ./scripts/erase-data.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
+    "test": "vitest run --config vitest.unit.config.ts",
     "vitest": "vitest run e2e/vitest",
     "playwright": "playwright test e2e/playwright",
     "test:e2e": "pnpm vitest && pnpm playwright",

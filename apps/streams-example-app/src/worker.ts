@@ -6,9 +6,16 @@ import type { Stream } from "iterate/sdk";
 import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
+import { streamDeploymentReadinessResponse } from "./lib/deployment-readiness.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
+import { DurableObjectNameCodec } from "~/domains/durable-object-names.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
+import {
+  deploymentReadinessProbeIndexes,
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWave,
+} from "~/domains/workers/worker-build-readiness.ts";
 
 export { StreamDurableObject } from "~/domains/streams/stream-durable-object.ts";
 
@@ -66,7 +73,33 @@ export default createServerEntry({
     const url = new URL(request.url);
 
     if (url.pathname === "/api/__internal/health") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      const version = workerEnv.CF_VERSION_METADATA?.id ?? "unversioned";
+      const probeSequence = url.searchParams.get(deploymentReadinessProbeQueryParam);
+      const probeWave = deploymentReadinessProbeWave(probeSequence);
+      const probeIndexes =
+        version === "unversioned" ? [0] : deploymentReadinessProbeIndexes(probeWave);
+
+      // Fixed, bounded names absorb this namespace's code-update transition
+      // before a test creates a random stream on the same rollout. Ten waves
+      // of eight names cover placements without leaking one identity per
+      // request or deployment.
+      const probes = probeIndexes.map((probe) =>
+        workerEnv.STREAM.getByName(
+          DurableObjectNameCodec.stringify(
+            {
+              path: "/deployment-readiness",
+              projectId: null,
+              props: { probe: String(probe) },
+            },
+            { allowNullProjectId: true },
+          ),
+        ),
+      );
+      return streamDeploymentReadinessResponse({
+        version,
+        readDurableObjectVersions: () =>
+          Promise.all(probes.map((probe) => probe.deploymentVersion())),
+      });
     }
 
     // Parsed per request, NOT at module scope (matching apps/os): a fresh
