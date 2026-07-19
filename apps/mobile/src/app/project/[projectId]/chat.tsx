@@ -42,6 +42,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
@@ -330,9 +331,13 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {message.text !== "" ? (
-        <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
-          {message.text}
-        </Text>
+        isUser ? (
+          <Text style={styles.bubbleUserText} selectable>
+            {message.text}
+          </Text>
+        ) : (
+          <Markdown markdown={message.text} />
+        )
       ) : null}
       {message.files?.map((file) => (
         <MessageAttachment key={file.path} file={file} />

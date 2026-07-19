@@ -55,8 +55,14 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
     });
   };
   const projectRoute =
-    (pathname: "/project/[projectId]/examples" | "/project/[projectId]/approvals") => () =>
-      router.push({ pathname, params: { projectId } });
+    (
+      pathname:
+        | "/project/[projectId]/repos"
+        | "/project/[projectId]/examples"
+        | "/project/[projectId]/approvals",
+    ) =>
+    () =>
+      router.push({ pathname, params: { projectId, slug: projectSlug } });
 
   return (
     <>
@@ -115,6 +121,10 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
               </View>
 
               <View style={styles.items}>
+                <DrawerItem
+                  label="/repos"
+                  onPress={() => close(projectRoute("/project/[projectId]/repos"))}
+                />
                 <DrawerItem
                   label="Examples"
                   onPress={() => close(projectRoute("/project/[projectId]/examples"))}

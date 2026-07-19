@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: implementation-complete
 size: large
 branch: mobile-repo-native-markdown
 replaces: https://github.com/iterate/iterate/pull/2065
@@ -9,7 +9,7 @@ replaces: https://github.com/iterate/iterate/pull/2065
 
 ## Status
 
-The replacement is specified against the merged native development-build app. Implementation has not started. The main product decision is that repository Markdown remains lossless source text: enriched Markdown is used for rendering and preview, while the source editor remains capable of preserving every Markdown construct.
+The native repo collection, working-tree editor, Markdown preview, and chat rendering are implemented. Unit/type/export/prebuild verification passes; a fresh EAS development build and physical-device interaction pass remain because the Markdown renderer adds native code to the client binary.
 
 ## Outcome
 
@@ -19,15 +19,15 @@ This supersedes the Expo Go proof of concept in #2065. It must build on the nati
 
 ## Checklist
 
-- [ ] Add `/repos` as the first first-class destination in the project drawer and expose the project's repositories with the config repo first.
-- [ ] Build a native repo screen with file navigation, search, create/delete/discard actions, and an explicit batch commit flow.
-- [ ] Load and mutate real repository state through `project.repos.list()`, `project.repos.get(path)`, `Repo.listFiles()`, `Repo.readFile()`, and `Repo.commitFiles()`.
-- [ ] Preserve a lossless source editor for Markdown and other text files, including dirty-file and deletion tracking and remote-head conflict detection.
-- [ ] Add `react-native-enriched-markdown` at a React Native 0.81-compatible version and use its viewer for Markdown file preview.
-- [ ] Render assistant chat messages with the enriched Markdown viewer while retaining selectable plain text for user messages.
-- [ ] Test the working-tree behavior, mobile typecheck/tests, web export/e2e surface, and native prebuild/autolinking.
-- [ ] Document that this native dependency requires installing a newly built development client before physical-device testing.
-- [ ] Close #2065 with a note pointing to the replacement PR after the replacement is open.
+- [x] Add `/repos` as the first first-class destination in the project drawer and expose the project's repositories with the config repo first. _Implemented in the drawer and `repos.tsx`._
+- [x] Build a native repo screen with file navigation, search, create/delete/discard actions, and an explicit batch commit flow. _Implemented by `repo.tsx`, the native tree drawer, and CodeMirror DOM editor._
+- [x] Load and mutate real repository state through `project.repos.list()`, `project.repos.get(path)`, `Repo.listFiles()`, `Repo.readFile()`, and `Repo.commitFiles()`. _The collection and workspace call these project capabilities directly._
+- [x] Preserve a lossless source editor for Markdown and other text files, including dirty-file and deletion tracking and remote-head conflict detection. _`repo-working-tree.ts` keeps source buffers and blocks commits after a head change._
+- [x] Add `react-native-enriched-markdown` at a React Native 0.81-compatible version and use its viewer for Markdown file preview. _Pinned to 0.5.0 with math disabled in the Expo config plugin._
+- [x] Render assistant chat messages with the enriched Markdown viewer while retaining selectable plain text for user messages. _Shared `Markdown` renders assistant output; user bubbles remain `Text`._
+- [ ] Test the working-tree behavior, mobile typecheck/tests, web export/e2e surface, and native prebuild/autolinking. _41 unit tests, typecheck, web export, mobile Playwright, and iOS prebuild pass; physical-device/EAS verification remains._
+- [x] Document that this native dependency requires installing a newly built development client before physical-device testing. _Added to the mobile README and replacement PR body._
+- [x] Close #2065 with a note pointing to the replacement PR after the replacement is open. _Closed with a supersession note linking #2143._
 
 ## Product and implementation decisions
 

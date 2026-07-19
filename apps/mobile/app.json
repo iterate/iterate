@@ -21,6 +21,12 @@
       "expo-web-browser",
       "expo-dev-client",
       [
+        "react-native-enriched-markdown",
+        {
+          "enableMath": false
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#0b0b0f",
