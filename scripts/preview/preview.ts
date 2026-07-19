@@ -80,6 +80,14 @@ type DeployCommandOptions = PullRequestCommandOptions & {
    */
   allApps?: boolean;
   /**
+   * With --all-apps, keep exact-head apps that this PR still owns and whose
+   * readiness endpoint is healthy. The marathon uses this to reunify a
+   * partial fleet without uploading an identical Worker version and opening
+   * a fresh Durable Object rollout window. Manual --all-apps remains a forced
+   * redeploy unless this narrower option is explicit.
+   */
+  reuseHealthyCurrentHead?: boolean;
+  /**
    * Deploy even when the PR is a draft without the `preview` label. Draft
    * PRs otherwise skip previews (or give their slot back); an explicit
    * invocation — workflow_dispatch, the flake-hunt marathon, a human at a
@@ -146,6 +154,9 @@ async function deployPreviewApps({
   options: DeployCommandOptions;
   runtime: PreviewRuntime;
 }) {
+  if (options.reuseHealthyCurrentHead && !options.allApps) {
+    throw new Error("--reuse-healthy-current-head requires --all-apps");
+  }
   logPreview(
     `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
   );
@@ -212,17 +223,28 @@ async function deployPreviewApps({
     };
   }
 
-  const selectedApps = options.allApps
-    ? (logPreview("--all-apps: deploying the full preview fleet regardless of diff"),
-      Object.values(cloudflarePreviewApps))
-    : await selectPreviewAppsForPullRequest({
-        ...context,
-        previousState: current.state,
-      });
+  let selectedApps: PreviewAppRuntime[];
+  if (options.allApps && options.reuseHealthyCurrentHead) {
+    selectedApps = await selectFullFleetAppsNeedingDeploy({
+      headSha: context.pullRequestHeadSha,
+      heldSlotSlugs: heldSlots.map((slot) => slot.slug),
+      previousState: current.state,
+    });
+  } else if (options.allApps) {
+    logPreview("--all-apps: deploying the full preview fleet regardless of diff");
+    selectedApps = Object.values(cloudflarePreviewApps);
+  } else {
+    selectedApps = await selectPreviewAppsForPullRequest({
+      ...context,
+      previousState: current.state,
+    });
+  }
 
   if (selectedApps.length === 0) {
     logPreview(
-      "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and PR body untouched",
+      options.reuseHealthyCurrentHead
+        ? "nothing to deploy: this PR still owns the recorded slot and every full-fleet app is healthy at the exact head — preserving the existing Worker versions"
+        : "nothing to deploy: no preview apps are affected by this diff, no failed apps need a retry, and every recorded app is still serving — leaving lease and PR body untouched",
     );
     return {
       ok: true,
@@ -553,6 +575,8 @@ async function testPreviewApps({
     };
   }
   logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
+  const testGeneration = resolvePreviewTestGeneration(runtime.commandEnvironment);
+  logPreview(`test generation: ${testGeneration}`);
 
   // Preview e2e commands are full app-level suites. They run concurrently:
   // each app deploys its own workers, and the non-OS suites are seconds-long
@@ -586,6 +610,7 @@ async function testPreviewApps({
         "--",
         "env",
         ...baseUrlEnvironment,
+        `PREVIEW_TEST_GENERATION=${testGeneration}`,
         ...app.previewTestCommandArgs,
       ],
       command: "doppler",
@@ -4619,6 +4644,76 @@ async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; deta
 }
 
 /**
+ * Full-fleet selection for repeated immutable-head testing. Reuse is safe
+ * only when semaphore truth says this PR still owns the recorded slot. Every
+ * app must also be testable at the exact head and answer its readiness probe;
+ * anything ambiguous is selected for deployment. Probes run concurrently so
+ * this guard adds roughly one health request, not five serial round trips.
+ */
+async function selectFullFleetAppsNeedingDeploy(input: {
+  headSha: string;
+  heldSlotSlugs: readonly string[];
+  previousState: CloudflarePreviewState;
+  probeAppServing?: PreviewAppServingProbe;
+}): Promise<PreviewAppRuntime[]> {
+  const fullFleet = Object.values(cloudflarePreviewApps);
+  const recordedSlot = input.previousState.environmentConfigLease?.slug;
+  if (!recordedSlot || !input.heldSlotSlugs.includes(recordedSlot)) {
+    logPreview(
+      "--reuse-healthy-current-head: semaphore ownership does not match the recorded slot, so the full fleet must be deployed",
+    );
+    return fullFleet;
+  }
+
+  const probeAppServing = input.probeAppServing ?? probePreviewAppServingOnce;
+  const decisions = await Promise.all(
+    fullFleet.map(async (app) => {
+      const entry = input.previousState.apps[app.slug];
+      if (entry?.headSha !== input.headSha) {
+        return { app, reason: entry ? "recorded at another head" : "not recorded" };
+      }
+      if (!canRunPreviewTests(entry)) {
+        return { app, reason: `recorded status ${entry?.status ?? "missing"} is not testable` };
+      }
+
+      const probes = await Promise.all(
+        resolvePreviewReadinessUrls({
+          publicUrl: entry.publicUrl!,
+          readyUrlPath: app.previewReadyUrlPath,
+        }).map(async (url) => {
+          try {
+            return { url, ...(await probeAppServing(url)) };
+          } catch (error) {
+            return { url, ok: false, detail: formatPreviewErrorMessage(error) };
+          }
+        }),
+      );
+      const failures = probes.filter((probe) => !probe.ok);
+      return failures.length === 0
+        ? null
+        : {
+            app,
+            reason: failures
+              .map((probe) => `${probe.url.toString()} answered ${probe.detail}`)
+              .join("; "),
+          };
+    }),
+  );
+
+  const selected = decisions.filter(
+    (decision): decision is { app: PreviewAppRuntime; reason: string } => decision !== null,
+  );
+  for (const decision of selected) {
+    logPreview(`app ${decision.app.slug} selected: ${decision.reason}`);
+  }
+  const reused = fullFleet.filter((app) => !selected.some((decision) => decision.app === app));
+  logPreview(
+    `--reuse-healthy-current-head: reusing ${reused.length}/${fullFleet.length} healthy exact-head apps${reused.length > 0 ? ` (${reused.map((app) => app.slug).join(", ")})` : ""}`,
+  );
+  return selected.map((decision) => decision.app);
+}
+
+/**
  * Recorded-green apps ("deployed"/"awaiting-tests") whose deployment is no
  * longer actually serving. A green row is normally trustworthy — but an
  * erase-data on the slot (the documented remedy when merged-main lands a
@@ -5084,6 +5179,18 @@ function resolvePreviewCompareBaseSha(params: {
   return previousHeadSha ?? params.pullRequestBaseSha;
 }
 
+/** One identity shared by every app/worker in this test invocation. */
+function resolvePreviewTestGeneration(env: NodeJS.ProcessEnv): string {
+  const explicit = env.PREVIEW_TEST_GENERATION?.trim();
+  if (explicit) return explicit;
+
+  const runId = env.GITHUB_RUN_ID?.trim();
+  if (runId) {
+    return `github-${runId}-attempt-${env.GITHUB_RUN_ATTEMPT?.trim() || "1"}`;
+  }
+  return `preview-${randomBytes(16).toString("hex")}`;
+}
+
 export const previewInternals = {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   acquireAnyEnvironmentConfigLease,
@@ -5120,9 +5227,11 @@ export const previewInternals = {
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  resolvePreviewTestGeneration,
   resolvePreviewTestBaseUrlEnvironment,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
+  selectFullFleetAppsNeedingDeploy,
   selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,

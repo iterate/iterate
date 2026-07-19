@@ -55,13 +55,17 @@ echo "acceptance contract: head=$EXPECTED_HEAD_SHA, max=${MAX_CLEAN_RUN_SECS}s, 
 # the constant, so scripts/preview/e2e-policy.test.ts guards the match.
 RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
 
-# Full-fleet deploy, used by the preflight and by slot re-claims below.
+# Full-fleet reconciliation, used by the preflight and slot re-claims below.
 # --allow-draft: the marathon targets an arbitrary PR by number — an explicit
 # ask, so the draft preview policy doesn't apply.
+# --reuse-healthy-current-head: an automatic preview run may already have
+# deployed this exact head. Keep those healthy versions instead of uploading
+# identical code and opening a new lazy Durable Object reset window. Missing,
+# unhealthy, stale-head, and externally claimed fleets still deploy.
 deploy_full_fleet() {
   local label=$1 dlog=$2
-  echo "$label: deploying full fleet for PR $PR_NUMBER (log: $dlog)"
-  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
+  echo "$label: reconciling full fleet for PR $PR_NUMBER (log: $dlog)"
+  doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft --reuse-healthy-current-head \
     --pull-request-number "$PR_NUMBER" >"$dlog" 2>&1
   local deploy_exit=$?
   if [ "$deploy_exit" -ne 0 ]; then
@@ -86,9 +90,10 @@ deploy_full_fleet() {
 # recorded head == the PR head, so the marathon then silently shrinks to the
 # changed apps and every run trips the full-fleet guard (exit 3) — or worse,
 # would count a partial lane as green if that guard were absent. `--all-apps`
-# forces the full fleet regardless of the diff, which reunifies the head.
-# So before a fresh marathon (START_AT=1) we run one deploy and assert all five
-# apps come back testable at the current head; set SKIP_PREFLIGHT_DEPLOY=1 to
+# covers the full fleet regardless of the diff, but preserves any app already
+# healthy at this exact head. So before a fresh marathon (START_AT=1) we
+# reconcile once and assert all five apps are testable at the current head;
+# set SKIP_PREFLIGHT_DEPLOY=1 to
 # bypass (e.g. resuming a marathon whose fleet is already unified).
 if [ "$START_AT" -eq 1 ] && [ -z "${SKIP_PREFLIGHT_DEPLOY:-}" ]; then
   deploy_full_fleet "preflight" "$LOG_DIR/preflight-deploy.log" || exit 4

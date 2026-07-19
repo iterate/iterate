@@ -49,8 +49,10 @@ const {
   resolveAuthPreviewRootSecret,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
+  resolvePreviewTestGeneration,
   resolvePreviewTestBaseUrlEnvironment,
   selectExpiredLeasesForGc,
+  selectFullFleetAppsNeedingDeploy,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   selectPreviewSlotDataOwners,
@@ -58,6 +60,26 @@ const {
   syncPreviewInventory,
   waitForHttpReadiness,
 } = previewInternals;
+
+describe("preview test generation", () => {
+  test("stays stable within one workflow attempt and rotates on rerun", () => {
+    expect(resolvePreviewTestGeneration({ GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1" })).toBe(
+      "github-123-attempt-1",
+    );
+    expect(resolvePreviewTestGeneration({ GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2" })).toBe(
+      "github-123-attempt-2",
+    );
+  });
+
+  test("honors an explicit marathon generation", () => {
+    expect(
+      resolvePreviewTestGeneration({
+        GITHUB_RUN_ID: "123",
+        PREVIEW_TEST_GENERATION: "marathon-fixed",
+      }),
+    ).toBe("marathon-fixed");
+  });
+});
 
 describe("preview app dependency expansion", () => {
   test("expands os to include its auth and dummy-petshop dependencies", () => {
@@ -452,6 +474,11 @@ describe("preview test commands", () => {
     expect(workflow).toContain("include-hidden-files: true");
     expect(workflow).not.toContain("            /tmp/os-e2e-*");
     expect(workflow).not.toContain("            /tmp/marathon");
+
+    const loop = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
+    expect(loop).toContain(
+      "pnpm preview deploy --all-apps --allow-draft --reuse-healthy-current-head",
+    );
   });
 
   test("runs the OS smoke, TUI, vitest, and Playwright sub-lanes concurrently", () => {
@@ -921,6 +948,67 @@ describe("preview deploy selection", () => {
         probeAppServing: everythingServing,
       }),
     ).rejects.toThrow("Server Error");
+  });
+});
+
+describe("full-fleet exact-head reuse", () => {
+  const headSha = "current-head";
+  const previousState = {
+    apps: Object.fromEntries(
+      Object.values(cloudflarePreviewApps).map((app) => [
+        app.slug,
+        CloudflarePreviewAppEntry.parse({
+          appDisplayName: app.displayName,
+          appSlug: app.slug,
+          headSha,
+          publicUrl: `https://${app.slug}.iterate-preview-7.com`,
+          status: app.slug === "semaphore" ? "tests-failed" : "deployed",
+          updatedAt: "2026-07-19T00:00:00.000Z",
+        }),
+      ]),
+    ),
+    environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
+    notice: null,
+  };
+
+  test("keeps every healthy exact-head app, including one whose tests need a rerun", async () => {
+    const probeAppServing = vi.fn(async () => ({ ok: true, detail: "HTTP 200" }));
+    const selected = await selectFullFleetAppsNeedingDeploy({
+      headSha,
+      heldSlotSlugs: ["preview-7"],
+      previousState,
+      probeAppServing,
+    });
+
+    expect(selected).toEqual([]);
+    expect(probeAppServing).toHaveBeenCalledTimes(Object.keys(cloudflarePreviewApps).length);
+  });
+
+  test("deploys only an exact-head app whose readiness probe fails", async () => {
+    const selected = await selectFullFleetAppsNeedingDeploy({
+      headSha,
+      heldSlotSlugs: ["preview-7"],
+      previousState,
+      probeAppServing: async (url) =>
+        url.hostname.startsWith("os.")
+          ? { ok: false, detail: "HTTP 503" }
+          : { ok: true, detail: "HTTP 200" },
+    });
+
+    expect(selected.map((app) => app.slug)).toEqual(["os"]);
+  });
+
+  test("forces the fleet when semaphore ownership no longer matches the recorded slot", async () => {
+    const probeAppServing = vi.fn(async () => ({ ok: true, detail: "HTTP 200" }));
+    const selected = await selectFullFleetAppsNeedingDeploy({
+      headSha,
+      heldSlotSlugs: [],
+      previousState,
+      probeAppServing,
+    });
+
+    expect(selected.map((app) => app.slug)).toEqual(Object.keys(cloudflarePreviewApps));
+    expect(probeAppServing).not.toHaveBeenCalled();
   });
 });
 

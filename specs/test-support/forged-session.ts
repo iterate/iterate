@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { z } from "zod/v4";
 import type {
@@ -9,6 +8,10 @@ import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
+import {
+  resolveReusableAdminProjectGeneration,
+  reusableAdminProjectIdentity,
+} from "./reusable-project-identity.ts";
 
 type OsPlaywrightAuthConfig = {
   adminApiSecret: string;
@@ -157,9 +160,9 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
 
 /**
  * Idempotently provision one project for a Playwright test family in this
- * deployed slot. The project identity is deterministic from the slot URL and
- * family name, so repeated marathon invocations reuse its already-completed
- * bootstrap while parallel invocations converge on the same birth events.
+ * deployed slot and test generation. Parallel workers and repeated marathon
+ * rounds converge on one completed bootstrap, while a new deployment/workflow
+ * attempt gets a fresh project and therefore fresh Durable Object identities.
  *
  * Callers MUST give every mutable child (agent, stream, repo, workspace, and
  * so on) a per-test path. Tests whose subject is project creation or isolation
@@ -169,15 +172,16 @@ export async function createReusableAdminProject(input: {
   baseUrl: string;
   family: string;
 }): Promise<ProjectIdentity> {
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.family)) {
-    throw new Error(`Reusable project family must be a slug fragment; received ${input.family}.`);
-  }
-
   const config = await resolveOsPlaywrightAuthConfig();
-  const origin = new URL(input.baseUrl).origin;
-  const identityHash = createHash("sha256").update(`${origin}\0${input.family}`).digest("hex");
-  const projectId = `prj_${identityHash.slice(0, 32)}`;
-  const slug = `e2e-${input.family}-family`;
+  const generation = resolveReusableAdminProjectGeneration(process.env);
+  const {
+    id: projectId,
+    origin,
+    slug,
+  } = reusableAdminProjectIdentity({
+    ...input,
+    generation,
+  });
 
   using session = connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
@@ -187,7 +191,9 @@ export async function createReusableAdminProject(input: {
   // so two concurrent jobs cannot split one family slug across two projects.
   using project = session.projects.create({ projectId, slug });
   const identity = await project.identity();
-  console.log(`[project-reuse] using Playwright family project ${identity.slug} (${projectId})`);
+  console.log(
+    `[project-reuse] using Playwright family project ${identity.slug} (${projectId}) for generation ${generation}`,
+  );
   return { id: identity.projectId, slug: identity.slug };
 }
 

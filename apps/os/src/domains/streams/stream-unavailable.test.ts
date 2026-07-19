@@ -79,6 +79,28 @@ describe("retryIdempotentDurableObjectOperation", () => {
     expect(isRetryableDurableObjectAvailabilityError(serialized)).toBe(true);
   });
 
+  it("retries a locally wrapped lifecycle failure through its cause chain", async () => {
+    const reset = withFlag("durableObjectReset");
+    const wrapped = new Error("agent collection could not catch up", { cause: reset });
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(wrapped)
+      .mockResolvedValueOnce("recovered");
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).resolves.toBe("recovered");
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(isDurableObjectLifecycleError(wrapped)).toBe(false);
+    expect(isRetryableDurableObjectAvailabilityError(wrapped)).toBe(true);
+  });
+
+  it("does not loop forever on a cyclic cause chain", () => {
+    const first = new Error("first");
+    const second = new Error("second", { cause: first });
+    Object.defineProperty(first, "cause", { value: second });
+
+    expect(isRetryableDurableObjectAvailabilityError(first)).toBe(false);
+  });
+
   it("never retries an application error", async () => {
     const applicationError = new Error("invalid workspace mount");
     const operation = vi.fn(async () => {

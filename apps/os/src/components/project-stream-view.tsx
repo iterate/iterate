@@ -27,6 +27,7 @@ import { BrowserFeedContract } from "~/domains/streams/client-libraries/processo
 import { isCurrentBrowserFeedState } from "~/domains/streams/client-libraries/processors/browser-feed/projector.ts";
 import { QueuedMessagesPanel } from "~/components/agent-feed.tsx";
 import { DeferredSurface } from "~/components/deferred-surface.tsx";
+import { isProjectStreamFeedPending } from "~/components/project-stream-feed-pending.ts";
 import { StreamFeedView } from "~/components/stream-feed-view.tsx";
 import { RawEventInspectorContent } from "~/components/raw-event-inspector-panel.tsx";
 import { LlmRequestInspectorContent } from "~/components/llm-request-inspector-panel.tsx";
@@ -301,7 +302,11 @@ function MirroredProjectStreamView({
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={agentUiState == null && snapshot.connectionStatus !== "subscribed"}
+      isPending={isProjectStreamFeedPending({
+        agentFeed: caps.agentFeed,
+        agentUiState,
+        connectionStatus: snapshot.connectionStatus,
+      })}
     />
   );
 

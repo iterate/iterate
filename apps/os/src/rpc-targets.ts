@@ -4696,6 +4696,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         path: AGENT_COLLECTION_PATH,
       }),
     );
+    const agentCollectionDeadline = Date.now() + PROCESSOR_BIRTH_WAIT_TIMEOUT_MS;
     await Promise.all([
       this.processor.waitUntilProcessed({
         offset: birthOffset,
@@ -4705,9 +4706,22 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
-      agentCollection.waitUntilAgentCreated({
-        path: this.#path,
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      retryIdempotentDurableObjectOperation({
+        operation: async () => {
+          const timeoutMs = Math.ceil(agentCollectionDeadline - Date.now());
+          if (timeoutMs <= 0) {
+            throw new Error(`agent collection creation barrier timed out for ${this.#path}`);
+          }
+          await agentCollection.waitUntilAgentCreated({ path: this.#path, timeoutMs });
+        },
+        onRetry: ({ attempt, error, maxAttempts }) => {
+          console.warn("agent collection Durable Object call restarting after lifecycle reset", {
+            attempt,
+            error: error instanceof Error ? error.message : String(error),
+            maxAttempts,
+            path: this.#path,
+          });
+        },
       }),
     ]);
   }

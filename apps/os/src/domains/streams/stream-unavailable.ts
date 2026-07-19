@@ -120,7 +120,21 @@ export function isStreamUnavailableError(error: unknown): boolean {
  * tag is the same failure class after those flags have been stripped by RPC.
  */
 export function isRetryableDurableObjectAvailabilityError(error: unknown): boolean {
-  return isDurableObjectLifecycleError(error) || isStreamUnavailableError(error);
+  // Infrastructure errors are often wrapped locally to add domain context
+  // before this classifier sees them. Walk Error.cause while it is still
+  // available in-process; once an error crosses RPC, the stream-unavailable
+  // message tag above remains the wire-level classification.
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null) {
+    if (isDurableObjectLifecycleError(candidate) || isStreamUnavailableError(candidate)) {
+      return true;
+    }
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /** Whether a rejection is the stream DO's explicitly modelled waiter timeout. */
