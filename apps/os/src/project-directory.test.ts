@@ -15,23 +15,28 @@ const record: ProjectDirectoryRecord = {
   name: "Alpha",
 };
 
-function directoryWithPut(put: ReturnType<typeof vi.fn>): KVNamespace {
-  return { put } as unknown as KVNamespace;
+function directoryWithPut(
+  put: ReturnType<typeof vi.fn>,
+  deleteKey = vi.fn().mockResolvedValue(undefined),
+): KVNamespace {
+  return { delete: deleteKey, put } as unknown as KVNamespace;
 }
 
 describe("primeProjectDirectory", () => {
   beforeEach(() => auth.getProjectBySlug.mockReset());
 
-  it("writes both durable lookup keys", async () => {
+  it("writes both durable lookup keys and clears a stale shared miss", async () => {
     const put = vi.fn().mockResolvedValue(undefined);
+    const deleteKey = vi.fn().mockResolvedValue(undefined);
 
-    await primeProjectDirectory(directoryWithPut(put), record);
+    await primeProjectDirectory(directoryWithPut(put, deleteKey), record);
 
     const body = JSON.stringify(record);
     expect(put.mock.calls).toEqual([
       ["slug:alpha", body],
       ["project:prj_alpha", body],
     ]);
+    expect(deleteKey).toHaveBeenCalledExactlyOnceWith("missing-slug:alpha");
   });
 
   it("recovers from one timed-out attempt and observes its late rejection", async () => {
@@ -178,6 +183,7 @@ describe("readProjectBySlug", () => {
       const authRecord = { ...record, id: "prj_auth", slug: "auth-only" };
       auth.getProjectBySlug.mockResolvedValue(authRecord);
       const directory = {
+        delete: vi.fn().mockResolvedValue(undefined),
         get: vi.fn().mockResolvedValue(null),
         put: vi.fn(() => new Promise<void>(() => {})),
       } as unknown as KVNamespace;
