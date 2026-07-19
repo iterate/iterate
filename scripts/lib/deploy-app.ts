@@ -27,7 +27,7 @@ export interface SmokeProbe {
  *
  *   resolve --env → assert resources provisioned → collect secrets →
  *   app-specific prepare (migrations, seeds, config preflight) → build plus
- *   explicitly independent host work → deploy code+secrets in one version →
+ *   explicitly independent prerequisites → deploy code+secrets in one version →
  *   smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
@@ -83,9 +83,10 @@ export async function deployApp<E extends DeployableEnv>(input: {
     credentials: Record<string, string>,
   ) => Promise<void> | void;
   /**
-   * Independent work that may overlap the Vite build but MUST complete before
-   * code upload. Both lanes are joined (including on failure) before deploy,
-   * so this cannot expose a version whose prerequisites are still running.
+   * Independent prerequisites that may overlap the Vite build but MUST
+   * complete before code upload. Both lanes are joined (including on failure)
+   * before deploy, so this cannot expose a version whose prerequisites are
+   * still running.
    */
   concurrentBuildWork?: (
     ctx: EnvContext<E>,
