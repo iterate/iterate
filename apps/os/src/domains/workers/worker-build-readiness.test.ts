@@ -15,6 +15,7 @@ describe("workerBuildReadinessResponse", () => {
     const readDurableObjectVersions = vi.fn(async () => ["local-version"]);
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "unversioned",
+      sandboxContainerDeploymentId: "unversioned",
       readDeployment,
       readDurableObjectVersions,
       version: "local-version",
@@ -26,6 +27,7 @@ describe("workerBuildReadinessResponse", () => {
     expect(await body(response)).toMatchObject({
       ok: true,
       durableObjectVersion: "local-version",
+      sandboxContainerDeploymentId: "unversioned",
       workerBuildDeploymentId: "unversioned",
     });
   });
@@ -33,6 +35,7 @@ describe("workerBuildReadinessResponse", () => {
   it("is ready only when the sidecar and capability-host answer with current identities", async () => {
     const matching = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
+      sandboxContainerDeploymentId: "sandbox-revision",
       readDeployment: async () => ({ deploymentId: "commit-123" }),
       readDurableObjectVersions: async () => Array(8).fill("worker-version"),
       version: "worker-version",
@@ -42,6 +45,7 @@ describe("workerBuildReadinessResponse", () => {
 
     const stale = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
+      sandboxContainerDeploymentId: "sandbox-revision",
       readDeployment: async () => ({ deploymentId: "old-commit" }),
       readDurableObjectVersions: async () => Array(8).fill("worker-version"),
       version: "worker-version",
@@ -57,6 +61,7 @@ describe("workerBuildReadinessResponse", () => {
   it("stays unready while the capability-host Durable Object still runs old code", async () => {
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
+      sandboxContainerDeploymentId: "sandbox-revision",
       readDeployment: async () => ({ deploymentId: "commit-123" }),
       readDurableObjectVersions: async () => [
         ...Array(7).fill("worker-version"),
@@ -79,6 +84,7 @@ describe("workerBuildReadinessResponse", () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
+      sandboxContainerDeploymentId: "sandbox-revision",
       readDeployment: async () => {
         throw new Error("sidecar unavailable");
       },
@@ -103,6 +109,7 @@ describe("workerBuildReadinessResponse", () => {
     const infoLog = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const response = await workerBuildReadinessResponse({
       expectedDeploymentId: "commit-123",
+      sandboxContainerDeploymentId: "sandbox-revision",
       readDeployment: async () => ({ deploymentId: "commit-123" }),
       readDurableObjectVersions: async () => {
         throw new Error("old code has no readiness method");

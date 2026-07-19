@@ -57,9 +57,9 @@ import {
   REQUIRED_SECRETS,
   RETIRED_AUTH_SERVICE_TOKEN,
   RETIRED_WORKER_SECRETS,
-  workerBuildDeploymentId,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
+import { sandboxContainerDeploymentId, workerBuildDeploymentId } from "./deployment-revisions.ts";
 import { waitForContainerRollouts } from "./container-rollout-readiness.ts";
 import { ensureWorkerQueues } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
@@ -83,8 +83,12 @@ export function assertPreviewPetshopIntegrationConfigured(
   }
 }
 
-/** Build-only PostHog credentials: available to Vite, never shipped as Worker bindings. */
-export function posthogBuildEnv(secrets: Record<string, string | undefined>) {
+/** Production-only PostHog build credentials; never shipped as Worker bindings. */
+export function posthogBuildEnv(
+  envName: string,
+  secrets: Record<string, string | undefined>,
+): Record<string, string> {
+  if (envName !== "prd") return {};
   return {
     POSTHOG_PERSONAL_API_KEY: requiredBuildSecret(secrets, "POSTHOG_PERSONAL_API_KEY"),
     POSTHOG_PROJECT_ID: requiredBuildSecret(secrets, "POSTHOG_PROJECT_ID"),
@@ -160,27 +164,43 @@ function previewContainerApplicationNames(env: DeployedEnv): string[] {
   ].map(containerApplicationName);
 }
 
-/** Best-effort read used only to avoid redeploying an identical route-less
- * builder. A miss is observable and safely falls back to a normal deploy. */
-export async function readWorkerBuilderDeploymentId(
+export type OsDeploymentState = {
+  workerBuildDeploymentId: string | null;
+  sandboxContainerDeploymentId: string | null;
+};
+
+const UNKNOWN_OS_DEPLOYMENT_STATE: OsDeploymentState = {
+  workerBuildDeploymentId: null,
+  sandboxContainerDeploymentId: null,
+};
+
+/** Best-effort read used only to avoid redeploying identical builder and
+ * container inputs. A miss safely falls back to a normal full deploy. */
+export async function readOsDeploymentState(
   baseUrl: string,
   fetchImplementation: typeof fetch = fetch,
-): Promise<string | null> {
+): Promise<OsDeploymentState> {
   try {
     const response = await fetchImplementation(new URL("/api/health", baseUrl), {
       headers: { "cache-control": "no-cache" },
       signal: AbortSignal.timeout(5_000),
     });
-    if (!response.ok) return null;
+    if (!response.ok) return UNKNOWN_OS_DEPLOYMENT_STATE;
     const body: unknown = await response.json();
-    if (typeof body !== "object" || body === null || !("workerBuildDeploymentId" in body)) {
-      return null;
-    }
-    const deploymentId = body.workerBuildDeploymentId;
-    return typeof deploymentId === "string" && deploymentId.trim() ? deploymentId : null;
+    if (typeof body !== "object" || body === null) return UNKNOWN_OS_DEPLOYMENT_STATE;
+    return {
+      workerBuildDeploymentId: deploymentIdFrom(body, "workerBuildDeploymentId"),
+      sandboxContainerDeploymentId: deploymentIdFrom(body, "sandboxContainerDeploymentId"),
+    };
   } catch {
-    return null;
+    return UNKNOWN_OS_DEPLOYMENT_STATE;
   }
+}
+
+function deploymentIdFrom(body: object, key: string): string | null {
+  if (!(key in body)) return null;
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 /** Deploy apps/os to a deployed environment (see scripts/lib/deploy-app.ts for the pipeline). */
@@ -191,7 +211,9 @@ export default async function deploy(
   } = {},
 ) {
   const desiredWorkerBuildDeploymentId = workerBuildDeploymentId();
+  const desiredSandboxContainerDeploymentId = sandboxContainerDeploymentId();
   let reuseWorkerBuilder = false;
+  let reuseSandboxContainers = false;
   await deployApp({
     appRoot: OS_APP_ROOT,
     appLabel: OS_DEPLOY_LABEL,
@@ -203,7 +225,8 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
-    buildEnv: (ctx) => posthogBuildEnv(ctx.secrets),
+    buildEnv: (ctx) => posthogBuildEnv(ctx.name, ctx.secrets),
+    deployArgs: () => (reuseSandboxContainers ? ["--containers-rollout", "none"] : []),
     prepare: async (ctx, secretValues, _credentials) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current
@@ -216,7 +239,7 @@ export default async function deploy(
       });
       // The live-secret assertions and JWKS fetch are independent network
       // reads. Complete them together before any deployed resource changes.
-      const [staticAuthJwks, , currentWorkerBuildDeploymentId] = await runTimedDeployPhase(
+      const [staticAuthJwks, , currentDeploymentState] = await runTimedDeployPhase(
         OS_DEPLOY_LABEL,
         "prepare: auth and secret preflight",
         () =>
@@ -236,17 +259,27 @@ export default async function deploy(
                 }),
               ),
             ),
-            readWorkerBuilderDeploymentId(ctx.env.baseUrl),
+            readOsDeploymentState(ctx.env.baseUrl),
           ]),
       );
 
       reuseWorkerBuilder =
         desiredWorkerBuildDeploymentId !== UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID &&
-        currentWorkerBuildDeploymentId === desiredWorkerBuildDeploymentId;
+        currentDeploymentState.workerBuildDeploymentId === desiredWorkerBuildDeploymentId;
       console.log(
         reuseWorkerBuilder
           ? `worker builder already serves deployment ${desiredWorkerBuildDeploymentId}; skipping identical sidecar deploy`
-          : `worker builder deployment is ${currentWorkerBuildDeploymentId ?? "unavailable"}; deploying ${desiredWorkerBuildDeploymentId}`,
+          : `worker builder deployment is ${currentDeploymentState.workerBuildDeploymentId ?? "unavailable"}; deploying ${desiredWorkerBuildDeploymentId}`,
+      );
+
+      reuseSandboxContainers =
+        ctx.name.startsWith("preview_") &&
+        desiredSandboxContainerDeploymentId !== UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID &&
+        currentDeploymentState.sandboxContainerDeploymentId === desiredSandboxContainerDeploymentId;
+      console.log(
+        reuseSandboxContainers
+          ? `sandbox containers already serve deployment ${desiredSandboxContainerDeploymentId}; skipping unchanged container rollout`
+          : `sandbox container deployment is ${currentDeploymentState.sandboxContainerDeploymentId ?? "unavailable"}; reconciling ${desiredSandboxContainerDeploymentId}`,
       );
 
       // Baked at deploy time, so it's the one secret not in secrets.required.

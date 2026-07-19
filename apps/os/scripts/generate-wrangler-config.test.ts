@@ -17,8 +17,8 @@ import {
   REQUIRED_SECRETS,
   envShapedVars,
   typecheckerConfig,
-  workerBuildDeploymentId,
 } from "./generate-wrangler-config.ts";
+import { sandboxContainerDeploymentId, workerBuildDeploymentId } from "./deployment-revisions.ts";
 
 it("does not emit the local forge JWKS into deployed builds", () => {
   const forgePrivateJwk = JSON.stringify({
@@ -58,19 +58,24 @@ it("names the top-level configs by service so cf:service script tags stay env-le
   expect(typecheckerConfig.name).toBe("os-typechecker");
 });
 
-it("gives the main worker and builder sidecar one immutable deployment identity", () => {
-  expect(
-    workerBuildDeploymentId({
-      GITHUB_SHA: "github-sha",
-      PREVIEW_PULL_REQUEST_HEAD_SHA: "preview-head",
-    }),
-  ).toBe("preview-head");
-  expect(workerBuildDeploymentId({ GITHUB_SHA: "github-sha" })).toBe("github-sha");
-  expect(workerBuildDeploymentId({})).toBe("unversioned");
+it("gives deployed workers content-addressed identities while local dev stays unversioned", () => {
+  const workerBuildRevision = workerBuildDeploymentId();
+  const sandboxContainerRevision = sandboxContainerDeploymentId();
+  expect(workerBuildRevision).toMatch(/^worker-builder-[a-f0-9]{32}$/);
+  expect(sandboxContainerRevision).toMatch(/^sandbox-containers-[a-f0-9]{32}$/);
+  expect(config.vars.WORKER_BUILD_DEPLOYMENT_ID).toBe("unversioned");
+  expect(config.vars.SANDBOX_CONTAINER_DEPLOYMENT_ID).toBe("unversioned");
+  expect(builderConfig.vars.WORKER_BUILD_DEPLOYMENT_ID).toBe("unversioned");
 
   for (const envName of Object.keys(config.env) as Array<keyof typeof config.env>) {
     expect(config.env[envName].vars.WORKER_BUILD_DEPLOYMENT_ID, String(envName)).toBe(
       builderConfig.env[envName].vars.WORKER_BUILD_DEPLOYMENT_ID,
+    );
+    expect(config.env[envName].vars.WORKER_BUILD_DEPLOYMENT_ID, String(envName)).toBe(
+      workerBuildRevision,
+    );
+    expect(config.env[envName].vars.SANDBOX_CONTAINER_DEPLOYMENT_ID, String(envName)).toBe(
+      sandboxContainerRevision,
     );
   }
 });

@@ -13,20 +13,27 @@ import {
   assertPreviewPetshopIntegrationConfigured,
   isExactOsProjectMiss,
   posthogBuildEnv,
-  readWorkerBuilderDeploymentId,
+  readOsDeploymentState,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
-describe("worker-builder deployment reuse probe", () => {
-  it("reads the immutable builder deployment id from a healthy OS", async () => {
+describe("deployment reuse probe", () => {
+  it("reads immutable builder and sandbox deployment ids from a healthy OS", async () => {
     const fetchImplementation = vi.fn<typeof fetch>(async () =>
-      Response.json({ ok: true, workerBuildDeploymentId: "commit-123" }),
+      Response.json({
+        ok: true,
+        workerBuildDeploymentId: "builder-123",
+        sandboxContainerDeploymentId: "sandbox-123",
+      }),
     );
 
     await expect(
-      readWorkerBuilderDeploymentId("https://os.example.com", fetchImplementation),
-    ).resolves.toBe("commit-123");
+      readOsDeploymentState("https://os.example.com", fetchImplementation),
+    ).resolves.toEqual({
+      workerBuildDeploymentId: "builder-123",
+      sandboxContainerDeploymentId: "sandbox-123",
+    });
     expect(fetchImplementation).toHaveBeenCalledWith(
       new URL("https://os.example.com/api/health"),
       expect.objectContaining({ headers: { "cache-control": "no-cache" } }),
@@ -39,8 +46,11 @@ describe("worker-builder deployment reuse probe", () => {
     Response.json({ ok: true, workerBuildDeploymentId: "" }),
   ])("falls back to a normal sidecar deploy when the probe is unavailable", async (response) => {
     await expect(
-      readWorkerBuilderDeploymentId("https://os.example.com", async () => response),
-    ).resolves.toBeNull();
+      readOsDeploymentState("https://os.example.com", async () => response),
+    ).resolves.toEqual({
+      workerBuildDeploymentId: null,
+      sandboxContainerDeploymentId: null,
+    });
   });
 });
 
@@ -62,9 +72,9 @@ describe("preview Petshop deployment invariant", () => {
 });
 
 describe("PostHog source-map build credentials", () => {
-  it("passes the Doppler credentials to Vite without adding Worker secrets", () => {
+  it("passes production Doppler credentials to Vite without adding Worker secrets", () => {
     expect(
-      posthogBuildEnv({
+      posthogBuildEnv("prd", {
         POSTHOG_PERSONAL_API_KEY: "phx_personal",
         POSTHOG_PROJECT_ID: "123456",
       }),
@@ -74,15 +84,19 @@ describe("PostHog source-map build credentials", () => {
     });
   });
 
+  it("does not require or expose source-map credentials in previews", () => {
+    expect(posthogBuildEnv("preview_4", {})).toEqual({});
+  });
+
   it.each(["POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"])(
-    "fails the deploy before building when %s is absent",
+    "fails a production deploy before building when %s is absent",
     (missing) => {
       const secrets = {
         POSTHOG_PERSONAL_API_KEY: "phx_personal",
         POSTHOG_PROJECT_ID: "123456",
       };
       delete secrets[missing as keyof typeof secrets];
-      expect(() => posthogBuildEnv(secrets)).toThrow(missing);
+      expect(() => posthogBuildEnv("prd", secrets)).toThrow(missing);
     },
   );
 });

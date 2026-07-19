@@ -40,6 +40,7 @@ import {
   WORKER_BUILD_COORDINATOR_CLASS_NAME,
   WORKER_BUILDER_CONTAINER_CLASS_NAME,
 } from "./container-class-names.ts";
+import { sandboxContainerDeploymentId, workerBuildDeploymentId } from "./deployment-revisions.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -141,17 +142,8 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 export const COMPATIBILITY_DATE = "2026-07-01";
 
 const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
-
-/** One immutable identity shared by the main worker and builder sidecar. */
-export function workerBuildDeploymentId(environment: NodeJS.ProcessEnv = process.env): string {
-  return (
-    environment.PREVIEW_PULL_REQUEST_HEAD_SHA?.trim() ||
-    environment.GITHUB_SHA?.trim() ||
-    UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID
-  );
-}
-
-const WORKER_BUILD_DEPLOYMENT_ID = workerBuildDeploymentId();
+const DEPLOYED_WORKER_BUILD_DEPLOYMENT_ID = workerBuildDeploymentId();
+const DEPLOYED_SANDBOX_CONTAINER_DEPLOYMENT_ID = sandboxContainerDeploymentId();
 
 /** The typechecker sidecar's worker name, derived — never spelled out in envs.ts. */
 function typecheckerWorkerName(osWorkerName: string) {
@@ -293,6 +285,8 @@ function workerBindings(input: {
   workerName: string;
   accountId: string;
   authWorkerName: string;
+  workerBuildDeploymentId: string;
+  sandboxContainerDeploymentId: string;
   authRemote?: boolean;
   kvId?: string;
   workerBuildCacheKvId?: string;
@@ -306,7 +300,8 @@ function workerBindings(input: {
   return {
     vars: {
       WORKER_SELF: input.workerName,
-      WORKER_BUILD_DEPLOYMENT_ID,
+      WORKER_BUILD_DEPLOYMENT_ID: input.workerBuildDeploymentId,
+      SANDBOX_CONTAINER_DEPLOYMENT_ID: input.sandboxContainerDeploymentId,
       ARTIFACTS_ACCOUNT_ID: input.accountId,
       ARTIFACTS_NAMESPACE: `${input.workerName}-repos`,
       // Sandbox workspace backup config — names the Sandbox SDK reads from
@@ -524,6 +519,8 @@ function envBlock(env: DeployedEnv) {
     workerName: env.osWorkerName,
     accountId: env.cloudflareAccountId,
     authWorkerName: env.authWorkerName,
+    workerBuildDeploymentId: DEPLOYED_WORKER_BUILD_DEPLOYMENT_ID,
+    sandboxContainerDeploymentId: DEPLOYED_SANDBOX_CONTAINER_DEPLOYMENT_ID,
     kvId: env.resources.projectDirectoryKvId,
     workerBuildCacheKvId: env.resources.workerBuildCacheKvId,
     workerBuilderScriptName: workerBuilderWorkerName(env.osWorkerName),
@@ -590,6 +587,8 @@ function localDevBindings() {
   const bindings = workerBindings({
     workerName: "os",
     accountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    workerBuildDeploymentId: UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID,
+    sandboxContainerDeploymentId: UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID,
     ...authBinding,
   });
   const localAuthJwks = localDevAuthJwks({
@@ -702,13 +701,16 @@ const WORKER_BUILDER_EXPORTS = {
   [WORKER_BUILDER_CONTAINER_CLASS_NAME]: { type: "durable-object", storage: "sqlite" },
 };
 
-function workerBuilderBindings(sandboxCaps: "preview" | "production") {
+function workerBuilderBindings(
+  sandboxCaps: "preview" | "production",
+  workerBuildDeploymentId: string,
+) {
   return {
     // These are consumed inside the Sandbox Durable Object. Keep the same
     // cold-host ceilings as project sandboxes; a quick warm start returns
     // immediately, while a genuinely stuck container still fails boundedly.
     vars: {
-      WORKER_BUILD_DEPLOYMENT_ID,
+      WORKER_BUILD_DEPLOYMENT_ID: workerBuildDeploymentId,
       SANDBOX_TRANSPORT: "rpc",
       SANDBOX_INSTANCE_TIMEOUT_MS: "300000",
       SANDBOX_PORT_TIMEOUT_MS: "300000",
@@ -739,14 +741,17 @@ export const builderConfig = {
   compatibility_flags: ["nodejs_compat"],
   exports: WORKER_BUILDER_EXPORTS,
   dev: { enable_containers: false },
-  ...workerBuilderBindings("preview"),
+  ...workerBuilderBindings("preview", UNVERSIONED_WORKER_BUILD_DEPLOYMENT_ID),
   env: Object.fromEntries(
     Object.entries(envs).map(([name, env]) => [
       name,
       {
         name: workerBuilderWorkerName(env.osWorkerName),
         account_id: env.cloudflareAccountId,
-        ...workerBuilderBindings(env.osWorkerName === "os-prd" ? "production" : "preview"),
+        ...workerBuilderBindings(
+          env.osWorkerName === "os-prd" ? "production" : "preview",
+          DEPLOYED_WORKER_BUILD_DEPLOYMENT_ID,
+        ),
       },
     ]),
   ),

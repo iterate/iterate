@@ -32,6 +32,7 @@ export function deploymentReadinessProbeIndexes(wave: number): number[] {
 
 type WorkerBuildReadinessOptions = {
   expectedDeploymentId: string;
+  sandboxContainerDeploymentId: string;
   readDeployment(): Promise<WorkerBuildDeployment>;
   readDurableObjectVersions(): Promise<readonly string[]>;
   version: string;
@@ -108,6 +109,7 @@ function readinessResponse(
       durableObjectVersions,
       durableObjectProbeCount: durableObjectVersions?.length ?? 0,
       workerBuildDeploymentId: deploymentId,
+      sandboxContainerDeploymentId: options.sandboxContainerDeploymentId,
       ...(deploymentId === options.expectedDeploymentId
         ? {}
         : { expectedWorkerBuildDeploymentId: options.expectedDeploymentId }),

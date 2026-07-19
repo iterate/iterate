@@ -99,6 +99,9 @@ export async function deployApp<E extends DeployableEnv>(input: {
   build?: "vite" | "checked-in-config";
   /** Extra env vars for the vite build (e.g. auth's inlined VITE_* values). */
   buildEnv?: (ctx: EnvContext<E>) => Record<string, string>;
+  /** App-specific Wrangler deploy flags resolved after `prepare` (for example,
+   * skipping an unchanged container rollout). */
+  deployArgs?: (ctx: EnvContext<E>) => readonly string[];
   /**
    * Runs after secret collection, before build/deploy: config preflights,
    * D1 migrations, seed data. May add deploy-time-computed secrets to
@@ -164,11 +167,11 @@ export async function deployApp<E extends DeployableEnv>(input: {
     : Promise.resolve();
 
   let builtConfig: string;
-  let extraDeployArgs: string[] | undefined;
+  let extraDeployArgs = [...(input.deployArgs?.(ctx) ?? [])];
   if (input.build === "checked-in-config") {
     await uploadPreparation;
     builtConfig = "wrangler.jsonc";
-    extraDeployArgs = ["--env", ctx.name];
+    extraDeployArgs = ["--env", ctx.name, ...extraDeployArgs];
   } else {
     await Promise.all([
       runTimedDeployPhase(input.appLabel, "build", () => {

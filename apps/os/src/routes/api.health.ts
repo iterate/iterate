@@ -79,6 +79,7 @@ export const Route = createFileRoute("/api/health")({
         ];
         return workerBuildReadinessResponse({
           expectedDeploymentId: itxEnv.WORKER_BUILD_DEPLOYMENT_ID,
+          sandboxContainerDeploymentId: itxEnv.SANDBOX_CONTAINER_DEPLOYMENT_ID,
           readDeployment: workerBuildDeployment,
           readDurableObjectVersions: () =>
             Promise.all(

@@ -117,4 +117,29 @@ describe("deployApp upload preparation", () => {
       env: { CLOUDFLARE_ENV: "preview_1" },
     });
   });
+
+  it("resolves app-specific Wrangler flags after deployment preflight", async () => {
+    let reuseContainers = false;
+
+    await deployApp({
+      appLabel: "apps/example",
+      appRoot: "/app",
+      dopplerProject: "example",
+      env: "preview_1",
+      envs: {
+        preview_1: { cloudflareAccountId: "account", dopplerConfig: "preview_1" },
+      },
+      prepare: () => {
+        reuseContainers = true;
+      },
+      deployArgs: () => (reuseContainers ? ["--containers-rollout", "none"] : []),
+      servingUrl: () => "https://example.test",
+      smokes: () => [],
+      workerName: () => "example-preview-1",
+    });
+
+    expect(mocks.deployWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({ extraDeployArgs: ["--containers-rollout", "none"] }),
+    );
+  });
 });
