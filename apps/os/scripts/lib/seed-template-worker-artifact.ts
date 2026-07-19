@@ -42,6 +42,7 @@ import {
   workerBuildRecipe,
 } from "../../src/domains/workers/build-recipe.ts";
 import type { WorkerBuildOptions } from "../../src/domains/workers/schemas.ts";
+import { waitForPkgPrNewPublication } from "./wait-for-package-publication.ts";
 import { runWorkerBuildRecipeOnHost } from "./worker-build-host-runner.ts";
 
 export async function seedTemplateWorkerArtifacts(input: {
@@ -55,6 +56,11 @@ export async function seedTemplateWorkerArtifacts(input: {
   log?: (message: string) => void;
 }): Promise<Array<{ buildKey: string; seeded: boolean }>> {
   const log = input.log ?? console.log;
+  // Preview deploys and pkg.pr.new publishing are independent workflows. A
+  // newly pushed head can reach this deploy before its exact package URL has
+  // propagated; wait once at the fan-out boundary instead of letting all five
+  // npm installs fail independently with opaque 404s.
+  await waitForPkgPrNewPublication(input.iterateSdkPackageSpec, { log });
   const files = Object.fromEntries(
     projectRepoSeedFiles(input.iterateSdkPackageSpec).map((file) => [file.path, file.content]),
   );
