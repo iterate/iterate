@@ -25,7 +25,7 @@ This supersedes the Expo Go proof of concept in #2065. It must build on the nati
 - [x] Preserve a lossless source editor for Markdown and other text files, including dirty-file and deletion tracking and remote-head conflict detection. _`repo-working-tree.ts` keeps source buffers and blocks commits after a head change._
 - [x] Add `react-native-enriched-markdown` at a React Native 0.81-compatible version and use its viewer for Markdown file preview. _Pinned to 0.5.0 with math disabled in the Expo config plugin._
 - [x] Render assistant chat messages with the enriched Markdown viewer while retaining selectable plain text for user messages. _Shared `Markdown` renders assistant output; user bubbles remain `Text`._
-- [ ] Test the working-tree behavior, mobile typecheck/tests, web export/e2e surface, and native prebuild/autolinking. _41 unit tests, typecheck, web export, mobile Playwright, iOS prebuild, and the signed EAS development build pass; physical-device interaction remains._
+- [ ] Test the working-tree behavior, mobile typecheck/tests, web export/e2e surface, and native prebuild/autolinking. _46 unit tests, typecheck, web export, mobile Playwright, iOS prebuild, and the signed EAS development build pass; physical-device interaction remains._
 - [x] Document that this native dependency requires installing a newly built development client before physical-device testing. _Added to the mobile README and replacement PR body._
 - [x] Close #2065 with a note pointing to the replacement PR after the replacement is open. _Closed with a supersession note linking #2143._
 
@@ -34,6 +34,7 @@ This supersedes the Expo Go proof of concept in #2065. It must build on the nati
 - [x] Route away from the server picker immediately after OAuth succeeds. _The success transition now resets the ITX/query context and replaces the route with the project picker._
 - [x] Prevent remembered projects leaking across deployments or sign-ins. _The storage key now includes the OS URL, auth issuer, and interactive OAuth client registration; boot also verifies the project remains in the current principal's catalogue._
 - [x] Make mobile-created projects expose their config repo before they open. _Backfill now waits for `project/ready`, which is committed only after `/repos/config` becomes ready._
+- [x] Highlight parsed TypeScript/JSON in chat without showing the model's duplicate fenced source. _Activity cards reuse read-only CodeMirror rendering and strip only fences whose contents match a parsed execution step._
 
 ## Product and implementation decisions
 

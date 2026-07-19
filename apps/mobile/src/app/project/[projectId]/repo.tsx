@@ -175,6 +175,7 @@ export default function RepoScreen() {
               ) : (
                 <CodeEditor
                   dom={{ scrollEnabled: false, style: { flex: 1 } }}
+                  editable
                   onChange={async (content) => store.updateSelected(content)}
                   path={repoState.selectedPath}
                   value={repoState.selectedBuffer?.current || ""}

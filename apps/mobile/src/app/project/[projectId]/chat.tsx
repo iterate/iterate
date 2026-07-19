@@ -386,7 +386,9 @@ function EventList({ events }: { events: StreamEvent[] }) {
           <Text style={styles.eventType}>
             {event.offset} · {event.type.replace("events.iterate.com/", "")}
           </Text>
-          {event.payload ? <CodeBlock text={previewPayload(event.payload)} muted /> : null}
+          {event.payload ? (
+            <CodeBlock language="json" text={previewPayload(event.payload)} muted />
+          ) : null}
         </View>
       )}
     />

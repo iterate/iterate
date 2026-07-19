@@ -5,15 +5,18 @@
 // token-by-token as chunks arrive over the stream subscription.
 
 import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { summarizeAgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { responseWithoutParsedCode } from "../lib/activity-display.ts";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import CodeEditor from "./code-editor.tsx";
 
 export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
+  const parsedCodes = activity.steps.flatMap((step) => (step.kind === "code" ? [step.code] : []));
   // Live activities stream open so you can watch the code being written;
   // settled ones collapse to their summary until tapped.
   const expanded = toggled ?? isLive;
@@ -30,7 +33,11 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
           {isLive ? liveSummary(activity) : summarizeActivity(activity)}
         </Text>
       </Pressable>
-      {expanded ? activity.steps.map((step) => <StepView key={step.id} step={step} />) : null}
+      {expanded
+        ? activity.steps.map((step) => (
+            <StepView key={step.id} parsedCodes={parsedCodes} step={step} />
+          ))
+        : null}
     </View>
   );
 }
@@ -45,7 +52,9 @@ function liveSummary(activity: AgentUiActivity): string {
   return "working…";
 }
 
-function StepView({ step }: { step: AgentUiStep }) {
+function StepView({ parsedCodes, step }: { parsedCodes: string[]; step: AgentUiStep }) {
+  const responseText =
+    step.kind === "llm" ? responseWithoutParsedCode(step.responseText, parsedCodes) : "";
   return (
     <View style={styles.step}>
       <Text style={styles.stepLabel}>
@@ -60,14 +69,18 @@ function StepView({ step }: { step: AgentUiStep }) {
           {step.thinkingText !== "" ? (
             <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
           ) : null}
-          {step.responseText !== "" ? <CodeBlock text={step.responseText} /> : null}
+          {responseText !== "" ? (
+            <CodeBlock language="typescript" muted={false} text={responseText} />
+          ) : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
         </>
       ) : (
         <>
-          {step.code !== "" ? <CodeBlock text={step.code} /> : null}
+          {step.code !== "" ? (
+            <CodeBlock language="typescript" muted={false} text={step.code} />
+          ) : null}
           {step.status === "done" && step.result !== undefined ? (
-            <CodeBlock text={`→ ${previewJson(step.result)}`} muted />
+            <CodeBlock language="json" text={previewJson(step.result)} muted />
           ) : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
         </>
@@ -92,13 +105,29 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }
 
-export function CodeBlock({ text, muted }: { text: string; muted?: boolean }) {
+export function CodeBlock({
+  language,
+  text,
+  muted,
+}: {
+  language: "json" | "typescript";
+  text: string;
+  muted: boolean;
+}) {
+  const lineCount = text.split("\n").length;
+  const height = Math.min(260, Math.max(58, lineCount * 19 + 24));
   return (
-    <ScrollView horizontal style={styles.codeScroll} contentContainerStyle={styles.codeContent}>
-      <Text style={[styles.code, muted && styles.codeMuted]} selectable>
-        {text}
-      </Text>
-    </ScrollView>
+    <View style={[styles.codeViewer, muted && styles.codeMuted]}>
+      <CodeEditor
+        dom={{ scrollEnabled: true, style: { height } }}
+        editable={false}
+        onChange={async () => {
+          throw new Error("A read-only code block attempted to change.");
+        }}
+        path={`snippet.${language === "typescript" ? "ts" : language}`}
+        value={text}
+      />
+    </View>
   );
 }
 
@@ -144,13 +173,12 @@ const styles = StyleSheet.create({
   },
   stepLabel: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
   thinking: { color: colors.textMuted, fontSize: 12, fontStyle: "italic", lineHeight: 17 },
-  code: { color: colors.text, fontFamily: "Menlo", fontSize: 12, lineHeight: 17 },
-  codeMuted: { color: colors.textMuted },
-  codeScroll: {
+  codeViewer: {
     backgroundColor: colors.background,
     borderRadius: radius.sm,
+    overflow: "hidden",
     maxHeight: 260,
   },
-  codeContent: { padding: spacing.sm },
+  codeMuted: { opacity: 0.72 },
   error: { color: colors.danger, fontSize: 12 },
 });

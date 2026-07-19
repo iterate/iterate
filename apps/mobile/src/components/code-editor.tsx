@@ -11,10 +11,12 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, type Extension } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 type Props = {
   dom?: import("expo/dom").DOMProps;
+  editable: boolean;
   onChange: (content: string) => Promise<void>;
   path: string;
   value: string;
@@ -34,6 +36,8 @@ export default class CodeEditor extends Component<Props> {
       parent: this.#root,
       extensions: [
         basicSetup,
+        EditorState.readOnly.of(!this.props.editable),
+        EditorView.editable.of(this.props.editable),
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({
           autocapitalize: "off",
