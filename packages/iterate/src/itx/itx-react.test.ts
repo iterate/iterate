@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const control = vi.hoisted(() => ({
   hangAuthProbe: false,
   hangFirstAuth: false,
+  hangCloseHandshake: false,
   authProbeError: undefined as Error | undefined,
   authError: undefined as Error | undefined,
   lastRoot: undefined as unknown,
@@ -62,7 +63,10 @@ class FakeWebSocket {
     (this.handlers[type] ??= []).push(cb);
   }
   close() {
-    this.fire("close");
+    // A half-open transport can accept our close frame without delivering the
+    // peer's close acknowledgement. The real WebSocket then remains CLOSING
+    // and never emits `close`; tests opt into that one-way failure here.
+    if (!control.hangCloseHandshake) this.fire("close");
   }
   fire(type: string) {
     for (const cb of this.handlers[type] ?? []) cb();
@@ -72,6 +76,7 @@ class FakeWebSocket {
 beforeEach(() => {
   control.hangAuthProbe = false;
   control.hangFirstAuth = false;
+  control.hangCloseHandshake = false;
   control.authProbeError = undefined;
   control.authError = undefined;
   control.lastRoot = undefined;
@@ -221,9 +226,10 @@ describe("itx session socket", () => {
     }
   });
 
-  test("isItxTransportError classifies exactly the three transport signatures", async () => {
+  test("isItxTransportError classifies exactly the transport signatures", async () => {
     const { isItxTransportError } = await import("./itx-react.ts");
     expect(isItxTransportError(new Error("itx WebSocket closed before connecting"))).toBe(true);
+    expect(isItxTransportError(new Error("itx WebSocket timed out before connecting"))).toBe(true);
     expect(isItxTransportError(new Error("Peer closed WebSocket: 1006 "))).toBe(true);
     expect(isItxTransportError(new Error("WebSocket connection failed."))).toBe(true);
     // An application error that merely MENTIONS WebSocket is not a transport close.
@@ -333,15 +339,18 @@ describe("itx session socket", () => {
 
   test("the dial timeout spans authenticate: a hung handshake closes and re-dials", async () => {
     // A server that accepts the WebSocket but never answers authenticate must
-    // be a FAILED dial (close → paced re-dial), not an infinite spinner.
+    // be a FAILED dial, not an infinite spinner. Retirement cannot wait for a
+    // close acknowledgement: that reply is exactly what a one-way transport
+    // may have lost.
     vi.useFakeTimers();
     try {
       const { connectIterateSession } = await import("./itx-react.ts");
       control.hangFirstAuth = true;
+      control.hangCloseHandshake = true;
       const first = connectIterateSession();
       FakeWebSocket.instances[0]!.fire("open"); // opens, then authenticate hangs
       await vi.advanceTimersByTimeAsync(15_000); // DIAL_TIMEOUT_MS
-      await expect(first).rejects.toThrow(/closed before connecting/);
+      await expect(first).rejects.toThrow(/timed out before connecting/);
       // The timeout closed the wedged socket and a fresh dial replaced it.
       expect(FakeWebSocket.instances).toHaveLength(2);
       control.hangFirstAuth = false;

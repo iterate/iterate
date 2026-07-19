@@ -349,9 +349,19 @@ function dial(): Generation {
     generation.ws = ws;
     let established = false;
     // The timeout spans the WHOLE dial — TCP/TLS/upgrade AND the authenticate
-    // round trip — so a server that accepts the socket but never answers
-    // authenticate is a failed dial (close → paced re-dial), not a wedge.
-    const timeout = setTimeout(() => ws.close(), DIAL_TIMEOUT_MS);
+    // round trip. Retire + replace directly instead of waiting for WebSocket's
+    // `close` event: on a one-way/half-open transport, close() can send its
+    // frame while the peer acknowledgement never arrives, leaving the browser
+    // in CLOSING forever. The generation CAS makes a late close/auth result a
+    // harmless stale event.
+    const timeout = setTimeout(() => {
+      if (current !== generation || established) return;
+      consecutiveDialFailures += 1;
+      current = undefined; // FIRST: a synchronous close event must not redial too
+      reject(new Error("itx WebSocket timed out before connecting"));
+      retireGeneration(generation);
+      dial();
+    }, DIAL_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
       // Generation CAS: a superseded generation's late `open` (its successor was
@@ -589,9 +599,9 @@ export function reconnectIterateSession(): void {
 }
 
 /**
- * The three — and only three — transport-close rejections a caller may treat as
- * "the socket died, retry on a fresh one": our own dial-close reject, and
- * capnweb's two aborts when the WebSocket dies (`Peer closed WebSocket:
+ * The four — and only four — transport-close rejections a caller may treat as
+ * "the socket died, retry on a fresh one": our own dial-close and dial-timeout
+ * rejects, plus capnweb's two aborts when the WebSocket dies (`Peer closed WebSocket:
  * <code> <reason>` after a close frame, `WebSocket connection failed.` on an
  * error event — both capnweb `websocket.ts`). Deliberately NARROW: an
  * application/auth/validation error that merely mentions "WebSocket" must never
@@ -602,6 +612,7 @@ export function isItxTransportError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     message.includes("itx WebSocket closed before connecting") ||
+    message.includes("itx WebSocket timed out before connecting") ||
     message.includes("Peer closed WebSocket") ||
     message.includes("WebSocket connection failed")
   );
