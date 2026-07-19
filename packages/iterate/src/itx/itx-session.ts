@@ -49,10 +49,13 @@
  *    capnweb import-table entry, so deriving stubs ad hoc (or inside React
  *    renders that may be discarded) would leak them. The module
  *    {@link projectStubCaches} WeakMap keyed by the session stub caches one
- *    real stub per (session, slug); a retired generation disposes them. The
- *    stub stays the REAL capnweb stub (a lazy wrapper that awaited the session
- *    per call would break pipelining — capnweb fork v0.8.0), and its identity
- *    changes exactly once per successful reconnect.
+ *    stable resolution per (session, slug); a retired generation disposes the
+ *    owning RpcPromise. Capability lookup is idempotent but can be stranded by
+ *    a lost RPC response while the socket remains healthy, so each resolution
+ *    has finite attempts and only an UNSETTLED attempt is replayed. Consumers
+ *    never receive the pipelined stub until that lookup resolves: otherwise
+ *    every action and subscription would queue forever behind one poisoned
+ *    cache entry. The resolved stub's identity changes once per reconnect.
  *
  *  • TRANSPORT HEALTH IS SOCKET-OWNED and GENERATION-GUARDED. A half-open
  *    socket (laptop sleep, network switch — no `close` event) is detected by
@@ -154,6 +157,15 @@ const LIVENESS_INTERVAL_MS = 45_000;
 const LIVENESS_TIMEOUT_MS = 10_000;
 
 /**
+ * `projects.get` is a cheap, idempotent capability lookup (normally a few
+ * milliseconds). Its response can nevertheless be lost without the shared
+ * WebSocket closing. A 5s first bound leaves enormous cold-start headroom; the
+ * second attempt gets 10s. Explicit rejections are never replayed.
+ */
+const PROJECT_STUB_ATTEMPT_TIMEOUTS_MS = [5_000, 10_000] as const;
+const PROJECT_STUB_TIMED_OUT = Symbol("itx-project-stub-timed-out");
+
+/**
  * One dial attempt = one WebSocket lifetime. OBJECT IDENTITY is the
  * compare-and-swap token that makes every reconnect verdict identity-safe
  * (`current === generation` — only the CURRENT generation may be retired or
@@ -222,27 +234,113 @@ export const subscribeSession = (onChange: () => void) => {
 };
 
 /**
- * One real project stub per (session, slug), cached in module state so a
+ * One project resolution per (session, slug), cached in module state so a
  * consumer's lifecycle (React renders that may be discarded, repeated
  * imperative calls) can't leak undisposed capnweb import entries (see module
- * header). Keyed by the session stub identity, so it is implicitly scoped to a
- * generation and torn down with it. `slug` may be a slug or a `prj_…` id —
- * `session.projects.get` accepts either.
+ * header). `owner` is the raw RpcPromise: on success its eventual result is the
+ * resolved stub consumers share, and disposing the RpcPromise disposes that
+ * future result. Keyed by session identity, so the entry is generation-scoped
+ * and torn down with it. `slug` may be a slug or a `prj_…` id.
  */
-const projectStubCaches = new WeakMap<SessionStub, Map<string, ProjectStub>>();
+type ProjectStubEntry = {
+  promise: Promise<ProjectStub>;
+  owner: ProjectStub | undefined;
+  disposed: boolean;
+};
 
-export function projectStubFor(session: SessionStub, slug: string): ProjectStub {
+const projectStubCaches = new WeakMap<SessionStub, Map<string, ProjectStubEntry>>();
+
+/** A finite, classified failure resolving a project capability. */
+export class ItxProjectCapabilityDeadlineError extends Error {
+  override readonly name = "ItxProjectCapabilityDeadlineError";
+  readonly slug: string;
+  readonly attemptTimeoutsMs: readonly number[];
+
+  constructor(slug: string, attemptTimeoutsMs: readonly number[]) {
+    super(
+      `itx project capability ${JSON.stringify(slug)} did not resolve after ${attemptTimeoutsMs.length} attempts (${attemptTimeoutsMs.reduce((total, timeout) => total + timeout, 0)}ms total)`,
+    );
+    this.slug = slug;
+    this.attemptTimeoutsMs = attemptTimeoutsMs;
+  }
+}
+
+export function projectStubPromiseFor(session: SessionStub, slug: string): Promise<ProjectStub> {
   let cache = projectStubCaches.get(session);
   if (cache === undefined) {
     cache = new Map();
     projectStubCaches.set(session, cache);
   }
-  let stub = cache.get(slug);
-  if (stub === undefined) {
-    stub = session.projects.get(slug);
-    cache.set(slug, stub);
+  let entry = cache.get(slug);
+  if (entry === undefined) {
+    entry = {
+      // Assigned immediately below. The entry must be in the map first so all
+      // callers, including concurrent React renders, share one stable thenable.
+      promise: undefined as unknown as Promise<ProjectStub>,
+      owner: undefined,
+      disposed: false,
+    };
+    cache.set(slug, entry);
+    entry.promise = resolveProjectStub(session, slug, cache, entry);
+    // A prewarmed/cache-owned resolution may temporarily have no external
+    // awaiter. Keep its real rejection observable to callers without producing
+    // a process-level unhandledrejection in that window.
+    void entry.promise.catch(() => {});
   }
-  return stub;
+  return entry.promise;
+}
+
+async function resolveProjectStub(
+  session: SessionStub,
+  slug: string,
+  cache: Map<string, ProjectStubEntry>,
+  entry: ProjectStubEntry,
+): Promise<ProjectStub> {
+  for (const [index, timeoutMs] of PROJECT_STUB_ATTEMPT_TIMEOUTS_MS.entries()) {
+    if (entry.disposed) {
+      throw new Error(
+        `itx session retired while resolving project capability ${JSON.stringify(slug)}`,
+      );
+    }
+
+    // Calling the method starts a fresh idempotent lookup. Keep ownership of
+    // the raw RpcPromise: disposing it cancels an unsettled attempt and also
+    // owns its eventual capability result after success.
+    const owner = session.projects.get(slug);
+    entry.owner = owner;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      Promise.resolve(owner as unknown as PromiseLike<ProjectStub>),
+      new Promise<typeof PROJECT_STUB_TIMED_OUT>((resolve) => {
+        timeout = setTimeout(() => resolve(PROJECT_STUB_TIMED_OUT), timeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timeout));
+
+    if (result !== PROJECT_STUB_TIMED_OUT) {
+      if (entry.disposed) {
+        (owner as Partial<Disposable>)[Symbol.dispose]?.();
+        throw new Error(
+          `itx session retired while resolving project capability ${JSON.stringify(slug)}`,
+        );
+      }
+      return result;
+    }
+
+    // Only the timeout branch retries: there was no server outcome to duplicate.
+    // Disposing the RpcPromise cancels it and releases any late capability.
+    (owner as Partial<Disposable>)[Symbol.dispose]?.();
+    if (entry.owner === owner) entry.owner = undefined;
+    reportTransportSuspicion();
+    console.warn(
+      `itx project capability ${JSON.stringify(slug)} attempt ${index + 1}/${PROJECT_STUB_ATTEMPT_TIMEOUTS_MS.length} did not resolve within ${timeoutMs}ms`,
+    );
+  }
+
+  // The failure is finite rather than a permanently pending cache poison. Drop
+  // this exact entry so an explicit remount/refresh may make a new bounded try;
+  // the rejected promise itself remains stable for its existing readers.
+  if (cache.get(slug) === entry) cache.delete(slug);
+  throw new ItxProjectCapabilityDeadlineError(slug, PROJECT_STUB_ATTEMPT_TIMEOUTS_MS);
 }
 
 /** getSnapshot for useSyncExternalStore: stable between transitions; dials when idle. */
@@ -275,7 +373,7 @@ export function connectIterateSession(): Promise<SessionStub> {
  * the session-owned cached stub, re-derived automatically after a reconnect.
  */
 export function connectItx(slug: string): Promise<ProjectStub> {
-  return connectIterateSession().then((session) => projectStubFor(session, slug));
+  return connectIterateSession().then((session) => projectStubPromiseFor(session, slug));
 }
 
 function dial(): Generation {
@@ -505,7 +603,15 @@ function disposeGeneration(generation: Generation): void {
 /** Dispose a retired session's project-stub cache and the session stub itself. */
 function disposeSession(session: SessionStub): void {
   const cache = projectStubCaches.get(session);
-  if (cache) for (const stub of cache.values()) (stub as Partial<Disposable>)[Symbol.dispose]?.();
+  if (cache) {
+    for (const entry of cache.values()) {
+      if (entry.disposed) continue;
+      entry.disposed = true;
+      (entry.owner as Partial<Disposable> | undefined)?.[Symbol.dispose]?.();
+      entry.owner = undefined;
+    }
+    cache.clear();
+  }
   (session as Partial<Disposable>)[Symbol.dispose]?.();
 }
 

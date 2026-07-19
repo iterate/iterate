@@ -15,6 +15,7 @@ export {
   configureIterateSession,
   connectIterateSession,
   connectItx,
+  ItxProjectCapabilityDeadlineError,
   isItxTransportError,
   reconnectIterateSession,
   releaseItxSubscription,

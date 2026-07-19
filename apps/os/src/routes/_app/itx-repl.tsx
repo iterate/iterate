@@ -172,6 +172,11 @@ function ItxReplPage({
     if (trimmedCode === "") return;
     setStatus("Running...");
     setCode("");
+    // End the input event before compiling/evaluating arbitrary user code. A
+    // busy tab can spend long enough in that synchronous prefix for the click
+    // itself to appear wedged even though the REPL already switched to
+    // "Running..."; yielding also gives React a chance to paint that progress.
+    await Promise.resolve();
     const entry = await runBrowserReplEntry({
       code: trimmedCode,
       itx,

@@ -10,8 +10,14 @@ const control = vi.hoisted(() => ({
   hangAuthProbe: false,
   hangFirstAuth: false,
   hangCloseHandshake: false,
+  hangProjectGetAttempts: 0,
   authProbeError: undefined as Error | undefined,
   authError: undefined as Error | undefined,
+  projectGetError: undefined as Error | undefined,
+  projectGetAttempts: [] as Array<{
+    slug: string;
+    dispose: ReturnType<typeof vi.fn>;
+  }>,
   lastRoot: undefined as unknown,
   lastCredentials: undefined as unknown,
 }));
@@ -40,7 +46,27 @@ vi.mock("capnweb", () => ({
         if (control.hangFirstAuth) return new Promise(() => {});
         if (control.authError) return Promise.reject(control.authError);
         const root = Object.assign(handleFor(""), {
-          projects: { get: (slug: string) => handleFor(slug) },
+          projects: {
+            get: (slug: string) => {
+              const result = handleFor(slug);
+              const dispose = vi.fn();
+              const attemptNumber = control.projectGetAttempts.length + 1;
+              const attempt = {
+                url: result.url,
+                [Symbol.dispose]: dispose,
+                then: (
+                  onResolve: (value: unknown) => unknown,
+                  onReject?: (error: Error) => unknown,
+                ) => {
+                  if (attemptNumber <= control.hangProjectGetAttempts) return;
+                  if (control.projectGetError) return onReject?.(control.projectGetError);
+                  return onResolve(result);
+                },
+              };
+              control.projectGetAttempts.push({ slug, dispose });
+              return attempt;
+            },
+          },
         });
         control.lastRoot = root;
         // The RpcPromise stand-in: thenable, resolves to the root handle.
@@ -77,8 +103,11 @@ beforeEach(() => {
   control.hangAuthProbe = false;
   control.hangFirstAuth = false;
   control.hangCloseHandshake = false;
+  control.hangProjectGetAttempts = 0;
   control.authProbeError = undefined;
   control.authError = undefined;
+  control.projectGetError = undefined;
+  control.projectGetAttempts = [];
   control.lastRoot = undefined;
   control.lastCredentials = undefined;
   FakeWebSocket.instances = [];
@@ -120,6 +149,75 @@ describe("itx session socket", () => {
     expect(acme).toMatchObject({ url: expect.stringContaining("/api/acme") });
     expect(other).toMatchObject({ url: expect.stringContaining("/api/prj_123") });
     await expect(session).resolves.toMatchObject({ url: expect.stringContaining("/api") });
+  });
+
+  test("a stranded project lookup is retired and retried without poisoning the session cache", async () => {
+    vi.useFakeTimers();
+    try {
+      control.hangProjectGetAttempts = 1;
+      const { connectItx } = await import("./itx-react.ts");
+      const project = connectItx("acme");
+      FakeWebSocket.instances[0]!.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(control.projectGetAttempts.map(({ slug }) => slug)).toEqual(["acme"]);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(control.projectGetAttempts.map(({ slug }) => slug)).toEqual(["acme", "acme"]);
+      expect(control.projectGetAttempts[0]!.dispose).toHaveBeenCalledTimes(1);
+      await expect(project).resolves.toMatchObject({ url: expect.stringContaining("/api/acme") });
+
+      // The successful retry is the one session-owned, slug-scoped result.
+      const sameProject = await connectItx("acme");
+      expect(sameProject).toBe(await project);
+      expect(control.projectGetAttempts).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("an explicit project lookup rejection surfaces immediately without replay", async () => {
+    vi.useFakeTimers();
+    try {
+      control.projectGetError = new Error("project is forbidden");
+      const { connectItx } = await import("./itx-react.ts");
+      const project = connectItx("acme");
+      const rejection = expect(project).rejects.toThrow("project is forbidden");
+      FakeWebSocket.instances[0]!.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+
+      await rejection;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(control.projectGetAttempts).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("project lookup exhaustion is finite, classified, and evicted for an explicit retry", async () => {
+    vi.useFakeTimers();
+    try {
+      control.hangProjectGetAttempts = 2;
+      const { connectItx, ItxProjectCapabilityDeadlineError } = await import("./itx-react.ts");
+      const project = connectItx("acme");
+      const rejection = expect(project).rejects.toBeInstanceOf(ItxProjectCapabilityDeadlineError);
+      FakeWebSocket.instances[0]!.fire("open");
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await rejection;
+      expect(control.projectGetAttempts).toHaveLength(2);
+      expect(control.projectGetAttempts[0]!.dispose).toHaveBeenCalledTimes(1);
+      expect(control.projectGetAttempts[1]!.dispose).toHaveBeenCalledTimes(1);
+
+      // Exhaustion removes only the failed cache entry. A deliberate retry is
+      // a new finite attempt on the still-live session, not a permanent poison.
+      control.hangProjectGetAttempts = 0;
+      await expect(connectItx("acme")).resolves.toMatchObject({
+        url: expect.stringContaining("/api/acme"),
+      });
+      expect(control.projectGetAttempts).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("a dial that closes before opening rejects awaiters instead of hanging, then re-dials", async () => {

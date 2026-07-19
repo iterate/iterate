@@ -117,16 +117,14 @@ test.describe("itx REPL catalogue examples", () => {
             );
           }
         };
-        if (exampleCase.completionTimeoutMs) {
-          // spinner-waiter caps "spinner still visible" waits at 30s, which is
-          // exactly the state a long-running example is in — bypass it and wait
-          // for the entry directly with the example's own budget.
-          await spinnerWaiter.settings.run({ disabled: true }, () =>
-            failFastOnError(exampleCase.completionTimeoutMs!),
-          );
-        } else {
-          await failFastOnError(30_000);
-        }
+        // These two locators ARE the progress model: success or explicit error.
+        // Running them through spinner-waiter adds its own 30s spinner window
+        // around each branch, so a stated 30s watchdog can take about a minute.
+        // Bypass that middleware for every example and enforce exactly the
+        // example's declared budget (or the catalogue's 30s default).
+        await spinnerWaiter.settings.run({ disabled: true }, () =>
+          failFastOnError(exampleCase.completionTimeoutMs ?? 30_000),
+        );
 
         const resultJson = await entry.getByTestId("itx-repl-result-json").textContent();
         const result = JSON.parse(resultJson!);

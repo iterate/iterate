@@ -75,7 +75,7 @@ import {
   connectItx,
   currentSnapshot,
   isItxTransportError,
-  projectStubFor,
+  projectStubPromiseFor,
   releaseItxSubscription,
   reportTransportSuspicion,
   serverSnapshot,
@@ -93,6 +93,7 @@ export {
   configureIterateSession,
   connectIterateSession,
   connectItx,
+  ItxProjectCapabilityDeadlineError,
   isItxTransportError,
   reconnectIterateSession,
   reportTransportSuspicion,
@@ -121,10 +122,12 @@ export function useIterateSession(): SessionStub {
 }
 
 /**
- * The project itx for `slug` — `session.projects.get(slug)`, the real capnweb
- * stub. `slug` comes from the argument or the nearest <ProjectScope>; an
- * explicit argument wins. The returned stub's identity is stable within a socket
- * and changes once per reconnect (which re-runs effects/memos keyed on it).
+ * The project itx for `slug` — the resolved `session.projects.get(slug)`
+ * capability. `slug` comes from the argument or the nearest <ProjectScope>; an
+ * explicit argument wins. Resolution is a stable, bounded thenable shared by
+ * every render for this session+slug, so one lost lookup response cannot poison
+ * every pipelined action/subscription forever. The returned stub's identity is
+ * stable within a socket and changes once per reconnect.
  *
  *   const itx = useItx();               // ambient project (under <ProjectScope>)
  *   const itx = useItx("other-slug");   // a specific project
@@ -139,7 +142,7 @@ export function useItx(explicitSlug?: string): ProjectStub {
       "useItx() needs a project: pass useItx(slug) or render under <ProjectScope slug>.",
     );
   }
-  return projectStubFor(useIterateSession(), slug);
+  return use(projectStubPromiseFor(useIterateSession(), slug));
 }
 
 function SessionPrewarm() {
@@ -198,11 +201,11 @@ const itxTransportRetry = {
  *   });
  *
  * The connection is resolved PER FETCH (never a render-captured stub — that
- * would pin a dead socket after a reconnect), and the per-fetch project stub is
- * disposed once the read resolves. A resolved query keeps its cached data across
- * a reconnect (no re-suspend, no spinner); only an in-flight read retries, on a
- * finite transport-only policy. Errors with no cached data throw to the nearest
- * error boundary; refetch after a mutation with
+ * would pin a dead socket after a reconnect), through the same bounded,
+ * session-owned project capability as actions and subscriptions. A resolved
+ * query keeps its cached data across a reconnect (no re-suspend, no spinner);
+ * only an in-flight read retries, on a finite transport-only policy. Errors
+ * with no cached data throw to the nearest error boundary; refetch after a mutation with
  * `queryClient.invalidateQueries({ queryKey: ["itx", ...key] })`.
  */
 export function useItxQuery<T>({
@@ -220,15 +223,8 @@ export function useItxQuery<T>({
     queryKey: ["itx", ...key],
     queryFn: async () => {
       const session = await connectIterateSession();
-      const itx = session.projects.get(slug);
-      // `return await` is load-bearing: dispose only AFTER the RPC result has
-      // fully resolved (the serialized result is already pulled, so disposing
-      // the short-lived stub can't invalidate it).
-      try {
-        return await query(itx);
-      } finally {
-        (itx as Partial<Disposable>)[Symbol.dispose]?.();
-      }
+      const itx = await projectStubPromiseFor(session, slug);
+      return query(itx);
     },
     ...itxTransportRetry,
   }).data;
