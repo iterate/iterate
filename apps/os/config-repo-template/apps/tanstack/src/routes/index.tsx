@@ -11,6 +11,8 @@ export function Todos() {
   const { todos, api, error } = useTodos();
   const [draft, setDraft] = useState("");
   const [pendingAdd, setPendingAdd] = useState<{
+    acceptNewMatchingTodo: boolean;
+    existingTodoIds: readonly string[];
     id: string | null;
     title: string;
   } | null>(null);
@@ -19,11 +21,15 @@ export function Todos() {
   const visibleError = error ?? mutationError;
 
   useEffect(() => {
-    if (
-      pendingAdd?.id !== null &&
-      pendingAdd?.id !== undefined &&
-      todos?.some((todo) => todo.id === pendingAdd.id)
-    ) {
+    if (pendingAdd === null || todos === undefined) return;
+    const observed =
+      (pendingAdd.id !== null && todos.some((todo) => todo.id === pendingAdd.id)) ||
+      (pendingAdd.acceptNewMatchingTodo &&
+        todos.some(
+          (todo) =>
+            todo.title === pendingAdd.title && !pendingAdd.existingTodoIds.includes(todo.id),
+        ));
+    if (observed) {
       setPendingAdd(null);
       setMutationError(null);
     }
@@ -73,9 +79,11 @@ export function Todos() {
         onSubmit={(event) => {
           event.preventDefault();
           const title = draft.trim().slice(0, 500);
-          if (api === null || title === "" || pendingAdd !== null) return;
+          if (api === null || todos === undefined || title === "" || pendingAdd !== null) return;
           setMutationError(null);
           setPendingAdd({
+            acceptNewMatchingTodo: false,
+            existingTodoIds: todos.map((todo) => todo.id),
             id: null,
             title,
           });
@@ -83,12 +91,24 @@ export function Todos() {
           void api
             .add(title)
             .then((id) => {
-              if (id === undefined) throw new Error("The todo was not added.");
-              setPendingAdd((current) => (current === null ? null : { ...current, id }));
+              // The pre-return-id API can answer briefly while its
+              // stale-while-rebuild facet swaps. Its void response still
+              // confirms success; identify that call by the first new
+              // equal-title live-state row instead of inviting a duplicate.
+              setPendingAdd((current) =>
+                current === null
+                  ? null
+                  : id === undefined
+                    ? { ...current, acceptNewMatchingTodo: true }
+                    : { ...current, id },
+              );
             })
             .catch((thrown: unknown) => {
-              setPendingAdd(null);
-              setMutationError(thrown instanceof Error ? thrown.message : String(thrown));
+              // A transport rejection can lose a successful call's ack. Keep
+              // the composer locked until live state confirms the row (or a
+              // reload proves otherwise), so retry cannot duplicate it.
+              const message = thrown instanceof Error ? thrown.message : String(thrown);
+              setMutationError(`${message} Reload before retrying.`);
             });
         }}
       >
@@ -98,12 +118,14 @@ export function Todos() {
           onChange={(event) => setDraft(event.target.value)}
           placeholder="add a todo"
           aria-label="add a todo"
-          disabled={api === null || pendingAdd !== null}
+          disabled={api === null || todos === undefined || pendingAdd !== null}
         />
         <button
           type="submit"
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={api === null || draft.trim() === "" || pendingAdd !== null}
+          disabled={
+            api === null || todos === undefined || draft.trim() === "" || pendingAdd !== null
+          }
         >
           add
         </button>

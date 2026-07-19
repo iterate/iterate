@@ -1329,6 +1329,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  const { todos, api, error } = useTodos();\n" +
       "  const [draft, setDraft] = useState(\"\");\n" +
       "  const [pendingAdd, setPendingAdd] = useState<{\n" +
+      "    acceptNewMatchingTodo: boolean;\n" +
+      "    existingTodoIds: readonly string[];\n" +
       "    id: string | null;\n" +
       "    title: string;\n" +
       "  } | null>(null);\n" +
@@ -1337,11 +1339,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  const visibleError = error ?? mutationError;\n" +
       "\n" +
       "  useEffect(() => {\n" +
-      "    if (\n" +
-      "      pendingAdd?.id !== null &&\n" +
-      "      pendingAdd?.id !== undefined &&\n" +
-      "      todos?.some((todo) => todo.id === pendingAdd.id)\n" +
-      "    ) {\n" +
+      "    if (pendingAdd === null || todos === undefined) return;\n" +
+      "    const observed =\n" +
+      "      (pendingAdd.id !== null && todos.some((todo) => todo.id === pendingAdd.id)) ||\n" +
+      "      (pendingAdd.acceptNewMatchingTodo &&\n" +
+      "        todos.some(\n" +
+      "          (todo) =>\n" +
+      "            todo.title === pendingAdd.title && !pendingAdd.existingTodoIds.includes(todo.id),\n" +
+      "        ));\n" +
+      "    if (observed) {\n" +
       "      setPendingAdd(null);\n" +
       "      setMutationError(null);\n" +
       "    }\n" +
@@ -1391,9 +1397,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        onSubmit={(event) => {\n" +
       "          event.preventDefault();\n" +
       "          const title = draft.trim().slice(0, 500);\n" +
-      "          if (api === null || title === \"\" || pendingAdd !== null) return;\n" +
+      "          if (api === null || todos === undefined || title === \"\" || pendingAdd !== null) return;\n" +
       "          setMutationError(null);\n" +
       "          setPendingAdd({\n" +
+      "            acceptNewMatchingTodo: false,\n" +
+      "            existingTodoIds: todos.map((todo) => todo.id),\n" +
       "            id: null,\n" +
       "            title,\n" +
       "          });\n" +
@@ -1401,12 +1409,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          void api\n" +
       "            .add(title)\n" +
       "            .then((id) => {\n" +
-      "              if (id === undefined) throw new Error(\"The todo was not added.\");\n" +
-      "              setPendingAdd((current) => (current === null ? null : { ...current, id }));\n" +
+      "              // The pre-return-id API can answer briefly while its\n" +
+      "              // stale-while-rebuild facet swaps. Its void response still\n" +
+      "              // confirms success; identify that call by the first new\n" +
+      "              // equal-title live-state row instead of inviting a duplicate.\n" +
+      "              setPendingAdd((current) =>\n" +
+      "                current === null\n" +
+      "                  ? null\n" +
+      "                  : id === undefined\n" +
+      "                    ? { ...current, acceptNewMatchingTodo: true }\n" +
+      "                    : { ...current, id },\n" +
+      "              );\n" +
       "            })\n" +
       "            .catch((thrown: unknown) => {\n" +
-      "              setPendingAdd(null);\n" +
-      "              setMutationError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
+      "              // A transport rejection can lose a successful call's ack. Keep\n" +
+      "              // the composer locked until live state confirms the row (or a\n" +
+      "              // reload proves otherwise), so retry cannot duplicate it.\n" +
+      "              const message = thrown instanceof Error ? thrown.message : String(thrown);\n" +
+      "              setMutationError(`${message} Reload before retrying.`);\n" +
       "            });\n" +
       "        }}\n" +
       "      >\n" +
@@ -1416,12 +1436,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          onChange={(event) => setDraft(event.target.value)}\n" +
       "          placeholder=\"add a todo\"\n" +
       "          aria-label=\"add a todo\"\n" +
-      "          disabled={api === null || pendingAdd !== null}\n" +
+      "          disabled={api === null || todos === undefined || pendingAdd !== null}\n" +
       "        />\n" +
       "        <button\n" +
       "          type=\"submit\"\n" +
       "          className=\"rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "          disabled={api === null || draft.trim() === \"\" || pendingAdd !== null}\n" +
+      "          disabled={\n" +
+      "            api === null || todos === undefined || draft.trim() === \"\" || pendingAdd !== null\n" +
+      "          }\n" +
       "        >\n" +
       "          add\n" +
       "        </button>\n" +
