@@ -13,6 +13,7 @@ const T = {
 } as const;
 
 const pendingReceiptDependencies = {
+  clearPushToken: async () => true,
   getReceipt: async () => ({ status: "pending" as const }),
   repointReceiptAlarm: async () => undefined,
 };
@@ -39,15 +40,12 @@ test("a device notification request becomes one journaled Expo push attempt", as
       payload: {
         config: {
           appVersion: "1.0.0",
-          encryptedPushToken: {
-            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
-            ciphertext: "encrypted-token",
-            iv: "initial-vector",
-          },
           label: "Misha's iPhone",
           notificationsStatus: "granted",
           ownerId: "usr_misha",
           platform: "ios",
+          pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+          pushTokenSecretUpdatedOffset: 1,
         },
       },
     },
@@ -67,7 +65,6 @@ test("a device notification request becomes one journaled Expo push attempt", as
   await vi.waitFor(() => expect(stream.events.some((event) => event.type === T.ticket)).toBe(true));
 
   expect(send).toHaveBeenCalledWith({
-    encryptedPushToken: expect.objectContaining({ ciphertext: "encrypted-token", offset: 1 }),
     notification: {
       body: "Buy milk",
       data: {
@@ -78,6 +75,8 @@ test("a device notification request becomes one journaled Expo push attempt", as
       expiresAt: Date.parse("2026-07-18T08:05:00Z"),
       title: "Reminder",
     },
+    pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+    pushTokenSecretUpdatedOffset: 1,
   });
   expect(stream.events.map((event) => event.type)).toEqual([
     T.created,
@@ -196,11 +195,8 @@ test("an expired notification request settles without contacting Expo", async ()
       payload: {
         config: {
           appVersion: "1.0.0",
-          encryptedPushToken: {
-            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
-            ciphertext: "encrypted-token",
-            iv: "initial-vector",
-          },
+          pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+          pushTokenSecretUpdatedOffset: 1,
           label: "Misha's iPhone",
           notificationsStatus: "granted",
           ownerId: "usr_misha",
@@ -247,11 +243,8 @@ test("a started attempt from a lost incarnation settles uncertain and is never r
       payload: {
         config: {
           appVersion: "1.0.0",
-          encryptedPushToken: {
-            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
-            ciphertext: "encrypted-token",
-            iv: "initial-vector",
-          },
+          pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+          pushTokenSecretUpdatedOffset: 1,
           label: "Misha's iPhone",
           notificationsStatus: "granted",
           ownerId: "usr_misha",
@@ -289,6 +282,7 @@ test("a started attempt from a lost incarnation settles uncertain and is never r
 
 test("an Expo ticket rejection becomes a terminal device outcome", async () => {
   const stream = deviceStream();
+  const clearPushToken = vi.fn(async () => true);
   const send = vi.fn(async () => ({
     status: "error" as const,
     error: "DeviceNotRegistered",
@@ -301,6 +295,7 @@ test("an Expo ticket rejection becomes a terminal device outcome", async () => {
     now: () => Date.parse("2026-07-18T08:00:00Z"),
     send,
     ...pendingReceiptDependencies,
+    clearPushToken,
   });
   const driver = driveProcessor(processor, stream);
   await stream.append(
@@ -309,11 +304,8 @@ test("an Expo ticket rejection becomes a terminal device outcome", async () => {
       payload: {
         config: {
           appVersion: "1.0.0",
-          encryptedPushToken: {
-            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
-            ciphertext: "encrypted-token",
-            iv: "initial-vector",
-          },
+          pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+          pushTokenSecretUpdatedOffset: 1,
           label: "Misha's iPhone",
           notificationsStatus: "granted",
           ownerId: "usr_misha",
@@ -354,6 +346,50 @@ test("an Expo ticket rejection becomes a terminal device outcome", async () => {
       payload: { reason: "push-token-invalid" },
     }),
   );
+  expect(clearPushToken).toHaveBeenCalledWith({
+    pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+    pushTokenSecretUpdatedOffset: 1,
+  });
+});
+
+test("a stale token rejection cannot revoke a concurrently rotated credential", async () => {
+  const stream = deviceStream();
+  const processor = new DeviceProcessor({
+    ...pendingReceiptDependencies,
+    clearPushToken: async () => false,
+    stream,
+    path: stream.path,
+    projectId: "prj_test",
+    now: () => Date.parse("2026-07-18T08:00:00Z"),
+    send: async () => ({
+      status: "error",
+      error: "DeviceNotRegistered",
+      message: "The previous token is no longer registered",
+    }),
+  });
+  const driver = driveProcessor(processor, stream);
+  await stream.append(deviceCreated(), {
+    type: T.requested,
+    payload: {
+      body: "Buy milk",
+      destination: { kind: "project" },
+      expiresAt: Date.parse("2026-07-18T08:05:00Z"),
+      title: "Reminder",
+    },
+  });
+
+  await driver.deliver();
+  await vi.waitFor(() =>
+    expect(stream.events.some((event) => event.type === T.settled)).toBe(true),
+  );
+
+  expect(stream.events.some((event) => event.type === T.revoked)).toBe(false);
+  expect(stream.events.at(-1)).toMatchObject({
+    type: T.settled,
+    payload: {
+      outcome: { kind: "rejected-by-expo", error: "DeviceNotRegistered" },
+    },
+  });
 });
 
 test("a notification requested after revocation settles as device unavailable", async () => {
@@ -395,6 +431,7 @@ test("a later Expo receipt records push-service acceptance without claiming devi
   let now = Date.parse("2026-07-18T08:00:00Z");
   const stream = new MemoryStreamNetwork(() => now).get("/devices/phone");
   const processor = new DeviceProcessor({
+    ...pendingReceiptDependencies,
     stream,
     path: stream.path,
     projectId: "prj_test",
@@ -410,11 +447,8 @@ test("a later Expo receipt records push-service acceptance without claiming devi
       payload: {
         config: {
           appVersion: "1.0.0",
-          encryptedPushToken: {
-            algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1",
-            ciphertext: "encrypted-token",
-            iv: "initial-vector",
-          },
+          pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+          pushTokenSecretUpdatedOffset: 1,
           label: "Misha's iPhone",
           notificationsStatus: "granted",
           ownerId: "usr_misha",
@@ -453,7 +487,10 @@ test("a later Expo receipt records push-service acceptance without claiming devi
 test("a DeviceNotRegistered receipt revokes the token before settling the request", async () => {
   let now = Date.parse("2026-07-18T08:00:00Z");
   const stream = new MemoryStreamNetwork(() => now).get("/devices/phone");
+  const clearPushToken = vi.fn(async () => true);
   const processor = new DeviceProcessor({
+    ...pendingReceiptDependencies,
+    clearPushToken,
     stream,
     path: stream.path,
     projectId: "prj_test",
@@ -495,6 +532,10 @@ test("a DeviceNotRegistered receipt revokes the token before settling the reques
       },
     },
   ]);
+  expect(clearPushToken).toHaveBeenCalledWith({
+    pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+    pushTokenSecretUpdatedOffset: 1,
+  });
 });
 
 test("a full-journal refold performs no extra vendor calls or home-stream writes", async () => {
@@ -544,11 +585,8 @@ function deviceCreated() {
     payload: {
       config: {
         appVersion: "1.0.0",
-        encryptedPushToken: {
-          algorithm: "AES-GCM-SHA256+DEVICE-PUSH-V1" as const,
-          ciphertext: "encrypted-token",
-          iv: "initial-vector",
-        },
+        pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
+        pushTokenSecretUpdatedOffset: 1,
         label: "Misha's iPhone",
         notificationsStatus: "granted" as const,
         ownerId: "usr_misha",
