@@ -21,10 +21,12 @@ export type SecretCreateInput = {
    * How the material may leave: "write-only" (never — the default and the
    * classic secret invariant) or "readable" (reveal() answers it, as often
    * as asked). IMMUTABLE: declared at birth, never updatable, so a
-   * write-only secret can never be retro-flipped readable. Reserve
-   * "readable" for credentials whose whole purpose is to be shown to the
-   * outside — the born project ingress key at /secrets/project-api-key is
-   * the canonical case.
+   * write-only secret can never be retro-flipped readable. Readable and
+   * substitutable are mutually exclusive: a readable secret must have (and
+   * keep) an empty egress pin — create and update both reject egress
+   * origins on one. Reserve "readable" for credentials whose whole purpose
+   * is to be shown to the outside — the born project ingress key at
+   * /secrets/project-api-key is the canonical case.
    */
   visibility?: SecretVisibility;
 };

@@ -149,6 +149,15 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #create(input: SecretCreateInput) {
     const egress = normalizeEgress(input.egress);
+    // Readable and substitutable are mutually exclusive kinds: material
+    // leaves via reveal() OR via pinned egress substitution, never both. The
+    // matching update() guard makes this an INVARIANT, not a default — a
+    // readable secret can never later grow an egress pin.
+    if ((input.visibility ?? "write-only") === "readable" && egress.urls.length > 0) {
+      throw new Error(
+        `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
+      );
+    }
     const idempotencyKey = `secret/created:${this.#name.projectId}:${this.#name.path}`;
     const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName: this.ctx.id.name!,
@@ -231,6 +240,17 @@ export class SecretDurableObject extends DurableObject<Env> {
     assertSecretCreated(initialSnapshot.state, this.#name.path);
 
     const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
+    // The create()-side exclusivity as an invariant: a readable secret's
+    // "never substituted outbound" property must survive every later update.
+    if (
+      initialSnapshot.state.birthCertificate?.config.visibility === "readable" &&
+      egress !== undefined &&
+      egress.urls.length > 0
+    ) {
+      throw new Error(
+        `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
+      );
+    }
 
     // A material-less update is intentionally destructive in the fold. It
     // needs no privileged append lane: egress, refresh, and audit facts are all

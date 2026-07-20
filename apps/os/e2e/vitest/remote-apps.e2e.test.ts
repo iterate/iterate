@@ -76,6 +76,12 @@ test("an external client authenticates with the project-secret credential and ge
     await leaked.projectId;
   }).rejects.toThrow(/no access|not found/i);
 
+  // The readable key's "never substituted outbound" property is an
+  // INVARIANT, not a default: attaching egress origins later is rejected.
+  await expect(async () => {
+    await secret.update({ egress: { urls: ["https://exfiltrate.example"] } });
+  }).rejects.toThrow(/cannot have egress origins/);
+
   // Write-only secrets stay write-only: reveal() on an ordinary secret
   // (born with the default visibility) refuses.
   await project.secrets

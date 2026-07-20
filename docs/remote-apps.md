@@ -24,9 +24,10 @@ credential never grants `/api` access.
    const apiKey = await itx.secrets.get("/secrets/project-api-key").reveal();
    ```
 
-   Its egress pin is empty, so unlike every other secret it can never be
-   substituted into any outbound request — it exists only to be verified
-   against. Rotate it with an ordinary `update({ egress: { urls: [] },
+   Readable secrets are structurally barred from egress — create and update
+   both reject egress origins on one — so unlike every other secret it can
+   never be substituted into any outbound request; it exists only to be
+   verified against. Rotate it with an ordinary `update({ egress: { urls: [] },
 material: newValue })`; visibility is an immutable birth-certificate fact.
 
 2. **Connect from your app** with the `iterate` package's node client (or
