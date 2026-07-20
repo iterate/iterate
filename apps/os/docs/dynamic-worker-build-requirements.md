@@ -82,12 +82,12 @@ requests share cached artifacts across projects. With an unlocked dependency
 range, the first successful registry resolution becomes that key's cached
 artifact until expiry.
 
-KV stores one JSON record per key: either the complete modules/assets (30-day
-TTL) or a bounded error returned by the worker-bundler call (15-minute TTL).
-Errors before that call (repo reads) and failures reaching or writing KV are
-not cached. Concurrent cache misses may build the same immutable key; their
-content-addressed writes are identical, and the next request is a hit. There
-is no request-crossing promise or distributed lock.
+KV stores one complete modules/assets JSON record per successful key with a
+30-day TTL. Build failures are not cached because worker-bundler does not
+distinguish deterministic source failures from transient registry or runtime
+failures; a later request tries again. Concurrent cache misses may build the
+same immutable key; their content-addressed writes are identical, and the next
+request is a hit. There is no request-crossing promise or distributed lock.
 
 Browser fetches may stop waiting at a small budget while the same promise
 continues under `waitUntil`; callers see the self-refreshing building page.

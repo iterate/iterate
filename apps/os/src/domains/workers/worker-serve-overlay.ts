@@ -13,9 +13,9 @@ import {
  * - The @iterate overlay — injected by project ingress into HTML documents
  *   (HTMLRewriter, before `</body>`): a floating Iterate mark in the corner.
  * - The building page body (served by workerBuildingResponse in
- *   worker-fetch-dispatch.ts) and the build-failed page — the two terminal
- *   states of the lane: nothing built yet, so a page stands in for the worker.
- *   Both poll their own URL and self-heal.
+ *   worker-fetch-dispatch.ts) and the build-failed page: nothing built yet, so
+ *   a page stands in for the worker. The transient building page polls; the
+ *   terminal failure page waits for an explicit reload.
  */
 
 /** The iterate mark — the letter i from the product logo. */
@@ -56,8 +56,7 @@ function servePageHtml(input: { body: string; head?: string; title: string }): s
 </html>`;
 }
 
-/** The stand-in pages' shared self-heal loop: poll this URL until the marker
- * header clears, then reload. */
+/** Poll this URL until the building marker clears, then reload. */
 function reloadWhenHeaderClearsScript(headerName: string, intervalMs: number): string {
   return `const poll = async () => {
         try {
@@ -96,9 +95,8 @@ export function workerBuildingPageHtml(buildingHeader: string): string {
 }
 
 /**
- * The terminal case: the build failed. Shows the bundler's error and polls its
- * own URL — a fixed commit is a new build key, so the page self-heals the same
- * way the building page does.
+ * The terminal case: the build failed. Shows the bundler's error without
+ * automatically retrying a potentially broken source forever.
  */
 export function workerBuildFailedResponse(error: unknown): Response {
   return new Response(
@@ -106,12 +104,9 @@ export function workerBuildFailedResponse(error: unknown): Response {
       body: `<main>
         ${ITERATE_MARK_SVG}
         <h1>Worker build failed</h1>
-        <p>Fix the worker source and this page picks it up automatically.</p>
+        <p>Fix the worker source, then reload this page.</p>
         <pre>${escapeHtml(buildFailureMessageFromError(error))}</pre>
-      </main>
-      <script>
-        ${reloadWhenHeaderClearsScript(WORKER_BUILD_FAILED_HEADER, 3_000)}
-      </script>`,
+      </main>`,
       title: "Worker build failed",
     }),
     {

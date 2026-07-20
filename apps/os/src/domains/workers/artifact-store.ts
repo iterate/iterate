@@ -2,12 +2,12 @@
 
 import type { WorkerBundlerAssetConfig } from "./schemas.ts";
 
-// v9 keeps successful artifacts separate from short-lived failure records so
-// a concurrent failed attempt cannot replace a completed build.
+// v9 stores successful artifacts separately from the failure records written
+// by an earlier implementation. Failures are deliberately not cached: the
+// bundler cannot distinguish broken source from transient infrastructure.
 export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 9;
 
 const ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
-const FAILURE_TTL_SECONDS = 15 * 60;
 const KV_PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
 
 /** JSON-safe subset of Worker Loader's module representation. */
@@ -41,21 +41,9 @@ export type WorkerBuildArtifact = {
   createdAt: string;
   mainModule: string;
   modules: Record<string, WorkerBuildModule>;
-  status: "complete";
   warnings?: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
 };
-
-export type WorkerBuildFailure = {
-  buildKey: string;
-  /** The commit whose build failed, when the source came from a repo. */
-  commitOid?: string;
-  createdAt: string;
-  message: string;
-  status: "failed";
-};
-
-type WorkerBuildRecord = WorkerBuildArtifact | WorkerBuildFailure;
 
 /** An expected source-build failure; repo, KV, and sidecar transport errors stay distinct. */
 export class WorkerBuildFailedError extends Error {
@@ -79,23 +67,16 @@ function artifactKey(buildKey: string): string {
   return `${KV_PREFIX}/complete/${buildKey}.json`;
 }
 
-function failureKey(buildKey: string): string {
-  return `${KV_PREFIX}/failed/${buildKey}.json`;
-}
-
 export class KvWorkerBuildArtifactStore {
   constructor(readonly kv: KVNamespace) {}
 
-  async get(buildKey: string): Promise<WorkerBuildRecord | null> {
-    const artifact = await this.kv.get<WorkerBuildArtifact>(artifactKey(buildKey), "json");
-    return artifact ?? (await this.kv.get<WorkerBuildFailure>(failureKey(buildKey), "json"));
+  async get(buildKey: string): Promise<WorkerBuildArtifact | null> {
+    return await this.kv.get<WorkerBuildArtifact>(artifactKey(buildKey), "json");
   }
 
-  async put(record: WorkerBuildRecord): Promise<void> {
-    const key =
-      record.status === "complete" ? artifactKey(record.buildKey) : failureKey(record.buildKey);
-    await this.kv.put(key, JSON.stringify(record), {
-      expirationTtl: record.status === "complete" ? ARTIFACT_TTL_SECONDS : FAILURE_TTL_SECONDS,
+  async put(artifact: WorkerBuildArtifact): Promise<void> {
+    await this.kv.put(artifactKey(artifact.buildKey), JSON.stringify(artifact), {
+      expirationTtl: ARTIFACT_TTL_SECONDS,
     });
   }
 }

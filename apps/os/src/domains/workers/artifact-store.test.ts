@@ -4,7 +4,6 @@ import {
   KvWorkerBuildArtifactStore,
   WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
   type WorkerBuildArtifact,
-  type WorkerBuildFailure,
 } from "./artifact-store.ts";
 
 const PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
@@ -34,7 +33,6 @@ const artifact: WorkerBuildArtifact = {
   createdAt: "2026-07-20T00:00:00.000Z",
   mainModule: "worker.js",
   modules: { "worker.js": "export default {};" },
-  status: "complete",
   wranglerConfig: {
     compatibilityDate: "2026-07-01",
     compatibilityFlags: ["nodejs_compat_v2"],
@@ -53,42 +51,6 @@ describe("KvWorkerBuildArtifactStore", () => {
     expect([...kv.data.keys()]).toEqual([`${PREFIX}/complete/abc123.json`]);
     expect(await store(kv).get("abc123")).toEqual(artifact);
     expect(kv.putTtls[0]).toBeGreaterThan(0);
-  });
-
-  it("round-trips a shorter-lived failure at the same key", async () => {
-    const kv = new FakeKv();
-    const failure: WorkerBuildFailure = {
-      buildKey: "abc123",
-      commitOid: "c0ffee",
-      createdAt: "2026-07-20T00:00:00.000Z",
-      message: "boom",
-      status: "failed",
-    };
-    await store(kv).put(failure);
-
-    expect([...kv.data.keys()]).toEqual([`${PREFIX}/failed/abc123.json`]);
-    expect(await store(kv).get("abc123")).toEqual(failure);
-    expect(kv.putTtls[0]).toBeGreaterThanOrEqual(10 * 60);
-    expect(kv.putTtls[0]).toBeLessThanOrEqual(60 * 60);
-  });
-
-  it("never lets a later failed attempt replace a complete build", async () => {
-    const kv = new FakeKv();
-    const failure: WorkerBuildFailure = {
-      buildKey: "abc123",
-      createdAt: "2026-07-20T00:00:01.000Z",
-      message: "transient registry failure",
-      status: "failed",
-    };
-
-    await store(kv).put(artifact);
-    await store(kv).put(failure);
-
-    expect([...kv.data.keys()].sort()).toEqual([
-      `${PREFIX}/complete/abc123.json`,
-      `${PREFIX}/failed/abc123.json`,
-    ]);
-    expect(await store(kv).get("abc123")).toEqual(artifact);
   });
 
   it("bounds compiler messages shown on the build-failed page", () => {

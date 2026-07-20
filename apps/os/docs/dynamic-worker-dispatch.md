@@ -114,9 +114,11 @@ request":
 A cold browser request waits only for its configured build budget. If the
 build is still running it receives `workerBuildingResponse()`: a 503 that
 polls itself and is marked `x-iterate-worker-building`. A build
-failure receives the similarly self-healing build-failed page. RPC calls wait
-for the build and receive the named error instead. There is no stale artifact,
-last-good pointer, distributed build lock, or background refresh policy.
+failure receives a terminal build-failed page; it is not cached, so a reload or
+later request tries the build again without turning a transient bundler outage
+into a persisted source failure. RPC calls wait for the build and receive the
+named error instead. There is no stale artifact, last-good pointer, distributed
+build lock, or background refresh policy.
 
 Successful repo-backed fetches carry platform-authored
 `x-iterate-worker-serve: <commit oid>`. The platform

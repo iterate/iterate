@@ -115,7 +115,7 @@ describe("workerBuildFailedResponse", () => {
     const body = await response.text();
     expect(body).toContain("Could not resolve &quot;&lt;b&gt;zod&lt;/b&gt;&quot;");
     expect(body).not.toContain("<b>zod</b>");
-    // Self-healing: the page polls for the marker header to disappear.
-    expect(body).toContain(WORKER_BUILD_FAILED_HEADER);
+    expect(body).toContain("then reload this page");
+    expect(body).not.toContain("const poll = async");
   });
 });

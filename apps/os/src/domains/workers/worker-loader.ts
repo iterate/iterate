@@ -2,10 +2,7 @@ import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
-  buildFailureMessageFromError,
-  isWorkerBuildFailedError,
   KvWorkerBuildArtifactStore,
-  WorkerBuildFailedError,
   type WorkerBuildArtifact,
   type WorkerBuildModule,
 } from "./artifact-store.ts";
@@ -118,11 +115,8 @@ async function resolveArtifact(
   },
 ): Promise<ResolvedWorkerSource> {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
-  const record = await store.get(buildKey);
-  if (record?.status === "failed") throw new WorkerBuildFailedError(record.message);
-  return record?.status === "complete"
-    ? memoizeArtifact(record)
-    : await runBuild(store, context, buildKey);
+  const artifact = await store.get(buildKey);
+  return artifact === null ? await runBuild(store, context, buildKey) : memoizeArtifact(artifact);
 }
 
 /** Build one immutable source snapshot. */
@@ -136,53 +130,30 @@ async function runBuild(
   buildKey: string,
 ): Promise<ResolvedWorkerSource> {
   const files = await resolvedSourceFiles(context.projectId, context.resolved);
-  try {
-    const built = await executeWorkerBuild({
-      files,
-      source: context.source,
-      workerBundler: env.WORKER_BUNDLER,
-    });
-    if (built.warnings.length > 0) {
-      console.warn("dynamic worker build completed with warnings", {
-        buildKey,
-        warnings: built.warnings,
-      });
-    }
-    const artifact: WorkerBuildArtifact = {
-      ...(built.assetConfig === undefined ? {} : { assetConfig: built.assetConfig }),
-      assetManifest: built.assetManifest,
-      assets: built.assets,
+  const built = await executeWorkerBuild({
+    files,
+    source: context.source,
+    workerBundler: env.WORKER_BUNDLER,
+  });
+  if (built.warnings.length > 0) {
+    console.warn("dynamic worker build completed with warnings", {
       buildKey,
-      createdAt: new Date().toISOString(),
-      mainModule: built.mainModule,
-      modules: built.modules,
-      status: "complete",
-      ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
-      ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
-    };
-    await store.put(artifact);
-    return memoizeArtifact(artifact);
-  } catch (error) {
-    if (isWorkerBuildFailedError(error)) {
-      try {
-        await store.put({
-          buildKey,
-          ...(context.resolved.type === "repo" ? { commitOid: context.resolved.commitOid } : {}),
-          createdAt: new Date().toISOString(),
-          message: buildFailureMessageFromError(error),
-          status: "failed",
-        });
-      } catch (cacheError) {
-        // The source failure is the request's real outcome. Preserve it while
-        // making the independent cache defect observable.
-        console.error("failed to cache dynamic worker build failure", {
-          buildKey,
-          error: cacheError,
-        });
-      }
-    }
-    throw error;
+      warnings: built.warnings,
+    });
   }
+  const artifact: WorkerBuildArtifact = {
+    ...(built.assetConfig === undefined ? {} : { assetConfig: built.assetConfig }),
+    assetManifest: built.assetManifest,
+    assets: built.assets,
+    buildKey,
+    createdAt: new Date().toISOString(),
+    mainModule: built.mainModule,
+    modules: built.modules,
+    ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
+    ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
+  };
+  await store.put(artifact);
+  return memoizeArtifact(artifact);
 }
 
 function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
