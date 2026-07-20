@@ -135,10 +135,9 @@ export class SlackAgentProcessor extends StreamProcessor<
   protected override processEvent(
     args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { append, blockProcessorWhile, event, state } = args;
+    const { event, state } = args;
     if (event !== null && event.type === "events.iterate.com/slack-agent/created") return;
     if (state.birthCertificate === null) return;
-    const { birthCertificate } = state;
     // Presence facts paint once from the complete at-head fold. A revival fact
     // also reconciles the current state so a replacement incarnation clears
     // or restores presentation left behind by the one that died.
@@ -158,6 +157,9 @@ export class SlackAgentProcessor extends StreamProcessor<
         this.#unpaintedTitleReconcile = true;
       }
     }
+    // Per-event blockers register FIRST: `blockProcessorWhile` runs in FIFO
+    // registration order, so the at-head repaint below must come after them.
+    if (event !== null) this.#processConsumedEvent(args, event);
     // AT-HEAD repaint: `delivery.caughtUp` means `args.state` is the whole
     // observed fold. It rides the last consumed event or the runner's
     // eventless pass. ONE blocking closure — the runner awaits it as this head
@@ -168,8 +170,19 @@ export class SlackAgentProcessor extends StreamProcessor<
     if (args.delivery.caughtUp) {
       args.blockProcessorWhile(() => this.#reconcilePresence(args));
     }
-    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
-    if (event === null) return;
+  }
+
+  /** The per-event switch, extracted so its early `return`s exit only this
+   * helper and can never skip the at-head registration in `processEvent`. */
+  #processConsumedEvent(
+    args: Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0],
+    event: NonNullable<
+      Parameters<StreamProcessor<SlackAgentProcessorContract>["processEvent"]>[0]["event"]
+    >,
+  ): void {
+    const { append, blockProcessorWhile, state } = args;
+    const { birthCertificate } = state;
+    if (birthCertificate === null) return; // narrowing only; the caller guards
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured": {
         // Route context is captured in reduce(). The integration contributes
