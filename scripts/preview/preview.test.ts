@@ -46,6 +46,7 @@ const {
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
+  resolveProvisionAuthPreviewSlotNumbers,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
@@ -57,6 +58,22 @@ const {
   syncPreviewInventory,
   waitForHttpReadiness,
 } = previewInternals;
+
+test("Auth preview provisioning can target only an approved slot range", () => {
+  expect(
+    resolveProvisionAuthPreviewSlotNumbers({
+      availableSlots: [1, 2, 9, 10, 11, 12, 13, 19],
+      slots: "10-13,19",
+    }),
+  ).toEqual([10, 11, 12, 13, 19]);
+
+  expect(() =>
+    resolveProvisionAuthPreviewSlotNumbers({
+      availableSlots: [1, 2, 3],
+      slots: "3-4",
+    }),
+  ).toThrow(/unknown preview slot 4/);
+});
 
 describe("preview app dependency expansion", () => {
   test("expands os to include its auth and dummy-petshop dependencies", () => {

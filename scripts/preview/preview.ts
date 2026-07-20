@@ -1235,19 +1235,57 @@ export async function reconcile() {
 type ProvisionAuthPreviewConfigsOptions = {
   /** Regenerate OAuth client secrets and app auth tokens instead of keeping existing values. */
   rotate?: boolean;
+  /** Comma-separated preview slots or ranges, for example `10-19` or `10-12,19`. */
+  slots?: string;
 };
 
 export async function provisionAuthPreviewConfigs(
   options: ProvisionAuthPreviewConfigsOptions = {},
 ) {
+  const slots = resolveProvisionAuthPreviewSlotNumbers({
+    availableSlots: previewEnvironmentSlotNumbers,
+    slots: options.slots,
+  });
   await ensureAuthPreviewConfigs({
     rotate: Boolean(options.rotate),
+    slots,
   });
 
   return {
     rotated: Boolean(options.rotate),
-    slots: previewEnvironmentSlotNumbers.length,
+    slots: slots.length,
   };
+}
+
+function resolveProvisionAuthPreviewSlotNumbers(input: {
+  availableSlots: number[];
+  slots: string | undefined;
+}) {
+  if (!input.slots) return input.availableSlots;
+
+  const requestedSlots = input.slots.split(",").flatMap((segment) => {
+    const trimmedSegment = segment.trim();
+    const singleSlot = /^(\d+)$/.exec(trimmedSegment);
+    if (singleSlot) return [Number(singleSlot[1])];
+
+    const range = /^(\d+)-(\d+)$/.exec(trimmedSegment);
+    if (!range) throw new Error(`Invalid preview slot selection ${JSON.stringify(segment)}`);
+
+    const first = Number(range[1]);
+    const last = Number(range[2]);
+    if (last < first) {
+      throw new Error(`Invalid descending preview slot range ${trimmedSegment}`);
+    }
+    return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  });
+
+  const uniqueSlots = [...new Set(requestedSlots)];
+  for (const slot of uniqueSlots) {
+    if (!input.availableSlots.includes(slot)) {
+      throw new Error(`Cannot provision unknown preview slot ${slot}`);
+    }
+  }
+  return uniqueSlots;
 }
 
 export const CloudflarePreviewAppSlug = z.enum([
@@ -2856,7 +2894,7 @@ function resolveAuthPreviewRootSecret(input: {
   );
 }
 
-async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
+async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
@@ -2884,7 +2922,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   setDopplerSecrets("streams-example-app", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
   console.log("streams-example-app/preview root config ensured");
 
-  for (const slot of previewEnvironmentSlotNumbers) {
+  for (const slot of input.slots) {
     const config = `preview_${slot}`;
     const authOrigin = `https://auth.iterate-preview-${slot}.com`;
     const osOrigin = `https://os.iterate-preview-${slot}.com`;
@@ -5057,6 +5095,7 @@ export const previewInternals = {
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
+  resolveProvisionAuthPreviewSlotNumbers,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
