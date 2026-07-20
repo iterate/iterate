@@ -600,7 +600,9 @@ export interface AgentCollection {
  */
 export interface ProjectEgress {
   __describe(): Promise<Description>;
-  /** Outbound fetch with the project's identity and secret substitution. */
+  /** Outbound fetch with project identity and secret substitution. Set
+   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
+   * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;

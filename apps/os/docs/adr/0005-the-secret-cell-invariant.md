@@ -8,9 +8,15 @@ There is no read lane, no reveal lane, no compute lane (`hmac`/`sign`/
 material-touching verb is `fetch()`: substitute `getSecret(...)` placeholders
 in trusted DO code and dispatch to a host on the secret's egress allowlist.
 Substitution reaches headers and the request URL PATH (added for Telegram,
-whose Bot API authenticates in the path `/bot<token>/…`) — never the query
-string, never the body; a placeholder anywhere else in the URL is rejected
-loudly rather than passed through. One request references one secret.
+whose Bot API authenticates in the path `/bot<token>/…`). Callers may also
+explicitly mark an `application/json` or `+json` body with
+`x-iterate-secret-template: json`; the cell parses it and substitutes only
+complete string values that are exact `getSecret(...)` references before
+re-encoding the JSON. It never scans ordinary bodies, interpolates references
+inside longer JSON strings, substitutes object keys, or substitutes URL query
+strings. A placeholder elsewhere in the URL is rejected loudly rather than
+passed through. The marker is consumed before vendor egress. One request
+references one secret.
 
 The egress pin is part of the material's authenticated context. Ciphertext is
 bound to its project, secret path, exact effective origins, and the offset of

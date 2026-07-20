@@ -306,12 +306,8 @@ export class SecretDurableObject extends DurableObject<Env> {
    * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
-    let references;
-    try {
-      references = secretReferencesFromRequest(request);
-    } catch {
-      return secretErrorResponse("secret_reference_required");
-    }
+    const { problems, references } = await secretReferencesFromRequest(request);
+    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
     if (references.length === 0) return secretErrorResponse("secret_reference_required");
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
@@ -422,7 +418,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     return await constantTimeStringEquals(expected, input.value);
   }
 
-  /** Substitute this secret's placeholders (headers + URL) from decrypted material. */
+  /** Substitute this secret's placeholders (headers, URL path, opted-in JSON) from material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
     const material =
       state.encryptedMaterial === null

@@ -392,10 +392,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectEgress",
     kind: "interface",
     sourceText:
-      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with the project's identity and secret substitution. */\n  fetch(request: Request): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
+      "/**\n * Public project egress facet.\n *\n * The Project Durable Object is the single egress decision point: it owns the\n * live runtime interceptor slot and, when there is no interceptor, performs the\n * terminal secret-substitution fetch path.\n */\nexport interface ProjectEgress {\n  __describe(): Promise<Description>;\n  /** Outbound fetch with project identity and secret substitution. Set\n   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string\n   * values in an `application/json` (or `+json`) body. */\n  fetch(request: Request): Promise<EgressResponse>;\n  /** Install a live egress interceptor (last writer wins); returns a release handle. */\n  intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;\n}",
     summary: "Public project egress facet.",
     memberSummaries: {
-      fetch: "Outbound fetch with the project's identity and secret substitution.",
+      fetch: "Outbound fetch with project identity and secret substitution.",
       intercept: "Install a live egress interceptor (last writer wins); returns a release handle.",
     },
     referencedTypeNames: [
