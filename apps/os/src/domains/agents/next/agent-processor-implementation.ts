@@ -496,7 +496,9 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             result: {
               status: "failed",
               errorMessage,
-              rateLimited: isRateLimitErrorMessage(errorMessage),
+              // Workers AI 3021 / HTTP 429 / "rate limit" text = weather,
+              // retried with more patience than real failures.
+              rateLimited: /\b429\b|\b3021\b|rate.?limit/i.test(errorMessage),
             },
           },
           idempotencyKey: this.idempotencyKey(`settle/${requestOffset}`),
@@ -577,10 +579,6 @@ export function retryBackoffMs(
   );
 }
 
-export function isRateLimitErrorMessage(message: string): boolean {
-  return /\b429\b|\b3021\b|rate.?limit/i.test(message);
-}
-
 /** Build the model-facing message array from the fold. The CONTENT is pinned
  * to the request's offset, so an adopting incarnation reproduces the covered
  * context exactly; the trailing timestamp deliberately is NOT pinned - it
@@ -604,16 +602,19 @@ export function buildLlmMessages(args: {
   const systemContent = [...systemByKey.values(), ...systemUnkeyed].join("\n\n");
   if (systemContent.length > 0) messages.push({ role: "system", content: systemContent });
   for (const item of args.context.history.filter(covered)) {
-    messages.push({ role: modelRoleFor(item.payload), content: renderContextItem(item) });
+    // Trust demotion: developer items from anyone but the agent or its own
+    // scripts read as user content, never as instructions.
+    const actorType = item.payload.role === "developer" ? item.payload.actor?.type : undefined;
+    const role =
+      item.payload.role !== "developer"
+        ? item.payload.role
+        : actorType === "agent" || actorType === "script"
+          ? "developer"
+          : "user";
+    messages.push({ role, content: renderContextItem(item) });
   }
   messages.push({ role: "developer", content: `The current time is ${args.nowIso}.` });
   return messages;
-}
-
-function modelRoleFor(payload: AgentNextContextAddedPayload): AgentLlmMessage["role"] {
-  if (payload.role !== "developer") return payload.role;
-  const actorType = payload.actor?.type;
-  return actorType === "agent" || actorType === "script" ? "developer" : "user";
 }
 
 function renderContextItem(item: {
