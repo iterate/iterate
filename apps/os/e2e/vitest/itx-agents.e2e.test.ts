@@ -333,14 +333,12 @@ test("Agent create replays its earlier birth and setup events through its subscr
   const agentSnapshot = await agent.processor.snapshot();
   expect(agentSnapshot.offset).toBeGreaterThanOrEqual(agentSubscriptionOffset);
   expect(agentSnapshot.state).toMatchObject({
-    birthCertificate: {},
+    birthCertificate: { createdAtOffset: expect.any(Number) },
     config: { llm: { model: expect.any(String) } },
-    context: {
-      system: expect.arrayContaining([
-        expect.objectContaining({ key: "agent/system-prompt" }),
-        expect.objectContaining({ key: "agent/boot-context" }),
-      ]),
-    },
+    contextItems: expect.arrayContaining([
+      expect.objectContaining({ payload: expect.objectContaining({ key: "agent/system-prompt" }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ key: "agent/boot-context" }) }),
+    ]),
   });
 
   const capabilityHostSnapshot = await agent.capabilityHost.processor.snapshot();
