@@ -17,6 +17,7 @@ import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/nat
 import { toast } from "@iterate-com/ui/components/sonner";
 import { useItx, useItxQuery } from "iterate/react";
 import {
+  assertInstallationRepoCanBeCreated,
   listGithubConnections,
   type InstallationRepo,
 } from "~/components/github-installation-repos.ts";
@@ -134,6 +135,7 @@ function AddRepoFromGithubWizard({
           `${input.path} already exists. To back an existing repo with GitHub, use the GitHub panel on that repo's page.`,
         );
       }
+      assertInstallationRepoCanBeCreated(input.repo);
       // Claim the path for this wizard instance before the create round-trip
       // so a retry can resume the same durable request after a failed call.
       setCreatedHere((previous) => new Set(previous).add(input.path));
