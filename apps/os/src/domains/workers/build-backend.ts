@@ -154,15 +154,13 @@ export function stubBareNpmExternals(modules: Record<string, string>): Record<st
       // "Class extends value #<Object> is not a constructor". Export a
       // no-op class so inheritance and `new` both succeed; real HTTP proxy
       // behaviour is unused under workerd (native fetch).
+      // ESM only — Worker Loader modules have no CommonJS `module`.
       out[path] =
-        `"use strict";\n` +
         `class IterateExternalStub {\n` +
         `  constructor() {}\n` +
         `}\n` +
-        `IterateExternalStub.default = IterateExternalStub;\n` +
-        `module.exports = IterateExternalStub;\n` +
         `export default IterateExternalStub;\n` +
-        `export const __esModule = true;\n`;
+        `export { IterateExternalStub as Agent };\n`;
     }
   }
   return out;
