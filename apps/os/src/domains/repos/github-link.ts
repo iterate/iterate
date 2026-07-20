@@ -80,13 +80,25 @@ function githubCrossPostSubscriptionEvent(input: {
   };
 }
 
-export async function linkRepoToGithub(input: {
-  connection: string;
-  owner: string;
-  projectId: string;
-  repo: string;
-  repoPath: string;
-}): Promise<LinkGithubResult> {
+type LinkRepoToGithubOptions = {
+  repo?: {
+    configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink>;
+    getGithubLink(): GithubRepoLink | null | Promise<GithubRepoLink | null>;
+    pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;
+  };
+  skipInitialPush?: boolean;
+};
+
+export async function linkRepoToGithub(
+  input: {
+    connection: string;
+    owner: string;
+    projectId: string;
+    repo: string;
+    repoPath: string;
+  },
+  options: LinkRepoToGithubOptions = {},
+): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
   // Trim at the boundary: a padded owner/repo would store a link (and a
   // GitHub coordinates) API calls never match — mirroring
@@ -152,13 +164,8 @@ export async function linkRepoToGithub(input: {
     repo,
     repositoryId,
   };
-  const repoStub = repoDurableObjectStub(input.projectId, repoPath);
-  const birthConfig = (await repoStub.processor.snapshot()).state.birthCertificate?.config;
-  const importedFromTarget =
-    birthConfig?.github?.artifactImport !== undefined &&
-    birthConfig.github.owner.toLowerCase() === owner.toLowerCase() &&
-    birthConfig.github.repo.toLowerCase() === repo.toLowerCase();
-  const previous = await repoStub.getGithubLink();
+  const repoTarget = options.repo ?? repoDurableObjectStub(input.projectId, repoPath);
+  const previous = await repoTarget.getGithubLink();
   const subscriptionKey = githubCrossPostSubscriptionKey(repoPath);
 
   // Re-linking through a DIFFERENT connection: the previous connection's
@@ -202,7 +209,7 @@ export async function linkRepoToGithub(input: {
         subscriptionKey,
       }),
     );
-    await repoStub.configureGithubLink(link);
+    await repoTarget.configureGithubLink(link);
   } catch (error) {
     const compensations: string[] = [];
     // Roll back the new subscription (a no-op fold if the failure happened
@@ -253,11 +260,11 @@ export async function linkRepoToGithub(input: {
   // pre-existing GitHub repo with unrelated history is the expected case —
   // the caller then picks syncFromGithub() or pushToGithub({ force: true })).
   let initialPush: LinkGithubResult["initialPush"];
-  if (importedFromTarget) {
+  if (options.skipInitialPush === true) {
     initialPush = { ok: true, skipped: true };
   } else {
     try {
-      const pushed = await repoStub.pushToGithub({});
+      const pushed = await repoTarget.pushToGithub({});
       initialPush = { commitOid: pushed.commitOid, ok: true };
     } catch (error) {
       initialPush = { error: String(error), ok: false };
@@ -265,41 +272,6 @@ export async function linkRepoToGithub(input: {
   }
 
   return { ...link, created, initialPush };
-}
-
-/** GitHub metadata needed before repo birth to decide whether Cloudflare can
- * import the repository without credentials. The installation lookup is the
- * authority; callers never trust browser-supplied visibility metadata. */
-export async function githubRepositoryImportCandidate(input: {
-  connection: string;
-  owner: string;
-  projectId: string;
-  repo: string;
-}): Promise<{ defaultBranch: string; importable: boolean }> {
-  const status = await getConnectionStatus({
-    connection: input.connection,
-    projectId: input.projectId,
-    provider: "github",
-  });
-  if (!status.connected || status.externalId === null) {
-    throw new Error(
-      `GitHub connection "${input.connection}" is not connected; use itx.integrations.list() to see connections.`,
-    );
-  }
-  const octokit = connectionOctokit({ connection: input.connection, projectId: input.projectId });
-  try {
-    const response = await octokit.rest.repos.get({ owner: input.owner, repo: input.repo });
-    const importable =
-      response.data.private === false &&
-      response.data.default_branch === "main" &&
-      response.data.pushed_at !== null;
-    return {
-      defaultBranch: response.data.default_branch,
-      importable,
-    };
-  } catch (error) {
-    throw normalizeGithubError(error, input.connection);
-  }
 }
 
 export async function unlinkRepoFromGithub(input: {

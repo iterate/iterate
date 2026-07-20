@@ -75,7 +75,6 @@ function ProjectRepoDetailContent() {
       <div className="overflow-y-auto p-4" data-spinner="true">
         <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
           <InfoRow label="Created" value={state.birthCertificate !== null ? "yes" : "not yet"} />
-          <InfoRow label="Ready" value={state.ready ? "yes" : "not yet"} />
           <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
           <InfoRow label="Default branch" value={state.defaultBranch ?? "(none)"} />
           <InfoRow

@@ -1,30 +1,21 @@
-import { describe, expect, test } from "vitest";
-import { sameRepoBirthConfig, type RepoBirthConfig } from "./repo-processor-contract.ts";
+import { describe, expect, it } from "vitest";
+import { RepoCreateRequest } from "./repo-processor-contract.ts";
 
-const importedConfig = (owner: string, repo: string): RepoBirthConfig => ({
-  github: {
-    owner,
-    repo,
-    artifactImport: { branch: "main", depth: 1 },
-  },
-});
-
-describe("sameRepoBirthConfig", () => {
-  test("treats GitHub owner and repository casing as the same durable source", () => {
-    expect(
-      sameRepoBirthConfig(
-        importedConfig("Iterate", "Iterate"),
-        importedConfig("iterate", "iterate"),
-      ),
-    ).toBe(true);
+describe("RepoCreateRequest", () => {
+  it.each([
+    { type: "empty" },
+    { type: "github-private", connection: "install-1", owner: "acme", repo: "private" },
+    { type: "github-public", connection: "install-1", owner: "acme", repo: "public" },
+  ])("accepts $type", (request) => {
+    expect(RepoCreateRequest.parse(request)).toEqual(request);
   });
 
-  test("still distinguishes different GitHub repositories", () => {
-    expect(
-      sameRepoBirthConfig(
-        importedConfig("iterate", "iterate"),
-        importedConfig("iterate", "agents"),
-      ),
-    ).toBe(false);
+  it("rejects source fields on an empty repo request", () => {
+    expect(() => RepoCreateRequest.parse({ type: "empty", owner: "acme" })).toThrow();
+  });
+
+  it("requires GitHub coordinates for both GitHub modes", () => {
+    expect(() => RepoCreateRequest.parse({ type: "github-public", owner: "acme" })).toThrow();
+    expect(() => RepoCreateRequest.parse({ type: "github-private", repo: "private" })).toThrow();
   });
 });

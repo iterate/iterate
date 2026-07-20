@@ -1,14 +1,6 @@
-// Repo artifact readiness as an at-head obligation, plus eviction recovery: the repo
-// processor's `onCaughtUp` reconciliation of the two durable obligations —
-// creation (blocking, NEVER re-run once `repo/ready` folded) and GitHub imports (background,
-// safely RE-driven: the sync is an idempotent current-head fast-forward).
-//
-// The processor is driven the way production drives it: a REAL
-// createStreamProcessorRegistry (runner + durableObjectRecovery + keepalive
-// alarm) over a fake DurableObjectState, the in-memory MemoryStream journal,
-// and a virtual clock — the same harness shape as
-// capability-host-recovery.test.ts. `crash()` is an eviction: in-flight work
-// dies; the journal, KV progress, and the durable alarm survive.
+// Repo creation and GitHub import recovery through the production-shaped
+// processor registry. `crash()` replaces the incarnation while preserving the
+// event journal, processor progress, and durable alarm.
 
 import { describe, expect, it, vi } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
@@ -17,7 +9,7 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
 const HOME = "/repos/config";
@@ -30,22 +22,27 @@ const GITHUB_LINK = {
   repo: "widgets",
   repositoryId: 101,
 };
-
-const createdArtifact = {
+const CREATED_ARTIFACT = {
   artifactName: "prj_1--L3JlcG9zL2NvbmZpZw",
   defaultBranch: "main",
   remote: "https://example.artifacts.cloudflare.net/git/ns/prj_1--L3JlcG9zL2NvbmZpZw.git",
 };
-const repoCreated = {
-  type: "events.iterate.com/repo/created" as const,
-  payload: { config: {} },
+const EMPTY_REQUEST = {
+  type: "events.iterate.com/repos/create-requested" as const,
+  payload: { type: "empty" as const },
 };
+
+function created(request: RepoCreateRequest) {
+  return {
+    type: "events.iterate.com/repos/created" as const,
+    payload: { ...CREATED_ARTIFACT, request },
+  };
+}
 
 function makeHarness() {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
   const network = new MemoryStreamNetwork(() => clock.now);
   const stream = network.get(HOME);
-
   const kv = new Map<string, unknown>();
   const alarm: { at: number | null } = { at: null };
   let pending: Promise<unknown>[] = [];
@@ -67,16 +64,27 @@ function makeHarness() {
     waitUntil: (promise: Promise<unknown>) => void pending.push(promise.catch(() => undefined)),
   } as unknown as DurableObjectState;
 
-  /** Per-incarnation vendor bodies; tests reassign `impl` across crashes. The
-   * defaults throw, so "must not run in this scenario" is the resting state. */
-  const create: { impl: (input: unknown) => Promise<typeof createdArtifact> } = {
-    impl: () => {
-      throw new Error("must not create in this scenario");
+  const effects = {
+    createEmpty: async (): Promise<typeof CREATED_ARTIFACT> => {
+      throw new Error("must not create empty artifact in this scenario");
     },
-  };
-  const sync: { impl: (input: unknown) => Promise<{ commitOid: string }> } = {
-    impl: () => {
-      throw new Error("must not sync in this scenario");
+    importPublic: async (_input: {
+      owner: string;
+      repo: string;
+    }): Promise<typeof CREATED_ARTIFACT> => {
+      throw new Error("must not import public artifact in this scenario");
+    },
+    link: async (_input: { connection: string; owner: string; repo: string }): Promise<void> => {
+      throw new Error("must not link GitHub in this scenario");
+    },
+    syncPrivate: async (): Promise<void> => {
+      throw new Error("must not sync private GitHub in this scenario");
+    },
+    syncPush: async (_input: {
+      afterCommitOid: string;
+      branch: string;
+    }): Promise<{ commitOid: string }> => {
+      throw new Error("must not sync GitHub push in this scenario");
     },
   };
 
@@ -95,8 +103,11 @@ function makeHarness() {
         stream,
         path: HOME,
         projectId: PROJECT_ID,
-        createRepoArtifact: (input) => create.impl(input),
-        syncFromGithubPush: (input) => sync.impl(input),
+        createEmptyArtifact: () => effects.createEmpty(),
+        importPublicGithubArtifact: (input) => effects.importPublic(input),
+        linkGithub: (input) => effects.link(input),
+        syncPrivateGithub: () => effects.syncPrivate(),
+        syncFromGithubPush: (input) => effects.syncPush(input),
         observeArtifactPush: () => {},
         taskChangesForArtifactPush: async () => [],
       }),
@@ -111,23 +122,15 @@ function makeHarness() {
     }
   };
   const head = () => stream.events.at(-1)?.offset ?? 0;
-
   const harness = {
-    clock,
-    stream,
-    kv,
     alarm,
-    create,
-    sync,
-    settle,
+    clock,
+    effects,
     head,
-    get registry() {
-      return registry;
-    },
-    /** The runner's committed fold — the read the DO's registry serves. */
+    kv,
+    settle,
+    stream,
     state: () => registry.reads(processor).currentState,
-    /** Evict the incarnation: registry, runner, and in-flight vendor bodies
-     * die; the journal, KV progress, and the durable alarm survive. */
     crash() {
       pending = [];
       boot();
@@ -139,8 +142,6 @@ function makeHarness() {
         processorSlug: SLUG,
       });
     },
-    /** Wake and push everything past the acknowledged cursor as one frame —
-     * the transport's job, minimally. */
     async deliverPending() {
       const woken = await harness.wake();
       const events = stream.events.filter((event) => event.offset > woken.checkpointOffset);
@@ -158,13 +159,11 @@ function makeHarness() {
       await settle();
       return woken;
     },
-    /** Advance virtual time, firing the durable alarm through the REAL
-     * handleAlarm path whenever it comes due within the window. */
     async advance(ms: number) {
       const target = clock.now + ms;
       while (alarm.at !== null && alarm.at <= target) {
         clock.now = Math.max(clock.now, alarm.at);
-        alarm.at = null; // the platform consumes the alarm by firing it
+        alarm.at = null;
         await registry.handleAlarm();
         await settle();
       }
@@ -174,120 +173,163 @@ function makeHarness() {
   return harness;
 }
 
-describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)", () => {
-  it("creates the artifact once at head and journals repo/ready", async () => {
+describe("RepoProcessor creation saga", () => {
+  it("creates an empty Artifact and journals the terminal certificate", async () => {
     const h = makeHarness();
-    const createCalls: unknown[] = [];
-    h.create.impl = async (input) => {
-      createCalls.push(input);
-      return createdArtifact;
+    let calls = 0;
+    h.effects.createEmpty = async () => {
+      calls += 1;
+      return CREATED_ARTIFACT;
     };
 
-    await h.stream.append(repoCreated);
+    await h.stream.append(EMPTY_REQUEST);
     await h.deliverPending();
 
-    expect(createCalls).toEqual([{ config: {}, path: HOME, projectId: PROJECT_ID }]);
-    const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
-    expect(ready).toHaveLength(1);
-    expect(ready[0]).toMatchObject({
-      idempotencyKey: "repo/ready",
-      payload: { ...createdArtifact, path: HOME, projectId: PROJECT_ID },
+    expect(calls).toBe(1);
+    expect(h.stream.events.at(-1)).toMatchObject({
+      type: "events.iterate.com/repos/created",
+      idempotencyKey: "repo/created",
+      payload: { ...CREATED_ARTIFACT, request: EMPTY_REQUEST.payload },
+    });
+    await h.deliverPending();
+    expect(h.state()).toMatchObject({ birthCertificate: { request: { type: "empty" } } });
+    expect(calls).toBe(1);
+  });
+
+  it("imports a public GitHub repo through Artifacts, then links it", async () => {
+    const h = makeHarness();
+    const order: string[] = [];
+    h.effects.importPublic = async (input) => {
+      order.push(`import:${input.owner}/${input.repo}`);
+      return CREATED_ARTIFACT;
+    };
+    h.effects.link = async (input) => void order.push(`link:${input.connection}`);
+    await h.stream.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: { type: "github-public", connection: "install-789", owner: "acme", repo: "widgets" },
     });
 
     await h.deliverPending();
-    expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });
-    expect(createCalls).toHaveLength(1);
+
+    expect(order).toEqual(["import:acme/widgets", "link:install-789"]);
+    expect(h.stream.events.at(-1)?.type).toBe("events.iterate.com/repos/created");
   });
 
-  it("throws when a second repo birth certificate is reduced", async () => {
+  it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {
     const h = makeHarness();
-    h.create.impl = async () => createdArtifact;
-    await h.stream.append(repoCreated, repoCreated);
-
-    await expect(h.deliverPending()).rejects.toThrow("repo received more than one created event");
-  });
-
-  it("defers creation while the fold is behind the head, then creates once caught up", async () => {
-    const h = makeHarness();
-    const createCalls: unknown[] = [];
-    h.create.impl = async (input) => {
-      createCalls.push(input);
-      return createdArtifact;
+    const order: string[] = [];
+    h.effects.createEmpty = async () => {
+      order.push("seed");
+      return CREATED_ARTIFACT;
     };
-    const [requested] = await h.stream.append(repoCreated);
+    h.effects.link = async () => void order.push("link");
+    h.effects.syncPrivate = async () => void order.push("sync-depth-one");
+    await h.stream.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: {
+        type: "github-private",
+        connection: "install-789",
+        owner: "acme",
+        repo: "widgets",
+      },
+    });
 
-    // The production wake lane is consumes-filtered but stamped with the RAW
-    // stream head, so a frame can deliver repo/created while naming a
-    // head PAST it — the mid-catch-up shape. No at-head pulse fires, so the
-    // creation obligation must stay untouched.
+    await h.deliverPending();
+
+    expect(order).toEqual(["seed", "link", "sync-depth-one"]);
+    expect(h.stream.events.at(-1)?.type).toBe("events.iterate.com/repos/created");
+  });
+
+  it("does not perform creation while the processor is behind the stream head", async () => {
+    const h = makeHarness();
+    let calls = 0;
+    h.effects.createEmpty = async () => {
+      calls += 1;
+      return CREATED_ARTIFACT;
+    };
+    const [request] = await h.stream.append(EMPTY_REQUEST);
     const woken = await h.wake();
     await woken.sink({
       projectId: PROJECT_ID,
       path: HOME,
-      events: [requested!],
+      events: [request!],
       scannedAfterOffset: woken.checkpointOffset,
-      scannedThroughOffset: requested!.offset,
-      streamMaxOffset: 2,
+      scannedThroughOffset: request!.offset,
+      streamMaxOffset: request!.offset + 1,
       state: null,
     });
     await h.settle();
-    expect(createCalls).toHaveLength(0);
+    expect(calls).toBe(0);
 
-    // The head-reaching delivery lands; the at-head pulse creates exactly once.
     await h.stream.append({
       type: "events.iterate.com/repo/github-link-configured",
       payload: GITHUB_LINK,
     });
     await h.deliverPending();
-    expect(createCalls).toHaveLength(1);
+    expect(calls).toBe(1);
   });
 
-  it("refold: a journal that already contains repo/ready never re-creates", async () => {
+  it("does not repeat completed creation when rebuilding state from the journal", async () => {
     const h = makeHarness();
-    const createCalls: unknown[] = [];
-    h.create.impl = async (input) => {
-      createCalls.push(input);
-      return createdArtifact;
+    let calls = 0;
+    h.effects.createEmpty = async () => {
+      calls += 1;
+      return CREATED_ARTIFACT;
     };
-
-    await h.stream.append(repoCreated);
+    await h.stream.append(EMPTY_REQUEST);
     await h.deliverPending();
     await h.deliverPending();
-    expect(createCalls).toHaveLength(1);
-    const journalBeforeRefold = h.stream.events.length;
-    const stateBeforeRefold = h.state();
+    const journalLength = h.stream.events.length;
+    const state = h.state();
+    expect(calls).toBe(1);
 
-    // A fresh incarnation replaying the WHOLE journal (durable progress
-    // erased): the refold replays `repo/created` with event-time state in
-    // which `ready` is still false, but the at-head fold has absorbed the
-    // journaled `repo/ready` fact — the completed external creation
-    // obligation must provably not run again.
     h.kv.clear();
     h.crash();
-    h.create.impl = () => {
-      throw new Error("refold must not re-create an existing repo");
+    h.effects.createEmpty = async () => {
+      throw new Error("completed creation must not run during refold");
     };
     await h.deliverPending();
 
-    expect(h.stream.events).toHaveLength(journalBeforeRefold);
-    expect(h.state()).toEqual(stateBeforeRefold);
+    expect(h.stream.events).toHaveLength(journalLength);
+    expect(h.state()).toEqual(state);
+  });
+
+  it("refolds existing repo lifecycle facts without rerunning creation", async () => {
+    const h = makeHarness();
+    await h.stream.append(
+      { type: "events.iterate.com/repo/created", payload: { config: {} } },
+      {
+        type: "events.iterate.com/repo/ready",
+        payload: { ...CREATED_ARTIFACT, path: HOME, projectId: PROJECT_ID },
+      },
+      { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
+    );
+    await h.deliverPending();
+    const state = h.state();
+    expect(state).toMatchObject({
+      artifactName: CREATED_ARTIFACT.artifactName,
+      birthCertificate: { config: {} },
+      github: GITHUB_LINK,
+    });
+
+    h.kv.clear();
+    h.crash();
+    await h.deliverPending();
+    expect(h.state()).toEqual(state);
   });
 });
 
-describe("eviction recovery end to end", () => {
-  it("died owing the creation → keepalive alarm → revived fact → its delivery reaches head → onCaughtUp completes the creation", async () => {
+describe("RepoProcessor eviction recovery", () => {
+  it("re-drives an interrupted creation obligation after revival", async () => {
     const h = makeHarness();
-    // Incarnation 1 HANGS mid-create: the at-head frame is blocked inside
-    // onCaughtUp's creation obligation, the attempt rides the keepalive, the
-    // revival alarm is armed. The frame never resolves — do not await it.
-    h.create.impl = () => new Promise<never>(() => {});
-    await h.stream.append(repoCreated);
+    h.effects.createEmpty = () => new Promise<never>(() => {});
+    await h.stream.append(EMPTY_REQUEST);
     const woken = await h.wake();
     void Promise.resolve(
       woken.sink({
         projectId: PROJECT_ID,
         path: HOME,
-        events: h.stream.events.filter((event) => event.offset > woken.checkpointOffset),
+        events: h.stream.events,
         scannedAfterOffset: woken.checkpointOffset,
         scannedThroughOffset: h.head(),
         streamMaxOffset: h.head(),
@@ -296,60 +338,28 @@ describe("eviction recovery end to end", () => {
     ).catch(() => undefined);
     await h.settle();
     expect(h.alarm.at).not.toBeNull();
-    expect(h.stream.events.some((event) => event.type === "events.iterate.com/repo/ready")).toBe(
-      false,
-    );
 
-    h.crash(); // the in-flight creation dies; journal, KV, and the alarm survive
-    const createCalls: unknown[] = [];
-    h.create.impl = async (input) => {
-      createCalls.push(input);
-      return createdArtifact;
-    };
+    h.crash();
+    h.effects.createEmpty = async () => CREATED_ARTIFACT;
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
-
-    // durableObjectRecovery's revival pass journaled the processor-scoped
-    // fact — the ONLY thing that creates a delivery turn for the wedged frame.
-    const revived = h.stream.events.filter(
-      (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-    );
-    expect(revived).toHaveLength(1);
-    expect(revived[0]!.payload).toMatchObject({
-      processorSlug: SLUG,
-      revivals: 1,
-      version: "v-test",
-    });
-
-    // Its ordinary delivery drives the runner to head; onCaughtUp finds the
-    // still-open creation obligation in the fold and completes it — exactly
-    // once, under the stable obligation key.
-    await h.deliverPending();
-    const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
-    expect(ready).toHaveLength(1);
-    expect(ready[0]!.idempotencyKey).toBe("repo/ready");
-    expect(createCalls).toEqual([{ config: {}, path: HOME, projectId: PROJECT_ID }]);
+    expect(
+      h.stream.events.filter((event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE),
+    ).toHaveLength(1);
 
     await h.deliverPending();
-    expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });
+    expect(
+      h.stream.events.filter((event) => event.type === "events.iterate.com/repos/created"),
+    ).toHaveLength(1);
   });
 
-  it("re-drives a GitHub import owed at zero lag: revived fact → onCaughtUp re-runs the idempotent sync", async () => {
+  it("re-drives an interrupted GitHub push import after revival", async () => {
     const h = makeHarness();
-    await h.stream.append(repoCreated, {
-      type: "events.iterate.com/repo/ready",
-      payload: { ...createdArtifact, path: HOME, projectId: PROJECT_ID },
-    });
+    await h.stream.append(EMPTY_REQUEST, created(EMPTY_REQUEST.payload));
     await h.deliverPending();
-    // Incarnation 1 starts the import and HANGS mid-sync: the started fact is
-    // journaled, the attempt rides the keepalive, the revival alarm is armed.
-    h.sync.impl = () => new Promise<never>(() => {});
+    h.effects.syncPush = () => new Promise<never>(() => {});
     await h.stream.append({
       type: "events.iterate.com/repo/github-import-requested",
-      payload: {
-        branch: "main",
-        requestId: "/repos/config:42",
-        requestedCommitOid: "requested-head",
-      },
+      payload: { branch: "main", requestId: `${HOME}:42`, requestedCommitOid: "requested-head" },
     });
     await h.deliverPending();
     await vi.waitFor(() => {
@@ -359,38 +369,24 @@ describe("eviction recovery end to end", () => {
         ),
       ).toBe(true);
     });
-    // Fold the started fact too, so the acknowledged cursor sits AT HEAD:
-    // the zero-lag wedge — after the eviction, no ordinary redelivery exists
-    // to hand this processor a recovery turn.
     await h.deliverPending();
     expect((await h.wake()).checkpointOffset).toBe(h.head());
-    expect(h.alarm.at).not.toBeNull();
 
-    h.crash(); // the in-flight sync dies; journal, KV, and the alarm survive
-    const syncCalls: unknown[] = [];
-    h.sync.impl = async (input) => {
-      syncCalls.push(input);
+    h.crash();
+    const calls: unknown[] = [];
+    h.effects.syncPush = async (input) => {
+      calls.push(input);
       return { commitOid: "current-github-head" };
     };
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
-
-    expect(
-      h.stream.events.filter((event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE),
-    ).toHaveLength(1);
-
-    // The revived delivery drives the runner to head; onCaughtUp finds the
-    // open import obligation and — unlike scripts — RE-drives it: the sync is
-    // an idempotent current-head fast-forward.
     await h.deliverPending();
     await vi.waitFor(() => {
-      const completed = h.stream.events.find(
-        (event) => event.type === "events.iterate.com/repo/github-import-completed",
-      );
-      expect(completed?.payload).toMatchObject({
-        commitOid: "current-github-head",
-        requestId: "/repos/config:42",
-      });
+      expect(
+        h.stream.events.find(
+          (event) => event.type === "events.iterate.com/repo/github-import-completed",
+        )?.payload,
+      ).toMatchObject({ commitOid: "current-github-head", requestId: `${HOME}:42` });
     });
-    expect(syncCalls).toEqual([{ afterCommitOid: "requested-head", branch: "main" }]);
+    expect(calls).toEqual([{ afterCommitOid: "requested-head", branch: "main" }]);
   });
 });

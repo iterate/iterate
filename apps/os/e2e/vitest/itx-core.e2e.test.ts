@@ -89,30 +89,24 @@ test("Authenticated internal auth itx can create project and append to stream", 
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/project/created",
-      "events.iterate.com/repo/created",
-      "events.iterate.com/repo/ready",
+      "events.iterate.com/repos/created",
       "events.iterate.com/project/ready",
       "events.iterate.com/stream/subscriber-disconnected",
     ]),
   );
 
-  const repoCreated = events.find((event) => event.type === "events.iterate.com/repo/created");
-  const repoReady = events.find((event) => event.type === "events.iterate.com/repo/ready");
+  const repoCreated = events.find((event) => event.type === "events.iterate.com/repos/created");
   const projectCreated = events.find(
     (event) => event.type === "events.iterate.com/project/created",
   );
   const projectReady = events.find((event) => event.type === "events.iterate.com/project/ready");
   expect(repoCreated).toMatchObject({
-    payload: { config: {} },
-  });
-  expect(repoReady).toMatchObject({
     payload: {
+      request: { type: "empty" },
       artifactName: RepoArtifactNameCodec.stringify({
         path: "/repos/config",
         projectId: description.projectId,
       }),
-      path: "/repos/config",
-      projectId: description.projectId,
     },
     // Provenance: the copy names its source coordinate on the config repo's
     // own stream.
@@ -122,7 +116,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
           path: "/repos/config",
           projectId: description.projectId,
           subscriptionKey: "cross-post:/",
-          type: "events.iterate.com/repo/ready",
+          type: "events.iterate.com/repos/created",
         }),
       ],
     },
@@ -130,17 +124,16 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(projectCreated).toBeTruthy();
   expect(projectReady).toBeTruthy();
   expect(projectCreated!.offset).toBeLessThan(repoCreated!.offset);
-  expect(repoCreated!.offset).toBeLessThan(repoReady!.offset);
-  expect(repoReady!.offset).toBeLessThan(projectReady!.offset);
+  expect(repoCreated!.offset).toBeLessThan(projectReady!.offset);
 
   // First-hand on the config repo's own stream: the same facts, no
   // provenance chain, plus the repo processor + cross-post subscriptions.
   const configRepoEvents = await project.streams.get("/repos/config").getEvents();
   const firstHandRepoCreated = configRepoEvents.find(
-    (event) => event.type === "events.iterate.com/repo/created",
+    (event) => event.type === "events.iterate.com/repos/created",
   );
   expect(firstHandRepoCreated).toMatchObject({
-    payload: { config: {} },
+    payload: { request: { type: "empty" } },
   });
   expect(firstHandRepoCreated!.source?.crossPostedFrom).toBeUndefined();
   expect(
@@ -290,7 +283,8 @@ test("Trusted internal root can access global streams and repos", async () => {
     type: "events.iterate.test/global-stream",
   });
 
-  using repo = await itx.repos.create({ path });
+  using repo = itx.repos.get(path);
+  await repo.create({ type: "empty" });
   expect(await repo.whoami()).toBe(`repo null:${path}`);
 });
 

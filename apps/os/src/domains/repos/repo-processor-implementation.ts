@@ -1,5 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
-import { RepoProcessorContract, type RepoBirthConfig } from "./repo-processor-contract.ts";
+import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
@@ -7,15 +7,18 @@ import {
 } from "./repo-task-events.ts";
 
 type RepoProcessorDeps = {
-  createRepoArtifact(input: {
-    config: RepoBirthConfig;
-    path: string;
-    projectId: string | null;
-  }): Promise<{
+  createEmptyArtifact(): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;
   }>;
+  importPublicGithubArtifact(input: { owner: string; repo: string }): Promise<{
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
+  }>;
+  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<void>;
+  syncPrivateGithub(): Promise<void>;
   /** Feed a queue-observed push into the branch-head cache authority —
    * INCLUDING ref deletions (`afterCommitOid: null`), which produce no
    * commit facts but must still evict a warm head/tree. The before oid lets
@@ -44,6 +47,22 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     state,
   }: Parameters<StreamProcessor<RepoProcessorContract>["reduce"]>[0]) {
     switch (event.type) {
+      case "events.iterate.com/repos/create-requested":
+        if (state.createRequest !== null) {
+          throw new Error("repo received more than one create-requested event");
+        }
+        return { ...state, createRequest: event.payload };
+      case "events.iterate.com/repos/created":
+        if (state.birthCertificate !== null) {
+          throw new Error("repo received more than one created event");
+        }
+        return {
+          ...state,
+          birthCertificate: event.payload,
+          artifactName: event.payload.artifactName,
+          defaultBranch: event.payload.defaultBranch,
+          remote: event.payload.remote,
+        };
       case "events.iterate.com/repo/created":
         if (state.birthCertificate !== null) {
           throw new Error("repo received more than one created event");
@@ -53,7 +72,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         return {
           ...state,
           artifactName: event.payload.artifactName,
-          ready: true,
           defaultBranch: event.payload.defaultBranch,
           remote: event.payload.remote,
         };
@@ -121,27 +139,25 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   protected override processEvent(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { blockProcessorWhile, event, state, append, appendTo } = args;
-    if (event !== null && event.type === "events.iterate.com/repo/created") {
-      blockProcessorWhile(() =>
-        appendTo("/", {
-          type: "events.iterate.com/repo/created",
-          idempotencyKey: this.idempotencyKey("catalog-created", event),
-          payload: event.payload,
-        }),
-      );
-    }
-    if (state.birthCertificate === null) return;
+    const { blockProcessorWhile, event, state, append } = args;
+    if (state.createRequest === null && state.birthCertificate === null) return;
     // AT-HEAD reconcile (was onCaughtUp): drive the repo's two durable
     // obligations (create, github-import) from the whole fold. ONE outer
     // blocking closure so the create seed+append is awaited before this head
     // event's deferred commit; a mid-catch-up fold never reaches it.
-    if (args.delivery.caughtUp) {
+    if (state.createRequest !== null && args.delivery.caughtUp) {
       args.blockProcessorWhileCaughtUp(() => this.#reconcileObligations(args));
     }
     // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;
-    if (event.type === "events.iterate.com/repo/created") return;
+    if (
+      event.type === "events.iterate.com/repos/create-requested" ||
+      event.type === "events.iterate.com/repos/created" ||
+      event.type === "events.iterate.com/repo/created" ||
+      event.type === "events.iterate.com/repo/ready"
+    ) {
+      return;
+    }
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
       if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
@@ -258,47 +274,31 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * and runs this reconcile, where the undriven obligations are re-driven.
    *
    * CREATION is an OBLIGATION driven from the at-head fold, never a per-event
-   * reaction: a journal refold (the normal aftermath of a state-schema
-   * deploy) replays the `repo/created` birth certificate, but the at-head fold
-   * (`args.state`, NOT `previousState`) has already absorbed any journaled
-   * `repo/ready` fact — so `createRepoArtifact`, an already-completed external
-   * creation obligation, provably never re-runs. The `ready`
-   * idempotency key binds NO event offset (`this.idempotencyKey("ready")`),
-   * so a redelivery/revival cannot rotate it and re-seed. No expiry on
-   * purpose: "this repo should exist" does not go stale. The creation
-   * implementation leaves any existing branch untouched, gives concurrent
-   * first seeds the same commit oid, and serializes creation with branch
-   * mutation, so a create-succeeded/append-failed retry is safe.
+   * reaction. `repos/create-requested` is durable intent; `repos/created` is its
+   * terminal fact. A refold sees both in the final fold and does no external
+   * work. If an incarnation dies between a retry-safe side effect and the
+   * terminal append, redelivery runs the same saga again and the fixed
+   * `repos/created` idempotency key collapses the outcome. No expiry on
+   * purpose: "this repo should exist" does not go stale.
    */
   async #reconcileObligations(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
-    if (args.state.birthCertificate === null) return;
-    if (!args.state.ready) {
-      // Create inline — this runs inside the head event's outer blocking
-      // closure (see processEvent), so awaiting the seed + `created` append
-      // holds the frame; a nested blockProcessorWhile would register after the
-      // runner's per-event blocker snapshot and never be awaited.
-      const payload = await this.deps.createRepoArtifact({
-        config: args.state.birthCertificate.config,
-        path: this.path,
-        projectId: this.projectId,
-      });
+    const request = args.state.createRequest;
+    if (request === null) return;
+    if (args.state.birthCertificate === null) {
+      const artifact = await this.#createRepo(request);
       await args.append({
-        type: "events.iterate.com/repo/ready",
-        idempotencyKey: this.idempotencyKey("ready"),
-        payload: {
-          ...payload,
-          path: this.path,
-          projectId: this.projectId,
-        },
+        type: "events.iterate.com/repos/created",
+        idempotencyKey: this.idempotencyKey("created"),
+        payload: { ...artifact, request },
       });
     }
 
-    const request = args.state.githubImport;
-    if (request === null || this.#liveGithubImports.has(request.requestId)) return;
+    const githubImport = args.state.githubImport;
+    if (githubImport === null || this.#liveGithubImports.has(githubImport.requestId)) return;
 
-    this.#liveGithubImports.add(request.requestId);
+    this.#liveGithubImports.add(githubImport.requestId);
     args.runInBackground(async () => {
       try {
         // The started fact must land before the vendor body runs. If this
@@ -306,29 +306,29 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         // the sync is deliberately not called.
         await args.append({
           type: "events.iterate.com/repo/github-import-started",
-          idempotencyKey: this.idempotencyKey(`github-import-started:${request.requestId}`),
+          idempotencyKey: this.idempotencyKey(`github-import-started:${githubImport.requestId}`),
           payload: {
-            branch: request.branch,
-            requestId: request.requestId,
-            requestedCommitOid: request.requestedCommitOid,
+            branch: githubImport.branch,
+            requestId: githubImport.requestId,
+            requestedCommitOid: githubImport.requestedCommitOid,
           },
         });
 
         let result: { commitOid: string };
         try {
           result = await this.deps.syncFromGithubPush({
-            afterCommitOid: request.requestedCommitOid,
-            branch: request.branch,
+            afterCommitOid: githubImport.requestedCommitOid,
+            branch: githubImport.branch,
           });
         } catch (error) {
           await args.append({
             type: "events.iterate.com/repo/github-import-failed",
-            idempotencyKey: this.idempotencyKey(`github-import-failed:${request.requestId}`),
+            idempotencyKey: this.idempotencyKey(`github-import-failed:${githubImport.requestId}`),
             payload: {
-              branch: request.branch,
+              branch: githubImport.branch,
               error: String(error),
-              requestId: request.requestId,
-              requestedCommitOid: request.requestedCommitOid,
+              requestId: githubImport.requestId,
+              requestedCommitOid: githubImport.requestedCommitOid,
             },
           });
           return;
@@ -336,17 +336,29 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
         await args.append({
           type: "events.iterate.com/repo/github-import-completed",
-          idempotencyKey: this.idempotencyKey(`github-import-completed:${request.requestId}`),
+          idempotencyKey: this.idempotencyKey(`github-import-completed:${githubImport.requestId}`),
           payload: {
-            branch: request.branch,
+            branch: githubImport.branch,
             commitOid: result.commitOid,
-            requestId: request.requestId,
-            requestedCommitOid: request.requestedCommitOid,
+            requestId: githubImport.requestId,
+            requestedCommitOid: githubImport.requestedCommitOid,
           },
         });
       } finally {
-        this.#liveGithubImports.delete(request.requestId);
+        this.#liveGithubImports.delete(githubImport.requestId);
       }
     });
+  }
+
+  async #createRepo(request: RepoCreateRequest) {
+    if (request.type === "empty") return await this.deps.createEmptyArtifact();
+
+    const artifact =
+      request.type === "github-public"
+        ? await this.deps.importPublicGithubArtifact(request)
+        : await this.deps.createEmptyArtifact();
+    await this.deps.linkGithub(request);
+    if (request.type === "github-private") await this.deps.syncPrivateGithub();
+    return artifact;
   }
 }

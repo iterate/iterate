@@ -26,16 +26,15 @@ const REPO_PATH_PATTERN = /^\/repos\/.+$/;
 
 /**
  * "Add from GitHub" on the repos page: a small wizard that creates a project
- * repo backed by a repository picked from the project's GitHub connection —
- * create, link (mirror-out + webhook cross-post), then adopt GitHub's `main`
- * head so the new repo starts as a copy of the GitHub one. Renders nothing
+ * repo backed by a repository picked from the project's GitHub connection.
+ * The repo creation saga imports public history through Cloudflare Artifacts
+ * and adopts private repos through a depth-one Worker sync. Renders nothing
  * when the project has no GitHub connection. Suspends on the connections
  * read — mount under a `<Suspense>` boundary.
  *
  * `existingRepoPaths` (the page's live repo list) gates the path field:
- * `repos.create` is create-if-absent, so without the gate an existing path —
- * `/repos/config` included — would be silently linked and force-synced,
- * discarding its local history. `undefined` means the list has not arrived
+ * `repo.create` is create-if-absent, so without the gate an existing path
+ * could receive a conflicting creation request. `undefined` means the list has not arrived
  * yet, and the gate stays CLOSED (submit disabled): an unknown list must not
  * read as "every path is free".
  */
@@ -108,12 +107,8 @@ function AddRepoFromGithubWizard({
   // Once the user edits the path by hand, picking a different repository
   // stops overwriting it.
   const [pathEdited, setPathEdited] = useState(false);
-  // Paths THIS wizard created. A failed linkGithub leaves the dialog open for
-  // a retry, but by then the just-created repo is in the live list — without
-  // this exemption the taken-path gate would block the very retry the
-  // idempotent create→link→sync flow is built for. Fresh seed only, so the
-  // force-sync stays safe; closing the dialog drops the exemption and the
-  // repo page's GitHub panel is the repair path from there.
+  // Paths claimed by this wizard. This keeps a retry available if the same
+  // durable creation saga fails after its request has been committed.
   const [createdHere, setCreatedHere] = useState<ReadonlySet<string>>(new Set());
   const normalizedPath = path.trim();
   // undefined = the live repo list has not arrived yet: the gate stays
@@ -139,47 +134,27 @@ function AddRepoFromGithubWizard({
           `${input.path} already exists. To back an existing repo with GitHub, use the GitHub panel on that repo's page.`,
         );
       }
-      // Claim the path for this wizard instance BEFORE the create round-trip:
-      // the live repo list records the path the moment the repo's stream is
-      // born (its first append), seconds before create() resolves — without
-      // the exemption already in place, the taken-path gate red-flags the very
-      // repo this mutation is creating while it is still being seeded.
+      // Claim the path for this wizard instance before the create round-trip
+      // so a retry can resume the same durable request after a failed call.
       setCreatedHere((previous) => new Set(previous).add(input.path));
-      // createFromGithub records the source in the repo's birth certificate,
-      // so a retry after a mid-flow failure is safe and finishes the job.
-      return await itx.repos.createFromGithub({
+      // The request is the repo saga's durable identity, so a retry after a
+      // mid-flow failure resumes the same creation rather than starting a
+      // second orchestration path in the browser.
+      await itx.repos.get(input.path).create({
         connection,
         owner: input.repo.owner,
-        path: input.path,
         repo: input.repo.name,
+        type: input.repo.private ? "github-private" : "github-public",
       });
     },
-    onSuccess: (result, variables) => {
-      const github = `${result.link.owner}/${result.link.repo}`;
-      if (result.imported) {
-        toast.success(`Added ${result.path} from ${github} at depth one.`);
-      } else if (result.syncError !== null) {
-        toast.warning(
-          `${result.path} is linked to ${github}, but pulling main failed: ${result.syncError} Use "Sync from GitHub" in the repo's GitHub panel to retry.`,
-        );
-      } else if (result.sync?.changed) {
-        toast.success(
-          `Added ${result.path} from ${github} at ${result.sync.commitOid.slice(0, 7)}.`,
-        );
-      } else if (result.link.initialPush.ok) {
-        // changed: false right after a successful seed push means GitHub had
-        // no main HEAD to pull — either an empty repository, or one whose
-        // content lives on a different default branch (which iterate does not
-        // mirror). Only claim what we know.
-        toast.success(
-          variables.repo.defaultBranch === "main"
-            ? `Added ${result.path} linked to ${github} — the GitHub repository had no main branch to pull, so it was seeded with the starter files.`
-            : `Added ${result.path} linked to ${github} — its content lives on "${variables.repo.defaultBranch}", which iterate does not mirror, so main was seeded with the starter files.`,
-        );
-      } else {
-        toast.success(`Added ${result.path} linked to ${github}.`);
-      }
-      onAdded(result.path);
+    onSuccess: (_, variables) => {
+      const github = `${variables.repo.owner}/${variables.repo.name}`;
+      toast.success(
+        variables.repo.private
+          ? `Added ${variables.path} from ${github} at depth one.`
+          : `Added ${variables.path} from ${github} with its full history.`,
+      );
+      onAdded(variables.path);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Could not add the repo.");

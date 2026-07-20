@@ -212,7 +212,7 @@ the seeded project worker through the worker build pipeline, and then emits
 `project/ready`. The onboarding agent is created separately and explicitly
 when its dashboard chat opens; its path alone never creates it. The config
 repo's stream carries a `cross-post:/` subscription from birth, so every
-config-repo event (including `repo/created`) is copied onto the project stream
+config-repo event (including `repos/created`) is copied onto the project stream
 `/` with provenance. Streams are the coordination layer for all of this —
 bootstrap is events and processors, not a setup RPC.
 

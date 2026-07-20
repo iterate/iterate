@@ -7,6 +7,7 @@ export type InstallationRepo = {
   fullName: string;
   name: string;
   owner: string;
+  private: boolean;
   pushedAt: string | null;
 };
 
@@ -42,6 +43,7 @@ export async function listInstallationRepos(
             full_name: string;
             name: string;
             owner: { login: string };
+            private: boolean;
             pushed_at: string | null;
           }>;
           total_count: number;
@@ -54,6 +56,7 @@ export async function listInstallationRepos(
           fullName: r.full_name,
           name: r.name,
           owner: r.owner.login,
+          private: r.private,
           pushedAt: r.pushed_at,
         })),
       );

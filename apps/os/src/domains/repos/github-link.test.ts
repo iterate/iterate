@@ -9,23 +9,12 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { GITHUB_CONNECTED_EVENT_TYPE } from "../integrations/utils.ts";
-import {
-  githubRepositoryImportCandidate,
-  linkRepoToGithub,
-  unlinkRepoFromGithub,
-} from "./github-link.ts";
+import { linkRepoToGithub, unlinkRepoFromGithub } from "./github-link.ts";
 
 const network = await vi.hoisted(async () => {
   const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
   const repoCalls: Array<{ args: unknown[]; method: string; name: string }> = [];
   const state = {
-    birthConfig: {} as {
-      github?: {
-        artifactImport?: { branch: string; depth: number };
-        owner: string;
-        repo: string;
-      };
-    },
     githubLink: null as Record<string, unknown> | null,
     /** What the fake GitHub API answers: repo exists / missing / create fails. */
     githubRepoExists: true,
@@ -55,7 +44,6 @@ const network = await vi.hoisted(async () => {
       itx.reset();
       repoCalls.length = 0;
       state.githubLink = null;
-      state.birthConfig = {};
       state.githubRepoExists = true;
       state.githubRepoPrivate = false;
       state.githubRepoPushedAt = "2026-07-20T00:00:00Z";
@@ -128,15 +116,6 @@ const network = await vi.hoisted(async () => {
     REPO: {
       getByName(name: string) {
         return {
-          processor: {
-            async snapshot() {
-              return {
-                state: {
-                  birthCertificate: { config: state.birthConfig },
-                },
-              };
-            },
-          },
           // Read-only probe, deliberately not recorded in repoCalls: the
           // ordering assertions track the mutating verbs.
           async getGithubLink() {
@@ -260,31 +239,17 @@ describe("linkRepoToGithub", () => {
     });
   });
 
-  test("does not clone and push an Artifact that was imported from this GitHub repo", async () => {
+  test("can link without pushing starter history during a creation saga", async () => {
     seedConnectedFact();
-    network.state.birthConfig = {
-      github: {
-        artifactImport: { branch: "main", depth: 1 },
-        owner: "ACME",
-        repo: "Widgets",
-      },
-    };
 
-    const result = await linkRepoToGithub(linkInput());
+    const result = await linkRepoToGithub(linkInput(), { skipInitialPush: true });
 
     expect(result.initialPush).toEqual({ ok: true, skipped: true });
     expect(network.repoCalls.map((call) => call.method)).toEqual(["configureGithubLink"]);
   });
 
-  test("pushes when an imported Artifact is linked to a different GitHub repo", async () => {
+  test("direct linking still pushes the existing Artifact immediately", async () => {
     seedConnectedFact();
-    network.state.birthConfig = {
-      github: {
-        artifactImport: { branch: "main", depth: 1 },
-        owner: "acme",
-        repo: "different",
-      },
-    };
 
     const result = await linkRepoToGithub(linkInput());
 
@@ -492,42 +457,6 @@ describe("linkRepoToGithub", () => {
         },
       },
     });
-  });
-});
-
-describe("githubRepositoryImportCandidate", () => {
-  afterEach(() => {
-    network.reset();
-  });
-
-  test("allows a non-empty public main branch", async () => {
-    seedConnectedFact();
-
-    await expect(
-      githubRepositoryImportCandidate({
-        connection: CONNECTION,
-        owner: "acme",
-        projectId: PROJECT_ID,
-        repo: "widgets",
-      }),
-    ).resolves.toEqual({ defaultBranch: "main", importable: true });
-  });
-
-  test.each([
-    { label: "private", mutate: () => (network.state.githubRepoPrivate = true) },
-    { label: "empty", mutate: () => (network.state.githubRepoPushedAt = null) },
-  ])("keeps a $label repository on the authenticated flow", async ({ mutate }) => {
-    seedConnectedFact();
-    mutate();
-
-    await expect(
-      githubRepositoryImportCandidate({
-        connection: CONNECTION,
-        owner: "acme",
-        projectId: PROJECT_ID,
-        repo: "widgets",
-      }),
-    ).resolves.toEqual({ defaultBranch: "main", importable: false });
   });
 });
 
