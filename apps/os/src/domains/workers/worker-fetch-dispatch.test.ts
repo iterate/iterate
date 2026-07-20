@@ -21,8 +21,10 @@ const ref: DynamicWorkerRef = {
   durableWorkerKey: "app-snake",
   path: "/",
   source: {
-    files: { include: ["apps/snake/**"], repoPath: "/", type: "repo" },
-    options: { entryPoint: "apps/snake/worker.ts" },
+    createWorker: {
+      entryPoint: "apps/snake/worker.ts",
+      files: { include: ["apps/snake/**"], repoPath: "/", type: "repo" },
+    },
   },
   type: "stateful",
 };

@@ -111,8 +111,10 @@ test("a project mounts ocado into the collection; connections + secret confineme
             path: "/",
             entrypoint: "OcadoIntegration",
             source: {
-              files: { type: "repo", repoPath: "/repos/config" },
-              options: { entryPoint: "integrations/ocado.js" },
+              createWorker: {
+                entryPoint: "integrations/ocado.js",
+                files: { type: "repo", repoPath: "/repos/config" },
+              },
             },
           },
         ],

@@ -7,7 +7,8 @@ short README.
 
 OS deploys as one Worker (see [worker-topology.md](./worker-topology.md)):
 the dashboard, the itx api, and every Durable Object class live in a single
-script (`src/worker.ts`), plus the typechecker sidecar for `itx.docs.typecheck`.
+script (`src/worker.ts`), plus isolated typechecker and worker-bundler compiler
+sidecars. Neither sidecar hosts state.
 Traffic is dispatched on hostname and path:
 
 1. Rpc lanes: `/api` (+ `/api/operator-sessions`), `/prj_<id>/...`, and project

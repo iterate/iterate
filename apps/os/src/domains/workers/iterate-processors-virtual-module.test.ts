@@ -25,15 +25,10 @@ test("the embedded iterate/processors runtime is loader-ready plain JavaScript",
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).toContain("StreamProcessor");
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).not.toContain("createStreamProcessorRegistry");
 
-  // Real bundle; deliberate externals only: zod (the worker's own installed
-  // copy, so worker-authored contract schemas and the machinery share one
-  // instance) and cloudflare:workers — which OUR pure machinery never
-  // imports (that is the point of the entry split); it enters here solely as
-  // capnweb's workerd build, selected by the bundle's workerd condition. In
-  // node the same entry resolves capnweb's node build and the graph is
-  // cloudflare-free (the e2e suite imports template processor modules with no
-  // shim).
-  expect(externals(ITERATE_PROCESSORS_VIRTUAL_MODULE)).toEqual(["cloudflare:workers", "zod"]);
+  // Cap'n Web is another platform virtual module so every generated module
+  // shares one class identity. Zod and the remaining implementation are
+  // bundled here; no project dependency install is needed.
+  expect(externals(ITERATE_PROCESSORS_VIRTUAL_MODULE)).toEqual(["@iterate-com/capnweb"]);
 });
 
 test("the embedded iterate/processors/cloudflare hosting layer shares the pure module", async () => {

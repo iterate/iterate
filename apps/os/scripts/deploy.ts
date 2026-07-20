@@ -223,17 +223,18 @@ export default async function deploy(
       // here avoids racing that write with the sidecar's Wrangler process.
       writeWranglerConfig();
     },
-    // Deploy the typechecker sidecar while the OS Vite build runs. deployApp
-    // joins this lane before uploading the main Worker, so TYPECHECKER can
-    // never target a missing script.
+    // Deploy both compiler sidecars while the OS Vite build runs. deployApp
+    // joins this lane before uploading the main Worker, so neither service
+    // binding can target a missing script.
     concurrentBuildWork: async (ctx, _secretValues, credentials) => {
-      await runAsync(
-        "pnpm",
-        ["exec", "wrangler", "deploy", "--config", "wrangler.typechecker.jsonc", "--env", ctx.name],
-        {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
-          env: credentials,
-        },
+      const cwd = fileURLToPath(new URL("..", import.meta.url));
+      await Promise.all(
+        ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"].map((config) =>
+          runAsync("pnpm", ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name], {
+            cwd,
+            env: credentials,
+          }),
+        ),
       );
     },
     smokes: osSmokes,

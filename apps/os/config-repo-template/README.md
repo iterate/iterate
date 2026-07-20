@@ -3,15 +3,21 @@
 This repo is seeded at project creation by the repo stream processor.
 
 The project worker entrypoint is `worker.ts` (TypeScript). The worker build
-pipeline bundles it — together with any files it imports and the npm
-dependencies in `package.json` — into a loader-ready worker on first use, so
-committing a change here changes the running worker on its next use.
+pipeline bundles it and the files it imports into loader-ready code on first
+use, so committing a change here changes the running worker on its next use.
+The platform passes this repo's files and build options directly to
+`@cloudflare/worker-bundler`; when `package.json` declares dependencies, that
+library attempts to install and bundle them.
 
 `apps/todo` and `apps/guestbook` are deliberately basic browser examples.
-Each contains only `server.tsx` and `client.tsx`: the server is a Durable
-Object, and the client is a separately served browser bundle whose React
-imports remain direct `esm.sh` URL imports. There is no app-local npm install,
-Vite config, router generator, or full-stack framework adapter.
+Each contains only `server.tsx` and `client.tsx`: the server exports a
+Durable Object and the client becomes a separately served browser module. JSX is
+compiled with the classic transform, so the explicit React imports remain
+direct `esm.sh` URLs instead of becoming npm dependencies. There is no
+app-local install, Vite config, router generator, or framework adapter. Iterate
+injects its small status overlay into the HTML response in production.
+Their two-file layout is only an example: app refs may choose arbitrary server
+and client entry points from the complete `files` map passed to the bundler.
 
 ## Authenticated web apps
 

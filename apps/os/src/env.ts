@@ -52,6 +52,12 @@ export interface Env {
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
   /**
+   * The worker-bundler sidecar (src/worker-bundler.ts): the only OS script
+   * carrying esbuild-wasm. Source files cross this binding as inert data so a
+   * build cannot load the compiler into the product Worker's DO isolate.
+   */
+  WORKER_BUNDLER: Service<import("./worker-bundler.ts").WorkerBundlerEntrypoint>;
+  /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types
    * validation and `itx.docs.typecheck`. The only script carrying the

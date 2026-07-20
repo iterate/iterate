@@ -120,7 +120,7 @@ export function envShapedVars(env: DeployedEnv) {
 
 const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
-// One compatibility date for the os worker AND the typechecker sidecar — a
+// One compatibility date for the os worker AND both compiler sidecars — a
 // bump that misses one would be silent drift. (Deliberately distinct from
 // WORKER_COMPATIBILITY_DATE in build-backend.ts: dynamic-worker compat is
 // hashed into build keys and moves on its own schedule.)
@@ -138,6 +138,11 @@ const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 /** The typechecker sidecar's worker name, derived — never spelled out in envs.ts. */
 function typecheckerWorkerName(osWorkerName: string) {
   return `${osWorkerName}-typechecker`;
+}
+
+/** The worker-bundler sidecar's worker name, derived — never in envs.ts. */
+function workerBundlerWorkerName(osWorkerName: string) {
+  return `${osWorkerName}-worker-bundler`;
 }
 
 /**
@@ -316,6 +321,10 @@ function workerBindings(input: {
       // compiler (tswasm, ~30MB wasm). The service binding requires deploy.ts
       // to deploy this worker first.
       { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
+      // The only script importing @cloudflare/worker-bundler and esbuild-wasm.
+      // Builds cross as inert source/result values, keeping compiler memory
+      // out of the product Worker and its Durable Object isolates.
+      { binding: "WORKER_BUNDLER", service: workerBundlerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
     browser: { binding: "BROWSER" },
@@ -610,12 +619,41 @@ export const typecheckerConfig = {
   ),
 };
 
-/** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
+/**
+ * The worker-bundler sidecar's config: one RPC entrypoint and no bindings.
+ * Wrangler bundles this independently so esbuild-wasm never enters the OS
+ * product script; local dev runs it as a Vite auxiliary Worker.
+ */
+export const workerBundlerConfig = {
+  $schema: "node_modules/wrangler/config-schema.json",
+  name: "os-worker-bundler",
+  main: "./src/worker-bundler.ts",
+  compatibility_date: COMPATIBILITY_DATE,
+  compatibility_flags: ["nodejs_compat"],
+  observability: OBSERVABILITY,
+  env: Object.fromEntries(
+    Object.entries(envs).map(([name, env]) => [
+      name,
+      {
+        name: workerBundlerWorkerName(env.osWorkerName),
+        account_id: env.cloudflareAccountId,
+        observability: OBSERVABILITY,
+      },
+    ]),
+  ),
+};
+
+/** Write all three gitignored Wrangler configs if changed. */
 export const writeWranglerConfig = () => {
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
     appLabel: "apps/os (typechecker sidecar)",
     config: typecheckerConfig,
+  });
+  writeGeneratedWranglerConfig({
+    configUrl: new URL("../wrangler.worker-bundler.jsonc", import.meta.url),
+    appLabel: "apps/os (worker-bundler sidecar)",
+    config: workerBundlerConfig,
   });
   return writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.jsonc", import.meta.url),
@@ -625,7 +663,7 @@ export const writeWranglerConfig = () => {
   });
 };
 
-/** Regenerate apps/os/wrangler.jsonc and the typechecker sidecar config. */
+/** Regenerate the OS config and both compiler-sidecar configs. */
 export default function generateWranglerConfig() {
   console.log(`Wrote ${writeWranglerConfig()}`);
 }

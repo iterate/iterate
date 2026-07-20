@@ -9,6 +9,7 @@ import {
   REQUIRED_SECRETS,
   envShapedVars,
   typecheckerConfig,
+  workerBundlerConfig,
 } from "./generate-wrangler-config.ts";
 
 it("does not emit the local forge JWKS into deployed builds", () => {
@@ -46,6 +47,7 @@ it.each([
 it("names the top-level configs by service so cf:service script tags stay env-less", () => {
   expect(config.name).toBe("os");
   expect(typecheckerConfig.name).toBe("os-typechecker");
+  expect(workerBundlerConfig.name).toBe("os-worker-bundler");
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -64,14 +66,23 @@ it("binds the os worker to its own env's typechecker sidecar", () => {
   }
 });
 
+it("binds the os worker to its own env's worker-bundler sidecar", () => {
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    const bundler = envBlock.services.find((service) => service.binding === "WORKER_BUNDLER");
+    expect(bundler?.service, envName).toBe(`${envBlock.name}-worker-bundler`);
+    const sidecarNames = Object.values(workerBundlerConfig.env).map((sidecar) => sidecar.name);
+    expect(sidecarNames, envName).toContain(bundler?.service);
+  }
+});
+
 it("only retains the retired builder as a Durable Object tombstone", () => {
   expect(config.exports.WorkerBuilderDurableObject).toEqual({
     type: "durable-object",
     state: "deleted",
   });
 
-  // Dynamic workers build in the OS worker itself. There is no service,
-  // Durable Object binding, or container left to run the old builder.
+  // The retired builder has no Durable Object, container, or legacy BUILDER
+  // binding. WORKER_BUNDLER is a stateless non-container compiler sidecar.
   expect(config.services.map((service) => service.binding)).not.toContain("BUILDER");
   expect(config.durable_objects.bindings.map((binding) => binding.class_name)).not.toContain(
     "WorkerBuilderDurableObject",

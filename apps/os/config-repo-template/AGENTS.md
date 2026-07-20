@@ -16,16 +16,14 @@ the project's capabilities through `await this.env.ITX.get()`. The seeded
 GitHub pull-request router and structural-review policy are deliberately
 inline in `worker.ts`: it is a complete, copyable userspace example. Extract
 local modules only when project-specific logic earns them. The worker is built
-by the platform's worker build pipeline: multi-file TypeScript works (the
-bundler follows imports), and npm dependencies declared in `package.json` are
-installed at build time. The platform's capability types and worker base
-classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
-IterateDurableObject, type StreamEvent } from "iterate/sdk"`. It's a
-devDependency here: the platform supplies the runtime `iterate/*` subpaths to
-ordinary worker builds as virtual modules, so the build never installs them; run
-`npm install` to get typechecking and editor support. Shared external runtimes
-used by those modules, such as `@iterate-com/capnweb`, remain ordinary
-dependencies so app code and the platform module share one implementation.
+by the platform's worker build pipeline: it passes the repo file map and build
+options to `@cloudflare/worker-bundler`, which follows local imports and
+attempts to install dependencies declared in `package.json`. The platform's
+capability types and worker base classes come from the `iterate` package —
+`import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from
+"iterate/sdk"`. It's a devDependency here: the platform supplies the runtime
+`iterate/*` subpaths and `@iterate-com/capnweb` to ordinary worker builds, so
+`npm install` is only for local typechecking and editor support.
 
 The root project worker and its in-file examples extend one of the two SDK
 base classes: `IterateWorkerEntrypoint` (stateless) or
@@ -60,14 +58,18 @@ results are serialized copies, so it can serve data but never a socket.
 `CounterApp`'s `/ws` route is the seeded WebSocket proof-of-concept; copy its
 shape for anything real-time. Method calls on apps
 (`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP
-rides the fetch lane.
+rides the fetch lane. App refs use `source.createApp` directly with ordinary
+worker-bundler `server` and `client` entry-point options; its repo-aware
+`files` option is the only platform adaptation, and file paths reach
+worker-bundler unchanged.
 
 `apps/todo` and `apps/guestbook` show the intentionally smallest browser-app
 shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per
 app. The client entry is served separately and imports React directly from
 `esm.sh`; those browser dependencies are not copied into the Worker bundle.
-Keep this path dependency-light. It is not a hidden Vite or full-stack
-framework pipeline.
+This is an example, not a platform file-layout rule. The apps deliberately
+avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform
+can inject the small Iterate status overlay in the corner.
 
 `InternalApp` is the canonical authenticated userspace-app shape: partial-fetch
 HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an
@@ -77,7 +79,7 @@ To give agents a new capability surface, add a getter or method to the
 default-export worker class: the platform dispatches dotted
 `itx.worker.<path>` calls as one flattened `invokeCapability({ path, args })`
 that the base class walks in userland, so a getter can hand back a whole
-vendor SDK (installed from `package.json`) in a single round trip. Built-in
+platform-supplied SDK surface in a single round trip. Built-in
 integrations (Slack, Gmail, GitHub, Telegram, Waitrose) already live at
 `itx.integrations.<slug>.get()` (or `.get("<connection>")` when the exact
 account matters) — reach for a worker getter when

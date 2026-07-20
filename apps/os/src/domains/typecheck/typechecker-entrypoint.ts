@@ -4,7 +4,7 @@ import { createCompiler, type Compiler } from "tswasm";
 import { createCachedFetch } from "@iterate-com/typm/cached-fetch";
 // The typescript-go compiler as a wasm module (~30MB raw, ~7MB gzip) — the
 // whole reason this is a sidecar worker: the product script stays lean, the
-// same way the builder quarantines esbuild-wasm. Two sidecars because they
+// same way the worker-bundler sidecar quarantines esbuild-wasm. Two sidecars because they
 // CANNOT be one: esbuild-wasm + tswasm gzip to ~11 MiB, over Cloudflare's
 // 10 MiB compressed script limit (upload rejected, error 10027).
 import typescriptWasm from "tswasm/tswasm.wasm";
@@ -44,7 +44,7 @@ const compilerCache = createCompilerCache<Compiler>(() =>
 
 /**
  * The typechecker worker's entrypoint: a pure function worker (files in,
- * diagnostics out) mirroring the builder sidecar. The os worker calls
+ * diagnostics out) mirroring the worker-bundler sidecar. The os worker calls
  * `env.TYPECHECKER.check(...)` for provide-time capability-types validation
  * and the `itx.docs.typecheck` door; a compiler upgrade redeploys one worker.
  */

@@ -406,8 +406,10 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
           durableWorkerKey,
           path: agentPath,
           source: {
-            files: { repoPath: "/repos/config", type: "repo" },
-            options: { entryPoint: "worker.ts" },
+            createWorker: {
+              entryPoint: "worker.ts",
+              files: { repoPath: "/repos/config", type: "repo" },
+            },
           },
           type: "stateful",
         },

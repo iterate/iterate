@@ -13,16 +13,13 @@ import {
   isWebSocketUpgradeRequest,
   withWorkerFetchDispatchHeader,
 } from "./worker-fetch-dispatch.ts";
-import { stripWorkerServeInfo, withWorkerServeInfo } from "./worker-serve-info.ts";
+import { withWorkerCommit } from "./worker-serve-info.ts";
 import {
   loadResolvedWorker,
-  resolveCachedArtifact,
   resolveWorkerSource,
   type ResolvedWorkerSource,
-  type ServedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
-import { workerAssetResponse } from "./worker-assets.ts";
 
 export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
@@ -103,33 +100,13 @@ export class DynamicWorkerRunner {
   async loadStatefulClass<T extends DurableObjectClass = DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ klass: T; resolved: ServedWorkerSource }> {
+  ): Promise<{ klass: T; resolved: ResolvedWorkerSource }> {
     const { resolved, worker } = await this.#load(ref, buildBudgetMs);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
 
-  /**
-   * Resolve a ref's CURRENT source version (building if needed) without
-   * materializing a Worker Loader isolate. The stale-while-rebuild background
-   * refresh must use this instead of {@link loadStatefulClass}: an isolate
-   * created inside a `waitUntil` context dies with it, and the loader CACHES
-   * isolates by key — a background-created isolate would poison every later
-   * mount of the same build (observed as persistent redacted "internal
-   * error"s on the swapped facet). The next real call creates the isolate in
-   * its own request context.
-   */
-  async resolveStatefulSourceCacheKey(ref: StatefulDynamicWorkerRef): Promise<string> {
-    const resolved = await resolveWorkerSource({
-      projectId: this.#projectId,
-      source: ref.source,
-      waitUntil: this.#waitUntil,
-    });
-    return resolved.cacheKey;
-  }
-
-  /** Resolve and serve a host-side browser asset without creating a dynamic
-   * Worker isolate. StatefulWorkerDurableObject calls this only for the
-   * configured client bundle pathname. */
+  /** Resolve and serve one createApp asset without creating a dynamic Worker
+   * isolate. */
   async resolveAsset(
     ref: DynamicWorkerRef,
     request: Request,
@@ -141,22 +118,13 @@ export class DynamicWorkerRunner {
       source: ref.source,
       waitUntil: this.#waitUntil,
     });
-    return workerAssetResponse(request, resolved.assets);
-  }
-
-  /**
-   * A stateful class from a previously built artifact, by exact cache key —
-   * never triggers a build (see resolveCachedArtifact). Null when the
-   * artifact is gone.
-   */
-  async loadStatefulClassFromCacheKey<T extends DurableObjectClass = DurableObjectClass>(
-    ref: StatefulDynamicWorkerRef,
-    cacheKey: string,
-  ): Promise<{ klass: T; resolved: ResolvedWorkerSource } | null> {
-    const resolved = await resolveCachedArtifact(cacheKey);
-    if (resolved === null) return null;
-    const worker = this.#loadResolved(ref, resolved);
-    return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
+    const asset = await env.WORKER_BUNDLER.handleAssetRequest(
+      request,
+      resolved.assetManifest,
+      resolved.assets,
+      resolved.assetConfig,
+    );
+    return asset === null ? null : withWorkerCommit(asset, resolved.commitOid);
   }
 
   #durableObjectClass<T extends DurableObjectClass>(
@@ -196,16 +164,13 @@ export class DynamicWorkerRunner {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
       let response: Response;
       if (ref.type === "stateful") {
-        // Stateful responses only get the header STRIPPED: the outer DO owns
-        // facet versioning, and this hop cannot know which build the facet is
-        // actually running.
-        response = stripWorkerServeInfo(
-          await (
-            env.WORKER.getByName(
-              statefulWorkerDurableObjectName(this.#projectId, ref),
-            ) as unknown as Fetcher
-          ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref })),
-        );
+        // The hosting DO resolves the facet and stamps its trusted build
+        // header after the user response returns.
+        response = await (
+          env.WORKER.getByName(
+            statefulWorkerDurableObjectName(this.#projectId, ref),
+          ) as unknown as Fetcher
+        ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
       } else {
         const resolved = await resolveWorkerSource({
           buildBudgetMs,
@@ -213,16 +178,24 @@ export class DynamicWorkerRunner {
           source: ref.source,
           waitUntil: this.#waitUntil,
         });
-        const asset = workerAssetResponse(request, resolved.assets);
+        const asset =
+          "createApp" in ref.source
+            ? await env.WORKER_BUNDLER.handleAssetRequest(
+                request,
+                resolved.assetManifest,
+                resolved.assets,
+                resolved.assetConfig,
+              )
+            : null;
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
         if (asset !== null) {
-          response = withWorkerServeInfo(asset, resolved.serveInfo);
+          response = withWorkerCommit(asset, resolved.commitOid);
         } else {
           const entrypoint = this.#loadResolved(ref, resolved).getEntrypoint(ref.entrypoint, {
             props: ref.props ?? {},
           }) as Fetcher;
-          response = withWorkerServeInfo(await entrypoint.fetch(request), resolved.serveInfo);
+          response = withWorkerCommit(await entrypoint.fetch(request), resolved.commitOid);
         }
       }
       span.setAttribute("http.response.status_code", response.status);
@@ -307,7 +280,7 @@ export class DynamicWorkerRunner {
   async #load(
     ref: DynamicWorkerRef,
     buildBudgetMs?: number,
-  ): Promise<{ resolved: ServedWorkerSource; worker: WorkerStub }> {
+  ): Promise<{ resolved: ResolvedWorkerSource; worker: WorkerStub }> {
     const resolved = await resolveWorkerSource({
       buildBudgetMs,
       projectId: this.#projectId,
@@ -342,11 +315,13 @@ export class DynamicWorkerRunner {
       setAttribute(name: string, value: boolean | number | string): void;
     }) => Promise<T>,
   ): Promise<T> {
-    const kind = traceRole ?? (ref.type === "stateful" ? "stateful" : ref.source.files.type);
+    const source =
+      "createApp" in ref.source ? ref.source.createApp.files : ref.source.createWorker.files;
+    const kind = traceRole ?? (ref.type === "stateful" ? "stateful" : source.type);
     return tracing.enterSpan(`dynamic_worker.${kind}.${operation}`, async (span) => {
       span.setAttribute("iterate.worker.kind", kind);
       span.setAttribute("iterate.worker.operation", operation);
-      span.setAttribute("iterate.worker.source", ref.source.files.type);
+      span.setAttribute("iterate.worker.source", source.type);
       span.setAttribute("iterate.worker.type", ref.type);
       return await callback(span);
     });

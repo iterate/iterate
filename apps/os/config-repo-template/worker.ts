@@ -18,12 +18,11 @@ const todoAppRef = {
   durableWorkerKey: "app-todo",
   path: "/",
   source: {
-    files: repoFiles,
-    options: {
-      clientEntryPoint: "client.tsx",
-      entryPoint: "server.tsx",
-      minify: true,
-      rootDir: "apps/todo",
+    createApp: {
+      bundle: false,
+      client: "apps/todo/client.tsx",
+      files: repoFiles,
+      server: "apps/todo/server.tsx",
     },
   },
   type: "stateful",
@@ -33,12 +32,11 @@ const guestbookAppRef = {
   durableWorkerKey: "app-guestbook",
   path: "/",
   source: {
-    files: repoFiles,
-    options: {
-      clientEntryPoint: "client.tsx",
-      entryPoint: "server.tsx",
-      minify: true,
-      rootDir: "apps/guestbook",
+    createApp: {
+      bundle: false,
+      client: "apps/guestbook/client.tsx",
+      files: repoFiles,
+      server: "apps/guestbook/server.tsx",
     },
   },
   type: "stateful",
@@ -112,8 +110,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         path: "/",
         entrypoint: "HelloApp",
         source: {
-          files: { type: "repo", repoPath: "/repos/config" },
-          options: { entryPoint: "worker.ts" },
+          createWorker: {
+            entryPoint: "worker.ts",
+            files: { type: "repo", repoPath: "/repos/config" },
+          },
         },
       });
     }
@@ -123,8 +123,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         path: "/",
         entrypoint: "InternalApp",
         source: {
-          files: { type: "repo", repoPath: "/repos/config" },
-          options: { entryPoint: "worker.ts" },
+          createWorker: {
+            entryPoint: "worker.ts",
+            files: { type: "repo", repoPath: "/repos/config" },
+          },
         },
       });
     }
@@ -141,8 +143,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         className: "CounterApp",
         durableWorkerKey: "app-counter",
         source: {
-          files: { type: "repo", repoPath: "/repos/config" },
-          options: { entryPoint: "worker.ts" },
+          createWorker: {
+            entryPoint: "worker.ts",
+            files: { type: "repo", repoPath: "/repos/config" },
+          },
         },
       });
     }

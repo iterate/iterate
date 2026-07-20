@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import { DynamicWorkerRef, DynamicWorkerSource } from "./schemas.ts";
 
 const inlineSource = {
-  files: {
-    files: { "worker.ts": "export default {};" },
-    type: "inline",
+  createWorker: {
+    entryPoint: "worker.ts",
+    files: {
+      files: { "worker.ts": "export default {};" },
+      type: "inline",
+    },
   },
-  options: { entryPoint: "worker.ts" },
 } as const;
 
 describe("DynamicWorkerRef schema", () => {
@@ -43,26 +45,32 @@ describe("DynamicWorkerSource schema", () => {
   it("accepts repo sources with branch or commit refs and glob masks", () => {
     expect(
       DynamicWorkerSource.parse({
-        files: {
-          exclude: [".git/**"],
-          include: ["src/**", "package.json"],
-          ref: { branch: "main" },
-          repoPath: "/",
-          type: "repo",
+        createWorker: {
+          entryPoint: "service/src/worker.ts",
+          files: {
+            exclude: [".git/**"],
+            include: ["service/src/**", "package.json"],
+            ref: { branch: "main" },
+            repoPath: "/",
+            type: "repo",
+          },
         },
-        options: { entryPoint: "src/worker.ts", minify: true },
       }),
-    ).toMatchObject({ files: { ref: { branch: "main" }, type: "repo" } });
+    ).toMatchObject({
+      createWorker: { files: { ref: { branch: "main" }, type: "repo" } },
+    });
 
     expect(
       DynamicWorkerSource.parse({
-        files: {
-          ref: { commitOid: "a".repeat(40) },
-          repoPath: "/",
-          type: "repo",
+        createWorker: {
+          files: {
+            ref: { commitOid: "a".repeat(40) },
+            repoPath: "/",
+            type: "repo",
+          },
         },
       }),
-    ).toMatchObject({ files: { ref: { commitOid: "a".repeat(40) } } });
+    ).toMatchObject({ createWorker: { files: { ref: { commitOid: "a".repeat(40) } } } });
   });
 
   it("rejects the pre-build-pipeline source shapes", () => {
@@ -81,13 +89,67 @@ describe("DynamicWorkerSource schema", () => {
   it("rejects malformed commit oids and unknown build options", () => {
     expect(() =>
       DynamicWorkerSource.parse({
-        files: { ref: { commitOid: "not-a-sha" }, repoPath: "/", type: "repo" },
+        createWorker: {
+          files: { ref: { commitOid: "not-a-sha" }, repoPath: "/", type: "repo" },
+        },
       }),
     ).toThrow();
     expect(() =>
       DynamicWorkerSource.parse({
-        files: { files: {}, type: "inline" },
-        options: { files: {} },
+        createWorker: { files: { files: {}, type: "inline" }, unknown: true },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts worker-bundler app entry points and serializable build options", () => {
+    expect(
+      DynamicWorkerSource.parse({
+        createApp: {
+          assetConfig: {
+            headers: { "/assets/*": { set: { "x-app": "todo" } } },
+            not_found_handling: "single-page-application",
+          },
+          assets: { "/robots.txt": "User-agent: *" },
+          bundle: true,
+          client: ["apps/todo/client/index.tsx", "apps/todo/client/admin.tsx"],
+          conditions: ["browser", "worker"],
+          define: { __DEV__: "false" },
+          externals: ["https://esm.sh/"],
+          files: { repoPath: "/repos/config", type: "repo" },
+          jsx: "automatic",
+          jsxImportSource: "react",
+          loader: { ".svg": "text" },
+          minify: true,
+          registry: "https://registry.npmjs.org",
+          server: "apps/todo/server/index.ts",
+          sourcemap: true,
+          target: "es2022",
+        },
+      }),
+    ).toMatchObject({
+      createApp: {
+        assets: { "/robots.txt": "User-agent: *" },
+        client: ["apps/todo/client/index.tsx", "apps/todo/client/admin.tsx"],
+        server: "apps/todo/server/index.ts",
+      },
+    });
+
+    expect(() =>
+      DynamicWorkerSource.parse({
+        createApp: {
+          __dangerouslyUseEsBuildPluginsDoNotUseOrYouWillBeFired: [],
+          files: { repoPath: "/repos/config", type: "repo" },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("requires exactly one upstream build function", () => {
+    expect(() => DynamicWorkerSource.parse({})).toThrow();
+    expect(() =>
+      DynamicWorkerSource.parse({
+        createApp: { files: { files: {}, type: "inline" } },
+        createWorker: { files: { files: {}, type: "inline" } },
       }),
     ).toThrow();
   });

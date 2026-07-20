@@ -1,96 +1,107 @@
 # Dynamic worker builds
 
-Dynamic Workers build inside the OS Worker with
-`@cloudflare/worker-bundler`. There is no build service, container, shell,
-package manager, Wrangler subprocess, or project build command in this path.
+Dynamic Workers are compiled by a small workerd sidecar whose public RPC
+accepts source values and returns Worker Loader values. The OS Worker never
+imports the 13 MiB esbuild Wasm module. There is no container, shell,
+filesystem checkout, Wrangler subprocess, or project build command in this
+path.
 
-## Ordinary Workers
+## Thin worker-bundler adapter
 
-`createWorker` receives the selected repo snapshot, the entry point, optional
-minification, and the platform's `iterate/*` virtual modules. It follows local
-imports and installs production dependencies declared in the root
-`package.json` into an in-memory filesystem before producing Worker Loader
-modules.
+A recipe contains exactly one property named after the upstream function:
+`createWorker` or `createApp`. Its value has the same shape as that function's
+options. The one substitution is `files`: it may point at an inline map or a
+project repo snapshot because a custom worker-bundler `FileSystem` object
+cannot cross the service-binding boundary.
 
-This is a bundler, not a general build environment. It does not run lifecycle
-scripts, install dev dependencies, execute Vite or another framework CLI, or
-honour a package-manager lockfile. Registry ranges are resolved when a cache
-miss builds, so artifacts remain scoped to the owning project.
+On a cache miss OS resolves that descriptor to `Record<string, string>` and
+puts the map back into the same options object. Paths are not rewritten. OS
+then makes exactly the call the recipe names:
 
-## Basic browser apps
+- `createWorker({ ...source.createWorker, files: resolvedFiles })`; or
+- `createApp({ ...source.createApp, files: resolvedFiles })`.
 
-Setting `clientEntryPoint: "client.tsx"` selects the intentionally narrow app
-path. After `rootDir` is applied, the complete app must be exactly:
+There are no OS rules for the number or names of files. Entry points may be
+explicit or left for worker-bundler to detect from wrangler config,
+`package.json`, or its defaults. A `package.json` is passed through untouched;
+worker-bundler attempts to install the root manifest's `dependencies` from the
+selected npm registry before resolving the graph.
 
-```text
-server.tsx
-client.tsx
+Ordinary Worker builds additionally receive these platform-owned virtual
+modules by exact specifier:
+
+- `@iterate-com/capnweb`
+- `iterate/live-state`
+- `iterate/processors`
+- `iterate/processors/cloudflare`
+- `iterate/sdk`
+
+The public data options mirror worker-bundler's serializable knobs: `bundle`,
+`externals`, `target`, `minify`, `sourcemap`, `registry`, `jsx`,
+`jsxImportSource`, `define`, `loader`, and `conditions`, plus the relevant
+worker or app entry points, `createWorker.virtualModules`, and
+`createApp.assets`/`assetConfig`. The library's esbuild-plugin escape hatch,
+custom `FileSystem` objects, and binary `ArrayBuffer` assets are not exposed
+because they cannot cross the public data boundary unchanged.
+
+## Seeded app example
+
+Todo and Guestbook deliberately use only `server.tsx` and `client.tsx`, but
+that is their example layout, not the build contract. Their refs spell out the
+ordinary `createApp` options:
+
+```ts
+source: {
+  createApp: {
+    bundle: false,
+    client: "apps/todo/client.tsx",
+    files: { type: "repo", repoPath: "/repos/config" },
+    server: "apps/todo/server.tsx",
+  },
+}
 ```
 
-OS calls `createApp` directly. Its server `bundle` option is disabled: the one
-server file is only transformed from TypeScript to JavaScript. The local client
-TSX is bundled into `/client.js` (the seeded refs request minification), which
-OS stores and serves as a host-side text asset. The client still needs this one
-esbuild pass because browsers cannot execute TSX. Imports under
-`https://esm.sh/` remain browser ESM imports, so that pass only transforms and
-minifies the one local file; React and ReactDOM are fetched by the browser and
-are never copied into the client asset or the dynamic Worker.
+With `bundle: false`, worker-bundler transforms the dependency-free server as
+separate modules while still compiling each client entry into a browser
+bundle. The direct `esm.sh` React imports remain external browser imports.
+`createApp` may return any number of client bundles and explicit text assets.
+OS caches the returned content, manifest, config, and Wrangler compatibility
+settings, then delegates requests to worker-bundler's own
+`handleAssetRequest` before falling through to the server Worker. HTML routing,
+redirects, headers, conditional requests, cache policy, and SPA fallbacks
+therefore remain worker-bundler behavior rather than an OS imitation. The
+platform still injects the Iterate status overlay into eligible HTML
+responses.
 
-The seeded Todo and Guestbook apps use this shape. They have no app-local
-`package.json`, framework config, generated router, Tailwind transform, shim,
-or dependency installation.
+## Cache and failure model
 
-## Deliberate limits
+The build key includes normalized source identity, all build options,
+compatibility settings, bundler version, artifact schema version, and (for
+ordinary Workers) the complete generated platform-module contents. Identical
+requests share cached artifacts across projects. With an unlocked dependency
+range, the first successful registry resolution becomes that key's cached
+artifact until expiry.
 
-The basic app path does not support:
+KV stores one JSON record per key: either the complete modules/assets (30-day
+TTL) or a bounded deterministic build error (15-minute TTL). Infrastructure
+errors from repo reads, KV, the service binding, or the sidecar runtime are not
+classified as source failures and are never written to the failure cache.
+Duplicate cold builds are permitted and converge on the same record.
 
-- more source files or multiple browser entries;
-- npm dependencies, local helper modules, or custom virtual modules;
-- binary or general static assets (only the emitted text client bundle);
-- Vite, TanStack Start, Tailwind compilation, framework adapters, plugins, or
-  arbitrary project build commands;
-- source maps, server-side bundling, or configurable asset routing.
+Browser fetches may stop waiting at a small budget while the same promise
+continues under `waitUntil`; callers see the self-refreshing building page.
+There is deliberately no last-good artifact, stale serving, distributed lock,
+or refresh policy.
 
-Use an ordinary dynamic Worker for a multi-file server graph. A richer browser
-application needs a separately designed build product rather than compatibility
-shims in this path.
+## Actual boundaries
 
-## Measured cost
+`@cloudflare/worker-bundler` 0.2.1 is experimental and runs only in workerd.
+Its registry client, package-format support, resolver, esbuild Wasm startup,
+CPU/memory limits, and output behavior are the build system's limits. There is
+no Vite, Tailwind CLI, TanStack Start adapter, lifecycle-script runner, native
+module toolchain, or compatibility shim around it.
 
-Measured on 2026-07-20 with `@cloudflare/worker-bundler` 0.2.1 and the final
-seed sources in a disposable local Wrangler/workerd process. Cold results are
-four first calls in four fresh isolates; warm results are five subsequent calls
-in one isolate. These measure the dynamic import plus `createApp`, not repo I/O
-or artifact-cache lookup.
-
-| App       | Cold mean (range) | Warm median (range) | Server output | Client output |
-| --------- | ----------------- | ------------------- | ------------- | ------------- |
-| Todo      | 175 ms (173–178)  | 13 ms (12–21)       | 3,672 bytes   | 2,005 bytes   |
-| Guestbook | 175 ms (171–178)  | 13 ms (11–21)       | 3,193 bytes   | 1,770 bytes   |
-
-Each build emitted one `server.js`, one `/client.js`, no warnings, and a client
-whose first statements import React and ReactDOM directly from `https://esm.sh/`.
-
-A production-shaped OS build and Wrangler dry run reported a 31,517.55 KiB
-raw / 8,434.11 KiB gzip Worker upload. The worker-bundler esbuild module is a
-13,596 KiB raw / 3,761,209 byte gzip asset within that upload. Ordinary
-`createWorker` bundles use the same module, so the package's public entry point
-cannot shed that cost while OS retains ordinary Worker bundling. This leaves
-limited compressed-upload headroom; check the dry-run size on every bundler
-upgrade as well as re-running the dynamic-build timing benchmark.
-
-## Runtime and cache
-
-Both `createWorker` and `createApp` require workerd; they do not run under
-Node.js. Successful loader modules and browser assets are stored separately in
-the content-addressed KV artifact cache. Warnings are treated as build failures,
-and incomplete cached artifacts are misses. Browser assets never enter the
-Worker Loader isolate.
-
-`@cloudflare/worker-bundler` is currently experimental upstream and explicitly
-not recommended for production use. Its API, registry installer, module
-resolution, WebAssembly startup cost, and Worker CPU/memory limits are the hard
-boundary of this implementation; upgrades must change the build-key version and
-re-run the real-workerd benchmarks. The behavior described here is pinned to
-the upstream [`createApp` implementation at 0.2.1](https://github.com/cloudflare/agents/blob/3e8963a7/packages/worker-bundler/src/app.ts)
-and its [package README](https://github.com/cloudflare/agents/tree/3e8963a7/packages/worker-bundler).
+Warnings are preserved as successful build metadata and logged; OS does not
+reinterpret them as errors. The JSON artifact cache currently accepts text
+assets and JSON-safe Worker Loader modules. An ArrayBuffer asset/module is an
+explicit build failure until the cache grows a binary encoding.

@@ -26,16 +26,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "GitHub pull-request router and structural-review policy are deliberately\n" +
       "inline in `worker.ts`: it is a complete, copyable userspace example. Extract\n" +
       "local modules only when project-specific logic earns them. The worker is built\n" +
-      "by the platform's worker build pipeline: multi-file TypeScript works (the\n" +
-      "bundler follows imports), and npm dependencies declared in `package.json` are\n" +
-      "installed at build time. The platform's capability types and worker base\n" +
-      "classes come from the `iterate` package — `import { IterateWorkerEntrypoint,\n" +
-      "IterateDurableObject, type StreamEvent } from \"iterate/sdk\"`. It's a\n" +
-      "devDependency here: the platform supplies the runtime `iterate/*` subpaths to\n" +
-      "ordinary worker builds as virtual modules, so the build never installs them; run\n" +
-      "`npm install` to get typechecking and editor support. Shared external runtimes\n" +
-      "used by those modules, such as `@iterate-com/capnweb`, remain ordinary\n" +
-      "dependencies so app code and the platform module share one implementation.\n" +
+      "by the platform's worker build pipeline: it passes the repo file map and build\n" +
+      "options to `@cloudflare/worker-bundler`, which follows local imports and\n" +
+      "attempts to install dependencies declared in `package.json`. The platform's\n" +
+      "capability types and worker base classes come from the `iterate` package —\n" +
+      "`import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from\n" +
+      "\"iterate/sdk\"`. It's a devDependency here: the platform supplies the runtime\n" +
+      "`iterate/*` subpaths and `@iterate-com/capnweb` to ordinary worker builds, so\n" +
+      "`npm install` is only for local typechecking and editor support.\n" +
       "\n" +
       "The root project worker and its in-file examples extend one of the two SDK\n" +
       "base classes: `IterateWorkerEntrypoint` (stateless) or\n" +
@@ -70,14 +68,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`CounterApp`'s `/ws` route is the seeded WebSocket proof-of-concept; copy its\n" +
       "shape for anything real-time. Method calls on apps\n" +
       "(`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP\n" +
-      "rides the fetch lane.\n" +
+      "rides the fetch lane. App refs use `source.createApp` directly with ordinary\n" +
+      "worker-bundler `server` and `client` entry-point options; its repo-aware\n" +
+      "`files` option is the only platform adaptation, and file paths reach\n" +
+      "worker-bundler unchanged.\n" +
       "\n" +
       "`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app\n" +
       "shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per\n" +
       "app. The client entry is served separately and imports React directly from\n" +
       "`esm.sh`; those browser dependencies are not copied into the Worker bundle.\n" +
-      "Keep this path dependency-light. It is not a hidden Vite or full-stack\n" +
-      "framework pipeline.\n" +
+      "This is an example, not a platform file-layout rule. The apps deliberately\n" +
+      "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
+      "can inject the small Iterate status overlay in the corner.\n" +
       "\n" +
       "`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch\n" +
       "HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an\n" +
@@ -87,7 +89,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "default-export worker class: the platform dispatches dotted\n" +
       "`itx.worker.<path>` calls as one flattened `invokeCapability({ path, args })`\n" +
       "that the base class walks in userland, so a getter can hand back a whole\n" +
-      "vendor SDK (installed from `package.json`) in a single round trip. Built-in\n" +
+      "platform-supplied SDK surface in a single round trip. Built-in\n" +
       "integrations (Slack, Gmail, GitHub, Telegram, Waitrose) already live at\n" +
       "`itx.integrations.<slug>.get()` (or `.get(\"<connection>\")` when the exact\n" +
       "account matters) — reach for a worker getter when\n" +
@@ -139,15 +141,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "This repo is seeded at project creation by the repo stream processor.\n" +
       "\n" +
       "The project worker entrypoint is `worker.ts` (TypeScript). The worker build\n" +
-      "pipeline bundles it — together with any files it imports and the npm\n" +
-      "dependencies in `package.json` — into a loader-ready worker on first use, so\n" +
-      "committing a change here changes the running worker on its next use.\n" +
+      "pipeline bundles it and the files it imports into loader-ready code on first\n" +
+      "use, so committing a change here changes the running worker on its next use.\n" +
+      "The platform passes this repo's files and build options directly to\n" +
+      "`@cloudflare/worker-bundler`; when `package.json` declares dependencies, that\n" +
+      "library attempts to install and bundle them.\n" +
       "\n" +
       "`apps/todo` and `apps/guestbook` are deliberately basic browser examples.\n" +
-      "Each contains only `server.tsx` and `client.tsx`: the server is a Durable\n" +
-      "Object, and the client is a separately served browser bundle whose React\n" +
-      "imports remain direct `esm.sh` URL imports. There is no app-local npm install,\n" +
-      "Vite config, router generator, or full-stack framework adapter.\n" +
+      "Each contains only `server.tsx` and `client.tsx`: the server exports a\n" +
+      "Durable Object and the client becomes a separately served browser module. JSX is\n" +
+      "compiled with the classic transform, so the explicit React imports remain\n" +
+      "direct `esm.sh` URLs instead of becoming npm dependencies. There is no\n" +
+      "app-local install, Vite config, router generator, or framework adapter. Iterate\n" +
+      "injects its small status overlay into the HTML response in production.\n" +
+      "Their two-file layout is only an example: app refs may choose arbitrary server\n" +
+      "and client entry points from the complete `files` map passed to the bundler.\n" +
       "\n" +
       "## Authenticated web apps\n" +
       "\n" +
@@ -294,7 +302,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          {entries.map((entry) => (\n" +
       "            <article key={entry.id}>\n" +
       "              <strong>{entry.name}</strong>{\" \"}\n" +
-      "              <time dateTime={entry.signedAt}>{new Date(entry.signedAt).toLocaleString()}</time>\n" +
+      "              <time dateTime={entry.signedAt}>{entry.signedAt}</time>\n" +
       "              <p>{entry.message}</p>\n" +
       "            </article>\n" +
       "          ))}\n" +
@@ -391,13 +399,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  </head>\n" +
       "  <body>\n" +
       "    <main id=\"root\"><p>Loading…</p></main>\n" +
-      "    <script type=\"module\" src=\"/client.js\"></script>\n" +
+      "    <script type=\"module\" src=\"/apps/guestbook/client.js\"></script>\n" +
       "  </body>\n" +
       "</html>`,\n" +
       "      {\n" +
       "        headers: {\n" +
-      "          \"content-security-policy\":\n" +
-      "            \"default-src 'self'; script-src 'self' https://esm.sh; style-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\",\n" +
       "          \"content-type\": \"text/html; charset=utf-8\",\n" +
       "          \"x-content-type-options\": \"nosniff\",\n" +
       "        },\n" +
@@ -636,13 +642,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  </head>\n" +
       "  <body>\n" +
       "    <main id=\"root\"><p>Loading…</p></main>\n" +
-      "    <script type=\"module\" src=\"/client.js\"></script>\n" +
+      "    <script type=\"module\" src=\"/apps/todo/client.js\"></script>\n" +
       "  </body>\n" +
       "</html>`,\n" +
       "      {\n" +
       "        headers: {\n" +
-      "          \"content-security-policy\":\n" +
-      "            \"default-src 'self'; script-src 'self' https://esm.sh; style-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\",\n" +
       "          \"content-type\": \"text/html; charset=utf-8\",\n" +
       "          \"x-content-type-options\": \"nosniff\",\n" +
       "        },\n" +
@@ -659,12 +663,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports its runtime subpaths: the platform supplies those modules to ordinary worker builds, so the devDependency is only for typechecking and editor support after `npm install`.\",\n" +
-      "  \"dependencies\": {\n" +
-      "    \"@iterate-com/capnweb\": \"0.10.0\"\n" +
-      "  },\n" +
+      "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
+      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"typescript\": \"^5.9.3\"\n" +
       "  }\n" +
@@ -712,12 +714,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  durableWorkerKey: \"app-todo\",\n" +
       "  path: \"/\",\n" +
       "  source: {\n" +
-      "    files: repoFiles,\n" +
-      "    options: {\n" +
-      "      clientEntryPoint: \"client.tsx\",\n" +
-      "      entryPoint: \"server.tsx\",\n" +
-      "      minify: true,\n" +
-      "      rootDir: \"apps/todo\",\n" +
+      "    createApp: {\n" +
+      "      bundle: false,\n" +
+      "      client: \"apps/todo/client.tsx\",\n" +
+      "      files: repoFiles,\n" +
+      "      server: \"apps/todo/server.tsx\",\n" +
       "    },\n" +
       "  },\n" +
       "  type: \"stateful\",\n" +
@@ -727,12 +728,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  durableWorkerKey: \"app-guestbook\",\n" +
       "  path: \"/\",\n" +
       "  source: {\n" +
-      "    files: repoFiles,\n" +
-      "    options: {\n" +
-      "      clientEntryPoint: \"client.tsx\",\n" +
-      "      entryPoint: \"server.tsx\",\n" +
-      "      minify: true,\n" +
-      "      rootDir: \"apps/guestbook\",\n" +
+      "    createApp: {\n" +
+      "      bundle: false,\n" +
+      "      client: \"apps/guestbook/client.tsx\",\n" +
+      "      files: repoFiles,\n" +
+      "      server: \"apps/guestbook/server.tsx\",\n" +
       "    },\n" +
       "  },\n" +
       "  type: \"stateful\",\n" +
@@ -806,8 +806,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        path: \"/\",\n" +
       "        entrypoint: \"HelloApp\",\n" +
       "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
+      "          createWorker: {\n" +
+      "            entryPoint: \"worker.ts\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "          },\n" +
       "        },\n" +
       "      });\n" +
       "    }\n" +
@@ -817,8 +819,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        path: \"/\",\n" +
       "        entrypoint: \"InternalApp\",\n" +
       "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
+      "          createWorker: {\n" +
+      "            entryPoint: \"worker.ts\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "          },\n" +
       "        },\n" +
       "      });\n" +
       "    }\n" +
@@ -835,8 +839,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        className: \"CounterApp\",\n" +
       "        durableWorkerKey: \"app-counter\",\n" +
       "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
+      "          createWorker: {\n" +
+      "            entryPoint: \"worker.ts\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "          },\n" +
       "        },\n" +
       "      });\n" +
       "    }\n" +

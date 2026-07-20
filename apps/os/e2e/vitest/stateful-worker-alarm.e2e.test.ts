@@ -38,10 +38,12 @@ test(
       // an RPC method name, and the SDK base class carries that dispatcher.
       // The `iterate/sdk` virtual module only exists in bundled builds.
       source: {
-        files: {
-          type: "inline",
+        createWorker: {
+          entryPoint: "alarm-probe.js",
           files: {
-            "alarm-probe.js": `
+            type: "inline",
+            files: {
+              "alarm-probe.js": `
                 import { IterateDurableObject } from "iterate/sdk";
 
                 export class AlarmProbe extends IterateDurableObject {
@@ -69,9 +71,9 @@ test(
                   }
                 }
               `,
+            },
           },
         },
-        options: { entryPoint: "alarm-probe.js" },
       },
       type: "stateful",
     };

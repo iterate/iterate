@@ -41,7 +41,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
 // app host rides on the HTTP Host header via node:http (see
 // fetchWithHostHeader); against a deployed preview the real wildcard
 // hostnames are used.
-test("routes seeded apps by host: stateless hello and stateful counter", async () => {
+test("routes seeded apps by host and serves worker-bundler browser assets", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   const slug = `multi-app-${marker}`;
 
@@ -117,6 +117,27 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   await fetchApp(`counter--${slug}`, { method: "POST", path: "/increment" });
   const read = await fetchApp(`counter--${slug}`);
   expect(await read.text()).toContain('count: <span id="n">2</span>');
+
+  // createApp keeps the server in transform-only mode, compiles the browser
+  // entry at its unchanged repo path, and lets worker-bundler's asset handler
+  // serve the result. URL imports remain external instead of copying React
+  // into the generated asset.
+  const guestbook = await fetchAppReady(`guestbook--${slug}`);
+  expect(guestbook).toMatchObject({ status: 200 });
+  const guestbookHtml = await guestbook.text();
+  expect(guestbookHtml).toContain("<title>Guestbook</title>");
+  expect(guestbookHtml).toContain(
+    '<script type="module" src="/apps/guestbook/client.js"></script>',
+  );
+  expect(guestbookHtml).toContain("__iterateWorkerOverlay");
+  const guestbookClient = await fetchApp(`guestbook--${slug}`, {
+    path: "/apps/guestbook/client.js",
+  });
+  expect(guestbookClient).toMatchObject({ status: 200 });
+  expect(guestbookClient.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
+  const guestbookClientSource = await guestbookClient.text();
+  expect(guestbookClientSource).toContain("https://esm.sh/react@19.2.4");
+  expect(guestbookClientSource).toContain("https://esm.sh/react-dom@19.2.4/client");
 
   // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.ts" });

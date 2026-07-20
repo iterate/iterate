@@ -11,7 +11,8 @@
 // (StreamProcessor.runnerDriver), and private-field access requires the
 // instance to be branded by the SAME class object. The live-state engine +
 // rpc retention are inlined here (nothing instance-shares them);
-// `cloudflare:workers` and `zod` stay external as in every worker bundle.
+// Cap'n Web stays external so every platform module shares the same instance;
+// `cloudflare:workers` stays external because workerd provides it.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import esbuild from "esbuild";
@@ -27,10 +28,11 @@ const bundled = new Set(
 );
 
 const result = await esbuild.build({
+  alias: { capnweb: "@iterate-com/capnweb" },
   bundle: true,
   conditions: ["workerd", "worker", "import"],
   entryPoints: [path.join(processorsDir, "cloudflare.ts")],
-  external: ["cloudflare:workers", "zod"],
+  external: ["@iterate-com/capnweb", "cloudflare:workers"],
   format: "esm",
   legalComments: "none",
   mainFields: ["module", "main"],

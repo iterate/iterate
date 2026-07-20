@@ -1,261 +1,130 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyRootDir, canonicalWorkerBuildOptions, executeWorkerBuild } from "./build-backend.ts";
+import { executeWorkerBuild } from "./build-backend.ts";
+import type { DynamicWorkerSource } from "./schemas.ts";
 
-const { createApp, createWorker } = vi.hoisted(() => ({
-  createApp: vi.fn(),
-  createWorker: vi.fn(),
-}));
-
-vi.mock("@cloudflare/worker-bundler", () => ({ createApp, createWorker }));
+const createApp = vi.fn();
+const createWorker = vi.fn();
+const workerBundler = { createApp, createWorker };
+const inlineFiles = { files: { "worker.ts": "source" }, type: "inline" } as const;
 
 beforeEach(() => {
   createApp.mockReset();
   createWorker.mockReset();
-  createWorker.mockResolvedValue({ mainModule: "bundle.js", modules: { "bundle.js": "built" } });
+  createWorker.mockResolvedValue({
+    mainModule: "bundle.js",
+    modules: { "bundle.js": "built" },
+    warnings: [],
+    wranglerConfig: { compatibilityDate: "2026-07-01" },
+  });
 });
 
+function execute(
+  files: Record<string, string>,
+  source: DynamicWorkerSource = {
+    createWorker: { entryPoint: "worker.ts", files: inlineFiles },
+  },
+) {
+  return executeWorkerBuild({ files, source, workerBundler });
+}
+
 describe("executeWorkerBuild", () => {
-  it("uses worker-bundler directly with only the supported options", async () => {
-    const options = canonicalWorkerBuildOptions({
-      entryPoint: "src/index.ts",
-      minify: true,
-      rootDir: "apps/basic",
-    });
-    await expect(
-      executeWorkerBuild({
-        files: {
-          "apps/basic/package.json": "{}",
-          "apps/basic/src/index.ts": "export default {};",
-          "outside.ts": "export {};",
-        },
-        options,
-      }),
-    ).resolves.toEqual({
+  it("calls createWorker with the resolved file map and platform virtual modules", async () => {
+    const source: DynamicWorkerSource = {
+      createWorker: {
+        bundle: false,
+        conditions: ["workerd"],
+        entryPoint: "apps/basic/src/index.ts",
+        files: { repoPath: "/repos/config", type: "repo" },
+        virtualModules: { "virtual:user": "export const user = true;" },
+      },
+    };
+    const files = {
+      "apps/basic/package.json": JSON.stringify({ dependencies: { hono: "latest" } }),
+      "apps/basic/src/helper.ts": "export const value = 1;",
+      "apps/basic/src/index.ts": "export default {};",
+      "outside.ts": "export {};",
+    };
+
+    await expect(execute(files, source)).resolves.toEqual({
+      assetManifest: {},
       assets: {},
       mainModule: "bundle.js",
       modules: { "bundle.js": "built" },
+      warnings: [],
+      wranglerConfig: { compatibilityDate: "2026-07-01" },
     });
-
-    expect(createWorker).toHaveBeenCalledOnce();
     expect(createWorker).toHaveBeenCalledWith({
-      entryPoint: "src/index.ts",
-      files: {
-        "package.json": "{}",
-        "src/index.ts": "export default {};",
-      },
-      minify: true,
-      virtualModules: options.virtualModules,
-    });
-  });
-
-  it("builds one external-import browser entry as a separate text asset", async () => {
-    createApp.mockResolvedValue({
-      assets: { "/client.js": 'import React from"https://esm.sh/react@19.2.4";' },
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "server" },
-    });
-    const options = canonicalWorkerBuildOptions({
-      clientEntryPoint: "client.tsx",
-      entryPoint: "server.tsx",
-      minify: true,
-      rootDir: "apps/todo",
-    });
-    expect(options).toMatchObject({ bundle: false, entryPoint: "server.tsx" });
-    expect(options.virtualModules).toBeUndefined();
-
-    await expect(
-      executeWorkerBuild({
-        files: {
-          "apps/todo/client.tsx": "export {};",
-          "apps/todo/server.tsx": "export class TodoApp {};",
-          "worker.ts": "outside",
-        },
-        options,
-      }),
-    ).resolves.toEqual({
-      assets: { "/client.js": 'import React from"https://esm.sh/react@19.2.4";' },
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "server" },
-    });
-
-    expect(createWorker).not.toHaveBeenCalled();
-    expect(createApp).toHaveBeenCalledWith({
       bundle: false,
-      client: "client.tsx",
-      externals: ["https://esm.sh/"],
-      files: {
-        "client.tsx": "export {};",
-        "server.tsx": "export class TodoApp {};",
+      conditions: ["workerd"],
+      entryPoint: "apps/basic/src/index.ts",
+      files,
+      virtualModules: {
+        "@iterate-com/capnweb": expect.any(String),
+        "iterate/live-state": expect.any(String),
+        "iterate/processors": expect.any(String),
+        "iterate/processors/cloudflare": expect.any(String),
+        "iterate/sdk": expect.any(String),
+        "virtual:user": "export const user = true;",
       },
-      minify: true,
-      server: "server.tsx",
-    });
-  });
-
-  it("keeps the app path to exactly one server and one client file", async () => {
-    await expect(
-      executeWorkerBuild({
-        files: {
-          "client.tsx": "export {};",
-          "helper.ts": "export const hiddenDependency = true;",
-          "server.tsx": "export class TodoApp {};",
-        },
-        options: canonicalWorkerBuildOptions({
-          clientEntryPoint: "client.tsx",
-          entryPoint: "server.tsx",
-        }),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("remove: helper.ts"),
-      name: "WorkerBuildFailedError",
     });
     expect(createApp).not.toHaveBeenCalled();
   });
 
-  it("requires the conventional server entry on the app path", async () => {
-    await expect(
-      executeWorkerBuild({
-        files: { "client.tsx": "", "worker.ts": "" },
-        options: canonicalWorkerBuildOptions({
-          clientEntryPoint: "client.tsx",
-          entryPoint: "worker.ts",
-        }),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining('entryPoint: "server.tsx"'),
-      name: "WorkerBuildFailedError",
-    });
-    expect(createApp).not.toHaveBeenCalled();
-  });
-
-  it("rejects opting the basic app path back into server bundling", async () => {
-    await expect(
-      executeWorkerBuild({
-        files: { "client.tsx": "", "server.tsx": "" },
-        options: canonicalWorkerBuildOptions({
-          bundle: true,
-          clientEntryPoint: "client.tsx",
-          entryPoint: "server.tsx",
-        }),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("requires bundle: false"),
-      name: "WorkerBuildFailedError",
-    });
-    expect(createApp).not.toHaveBeenCalled();
-  });
-
-  it("rejects custom virtual modules on the deliberately basic app path", async () => {
+  it("calls createApp with an arbitrary repo tree and package.json unchanged", async () => {
     createApp.mockResolvedValue({
-      assets: { "/client.js": "built" },
+      assetManifest: {
+        "/client.js": { contentType: "application/javascript", etag: "abc" },
+      },
+      assets: { "/client.js": "client" },
       mainModule: "bundle.js",
-      modules: { "bundle.js": "server" },
+      modules: { "bundle.js": "server", "shared.js": "shared" },
+      warnings: ["upstream warning"],
     });
-    await expect(
-      executeWorkerBuild({
-        files: { "client.tsx": "", "server.tsx": "" },
-        options: canonicalWorkerBuildOptions({
-          clientEntryPoint: "client.tsx",
-          entryPoint: "server.tsx",
-          virtualModules: { "custom:module": "export default 1" },
-        }),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("does not support custom virtualModules"),
-      name: "WorkerBuildFailedError",
-    });
-  });
+    const source: DynamicWorkerSource = {
+      createApp: {
+        client: "apps/todo/client/index.tsx",
+        files: { repoPath: "/repos/config", type: "repo" },
+        jsx: "automatic",
+        server: "apps/todo/server/index.ts",
+      },
+    };
+    const files = {
+      "apps/todo/client/index.tsx": "client",
+      "apps/todo/package.json": JSON.stringify({ dependencies: { react: "latest" } }),
+      "apps/todo/server/index.ts": "server",
+      "apps/todo/shared/model.ts": "shared",
+      "worker.ts": "outside",
+    };
 
-  it("rejects binary app assets instead of silently corrupting them", async () => {
-    createApp.mockResolvedValue({
-      assets: { "/client.js": new ArrayBuffer(4) },
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "server" },
+    await expect(execute(files, source)).resolves.toMatchObject({
+      assets: { "/client.js": "client" },
+      warnings: ["upstream warning"],
     });
-    await expect(
-      executeWorkerBuild({
-        files: { "client.tsx": "", "server.tsx": "" },
-        options: canonicalWorkerBuildOptions({
-          clientEntryPoint: "client.tsx",
-          entryPoint: "server.tsx",
-        }),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("only text client bundles are supported"),
-      name: "WorkerBuildFailedError",
+    expect(createApp).toHaveBeenCalledWith({
+      client: "apps/todo/client/index.tsx",
+      files,
+      jsx: "automatic",
+      server: "apps/todo/server/index.ts",
     });
-  });
-
-  it("rejects app output other than the one host-served client asset", async () => {
-    createApp.mockResolvedValue({
-      assets: { "/client.js": "built", "/extra.js": "unexpected" },
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "server" },
-    });
-    await expect(
-      executeWorkerBuild({
-        files: { "client.tsx": "", "server.tsx": "" },
-        options: canonicalWorkerBuildOptions({
-          clientEntryPoint: "client.tsx",
-          entryPoint: "server.tsx",
-        }),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("exactly /client.js"),
-      name: "WorkerBuildFailedError",
-    });
-  });
-
-  it("classifies every bundler warning as a build failure", async () => {
-    createWorker.mockResolvedValue({
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "built" },
-      warnings: ["dependency could not be installed"],
-    });
-    await expect(
-      executeWorkerBuild({
-        files: { "worker.ts": "export default {};" },
-        options: canonicalWorkerBuildOptions({}),
-      }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("dependency could not be installed"),
-      name: "WorkerBuildFailedError",
-    });
-  });
-
-  it("rejects non-inline bundle:false instead of ignoring virtual modules", async () => {
-    await expect(
-      executeWorkerBuild({
-        files: { "worker.ts": "export default {};" },
-        options: canonicalWorkerBuildOptions({ bundle: false }),
-      }),
-    ).rejects.toMatchObject({ name: "WorkerBuildFailedError" });
     expect(createWorker).not.toHaveBeenCalled();
   });
-});
 
-describe("applyRootDir", () => {
-  it("drops files outside the selected app and re-roots matching files", () => {
-    expect(
-      applyRootDir(
-        {
-          "apps/todo/package.json": "{}",
-          "apps/todo/src/worker.ts": "source",
-          "worker.ts": "outside",
-        },
-        "/apps/todo/",
-      ),
-    ).toEqual({ "package.json": "{}", "src/worker.ts": "source" });
+  it("does not pre-parse package.json", async () => {
+    await execute({ "package.json": "worker-bundler gets to decide", "worker.ts": "source" });
+    expect(createWorker).toHaveBeenCalledOnce();
   });
 
-  it.each(["", "/", "../todo", "apps/./todo", "apps\\todo"])(
-    "rejects unsafe rootDir %j",
-    (rootDir) => {
-      expect(() => applyRootDir({ "worker.ts": "" }, rootDir)).toThrow(/safe relative directory/);
-    },
-  );
+  it("classifies only named sidecar build errors as deterministic failures", async () => {
+    const buildFailure = new Error("Could not resolve package");
+    buildFailure.name = "WorkerBundlerBuildError";
+    createWorker.mockRejectedValueOnce(buildFailure);
+    await expect(execute({ "worker.ts": "export default {};" })).rejects.toMatchObject({
+      message: "Could not resolve package",
+      name: "WorkerBuildFailedError",
+    });
 
-  it("rejects a rootDir that selects no files", () => {
-    expect(() => applyRootDir({ "worker.ts": "" }, "apps/missing")).toThrow(/matches no files/);
+    const transportFailure = new Error("service binding disconnected");
+    createWorker.mockRejectedValueOnce(transportFailure);
+    await expect(execute({ "worker.ts": "export default {};" })).rejects.toBe(transportFailure);
   });
 });

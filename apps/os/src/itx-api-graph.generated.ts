@@ -2074,7 +2074,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StatefulDynamicWorkerRef",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Stateful workers are Durable Object class exports hosted by\n * `StatefulWorkerDurableObject`.\n *\n * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is\n * not a source cache key: source changes deliberately affect the next use of the\n * same durable worker identity.\n */\nexport type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {\n  type: "stateful";\n  className: string;\n  durableWorkerKey: string;\n  /**\n   * What a call does when the worker\'s source changed since the running\n   * version. `"block"` (default) waits for the rebuild — commit-then-call\n   * sees the new code. `"stale-while-rebuild"` keeps answering with the\n   * running version and swaps to the new build in the background: better\n   * availability, but the next few calls after a commit may see old code.\n   * The policy rides the REF, not the durable identity — callers sharing one\n   * `durableWorkerKey` should agree on it (and on `source`), or each call\n   * flips the facet to its own version.\n   */\n  updatePolicy?: "block" | "stale-while-rebuild";\n};',
+      '/**\n * Stateful workers are Durable Object class exports hosted by\n * `StatefulWorkerDurableObject`.\n *\n * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is\n * not a source cache key: source changes deliberately affect the next use of the\n * same durable worker identity.\n */\nexport type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {\n  type: "stateful";\n  className: string;\n  durableWorkerKey: string;\n};',
     summary:
       "Stateful workers are Durable Object class exports hosted by `StatefulWorkerDurableObject`.",
     memberSummaries: {},
@@ -2398,11 +2398,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerSource",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Declarative source for a dynamic worker: an orthogonal file source plus\n * Cloudflare-compatible build options.\n *\n * Materialization resolves `files` to a file map and builds it through\n * Cloudflare's worker bundler; the loader-ready output is cached by a\n * deterministic build key, so the same source+options never builds twice.\n */\nexport type DynamicWorkerSource = {\n  files: WorkerFileSource;\n  options?: WorkerBuildOptions;\n};",
-    summary:
-      "Declarative source for a dynamic worker: an orthogonal file source plus Cloudflare-compatible build options.",
+      "/**\n * One direct worker-bundler call. The wrapper names deliberately match the\n * upstream functions; OS only resolves the repo-aware `files` value, adds its\n * platform virtual modules to `createWorker`, and caches the returned build.\n */\nexport type DynamicWorkerSource =\n  | { createApp: WorkerBundlerCreateAppOptions }\n  | { createWorker: WorkerBundlerCreateWorkerOptions };",
+    summary: "One direct worker-bundler call.",
     memberSummaries: {},
-    referencedTypeNames: ["WorkerFileSource", "WorkerBuildOptions"],
+    referencedTypeNames: ["WorkerBundlerCreateAppOptions", "WorkerBundlerCreateWorkerOptions"],
   },
   {
     name: "WorkspaceChange",
@@ -2433,20 +2432,57 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "WorkerBundlerCreateAppOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable `createApp` input. The generated browser bundles and explicit\n * text assets are retained in the host and served by worker-bundler's own\n * asset handler. ArrayBuffer assets and the esbuild plugin callback are the\n * only upstream inputs omitted from this data-only boundary. */\nexport type WorkerBundlerCreateAppOptions = WorkerBundlerOptions & {\n  assetConfig?: WorkerBundlerAssetConfig;\n  assets?: Record<string, string>;\n  client?: string | string[];\n  files: WorkerFileSource;\n  server?: string;\n};",
+    summary: "Serializable `createApp` input.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerOptions", "WorkerBundlerAssetConfig", "WorkerFileSource"],
+  },
+  {
+    name: "WorkerBundlerCreateWorkerOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable `createWorker` input. `files` is repo-aware; after resolving\n * it, OS passes the resulting path-to-source map to worker-bundler unchanged.\n * The plugin callback and custom `FileSystem` variants cannot cross Workers\n * RPC, so those are the only upstream inputs omitted here. */\nexport type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {\n  files: WorkerFileSource;\n  entryPoint?: string;\n  virtualModules?: Record<string, string>;\n};",
+    summary: "Serializable `createWorker` input.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerOptions", "WorkerFileSource"],
+  },
+  {
+    name: "WorkerBundlerOptions",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * The serializable `@cloudflare/worker-bundler` options shared by\n * `createWorker` and `createApp`.\n *\n * These fields are passed through unchanged. The method-specific types below\n * replace only `files` with a repo-aware value and omit callbacks that cannot\n * cross the isolated bundler Worker\'s RPC boundary.\n */\nexport type WorkerBundlerOptions = {\n  bundle?: boolean;\n  conditions?: string[];\n  define?: Record<string, string>;\n  externals?: string[];\n  jsx?: "transform" | "preserve" | "automatic";\n  jsxImportSource?: string;\n  loader?: Record<string, WorkerBundlerLoader>;\n  minify?: boolean;\n  registry?: string;\n  sourcemap?: boolean;\n  target?: string;\n};',
+    summary:
+      "The serializable `@cloudflare/worker-bundler` options shared by `createWorker` and `createApp`.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerLoader"],
+  },
+  {
+    name: "WorkerBundlerAssetConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** JSON-safe `AssetConfig` accepted by worker-bundler\'s asset handler. */\nexport type WorkerBundlerAssetConfig = {\n  headers?: Record<string, { set?: Record<string, string>; unset?: string[] }>;\n  html_handling?: "auto-trailing-slash" | "force-trailing-slash" | "drop-trailing-slash" | "none";\n  not_found_handling?: "single-page-application" | "404-page" | "none";\n  redirects?: {\n    dynamic?: Record<string, { status: number; to: string }>;\n    static?: Record<string, { status: number; to: string }>;\n  };\n};',
+    summary: "JSON-safe `AssetConfig` accepted by worker-bundler's asset handler.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "WorkerFileSource",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Where a dynamic worker\'s source files come from.\n *\n * `inline` supplies the file map directly — the primitive behind run-script and\n * worker-backed provided capabilities where the caller hands over a small\n * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names\n * a project repo snapshot: a branch (late-bound, so future commits affect the\n * next use) or a pinned commit, narrowed by include/exclude glob masks so a\n * large repo does not become build input by default.\n */\nexport type WorkerFileSource =\n  | {\n      type: "inline";\n      files: Record<string, string>;\n    }\n  | {\n      type: "repo";\n      repoPath: string;\n      /**\n       * Defaults to the repo\'s default branch when omitted. A pinned commit\n       * may name the branch it lives on — clones are single-branch, so an\n       * off-default-branch commit is unreachable without it.\n       */\n      ref?: { branch: string } | { commitOid: string; branch?: string };\n      include?: string[];\n      exclude?: string[];\n    };',
+      '/**\n * Where a dynamic worker\'s source files come from.\n *\n * `inline` supplies the file map directly — the primitive behind run-script and\n * worker-backed provided capabilities where the caller hands over a small\n * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names\n * a project repo snapshot: a branch (late-bound, so future commits affect the\n * next use) or a pinned commit. The whole snapshot is passed through by\n * default; optional include/exclude glob masks let callers narrow it.\n */\nexport type WorkerFileSource =\n  | {\n      type: "inline";\n      files: Record<string, string>;\n    }\n  | {\n      type: "repo";\n      repoPath: string;\n      /**\n       * Defaults to the repo\'s default branch when omitted. A pinned commit\n       * may name the branch it lives on — clones are single-branch, so an\n       * off-default-branch commit is unreachable without it.\n       */\n      ref?: { branch: string } | { commitOid: string; branch?: string };\n      include?: string[];\n      exclude?: string[];\n    };',
     summary: "Where a dynamic worker's source files come from.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "WorkerBuildOptions",
+    name: "WorkerBundlerLoader",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Build options for a dynamic worker.\n *\n * Deliberately small: OS passes these options directly to Cloudflare\'s\n * in-workerd worker bundler. A package.json may contain ordinary registry\n * dependencies; lifecycle scripts and devDependencies are not installed.\n */\nexport type WorkerBuildOptions = {\n  /** Entry point file path relative to the source root. Default: "worker.ts". */\n  entryPoint?: string;\n  /** Opt into the deliberately basic two-file browser app shape. The only\n   * supported client entry is `client.tsx`, paired with `server.tsx`; it is\n   * compiled to a separately served asset while esm.sh URL imports remain\n   * external. No other files or custom virtual modules are accepted. */\n  clientEntryPoint?: "client.tsx";\n  /** Bundle to loader-ready output (default: true). `bundle: false` is the\n   * run-script fast path: inline JavaScript that is ALREADY loader-ready\n   * skips the build pipeline entirely. The basic browser-app path always\n   * transforms its single server file without bundling it. */\n  bundle?: boolean;\n  minify?: boolean;\n  /** Build from this subdirectory of the resolved source: files outside it\n   * are dropped and paths are re-rooted, so a repo can host an app at e.g.\n   * `apps/todo/` with its own entries. */\n  rootDir?: string;\n  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`\n   * runtime rides in this way). A source\'s own entry wins over the platform\'s.\n   * Not available to the two-file browser app path. */\n  virtualModules?: Record<string, string>;\n};',
-    summary: "Build options for a dynamic worker.",
+      '/** Portable loader names accepted by `@cloudflare/worker-bundler`. */\nexport type WorkerBundlerLoader =\n  | "js"\n  | "jsx"\n  | "ts"\n  | "tsx"\n  | "json"\n  | "css"\n  | "text"\n  | "binary"\n  | "base64"\n  | "dataurl";',
+    summary: "Portable loader names accepted by `@cloudflare/worker-bundler`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

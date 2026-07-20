@@ -244,11 +244,9 @@ async function apiFetch(
       // injected from the serve header the runner just stamped.
       return applyProjectWorkerOverlay(request, response);
     } catch (error) {
-      // A first-ever build shows the polling "building" page rather than
-      // hanging the request (the in-workerd build keeps running);
-      // a failed first-ever build shows the bundler's error. Both self-heal —
-      // once a good build exists, the runner serves it stale instead of
-      // landing here.
+      // A cold build shows the polling "building" page rather than hanging
+      // the request (the in-workerd build keeps running). A source failure
+      // shows the bundler's error; the next good commit heals it.
       const buildStatus = workerBuildStatus(error);
       if (buildStatus !== null) {
         wideLogger.setOutcome(buildStatus.outcome);

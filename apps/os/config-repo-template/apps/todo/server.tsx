@@ -92,13 +92,11 @@ export class TodoApp extends DurableObject {
   </head>
   <body>
     <main id="root"><p>Loading…</p></main>
-    <script type="module" src="/client.js"></script>
+    <script type="module" src="/apps/todo/client.js"></script>
   </body>
 </html>`,
       {
         headers: {
-          "content-security-policy":
-            "default-src 'self'; script-src 'self' https://esm.sh; style-src 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
           "content-type": "text/html; charset=utf-8",
           "x-content-type-options": "nosniff",
         },

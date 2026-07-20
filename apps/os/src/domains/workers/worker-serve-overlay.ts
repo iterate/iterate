@@ -3,7 +3,6 @@ import {
   OVERLAY_OPT_OUT_HEADER,
   WORKER_BUILD_FAILED_HEADER,
   WORKER_SERVE_HEADER,
-  WorkerServeInfo,
 } from "./worker-serve-info.ts";
 
 /**
@@ -12,9 +11,7 @@ import {
  * worker builds.
  *
  * - The @iterate overlay — injected by project ingress into HTML documents
- *   (HTMLRewriter, before `</body>`): a floating iterate mark that surfaces
- *   build state in the corner of every project page, and — while a rebuild
- *   runs — polls the serve header until the fresh build lands, then reloads.
+ *   (HTMLRewriter, before `</body>`): a floating Iterate mark in the corner.
  * - The building page body (served by workerBuildingResponse in
  *   worker-fetch-dispatch.ts) and the build-failed page — the two terminal
  *   states of the lane: nothing built yet to fall back on, so a page stands
@@ -137,10 +134,7 @@ export function workerBuildFailedResponse(error: unknown): Response {
  * Exported for unit tests — the HTMLRewriter call itself is proven in e2e
  * (workerd-only API).
  */
-export function workerOverlayDecision(
-  request: Request,
-  response: Response,
-): WorkerServeInfo | null {
+export function workerOverlayDecision(request: Request, response: Response): string | null {
   if (response.status === 101 || response.webSocket || response.body === null) return null;
   const raw = response.headers.get(WORKER_SERVE_HEADER);
   if (raw === null) return null;
@@ -156,36 +150,24 @@ export function workerOverlayDecision(
   // absent sec-fetch-dest (curl, old clients) counts as a document.
   const dest = request.headers.get("sec-fetch-dest");
   if (dest !== null && dest !== "document") return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const info = WorkerServeInfo.safeParse(parsed);
-  return info.success ? info.data : null;
+  return raw.length > 0 ? raw : null;
 }
 
 /**
- * The injected fragment: one inline script that mounts the floating iterate
- * mark in a shadow root (page CSS cannot reach in) with a status popover.
- * While a rebuild runs it polls the serve header and reloads on fresh.
- *
- * `info` MUST be schema-validated (workerOverlayDecision) — `state` derives
- * from the `reason` enum and reaches the widget's innerHTML as an attribute.
+ * The injected fragment: one inline script mounts the floating mark in a
+ * shadow root so application CSS cannot reach it.
  */
-export function workerOverlayHtml(info: WorkerServeInfo): string {
+export function workerOverlayHtml(commitOid: string): string {
   // U+003C escaping keeps any "</script>" (or "<!--") inside failure messages
   // inert; U+2028/2029 stay out of the source for pre-ES2019 parsers.
-  const infoJson = JSON.stringify(info)
+  const commitOidJson = JSON.stringify(commitOid)
     .replaceAll("<", "\\u003c")
     .replaceAll("\u2028", "\\u2028")
     .replaceAll("\u2029", "\\u2029");
   return `<script>(() => {
   if (window.__iterateWorkerOverlay) return;
   window.__iterateWorkerOverlay = true;
-  const info = ${infoJson};
-  const state = info.status === "fresh" ? "fresh" : info.reason;
+  const commitOid = ${commitOidJson};
   const host = document.createElement("div");
   host.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:2147483647";
   const root = host.attachShadow({ mode: "open" });
@@ -193,49 +175,23 @@ export function workerOverlayHtml(info: WorkerServeInfo): string {
     :host { all: initial; }
     #badge { display: block; position: relative; width: 34px; height: 34px; padding: 0; border: 0; background: none; cursor: pointer; opacity: .55; transition: opacity .15s; }
     #badge svg { width: 100%; height: 100%; border-radius: 9px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
-    #badge:hover, .building #badge, .build-failed #badge { opacity: 1; }
-    #dot { display: none; position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #fff; }
-    .building #dot { display: block; background: #f59e0b; animation: pulse 1.2s infinite; }
-    .build-failed #dot { display: block; background: #ef4444; }
-    @keyframes pulse { 50% { opacity: .35; } }
+    #badge:hover { opacity: 1; }
     #panel { position: absolute; bottom: 42px; right: 0; width: 320px; padding: 12px 14px; background: #0a0a0a; color: #fafafa; border: 1px solid #262626; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.45); font: 12px/1.5 ui-sans-serif, system-ui, sans-serif; }
     #panel header { display: flex; justify-content: space-between; color: #a3a3a3; margin-bottom: 4px; }
     #status { color: #fafafa; }
-    #error { display: none; margin: 8px 0 0; padding: 8px 10px; background: #171717; border-radius: 6px; color: #fca5a5; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow: auto; }
-    .build-failed #error { display: block; }
   </style>
-  <div id="widget" class="\${state}">
+  <div id="widget">
     <div id="panel" hidden>
       <header><span>iterate worker</span><span id="commit"></span></header>
-      <div id="status"></div>
-      <pre id="error"></pre>
+      <div>Live — serving the latest build.</div>
     </div>
-    <button id="badge" aria-label="iterate worker status">${ITERATE_MARK_SVG}<span id="dot"></span></button>
+    <button id="badge" aria-label="iterate worker status">${ITERATE_MARK_SVG}</button>
   </div>\`;
   const short = (oid) => (oid ? oid.slice(0, 7) : "");
-  root.getElementById("commit").textContent = short(info.commitOid);
-  root.getElementById("status").textContent =
-    state === "fresh" ? "Live — serving the latest build."
-    : state === "building" ? "Rebuilding — serving the previous build until the new one lands."
-    : "Build failed — serving the previous build. Latest commit: " + (short(info.failure && info.failure.commitOid) || "unknown") + ".";
-  if (info.failure) root.getElementById("error").textContent = info.failure.message;
+  root.getElementById("commit").textContent = short(commitOid);
   const panel = root.getElementById("panel");
   root.getElementById("badge").addEventListener("click", () => { panel.hidden = !panel.hidden; });
   document.body.appendChild(host);
-  if (state !== "building") return;
-  let polls = 0;
-  const poll = async () => {
-    try {
-      const res = await fetch(location.href, { cache: "no-store" });
-      const raw = res.headers.get(${JSON.stringify(WORKER_SERVE_HEADER)});
-      if (raw) {
-        const next = JSON.parse(raw);
-        if (next.status === "fresh" || next.reason !== info.reason) { location.reload(); return; }
-      }
-    } catch {}
-    if (polls++ < 100) setTimeout(poll, 2500);
-  };
-  setTimeout(poll, 2500);
 })();</script>`;
 }
 
@@ -246,12 +202,12 @@ export function workerOverlayHtml(info: WorkerServeInfo): string {
  * end tag); everything else passes through untouched.
  */
 export function applyProjectWorkerOverlay(request: Request, response: Response): Response {
-  const info = workerOverlayDecision(request, response);
-  if (info === null) return response;
+  const commitOid = workerOverlayDecision(request, response);
+  if (commitOid === null) return response;
   const transformed = new HTMLRewriter()
     .on("body", {
       element(element) {
-        element.append(workerOverlayHtml(info), { html: true });
+        element.append(workerOverlayHtml(commitOid), { html: true });
       },
     })
     .transform(response);

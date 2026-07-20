@@ -1,11 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
   OVERLAY_OPT_OUT_HEADER,
-  stripWorkerServeInfo,
   WORKER_BUILD_FAILED_HEADER,
   WORKER_SERVE_HEADER,
-  type WorkerServeInfo,
-  withWorkerServeInfo,
+  withWorkerCommit,
 } from "./worker-serve-info.ts";
 import {
   workerBuildFailedResponse,
@@ -13,39 +11,38 @@ import {
   workerOverlayHtml,
 } from "./worker-serve-overlay.ts";
 
-// The HTMLRewriter injection itself is workerd-only and proven in e2e
-// (worker-stale-serve.e2e.test.ts); these tests cover the decision, the
-// header stamping, and the injected fragment's escaping.
+// The HTMLRewriter injection itself is workerd-only. These tests cover the
+// decision, the trusted header stamping, and the injected fragment's escaping.
 
-const freshInfo: WorkerServeInfo = { commitOid: "c0ffee1234", status: "fresh" };
+const commitOid = "c0ffee1234";
 
 function htmlResponse(headers: Record<string, string> = {}): Response {
   return new Response("<html><body>hi</body></html>", {
     headers: {
       "content-type": "text/html; charset=utf-8",
-      [WORKER_SERVE_HEADER]: JSON.stringify(freshInfo),
+      [WORKER_SERVE_HEADER]: commitOid,
       ...headers,
     },
   });
 }
 
-describe("withWorkerServeInfo", () => {
-  test("stamps platform serve info onto the response", () => {
-    const stamped = withWorkerServeInfo(new Response("ok"), freshInfo);
-    expect(JSON.parse(stamped.headers.get(WORKER_SERVE_HEADER)!)).toEqual(freshInfo);
+describe("withWorkerCommit", () => {
+  test("stamps the platform's repo commit onto the response", () => {
+    const stamped = withWorkerCommit(new Response("ok"), commitOid);
+    expect(stamped.headers.get(WORKER_SERVE_HEADER)).toBe(commitOid);
   });
 
   test("always drops whatever user code set — even with nothing to say", () => {
     const spoofed = new Response("ok", {
-      headers: { [WORKER_SERVE_HEADER]: JSON.stringify({ status: "fresh" }) },
+      headers: { [WORKER_SERVE_HEADER]: "spoof" },
     });
-    expect(stripWorkerServeInfo(spoofed).headers.get(WORKER_SERVE_HEADER)).toBeNull();
+    expect(withWorkerCommit(spoofed, undefined).headers.get(WORKER_SERVE_HEADER)).toBeNull();
   });
 
   test("keeps status, other headers, and body intact", async () => {
-    const stamped = withWorkerServeInfo(
+    const stamped = withWorkerCommit(
       new Response("payload", { headers: { "x-app": "1" }, status: 418 }),
-      freshInfo,
+      commitOid,
     );
     expect(stamped.status).toBe(418);
     expect(stamped.headers.get("x-app")).toBe("1");
@@ -57,7 +54,7 @@ describe("workerOverlayDecision", () => {
   const documentRequest = new Request("https://app.example.com/");
 
   test("injects for an HTML document carrying serve info", () => {
-    expect(workerOverlayDecision(documentRequest, htmlResponse())).toEqual(freshInfo);
+    expect(workerOverlayDecision(documentRequest, htmlResponse())).toBe(commitOid);
   });
 
   test.each([
@@ -68,8 +65,7 @@ describe("workerOverlayDecision", () => {
     ["non-HTML response", htmlResponse({ "content-type": "application/json" })],
     ["overlay opt-out", htmlResponse({ [OVERLAY_OPT_OUT_HEADER]: "off" })],
     ["a page with its own CSP", htmlResponse({ "content-security-policy": "default-src 'self'" })],
-    ["malformed serve info", htmlResponse({ [WORKER_SERVE_HEADER]: "not json" })],
-    ["serve info that fails the schema", htmlResponse({ [WORKER_SERVE_HEADER]: '{"status":"?"}' })],
+    ["empty commit", htmlResponse({ [WORKER_SERVE_HEADER]: "" })],
     ["a pre-encoded body we cannot parse", htmlResponse({ "content-encoding": "gzip" })],
   ])("stays out of %s", (_name, response) => {
     expect(workerOverlayDecision(documentRequest, response)).toBeNull();
@@ -79,7 +75,7 @@ describe("workerOverlayDecision", () => {
     const bodyless = new Response(null, {
       headers: {
         "content-type": "text/html",
-        [WORKER_SERVE_HEADER]: JSON.stringify(freshInfo),
+        [WORKER_SERVE_HEADER]: commitOid,
       },
       status: 204,
     });
@@ -97,20 +93,13 @@ describe("workerOverlayDecision", () => {
 
 describe("workerOverlayHtml", () => {
   test("carries the iterate mark and the serve info", () => {
-    const html = workerOverlayHtml(freshInfo);
+    const html = workerOverlayHtml(commitOid);
     expect(html).toContain('viewBox="0 0 500 500"');
-    expect(html).toContain('"commitOid":"c0ffee1234"');
+    expect(html).toContain('"c0ffee1234"');
   });
 
-  test("a failure message cannot break out of the script element", () => {
-    const html = workerOverlayHtml({
-      failure: {
-        at: "2026-07-17T00:00:00.000Z",
-        message: 'evil</script><script>alert("x")</script>',
-      },
-      reason: "build-failed",
-      status: "stale",
-    });
+  test("serve metadata cannot break out of the script element", () => {
+    const html = workerOverlayHtml('evil</script><script>alert("x")</script>');
     // Only the fragment's own tags — the payload's are <-escaped inert.
     expect(html.match(/<\/script>/g)).toHaveLength(1);
     expect(html).toContain("\\u003c/script>");

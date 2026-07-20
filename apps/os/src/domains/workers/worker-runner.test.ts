@@ -14,7 +14,6 @@ vi.mock("../projects/utils.ts", () => ({
 
 vi.mock("./worker-loader.ts", () => ({
   loadResolvedWorker: vi.fn(),
-  resolveCachedArtifact: vi.fn(),
   resolveWorkerSource: vi.fn(async () => {
     throw new Error("stop after entering the trace span");
   }),
@@ -25,7 +24,9 @@ const inlineRef = {
   entrypoint: privateMarker,
   path: `/${privateMarker}`,
   source: {
-    files: { files: { "private.ts": privateMarker }, type: "inline" },
+    createWorker: {
+      files: { files: { "private.ts": privateMarker }, type: "inline" },
+    },
   },
   type: "stateless",
 } satisfies DynamicWorkerRef;
@@ -33,7 +34,9 @@ const repoRef = {
   entrypoint: privateMarker,
   path: `/${privateMarker}`,
   source: {
-    files: { repoPath: `/${privateMarker}`, type: "repo" },
+    createWorker: {
+      files: { repoPath: `/${privateMarker}`, type: "repo" },
+    },
   },
   type: "stateless",
 } satisfies DynamicWorkerRef;
@@ -62,6 +65,10 @@ describe("dynamic worker spans", () => {
     { expectedKind: "inline", ref: inlineRef },
     { expectedKind: "stateful", ref: statefulRef },
   ])("uses the bounded $expectedKind kind for call and fetch", async (fixture) => {
+    const source =
+      "createApp" in fixture.ref.source
+        ? fixture.ref.source.createApp.files
+        : fixture.ref.source.createWorker.files;
     const runner = new DynamicWorkerRunner({
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
@@ -90,7 +97,7 @@ describe("dynamic worker spans", () => {
         attributes: {
           "iterate.worker.kind": fixture.expectedKind,
           "iterate.worker.operation": "call",
-          "iterate.worker.source": fixture.ref.source.files.type,
+          "iterate.worker.source": source.type,
           "iterate.worker.type": fixture.ref.type,
         },
       },
@@ -99,7 +106,7 @@ describe("dynamic worker spans", () => {
         attributes: {
           "iterate.worker.kind": fixture.expectedKind,
           "iterate.worker.operation": "fetch",
-          "iterate.worker.source": fixture.ref.source.files.type,
+          "iterate.worker.source": source.type,
           "iterate.worker.type": fixture.ref.type,
         },
       },

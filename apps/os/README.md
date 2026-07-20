@@ -17,10 +17,10 @@ It combines:
   — and as the **project directory**: OS has no database of its own; slug →
   project id resolution goes through the auth worker with a `PROJECT_DIRECTORY`
   KV cache in front. All other durable state lives in Durable Object SQLite.
-- **One deployed worker** (plus the typechecker sidecar) — dashboard, itx
+- **One product worker** (plus two compiler sidecars) — dashboard, itx
   API, and every Durable Object class in a single script. Dynamic workers
-  build directly inside workerd with `@cloudflare/worker-bundler`; no build
-  service or build container is involved. See
+  build through a stateless `@cloudflare/worker-bundler` Worker service; no
+  build container is involved. See
   [docs/worker-topology.md](./docs/worker-topology.md).
 
 Integrations are connections at fully qualified paths

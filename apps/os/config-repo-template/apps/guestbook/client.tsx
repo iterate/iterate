@@ -89,8 +89,7 @@ export function GuestbookClient() {
         <section aria-label="Guestbook entries">
           {entries.map((entry) => (
             <article key={entry.id}>
-              <strong>{entry.name}</strong>{" "}
-              <time dateTime={entry.signedAt}>{new Date(entry.signedAt).toLocaleString()}</time>
+              <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>
               <p>{entry.message}</p>
             </article>
           ))}

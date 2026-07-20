@@ -43,8 +43,9 @@ describe("scriptWorkerRef", () => {
       scopePath: "/agents/test",
     });
 
-    if (ref.source.files.type !== "inline") throw new Error("expected inline script worker source");
-    const main = ref.source.files.files["main.js"];
+    if (!("createWorker" in ref.source) || ref.source.createWorker.files.type !== "inline")
+      throw new Error("expected inline createWorker source");
+    const main = ref.source.createWorker.files.files["main.js"];
     expect(main).toContain(`const executionDeadline = ${expiresAt}`);
     expect(main).toContain(`const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS}`);
     expect(main).toContain("const sandboxExecTimeout = ");

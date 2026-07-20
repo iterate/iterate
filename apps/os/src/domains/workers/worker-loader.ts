@@ -1,73 +1,43 @@
 import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { DEFAULT_REPO_WORKER_SOURCE_EXCLUDE } from "../repos/utils.ts";
-import type { DynamicWorkerRef, DynamicWorkerSource, WorkerBuildOptions } from "./schemas.ts";
+import type { DynamicWorkerRef, DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
+  buildFailureMessageFromError,
   isWorkerBuildFailedError,
   KvWorkerBuildArtifactStore,
   WorkerBuildFailedError,
   type WorkerBuildArtifact,
-  type WorkerBuildFailure,
-  type WorkerLastGoodBuild,
+  type WorkerBuildModule,
 } from "./artifact-store.ts";
-import {
-  projectWorkerBuildKey,
-  workerBuildKey,
-  type ResolvedWorkerFileSource,
-} from "./build-key.ts";
+import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import {
   WORKER_COMPATIBILITY_DATE,
   WORKER_COMPATIBILITY_FLAGS,
-  canonicalWorkerBuildOptions,
   executeWorkerBuild,
 } from "./build-backend.ts";
-import type { WorkerServeInfo } from "./worker-serve-info.ts";
-import { stableSha256 } from "./utils.ts";
 
-/**
- * The build is real and in flight, but the caller's build budget ran out
- * before it finished. Workers RPC preserves `error.name`, so ingress-side
- * classifiers can turn this into a "building your worker" page instead of a
- * 500 — the build keeps running in the build backend and the retry hits the
- * artifact cache.
- */
 class WorkerBuildInProgressError extends Error {
   override readonly name = "WorkerBuildInProgressError";
 }
 
-/** Name-based, because the error crosses Workers RPC (which preserves
- * `error.name` but not class identity). */
+/** Name-based because the error crosses Workers RPC. */
 export function isWorkerBuildInProgressError(error: unknown): boolean {
   return (error as { name?: string } | null)?.name === "WorkerBuildInProgressError";
 }
 
-/**
- * Fully materialized Worker Loader input plus a cache key for the built bytes.
- * The cache key is build identity only; runtime scope and exported symbol are
- * added by `loadResolvedWorker` so the same artifact can be used in multiple
- * itx paths without leaking bindings or entrypoint props across scopes.
- */
 export type ResolvedWorkerSource = {
-  /** Browser assets stay in the host and are never passed to Worker Loader. */
+  /** Browser assets stay in OS and never enter Worker Loader. */
+  assetConfig: WorkerBuildArtifact["assetConfig"];
+  assetManifest: WorkerBuildArtifact["assetManifest"];
   assets: Record<string, string>;
   cacheKey: string;
+  commitOid?: string;
   mainModule: string;
-  modules: Record<string, string>;
+  modules: Record<string, WorkerBuildModule>;
+  wranglerConfig: WorkerBuildArtifact["wranglerConfig"];
 };
-
-/**
- * What a resolve returns: the artifact plus per-resolve serving context for
- * the fetch lane (repo-backed sources only) — which commit is serving and
- * whether it is a stale fallback. The memo stores plain
- * {@link ResolvedWorkerSource}, so serve info can never leak across requests
- * by construction.
- */
-export type ServedWorkerSource = ResolvedWorkerSource & { serveInfo?: WorkerServeInfo };
-
 export type WorkerBindings = Record<string, unknown>;
 
-// Artifacts are immutable (content-addressed by build key), so a small
-// per-isolate memo removes the KV manifest+module reads from warm loads.
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 
@@ -77,50 +47,22 @@ export async function resolveWorkerSource({
   source,
   waitUntil,
 }: {
-  /** Give up on a cold resolve after this long (the build itself keeps
-   * running in the background). Omitted = wait for the build. */
+  /** Give up on a cold resolve after this long; the build continues. */
   buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
-  /** The hosting request context's `ctx.waitUntil`. Budget-expired resolves,
-   * background rebuilds, and last-good pointer notes are handed to it so
-   * they survive the caller's request ending. */
   waitUntil: (promise: Promise<unknown>) => void;
-}): Promise<ServedWorkerSource> {
-  const options = source.options ?? {};
-
-  // Loader-ready degenerate case: inline JavaScript with bundling explicitly
-  // off is exactly what the Worker Loader consumes, so materialization is the
-  // identity function. Skipping the pipeline keeps run-script (which executes
-  // on every agent turn) at direct-load latency instead of paying a build
-  // round trip per script.
-  const loaderReady = await loaderReadyInlineSource(source, options);
-  if (loaderReady !== null) return loaderReady;
-
-  // The budget covers the WHOLE cold path — head resolution (a Repo DO call)
-  // included — so a browser-facing caller's bound is a real bound, not just a
-  // bound on the bundler.
-  return await withBuildBudget(
-    resolveThroughBuild({
-      budgeted: buildBudgetMs !== undefined,
-      options,
-      projectId,
-      source,
-      waitUntil,
-    }),
-    buildBudgetMs,
-    waitUntil,
-  );
+}): Promise<ResolvedWorkerSource> {
+  const resolution = resolveThroughBuild({ projectId, source });
+  return await withBuildBudget(resolution, buildBudgetMs, waitUntil);
 }
 
-/** Race a resolution against the caller's budget without cancelling it: the
- * build finishes into the artifact cache regardless, so the caller's retry
- * is a hit. */
+/** Race a cold resolve against the browser budget without cancelling it. */
 async function withBuildBudget(
-  resolution: Promise<ServedWorkerSource>,
+  resolution: Promise<ResolvedWorkerSource>,
   budgetMs: number | undefined,
   waitUntil: (promise: Promise<unknown>) => void,
-): Promise<ServedWorkerSource> {
+): Promise<ResolvedWorkerSource> {
   if (budgetMs === undefined) return await resolution;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -128,12 +70,11 @@ async function withBuildBudget(
       resolution,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          // The losing resolution must outlive this request: when the caller
-          // returns the building page, the runtime cancels the request's
-          // pending work, and a build that hasn't finished dies with it —
-          // every refresh would then restart the cold path from zero instead
-          // of converging on the cached artifact.
-          waitUntil(resolution.catch(() => {}));
+          waitUntil(
+            resolution.catch((error: unknown) => {
+              console.error("background dynamic worker build failed", error);
+            }),
+          );
           reject(new WorkerBuildInProgressError("This worker is still building."));
         }, budgetMs);
       }),
@@ -143,363 +84,146 @@ async function withBuildBudget(
   }
 }
 
-/** The resolve-scoped inputs the serve policy works with: which project,
- * which pinned source, which (sdk-injected) build options. */
-type ResolveContext = {
-  options: WorkerBuildOptions;
-  projectId: string;
-  resolved: ResolvedWorkerFileSource;
-};
-
-// Concurrent cold resolutions of one build key deliberately do NOT share a
-// promise: awaiting another request's in-flight RPC is workerd's
-// "cannot perform I/O on behalf of a different request" trap. Blocking
-// callers instead WAIT by polling the artifact cache with their own request's
-// I/O (waitForBuildElsewhere) and fall back to a duplicate build — which is
-// harmless (content-addressed, idempotent artifact writes), just redundant.
 async function resolveThroughBuild(input: {
-  /** Whether the caller runs under a build budget — the fetch lane. Budgeted
-   * callers prefer availability (previous good build now, fresh build in the
-   * background); blocking callers keep commit-then-call-sees-new-code. */
-  budgeted: boolean;
-  options: WorkerBuildOptions;
   projectId: string;
   source: DynamicWorkerSource;
-  waitUntil: (promise: Promise<unknown>) => void;
-}): Promise<ServedWorkerSource> {
-  const options = canonicalWorkerBuildOptions(input.options);
-  const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
-  const contentKey = await workerBuildKey({
+}): Promise<ResolvedWorkerSource> {
+  const resolved = await resolveFileSource({
+    files:
+      "createApp" in input.source ? input.source.createApp.files : input.source.createWorker.files,
+    projectId: input.projectId,
+  });
+  const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    options,
-    source: resolved,
+    files: resolved,
+    source: input.source,
   });
-  const buildKey = await projectWorkerBuildKey(input.projectId, contentKey);
-  const context: ResolveContext = { options, projectId: input.projectId, resolved };
-  const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
-
-  const hit = await resolveCachedArtifact(buildKey);
-  if (hit !== null) {
-    input.waitUntil(noteLastGoodBuild(store, context, hit.cacheKey));
-    return freshServe(hit, resolved);
+  let artifact = resolvedArtifactMemo.get(buildKey);
+  if (artifact === undefined) {
+    const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
+    const record = await store.get(buildKey);
+    if (record?.status === "failed") throw new WorkerBuildFailedError(record.message);
+    artifact =
+      record?.status === "complete"
+        ? memoizeArtifact(record)
+        : await runBuild(
+            store,
+            { projectId: input.projectId, resolved, source: input.source },
+            buildKey,
+          );
   }
-
-  if (input.budgeted) {
-    // The fetch lane never makes a browser wait on a build it can avoid: with
-    // a previous good build on record, serve THAT — the rebuild (or its
-    // recorded failure) rides along as serve info for the overlay.
-    const [lastGood, failure] = await Promise.all([
-      lastGoodArtifact(store, context, buildKey),
-      store.getBuildFailure(buildKey),
-    ]);
-    if (failure !== null) {
-      if (lastGood !== null) return staleServe(lastGood, "build-failed", failure);
-      throw new WorkerBuildFailedError(failure.message);
-    }
-    if (lastGood !== null) {
-      dispatchBackgroundBuild({ buildKey, context, store, waitUntil: input.waitUntil });
-      return staleServe(lastGood, "building");
-    }
-    // Nothing to fall back on: answer "still building" from the in-flight
-    // marker instead of piling a duplicate full build onto a running one —
-    // the building page's poll loop otherwise multiplies cold builds per tab.
-    if (await store.isBuildInFlight(buildKey)) {
-      throw new WorkerBuildInProgressError("This worker is still building.");
-    }
-  } else {
-    // Blocking callers REPLAY a recorded failure within its TTL instead of
-    // re-running the build. Same-key retries — the at-least-once event
-    // delivery loop above all — would otherwise rebuild per attempt for a
-    // deterministically broken source. A fix always commits a
-    // NEW head → new key, so healing is never gated on the TTL.
-    const recorded = await store.getBuildFailure(buildKey);
-    if (recorded !== null) throw new WorkerBuildFailedError(recorded.message);
-
-    // Stampede guard: a project worker is loaded independently by every
-    // stream delivering to it, so one commit can fan out into DOZENS of
-    // concurrent cold resolves of ONE key. When THIS ISOLATE is already
-    // building the key, wait for its artifact instead of piling on. Never
-    // worse than building: the wait is bounded and falls back to a duplicate
-    // build.
-    const built = await waitForBuildElsewhere(store, buildKey);
-    if (built !== null) {
-      input.waitUntil(noteLastGoodBuild(store, context, buildKey));
-      return freshServe(built, resolved);
-    }
-  }
-
-  return freshServe(await runBuild(store, context, buildKey), resolved);
+  return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
 }
 
-/**
- * One in-workerd build through Cloudflare's worker-bundler. The file snapshot
- * is resolved here and passed by value, sized by the ref's source masks; the
- * artifact is written to the cache and returned by value,
- * so nothing waits on KV write propagation. A GENUINE build failure (the
- * backend's named error) is recorded so the fetch lane can fall back without
- * re-running it — and clears the in-flight marker, so budgeted callers are
- * never held in "building" by a build that already died. Repo, cache, and
- * host-operation failures happen outside the backend and remain retryable.
- *
- * Concurrent cold builds of one key are not deduped across isolates: they
- * converge on one content-addressed, idempotent artifact write — redundant
- * work, never wrong output.
- */
-// Presence of a running build per key IN THIS ISOLATE. Presence-only, like
-// backgroundBuilds below — the build promise itself is never shared across
-// requests (workerd's cross-request-I/O trap); concurrent same-key resolves
-// instead wait by polling the artifact cache with their own request's I/O
-// (waitForBuildElsewhere).
-const buildsInFlight = new Set<string>();
-
-/** How long a blocking caller waits on this isolate's in-flight build of the
- * same key before falling back to its own duplicate build. */
-const BUILD_WAIT_CAP_MS = 120_000;
-const BUILD_WAIT_POLL_MS = 1_000;
-
-/**
- * Wait for THIS ISOLATE's in-flight build of `buildKey` to land. The wait
- * loop does no I/O at all — it sleeps on the presence set, then reads the
- * outcome once: the artifact from the per-isolate memo (the leader memoizes
- * on success, so this read never depends on KV propagation), or the leader's
- * recorded GENUINE failure (deterministic for this key — replaying it is the
- * same contract as the failure-record short-circuit above). Returns null when
- * no build is running here, the leader died unrecorded, or the cap passes —
- * every null falls back to building, so this never fails a resolve that
- * would previously have succeeded.
- *
- * Deliberately IN-ISOLATE ONLY. The first cut of this guard also waited on
- * OTHER isolates' builds via the KV in-flight marker, polling the artifact
- * key — but KV negative-caches a missing key per colo (~60s), so waiters
- * could not see the leader's write promptly and every cross-isolate cold
- * resolve stalled toward the cap. Cross-isolate duplicates are cheaper:
- * bounded by isolate count and idempotent.
- */
-async function waitForBuildElsewhere(
-  store: KvWorkerBuildArtifactStore,
-  buildKey: string,
-): Promise<ResolvedWorkerSource | null> {
-  if (!buildsInFlight.has(buildKey)) return null;
-  const deadline = Date.now() + BUILD_WAIT_CAP_MS;
-  while (buildsInFlight.has(buildKey) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, BUILD_WAIT_POLL_MS));
-  }
-  const artifact = await resolveCachedArtifact(buildKey);
-  if (artifact !== null) return artifact;
-  const failure = await store.getBuildFailure(buildKey);
-  if (failure !== null) throw new WorkerBuildFailedError(failure.message);
-  return null;
-}
-
+/** Build one immutable source snapshot. Duplicate cold builds are harmless:
+ * they produce the same key and converge on the same KV record. */
 async function runBuild(
   store: KvWorkerBuildArtifactStore,
-  context: ResolveContext,
+  context: {
+    projectId: string;
+    resolved: ResolvedWorkerFileSource;
+    source: DynamicWorkerSource;
+  },
   buildKey: string,
 ): Promise<ResolvedWorkerSource> {
-  let marked = false;
-  buildsInFlight.add(buildKey);
+  const files = await resolvedSourceFiles(context.projectId, context.resolved);
   try {
-    const files = await resolvedSourceFiles(context.projectId, context.resolved);
-    // Best-effort duplicate suppression for budgeted callers (the building
-    // page's poll loop would otherwise dispatch a fresh build per refresh);
-    // the artifact write below always supersedes it.
-    await store.markBuildInFlight(buildKey).then(
-      () => {
-        marked = true;
-      },
-      () => {},
-    );
     const built = await executeWorkerBuild({
       files,
-      options: context.options,
+      source: context.source,
+      workerBundler: env.WORKER_BUNDLER,
     });
+    if (built.warnings.length > 0) {
+      console.warn("dynamic worker build completed with warnings", {
+        buildKey,
+        warnings: built.warnings,
+      });
+    }
     const artifact: WorkerBuildArtifact = {
+      ...(built.assetConfig === undefined ? {} : { assetConfig: built.assetConfig }),
+      assetManifest: built.assetManifest,
       assets: built.assets,
       buildKey,
+      createdAt: new Date().toISOString(),
       mainModule: built.mainModule,
       modules: built.modules,
+      status: "complete",
+      ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
+      ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
     };
     await store.put(artifact);
-    const resolvedSource = memoizeArtifact(artifact);
-    await noteLastGoodBuild(store, context, buildKey);
-    return resolvedSource;
+    return memoizeArtifact(artifact);
   } catch (error) {
-    // This attempt's build is dead, so clear the marker it set (a stranded
-    // marker holds budgeted callers in "building" until its TTL) — but only
-    // when it actually MARKED: a failure before that point must not wipe a
-    // marker a concurrent sibling is relying on. The marker is per-key, so a
-    // failed attempt clearing while a sibling still runs remains possible —
-    // that costs duplicate (idempotent) builds, deliberately preferred over
-    // the TTL-long wedge a stranded marker causes. Only GENUINE failures are
-    // additionally recorded; unclassified runtime and cache errors stay
-    // retryable.
-    const bookkeeping = marked ? [store.clearBuildInFlight(buildKey).catch(() => {})] : [];
     if (isWorkerBuildFailedError(error)) {
-      bookkeeping.push(recordBuildFailure(store, buildKey, context.resolved, error));
+      await store.put({
+        buildKey,
+        ...(context.resolved.type === "repo" ? { commitOid: context.resolved.commitOid } : {}),
+        createdAt: new Date().toISOString(),
+        message: buildFailureMessageFromError(error),
+        status: "failed",
+      });
     }
-    await Promise.all(bookkeeping);
     throw error;
-  } finally {
-    buildsInFlight.delete(buildKey);
   }
 }
 
-function freshServe(
-  artifact: ResolvedWorkerSource,
-  resolved: ResolvedWorkerFileSource,
-): ServedWorkerSource {
-  if (resolved.type !== "repo") return artifact;
-  return { ...artifact, serveInfo: { commitOid: resolved.commitOid, status: "fresh" } };
+function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
+  const resolved: ResolvedWorkerSource = {
+    assetConfig: artifact.assetConfig,
+    assetManifest: artifact.assetManifest,
+    assets: artifact.assets,
+    cacheKey: artifact.buildKey,
+    mainModule: artifact.mainModule,
+    modules: artifact.modules,
+    wranglerConfig: artifact.wranglerConfig,
+  };
+  if (resolvedArtifactMemo.size >= RESOLVED_ARTIFACT_MEMO_LIMIT) {
+    const oldest = resolvedArtifactMemo.keys().next().value;
+    if (oldest !== undefined) resolvedArtifactMemo.delete(oldest);
+  }
+  resolvedArtifactMemo.set(artifact.buildKey, resolved);
+  return resolved;
 }
 
-function staleServe(
-  lastGood: { artifact: ResolvedWorkerSource; record: WorkerLastGoodBuild },
-  reason: "build-failed" | "building",
-  failure?: WorkerBuildFailure,
-): ServedWorkerSource {
+/** Pin a branch to a commit before hashing or reading its file snapshot. */
+async function resolveFileSource({
+  files,
+  projectId,
+}: {
+  files: WorkerFileSource;
+  projectId: string;
+}): Promise<ResolvedWorkerFileSource> {
+  if (files.type === "inline") {
+    return { files: files.files, type: "inline" };
+  }
+  if (files.ref !== undefined && "commitOid" in files.ref) {
+    return {
+      branch: files.ref.branch,
+      commitOid: files.ref.commitOid,
+      exclude: files.exclude,
+      include: files.include,
+      repoPath: files.repoPath,
+      type: "repo",
+    };
+  }
+
+  const repo = env.REPO.getByName(
+    DurableObjectNameCodec.stringify({ path: files.repoPath, projectId }),
+  );
+  const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
   return {
-    ...lastGood.artifact,
-    serveInfo: {
-      reason,
-      status: "stale",
-      ...(lastGood.record.commitOid !== undefined ? { commitOid: lastGood.record.commitOid } : {}),
-      ...(failure !== undefined ? { failure } : {}),
-    },
+    branch: head.branch,
+    commitOid: head.commitOid,
+    contentHash: head.contentHash,
+    exclude: files.exclude,
+    include: files.include,
+    repoPath: files.repoPath,
+    type: "repo",
   };
 }
 
-/**
- * The identity of "this worker" across commits — everything in the build key
- * EXCEPT source content. It addresses the mutable last-good pointer, so a
- * failed or in-flight build of new source can find the previous good artifact.
- *
- * Only live branch-head resolves participate: a pinned-commit ref names a
- * frozen build, and letting it read or move the pointer would regress the
- * branch worker's fallback to (or serve in place of) an arbitrary older
- * commit. Head-cache resolves are exactly the ones carrying a contentHash
- * (see build-key.ts).
- */
-async function workerLastGoodKey(context: ResolveContext): Promise<string | null> {
-  if (context.resolved.type !== "repo" || context.resolved.contentHash === undefined) return null;
-  return await stableSha256({
-    branch: context.resolved.branch,
-    exclude:
-      context.resolved.exclude === undefined ? undefined : [...context.resolved.exclude].sort(),
-    include:
-      context.resolved.include === undefined ? undefined : [...context.resolved.include].sort(),
-    options: context.options,
-    projectId: context.projectId,
-    repoPath: context.resolved.repoPath,
-    type: "worker-last-good-key",
-  });
-}
-
-// Last-good pointer writes ride cold builds plus ONE note per isolate per
-// (worker, build) — never the per-request hot path, which would trip KV's
-// one-write-per-second-per-key limit. Best-effort by design: a lost write
-// costs one stale-fallback opportunity, some other isolate rewrites it.
-const lastGoodNoted = new Set<string>();
-
-async function noteLastGoodBuild(
-  store: KvWorkerBuildArtifactStore,
-  context: ResolveContext,
-  buildKey: string,
-): Promise<void> {
-  const workerKey = await workerLastGoodKey(context);
-  if (workerKey === null) return;
-  const noteKey = `${workerKey}:${buildKey}`;
-  if (lastGoodNoted.has(noteKey)) return;
-  if (lastGoodNoted.size >= 512) lastGoodNoted.clear();
-  lastGoodNoted.add(noteKey);
-  const commitOid = context.resolved.type === "repo" ? context.resolved.commitOid : undefined;
-  await store
-    .putLastGood(workerKey, {
-      at: new Date().toISOString(),
-      buildKey,
-      ...(commitOid !== undefined ? { commitOid } : {}),
-    })
-    .catch(() => {
-      // A failed write must stay retryable by this isolate's next request.
-      lastGoodNoted.delete(noteKey);
-    });
-}
-
-/** The previous good build for this worker, loadable — or null (inline or
- * pinned source, no pointer yet, pointer at the current key, or artifact
- * expired). */
-async function lastGoodArtifact(
-  store: KvWorkerBuildArtifactStore,
-  context: ResolveContext,
-  currentBuildKey: string,
-): Promise<{ artifact: ResolvedWorkerSource; record: WorkerLastGoodBuild } | null> {
-  const workerKey = await workerLastGoodKey(context);
-  if (workerKey === null) return null;
-  const record = await store.getLastGood(workerKey);
-  if (record === null || record.buildKey === currentBuildKey) return null;
-  const artifact = await resolveCachedArtifact(record.buildKey);
-  if (artifact === null) return null;
-  return { artifact, record };
-}
-
-async function recordBuildFailure(
-  store: KvWorkerBuildArtifactStore,
-  buildKey: string,
-  resolved: ResolvedWorkerFileSource,
-  error: unknown,
-): Promise<void> {
-  const commitOid = resolved.type === "repo" ? resolved.commitOid : undefined;
-  await store
-    .putBuildFailure(buildKey, {
-      at: new Date().toISOString(),
-      // Already bounded by the backend's named wrap; message extraction here
-      // keeps locally-thrown failures (none today) equally safe.
-      message: error instanceof Error ? error.message : String(error),
-      ...(commitOid !== undefined ? { commitOid } : {}),
-    })
-    .catch(() => {});
-}
-
-// Per-isolate dedupe for fetch-lane background rebuilds. Presence-only — the
-// promise itself is never shared across requests (workerd's cross-request-I/O
-// trap); other requests just skip dispatching a duplicate.
-const backgroundBuilds = new Set<string>();
-
-function dispatchBackgroundBuild(input: {
-  buildKey: string;
-  context: ResolveContext;
-  store: KvWorkerBuildArtifactStore;
-  waitUntil: (promise: Promise<unknown>) => void;
-}): void {
-  const { buildKey, context, store } = input;
-  if (backgroundBuilds.has(buildKey)) return;
-  backgroundBuilds.add(buildKey);
-  input.waitUntil(
-    (async () => {
-      try {
-        // Another isolate's build marked in-flight; its artifact write will
-        // land — do not pile a duplicate build on top.
-        if (await store.isBuildInFlight(buildKey)) return;
-        await runBuild(store, context, buildKey);
-      } catch (error) {
-        // Genuine build failures were recorded inside runBuild; anything
-        // else (runtime interruption, repo/cache failure, cancellation) just
-        // ends this attempt — the next request redispatches.
-        if (!isWorkerBuildFailedError(error)) {
-          console.warn(
-            `background worker build attempt failed for ${buildKey.slice(0, 12)}`,
-            error,
-          );
-        }
-      } finally {
-        backgroundBuilds.delete(buildKey);
-      }
-    })(),
-  );
-}
-
-/** The full file map for a resolved source. Only runs on artifact-cache
- * misses, so warm loads never touch the repo. */
+/** Read source files only on an artifact-cache miss. */
 async function resolvedSourceFiles(
   projectId: string,
   resolved: ResolvedWorkerFileSource,
@@ -517,112 +241,6 @@ async function resolvedSourceFiles(
   return snapshot.files;
 }
 
-/**
- * A previously built artifact by exact cache key — memo then KV, never a
- * build. This is the stale-while-rebuild read: the stateful worker host keeps
- * serving the version it already ran while the fresh resolve happens in the
- * background. Null when the artifact expired (or the key was a loader-ready
- * fast-path hash, which never enters the store) — callers fall back to a
- * blocking resolve.
- */
-export async function resolveCachedArtifact(
-  cacheKey: string,
-): Promise<ResolvedWorkerSource | null> {
-  const memoized = resolvedArtifactMemo.get(cacheKey);
-  if (memoized !== undefined) return memoized;
-  const artifact = await new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE).get(cacheKey);
-  return artifact === null ? null : memoizeArtifact(artifact);
-}
-
-function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
-  const resolved: ResolvedWorkerSource = {
-    assets: artifact.assets,
-    cacheKey: artifact.buildKey,
-    mainModule: artifact.mainModule,
-    modules: artifact.modules,
-  };
-  if (resolvedArtifactMemo.size >= RESOLVED_ARTIFACT_MEMO_LIMIT) {
-    const oldest = resolvedArtifactMemo.keys().next().value;
-    if (oldest !== undefined) resolvedArtifactMemo.delete(oldest);
-  }
-  resolvedArtifactMemo.set(artifact.buildKey, resolved);
-  return resolved;
-}
-
-// The fast-path cache key deliberately shares no space with workerBuildKey:
-// both hashes carry a distinct `type` discriminant, so a verbatim load can
-// never collide with a built artifact in the Worker Loader's cache.
-async function loaderReadyInlineSource(
-  source: DynamicWorkerSource,
-  options: WorkerBuildOptions,
-): Promise<ResolvedWorkerSource | null> {
-  if (source.files.type !== "inline" || options.bundle !== false) return null;
-  if (options.entryPoint === undefined) return null;
-  const fileNames = Object.keys(source.files.files);
-  if (!fileNames.includes(options.entryPoint)) return null;
-  if (!fileNames.every((name) => name.endsWith(".js") || name.endsWith(".mjs"))) return null;
-  return {
-    assets: {},
-    cacheKey: await stableSha256({
-      entryPoint: options.entryPoint,
-      files: source.files.files,
-      type: "loader-ready-inline-worker-source",
-    }),
-    mainModule: options.entryPoint,
-    modules: source.files.files,
-  };
-}
-
-/** Pin any late-bound source identity (a branch name) to a commit so build key
- * and artifact are immutable and auditable. Repo sources that omit `exclude`
- * get the canonical default masks HERE — before the key is computed — so a
- * bare `{ type: "repo", repoPath }` ref (the template's app refs, most
- * userland refs) and defaultProjectWorkerRef hash to the same project-scoped
- * artifact. */
-async function resolveFileSource({
-  projectId,
-  source,
-}: {
-  projectId: string;
-  source: DynamicWorkerSource;
-}): Promise<ResolvedWorkerFileSource> {
-  if (source.files.type === "inline") {
-    return { files: source.files.files, type: "inline" };
-  }
-  const exclude = source.files.exclude ?? DEFAULT_REPO_WORKER_SOURCE_EXCLUDE;
-
-  if (source.files.ref !== undefined && "commitOid" in source.files.ref) {
-    return {
-      branch: source.files.ref.branch,
-      commitOid: source.files.ref.commitOid,
-      exclude,
-      include: source.files.include,
-      repoPath: source.files.repoPath,
-      type: "repo",
-    };
-  }
-
-  // Branch refs are deliberately late-bound: a DynamicWorkerRef names "the
-  // worker at this repo path", not a frozen commit, so source changes are
-  // visible on next use. The repo answers branch -> head from its durable
-  // head cache.
-  const repo = env.REPO.getByName(
-    DurableObjectNameCodec.stringify({ path: source.files.repoPath, projectId }),
-  );
-  const head = await repo.getHead(
-    source.files.ref === undefined ? {} : { branch: source.files.ref.branch },
-  );
-  return {
-    branch: head.branch,
-    commitOid: head.commitOid,
-    contentHash: head.contentHash,
-    exclude,
-    include: source.files.include,
-    repoPath: source.files.repoPath,
-    type: "repo",
-  };
-}
-
 export function loadResolvedWorker({
   bindings,
   globalOutbound,
@@ -638,20 +256,12 @@ export function loadResolvedWorker({
   resolved: ResolvedWorkerSource;
   scopePath: string;
 }): WorkerStub {
-  // The Worker Loader cache must separate all runtime-relevant dimensions. In
-  // particular `scopePath` prevents a worker loaded for an agent path from
-  // reusing a project-root `env.ITX` binding, even if the module bytes match.
   const exportKey =
     ref.type === "stateless"
       ? `entrypoint:${ref.entrypoint ?? "default"}`
       : `durable-object:${ref.className}`;
   const cacheKey = [
     "worker-loader",
-    // The hosting worker's own name. Loader caches are shared across parent
-    // workers when they run in one workerd (vitest-pool-workers; a future
-    // second LOADER holder), and a cached isolate only works for the parent
-    // whose loopback stubs it was created with — a foreign hit fails as an
-    // opaque "internal error" (#1614).
     env.WORKER_SELF,
     projectId,
     ref.path,
@@ -661,13 +271,8 @@ export function loadResolvedWorker({
     resolved.cacheKey,
   ].join(":");
   return env.LOADER.get(cacheKey, () => ({
-    compatibilityDate: WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
-    // ITERATE_WORKER_VERSION is the worker's own build identity — the same
-    // content-addressed key this loader caches by. Its one job is to change
-    // exactly when the worker's source does: the SDK's processor registry
-    // uses it as the deploy version whose change resets a crash-looping
-    // keepalive's backoff budget (the "antidote deploy" lane).
+    compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,
     env: { ...bindings, ITERATE_WORKER_VERSION: resolved.cacheKey },
     globalOutbound,
     mainModule: resolved.mainModule,

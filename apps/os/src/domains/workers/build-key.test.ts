@@ -1,19 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { projectWorkerBuildKey, workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
+import { workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
 import { WORKER_BUNDLER_VERSION } from "./build-backend.ts";
+
+const buildSource = (entryPoint: string): WorkerBuildInput["source"] => ({
+  createWorker: {
+    entryPoint,
+    files: { files: {}, type: "inline" },
+  },
+});
 
 const baseInput: WorkerBuildInput = {
   compatibilityDate: "2026-05-01",
   compatibilityFlags: ["nodejs_compat"],
-  options: { entryPoint: "worker.ts" },
-  source: {
+  files: {
     commitOid: "a".repeat(40),
     exclude: [".git/**", "node_modules/**"],
     include: ["worker.ts", "package.json"],
     repoPath: "/",
     type: "repo",
   },
+  source: buildSource("worker.ts"),
 };
 
 describe("workerBuildKey", () => {
@@ -24,12 +31,12 @@ describe("workerBuildKey", () => {
     expect(
       await workerBuildKey({
         ...baseInput,
-        source: {
-          ...baseInput.source,
+        files: {
+          ...baseInput.files,
           type: "repo",
           exclude: ["node_modules/**", ".git/**"],
           include: ["package.json", "worker.ts"],
-        } as WorkerBuildInput["source"],
+        } as WorkerBuildInput["files"],
       }),
     ).toBe(key);
   });
@@ -39,14 +46,24 @@ describe("workerBuildKey", () => {
     const variants: WorkerBuildInput[] = [
       { ...baseInput, compatibilityDate: "2026-06-01" },
       { ...baseInput, compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"] },
-      { ...baseInput, options: { entryPoint: "worker.ts", minify: true } },
+      { ...baseInput, source: buildSource("different.ts") },
       {
         ...baseInput,
-        source: { commitOid: "b".repeat(40), repoPath: "/", type: "repo" },
+        source: {
+          createWorker: {
+            entryPoint: "worker.ts",
+            files: { files: {}, type: "inline" },
+            virtualModules: { "iterate/sdk": "user override" },
+          },
+        },
       },
       {
         ...baseInput,
-        source: { files: { "worker.js": "export default {};" }, type: "inline" },
+        files: { commitOid: "b".repeat(40), repoPath: "/", type: "repo" },
+      },
+      {
+        ...baseInput,
+        files: { files: { "worker.js": "export default {};" }, type: "inline" },
       },
     ];
     for (const variant of variants) {
@@ -57,10 +74,10 @@ describe("workerBuildKey", () => {
   it("keys repo sources by content identity when the repo provides one", async () => {
     const withContent = (commitOid: string, contentHash: string): WorkerBuildInput => ({
       ...baseInput,
-      source: { commitOid, contentHash, repoPath: "/", type: "repo" },
+      files: { commitOid, contentHash, repoPath: "/", type: "repo" },
     });
-    // Same content under different commits converges on one content key. The
-    // project wrapper below still prevents cross-project artifact sharing.
+    // Same source and build options converge on one cached build request even
+    // when equivalent content appears under different commits.
     expect(await workerBuildKey(withContent("a".repeat(40), "content-1"))).toBe(
       await workerBuildKey(withContent("b".repeat(40), "content-1")),
     );
@@ -73,22 +90,11 @@ describe("workerBuildKey", () => {
   it("hashes inline file contents into the key", async () => {
     const inline = (content: string): WorkerBuildInput => ({
       ...baseInput,
-      source: { files: { "worker.js": content }, type: "inline" },
+      files: { files: { "worker.js": content }, type: "inline" },
     });
     expect(await workerBuildKey(inline("export default 1;"))).not.toBe(
       await workerBuildKey(inline("export default 2;")),
     );
-  });
-
-  it("scopes the project tier by project without losing determinism", async () => {
-    const contentKey = await workerBuildKey(baseInput);
-    const projectKey = await projectWorkerBuildKey("prj_one", contentKey);
-    expect(projectKey).toMatch(/^[a-f0-9]{64}$/);
-    expect(await projectWorkerBuildKey("prj_one", contentKey)).toBe(projectKey);
-    // Dependency ranges resolve at build time, so runtime artifacts stay
-    // project-scoped even when two projects begin with identical source.
-    expect(await projectWorkerBuildKey("prj_two", contentKey)).not.toBe(projectKey);
-    expect(projectKey).not.toBe(contentKey);
   });
 
   it("pins the build-key version to the worker-bundler dependency", () => {
