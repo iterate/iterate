@@ -73,7 +73,7 @@ export async function executeWorkerBuild(input: {
     // paths that actually need those packages still fail loudly at call time.
     return {
       mainModule: collected.mainModule,
-      modules: stubBareNpmExternals(collected.modules),
+      modules: polyfillEsbuildNodeRequire(stubBareNpmExternals(collected.modules)),
     };
   } catch (error) {
     if (error instanceof WorkerBuildFailedError) throw error;
@@ -193,6 +193,102 @@ export function bareModuleSpecifiers(source: string): string[] {
     }
   }
   return [...found].sort();
+}
+
+/**
+ * Node builtins workerd provides under `nodejs_compat` (our Worker Loader
+ * mounts every isolate with that flag). esbuild's CJS→ESM interop emits a
+ * `__require` helper that throws `Dynamic require of "node:os" is not
+ * supported` at runtime even with `platform: "node"`, because the ESM
+ * isolate has no CommonJS `require`. Rewrite that helper to serve real
+ * `node:*` modules instead.
+ */
+const WORKERD_NODE_BUILTINS = [
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "constants",
+  "crypto",
+  "diagnostics_channel",
+  "dns",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "module",
+  "net",
+  "os",
+  "path",
+  "process",
+  "querystring",
+  "stream",
+  "string_decoder",
+  "timers",
+  "tls",
+  "tty",
+  "url",
+  "util",
+  "zlib",
+] as const;
+
+/** Exported for unit tests. */
+export function polyfillEsbuildNodeRequire(
+  modules: Record<string, string>,
+): Record<string, string> {
+  let touched = false;
+  const out: Record<string, string> = {};
+  for (const [name, source] of Object.entries(modules)) {
+    if (!source.includes('Dynamic require of "') && !source.includes("Dynamic require of '")) {
+      out[name] = source;
+      continue;
+    }
+    // esbuild emits exactly:
+    //   throw Error('Dynamic require of "' + x + '" is not supported')
+    // (single-quoted outer string, double quotes around the inserted id).
+    // Replace the throw with a lookup into a prelude-provided table.
+    const rewritten = source
+      .replace(
+        /throw Error\('Dynamic require of "' \+ (\w+) \+ '" is not supported'\)/g,
+        "return __iterateNodeRequire($1)",
+      )
+      .replace(
+        /throw new Error\('Dynamic require of "' \+ (\w+) \+ '" is not supported'\)/g,
+        "return __iterateNodeRequire($1)",
+      )
+      .replace(
+        /throw Error\("Dynamic require of '" \+ (\w+) \+ "' is not supported"\)/g,
+        "return __iterateNodeRequire($1)",
+      );
+    if (rewritten === source) {
+      out[name] = source;
+      continue;
+    }
+    touched = true;
+    out[name] = `${nodeRequirePrelude()}\n${rewritten}`;
+  }
+  return touched ? out : modules;
+}
+
+function nodeRequirePrelude(): string {
+  const imports = WORKERD_NODE_BUILTINS.map(
+    (name) => `import * as __iterate_node_${name} from ${JSON.stringify(`node:${name}`)};`,
+  ).join("\n");
+  const entries = WORKERD_NODE_BUILTINS.flatMap((name) => [
+    `${JSON.stringify(name)}: __iterate_node_${name}`,
+    `${JSON.stringify(`node:${name}`)}: __iterate_node_${name}`,
+  ]).join(",\n  ");
+  return `${imports}
+const __iterateNodeBuiltins = {
+  ${entries}
+};
+function __iterateNodeRequire(id) {
+  const mod = __iterateNodeBuiltins[id];
+  if (mod !== undefined) return mod;
+  throw Error('Dynamic require of "' + id + '" is not supported');
+}
+`;
 }
 
 /**

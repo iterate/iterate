@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { bareModuleSpecifiers, stubBareNpmExternals } from "./build-backend.ts";
+import {
+  bareModuleSpecifiers,
+  polyfillEsbuildNodeRequire,
+  stubBareNpmExternals,
+} from "./build-backend.ts";
 
 describe("bareModuleSpecifiers", () => {
   it("finds import and require bare names and ignores relatives", () => {
@@ -51,5 +55,30 @@ describe("stubBareNpmExternals", () => {
     const out = stubBareNpmExternals(modules);
     expect(out["form-data"]).toBe("export default 'real';\n");
     expect(out["bundle.js"]).toBe(modules["bundle.js"]);
+  });
+});
+
+describe("polyfillEsbuildNodeRequire", () => {
+  it("rewrites esbuild's Dynamic require helper to serve node: builtins", () => {
+    const helper = `var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
+  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
+}) : x)(function(x) {
+  if (typeof require !== "undefined") return require.apply(this, arguments);
+  throw Error('Dynamic require of "' + x + '" is not supported');
+});
+var os = __require("node:os");
+export default os;
+`;
+    const out = polyfillEsbuildNodeRequire({ "bundle.js": helper });
+    expect(out["bundle.js"]).toContain('import * as __iterate_node_os from "node:os"');
+    expect(out["bundle.js"]).toContain("return __iterateNodeRequire(x)");
+    expect(out["bundle.js"]).not.toMatch(
+      /throw Error\('Dynamic require of "' \+ x \+ '" is not supported'\)/,
+    );
+  });
+
+  it("leaves modules without the helper untouched", () => {
+    const modules = { "bundle.js": "export default {};\n" };
+    expect(polyfillEsbuildNodeRequire(modules)).toBe(modules);
   });
 });
