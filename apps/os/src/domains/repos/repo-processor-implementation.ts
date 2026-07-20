@@ -1,5 +1,9 @@
 import { StreamProcessor, type EmittedInput } from "iterate/processors";
-import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
+import {
+  REPO_DEFAULT_BRANCH,
+  RepoProcessorContract,
+  type RepoCreateRequest,
+} from "./repo-processor-contract.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
@@ -51,7 +55,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         if (state.createRequest !== null) {
           throw new Error("repo received more than one create-requested event");
         }
-        return { ...state, createRequest: event.payload };
+        return {
+          ...state,
+          createRequest: event.payload,
+          // Every creation mode targets main. Record that invariant with the
+          // intent so an Artifact push racing the terminal certificate is
+          // still normalized into durable commit/task facts.
+          defaultBranch: REPO_DEFAULT_BRANCH,
+        };
       case "events.iterate.com/repos/created":
         if (state.birthCertificate !== null) {
           throw new Error("repo received more than one created event");

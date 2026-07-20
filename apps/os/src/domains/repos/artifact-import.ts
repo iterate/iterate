@@ -1,3 +1,32 @@
+import { isRepoNotSeededError } from "./utils.ts";
+
+const READY_ATTEMPTS = 120;
+const READY_RETRY_MS = 1_000;
+
+async function waitForArtifactReady(
+  artifacts: Pick<Artifacts, "get">,
+  name: string,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= READY_ATTEMPTS; attempt += 1) {
+    try {
+      await artifacts.get(name);
+      return;
+    } catch (error) {
+      if (!isRepoNotSeededError(error)) throw error;
+      lastError = error;
+    }
+
+    if (attempt < READY_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, READY_RETRY_MS));
+    }
+  }
+
+  throw new Error(`Artifact ${name} was not ready after ${READY_ATTEMPTS} attempts.`, {
+    cause: lastError,
+  });
+}
+
 /**
  * Ask Cloudflare Artifacts to clone a public GitHub repository directly.
  * The deterministic target name makes a completed retry equivalent to
@@ -26,5 +55,5 @@ export async function importGithubArtifact(
   // import() can be retried after its side effect committed but before the
   // caller observed the response. Never equate a reserved name with a ready
   // repository: get() is the Artifacts readiness barrier.
-  await artifacts.get(input.name);
+  await waitForArtifactReady(artifacts, input.name);
 }

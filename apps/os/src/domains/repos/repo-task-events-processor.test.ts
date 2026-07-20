@@ -349,6 +349,26 @@ describe("RepoProcessor task change events", () => {
     });
   });
 
+  it("preserves a creation push that arrives before the created certificate", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const taskChangesForArtifactPush = vi.fn(async () => []);
+    const repo = newRepoProcessor(stream, taskChangesForArtifactPush);
+
+    await stream.append(REPO_CREATE_REQUESTED, artifactPush("main"));
+    await repo.runner.catchUp();
+    await repo.runner.catchUp();
+
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
+    ).toBe(true);
+    expect(taskChangesForArtifactPush).toHaveBeenCalledWith({
+      afterCommitOid: "after456",
+      beforeCommitOid: "before123",
+      branch: "main",
+    });
+  });
+
   it("ignores pushes to non-default branches", async () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");

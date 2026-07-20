@@ -6,6 +6,8 @@ import {
 } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
+export const REPO_DEFAULT_BRANCH = "main";
+
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the
  * App installation whose token authenticates pushes) plus the owner/repo

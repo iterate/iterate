@@ -53,7 +53,7 @@ import {
   isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { REPO_DEFAULT_BRANCH, RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { linkRepoToGithub } from "./github-link.ts";
 import {
@@ -69,8 +69,6 @@ import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-eve
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifact } from "./artifact-import.ts";
-
-const REPO_DEFAULT_BRANCH = "main";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;

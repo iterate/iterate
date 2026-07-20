@@ -67,23 +67,32 @@ describe("importGithubArtifact", () => {
     expect(artifacts.get).toHaveBeenCalledWith("project--repo");
   });
 
-  test("does not accept an existing target that is not ready", async () => {
-    const artifacts = fakeArtifacts();
-    artifacts.import.mockRejectedValueOnce(
-      Object.assign(new Error("already exists"), { code: "ALREADY_EXISTS" }),
-    );
-    artifacts.get.mockRejectedValueOnce(
-      Object.assign(new Error("still importing"), { code: "IMPORT_IN_PROGRESS" }),
-    );
+  test("waits for an existing target whose import is still in progress", async () => {
+    vi.useFakeTimers();
+    try {
+      const artifacts = fakeArtifacts();
+      artifacts.import.mockRejectedValueOnce(
+        Object.assign(new Error("already exists"), { code: "ALREADY_EXISTS" }),
+      );
+      artifacts.get
+        .mockRejectedValueOnce(
+          Object.assign(new Error("still importing"), { code: "IMPORT_IN_PROGRESS" }),
+        )
+        .mockResolvedValueOnce({} as ArtifactsRepo);
 
-    await expect(
-      importGithubArtifact(artifacts, {
+      const imported = importGithubArtifact(artifacts, {
         branch: "main",
         name: "project--repo",
         owner: "iterate",
         repo: "iterate",
-      }),
-    ).rejects.toMatchObject({ code: "IMPORT_IN_PROGRESS" });
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(imported).resolves.toBeUndefined();
+      expect(artifacts.get).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("does not hide import failures", async () => {
