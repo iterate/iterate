@@ -12,7 +12,7 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { describe, expect, test } from "vitest";
-import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { seedPets } from "./pets.ts";
 import { randomSealKey } from "./seal.ts";
 import { DEFAULT_APP_ID, DEFAULT_INSTALLATION_ID, PetshopStateDurableObject } from "./state.ts";
