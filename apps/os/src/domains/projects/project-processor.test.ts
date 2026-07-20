@@ -97,7 +97,7 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/stream/subscription-configured",
     ]);
     expect(network.eventsAt("/repos/config").map((event) => event.type)).toEqual([
-      "events.iterate.com/repo/created",
+      "events.iterate.com/repos/create-requested",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
     ]);
@@ -198,12 +198,11 @@ describe("ProjectProcessor bootstrap", () => {
     await driver.deliver();
 
     await stream.append({
-      type: "events.iterate.com/repo/ready",
+      type: "events.iterate.com/repos/created",
       payload: {
+        request: { type: "empty" },
         artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
         defaultBranch: "main",
-        path: "/repos/config",
-        projectId: "prj_test",
         remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
       },
       source: {
@@ -214,7 +213,7 @@ describe("ProjectProcessor bootstrap", () => {
             offset: 4,
             path: "/repos/config",
             projectId: "prj_test",
-            type: "events.iterate.com/repo/ready",
+            type: "events.iterate.com/repos/created",
           },
         ],
       },

@@ -80,13 +80,25 @@ function githubCrossPostSubscriptionEvent(input: {
   };
 }
 
-export async function linkRepoToGithub(input: {
-  connection: string;
-  owner: string;
-  projectId: string;
-  repo: string;
-  repoPath: string;
-}): Promise<LinkGithubResult> {
+type LinkRepoToGithubOptions = {
+  repo?: {
+    configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink>;
+    getGithubLink(): GithubRepoLink | null | Promise<GithubRepoLink | null>;
+    pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;
+  };
+  skipInitialPush?: boolean;
+};
+
+export async function linkRepoToGithub(
+  input: {
+    connection: string;
+    owner: string;
+    projectId: string;
+    repo: string;
+    repoPath: string;
+  },
+  options: LinkRepoToGithubOptions = {},
+): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
   // Trim at the boundary: a padded owner/repo would store a link (and a
   // GitHub coordinates) API calls never match — mirroring
@@ -152,8 +164,8 @@ export async function linkRepoToGithub(input: {
     repo,
     repositoryId,
   };
-  const repoStub = repoDurableObjectStub(input.projectId, repoPath);
-  const previous = await repoStub.getGithubLink();
+  const repoTarget = options.repo ?? repoDurableObjectStub(input.projectId, repoPath);
+  const previous = await repoTarget.getGithubLink();
   const subscriptionKey = githubCrossPostSubscriptionKey(repoPath);
 
   // Re-linking through a DIFFERENT connection: the previous connection's
@@ -197,7 +209,7 @@ export async function linkRepoToGithub(input: {
         subscriptionKey,
       }),
     );
-    await repoStub.configureGithubLink(link);
+    await repoTarget.configureGithubLink(link);
   } catch (error) {
     const compensations: string[] = [];
     // Roll back the new subscription (a no-op fold if the failure happened
@@ -248,11 +260,15 @@ export async function linkRepoToGithub(input: {
   // pre-existing GitHub repo with unrelated history is the expected case —
   // the caller then picks syncFromGithub() or pushToGithub({ force: true })).
   let initialPush: LinkGithubResult["initialPush"];
-  try {
-    const pushed = await repoStub.pushToGithub({});
-    initialPush = { commitOid: pushed.commitOid, ok: true };
-  } catch (error) {
-    initialPush = { error: String(error), ok: false };
+  if (options.skipInitialPush === true) {
+    initialPush = { ok: true, skipped: true };
+  } else {
+    try {
+      const pushed = await repoTarget.pushToGithub({});
+      initialPush = { commitOid: pushed.commitOid, ok: true };
+    } catch (error) {
+      initialPush = { error: String(error), ok: false };
+    }
   }
 
   return { ...link, created, initialPush };

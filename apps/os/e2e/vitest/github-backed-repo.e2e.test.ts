@@ -27,7 +27,7 @@ test("github pushes about a linked repository cross-post onto the repo stream", 
   // A real repo, so the repo processor is live on the target stream and must
   // coexist with (ignore) the cross-posted webhook events.
   using repo = project.repos.get(repoPath);
-  await repo.create();
+  await repo.create({ type: "empty" });
 
   using connectionStream = project.streams.get(connectionPath);
   using repoStream = project.streams.get(repoPath);

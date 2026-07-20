@@ -34,7 +34,16 @@ function newRepoProcessor(
     observeArtifactPush,
     taskChangesForArtifactPush,
     syncFromGithubPush,
-    createRepoArtifact: async () => {
+    createEmptyArtifact: async () => {
+      throw new Error("not under test");
+    },
+    importPublicGithubArtifact: async () => {
+      throw new Error("not under test");
+    },
+    linkGithub: async () => {
+      throw new Error("not under test");
+    },
+    syncPrivateGithub: async () => {
       throw new Error("not under test");
     },
   });
@@ -42,18 +51,17 @@ function newRepoProcessor(
   return { processor, runner };
 }
 
-const REPO_CREATED = {
-  type: "events.iterate.com/repo/created" as const,
-  payload: { config: {} },
+const REPO_CREATE_REQUESTED = {
+  type: "events.iterate.com/repos/create-requested" as const,
+  payload: { type: "empty" as const },
 };
 
-const REPO_READY = {
-  type: "events.iterate.com/repo/ready" as const,
+const REPO_CREATED = {
+  type: "events.iterate.com/repos/created" as const,
   payload: {
+    request: REPO_CREATE_REQUESTED.payload,
     artifactName: "artifact",
     defaultBranch: "main",
-    path: "/repos/config",
-    projectId: "prj_1",
     remote: "https://example.com/repo.git",
   },
 };
@@ -132,7 +140,7 @@ describe("RepoProcessor task change events", () => {
     const network = new MemoryStreamNetwork();
     const stream = network.get("/repos/config");
     const repo = newRepoProcessor(stream, async () => []);
-    await stream.append(REPO_CREATED, REPO_CREATED);
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, REPO_CREATED);
 
     await expect(repo.runner.catchUp()).rejects.toThrow(
       "repo received more than one created event",
@@ -146,7 +154,7 @@ describe("RepoProcessor task change events", () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, githubPush());
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, GITHUB_LINK_CONFIGURED, githubPush());
     await repo.runner.catchUp();
 
     expect(syncFromGithubPush).not.toHaveBeenCalled();
@@ -201,7 +209,12 @@ describe("RepoProcessor task change events", () => {
     const syncFromGithubPush = vi.fn(async () => ({ commitOid: "github-head" }));
     const repo = newRepoProcessor(stream, async () => [], syncFromGithubPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, githubPush(webhookInput));
+    await stream.append(
+      REPO_CREATE_REQUESTED,
+      REPO_CREATED,
+      GITHUB_LINK_CONFIGURED,
+      githubPush(webhookInput),
+    );
     await repo.runner.catchUp();
     await repo.runner.catchUp();
 
@@ -222,7 +235,7 @@ describe("RepoProcessor task change events", () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush, syncFromGithubPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, GITHUB_LINK_CONFIGURED, githubPush());
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, GITHUB_LINK_CONFIGURED, githubPush());
     await repo.runner.catchUp();
     await repo.runner.catchUp();
     await vi.waitFor(() =>
@@ -256,8 +269,8 @@ describe("RepoProcessor task change events", () => {
     const repo = newRepoProcessor(stream, async () => [], syncFromGithubPush);
 
     await stream.append(
+      REPO_CREATE_REQUESTED,
       REPO_CREATED,
-      REPO_READY,
       GITHUB_LINK_CONFIGURED,
       {
         type: "events.iterate.com/repo/github-import-requested",
@@ -298,7 +311,7 @@ describe("RepoProcessor task change events", () => {
     ]);
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, artifactPush("main"));
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, artifactPush("main"));
     await repo.runner.catchUp();
     await repo.runner.catchUp();
 
@@ -342,7 +355,7 @@ describe("RepoProcessor task change events", () => {
     const taskChangesForArtifactPush = vi.fn(async () => []);
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, artifactPush("feature"));
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, artifactPush("feature"));
     await repo.runner.catchUp();
 
     expect(taskChangesForArtifactPush).not.toHaveBeenCalled();
@@ -359,7 +372,7 @@ describe("RepoProcessor task change events", () => {
     ];
     const repo = newRepoProcessor(stream, taskChangesForArtifactPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, artifactPush("main"));
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, artifactPush("main"));
     await repo.runner.catchUp();
     await repo.runner.catchUp();
     const journalLength = stream.events.length;
@@ -381,8 +394,8 @@ describe("RepoProcessor task change events", () => {
 
     const zeroOid = "0".repeat(40);
     await stream.append(
+      REPO_CREATE_REQUESTED,
       REPO_CREATED,
-      REPO_READY,
       artifactPush("main"),
       artifactPush("main", { after: zeroOid, before: "after456" }),
     );
@@ -410,7 +423,7 @@ describe("RepoProcessor task change events", () => {
     const observeArtifactPush = vi.fn();
     const repo = newRepoProcessor(stream, async () => [], undefined, observeArtifactPush);
 
-    await stream.append(REPO_CREATED, REPO_READY, artifactPush("feature"));
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATED, artifactPush("feature"));
     await repo.runner.catchUp();
 
     expect(observeArtifactPush).not.toHaveBeenCalled();

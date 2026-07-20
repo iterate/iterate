@@ -558,7 +558,7 @@ const beforeText = "status: draft\\n";
 const afterText = "status: reviewed\\n";
 
 // Path-scoped repos need first-use creation; the default config repo already exists.
-if (vars.repoPath) await repo.create();
+if (vars.repoPath) await repo.create({ type: "empty" });
 
 // Seed a known starting point. Agents can skip this when editing an existing file.
 await repo.commitFiles({
@@ -566,7 +566,7 @@ await repo.commitFiles({
   changes: [{ path, content: "# Edit example\\n\\n" + beforeText }],
 });
 
-// create waits for repo/ready, and commitFiles is a read-your-write boundary.
+// create waits for repos/created, and commitFiles is a read-your-write boundary.
 const before = await repo.readFile({ path });
 if (before === null) throw new Error("Expected seeded file to exist.");
 

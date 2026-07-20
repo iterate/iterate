@@ -31,7 +31,41 @@ const RepoCommitCompletedPayload = z.object({
   commitOid: z.string().trim().min(1),
 });
 
-const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
+export const RepoCreateRequest = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("empty") }),
+  z.strictObject({
+    type: z.literal("github-private"),
+    connection: z.string().trim().min(1),
+    owner: z.string().trim().min(1),
+    repo: z.string().trim().min(1),
+  }),
+  z.strictObject({
+    type: z.literal("github-public"),
+    connection: z.string().trim().min(1),
+    owner: z.string().trim().min(1),
+    repo: z.string().trim().min(1),
+  }),
+]);
+
+export type RepoCreateRequest = z.infer<typeof RepoCreateRequest>;
+
+const RepoBirthCertificate = z.strictObject({
+  request: RepoCreateRequest,
+  artifactName: z.string().trim().min(1),
+  defaultBranch: z.string().trim().min(1),
+  remote: z.string().url(),
+});
+
+// Replayed by existing repos when the 0.4 reducer refolds their journals.
+// New creation uses the `repos/*` saga facts below.
+const LegacyRepoBirthCertificate = z.strictObject({ config: z.unknown() });
+const LegacyRepoReady = z.object({
+  artifactName: z.string(),
+  defaultBranch: z.string(),
+  path: z.string(),
+  projectId: z.string().nullable(),
+  remote: z.string(),
+});
 
 const GithubWebhookReceivedPayload = z
   .object({
@@ -50,13 +84,16 @@ const GithubWebhookReceivedPayload = z
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.2.0",
+  version: "0.4.0",
   description:
     "Projects repo lifecycle, Git activity, task changes, and linked GitHub default-branch imports.",
   stateSchema: z.object({
-    birthCertificate: RepoBirthCertificate.nullable().default(null),
+    birthCertificate: z
+      .union([RepoBirthCertificate, LegacyRepoBirthCertificate])
+      .nullable()
+      .default(null),
+    createRequest: RepoCreateRequest.nullable().default(null),
     artifactName: z.string().nullable().default(null),
-    ready: z.boolean().default(false),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
     /** A GitHub default-branch import obligation. The webhook is first
@@ -85,29 +122,66 @@ export const RepoProcessorContract = defineProcessorContract({
     remote: z.string().nullable().default(null),
   }),
   events: {
-    "events.iterate.com/repo/created": {
-      description: "Creates a repo processor on this stream.",
-      payloadSchema: RepoBirthCertificate,
+    "events.iterate.com/repos/create-requested": {
+      description:
+        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts with full history.",
+      payloadSchema: RepoCreateRequest,
       examples: [
         {
-          description: "A repo is born; its backing artifact is established asynchronously.",
-          payload: { config: {} },
+          description: "Create a repo containing Iterate's starter files.",
+          payload: { type: "empty" },
+        },
+        {
+          description: "Pull a private GitHub repository through the Worker at depth one.",
+          payload: {
+            type: "github-private",
+            connection: "install-87654321",
+            owner: "acme-inc",
+            repo: "private-app",
+          },
+        },
+        {
+          description:
+            "Ask Cloudflare Artifacts to import a public GitHub repository directly with full history.",
+          payload: {
+            type: "github-public",
+            connection: "install-87654321",
+            owner: "acme-inc",
+            repo: "public-app",
+          },
         },
       ],
     },
-    "events.iterate.com/repo/ready": {
-      description: "The repo's backing artifact is ready.",
-      payloadSchema: z.object({
-        artifactName: z.string(),
-        defaultBranch: z.string(),
-        path: z.string(),
-        projectId: z.string().nullable(),
-        remote: z.string(),
-      }),
+    "events.iterate.com/repos/created": {
+      description: "The repo creation saga completed and its backing Artifact is ready.",
+      payloadSchema: RepoBirthCertificate,
       examples: [
         {
           description:
             "The project's config repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
+          payload: {
+            request: { type: "empty" },
+            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
+            defaultBranch: "main",
+            remote:
+              "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repo/created": {
+      description: "Legacy repo birth fact retained for journal replay.",
+      payloadSchema: LegacyRepoBirthCertificate,
+      examples: [
+        { description: "A repo created before the creation saga.", payload: { config: {} } },
+      ],
+    },
+    "events.iterate.com/repo/ready": {
+      description: "Legacy Artifact-ready fact retained for journal replay.",
+      payloadSchema: LegacyRepoReady,
+      examples: [
+        {
+          description: "An existing repo's Artifact coordinates.",
           payload: {
             artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
             defaultBranch: "main",
@@ -453,6 +527,8 @@ export const RepoProcessorContract = defineProcessorContract({
   },
   processorDeps: [CoreProcessorContract],
   consumes: [
+    "events.iterate.com/repos/create-requested",
+    "events.iterate.com/repos/created",
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/ready",
     "events.iterate.com/repo/cloudflare-artifact-event-received",
@@ -473,8 +549,7 @@ export const RepoProcessorContract = defineProcessorContract({
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
-    "events.iterate.com/repo/created",
-    "events.iterate.com/repo/ready",
+    "events.iterate.com/repos/created",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/task-created",
     "events.iterate.com/repo/task-updated",

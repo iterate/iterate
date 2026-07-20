@@ -7,8 +7,25 @@ export type InstallationRepo = {
   fullName: string;
   name: string;
   owner: string;
+  private: boolean;
   pushedAt: string | null;
 };
+
+/** Repo creation currently adopts GitHub's `main` history. Reject unsupported
+ * selections before committing a durable saga request rather than leaving a
+ * seeded repo whose GitHub adoption can never complete. */
+export function assertInstallationRepoCanBeCreated(repo: InstallationRepo): void {
+  if (repo.pushedAt === null) {
+    throw new Error(
+      `${repo.fullName} has no commits yet. Create its first commit on GitHub first.`,
+    );
+  }
+  if (repo.defaultBranch !== "main") {
+    throw new Error(
+      `${repo.fullName} uses ${repo.defaultBranch} as its default branch. Repo creation currently supports GitHub repositories whose default branch is main.`,
+    );
+  }
+}
 
 /** Builtin GitHub connection names. Never throws (shared suspense cache key). */
 export async function listGithubConnections(itx: Itx): Promise<string[]> {
@@ -42,6 +59,7 @@ export async function listInstallationRepos(
             full_name: string;
             name: string;
             owner: { login: string };
+            private: boolean;
             pushed_at: string | null;
           }>;
           total_count: number;
@@ -54,6 +72,7 @@ export async function listInstallationRepos(
           fullName: r.full_name,
           name: r.name,
           owner: r.owner.login,
+          private: r.private,
           pushedAt: r.pushed_at,
         })),
       );

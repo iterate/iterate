@@ -18,6 +18,8 @@ const network = await vi.hoisted(async () => {
     githubLink: null as Record<string, unknown> | null,
     /** What the fake GitHub API answers: repo exists / missing / create fails. */
     githubRepoExists: true,
+    githubRepoPrivate: false,
+    githubRepoPushedAt: "2026-07-20T00:00:00Z" as string | null,
     githubRepositoryId: 101,
     githubCreateStatus: 201,
     pushShouldFail: false,
@@ -43,6 +45,8 @@ const network = await vi.hoisted(async () => {
       repoCalls.length = 0;
       state.githubLink = null;
       state.githubRepoExists = true;
+      state.githubRepoPrivate = false;
+      state.githubRepoPushedAt = "2026-07-20T00:00:00Z";
       state.githubRepositoryId = 101;
       state.githubCreateStatus = 201;
       state.pushShouldFail = false;
@@ -65,6 +69,8 @@ const network = await vi.hoisted(async () => {
                   default_branch: "main",
                   full_name: "acme/widgets",
                   id: state.githubRepositoryId,
+                  private: state.githubRepoPrivate,
+                  pushed_at: state.githubRepoPushedAt,
                 });
               }
               return Response.json({ message: "Not Found" }, { status: 404 });
@@ -233,6 +239,27 @@ describe("linkRepoToGithub", () => {
     });
   });
 
+  test("can link without pushing starter history during a creation saga", async () => {
+    seedConnectedFact();
+
+    const result = await linkRepoToGithub(linkInput(), { skipInitialPush: true });
+
+    expect(result.initialPush).toEqual({ ok: true, skipped: true });
+    expect(network.repoCalls.map((call) => call.method)).toEqual(["configureGithubLink"]);
+  });
+
+  test("direct linking still pushes the existing Artifact immediately", async () => {
+    seedConnectedFact();
+
+    const result = await linkRepoToGithub(linkInput());
+
+    expect(result.initialPush).toEqual({ commitOid: "abc123", ok: true });
+    expect(network.repoCalls.map((call) => call.method)).toEqual([
+      "configureGithubLink",
+      "pushToGithub",
+    ]);
+  });
+
   test("creates the GitHub repo (private, in-org) when it does not exist", async () => {
     seedConnectedFact();
     network.state.githubRepoExists = false;
@@ -281,6 +308,7 @@ describe("linkRepoToGithub", () => {
 
     const result = await linkRepoToGithub(linkInput());
     expect(result.initialPush.ok).toBe(false);
+    if (result.initialPush.ok) throw new Error("Expected the initial push to fail.");
     expect(result.initialPush.error).toMatch(/github push exploded/);
     expect(network.state.githubLink).not.toBeNull();
   });

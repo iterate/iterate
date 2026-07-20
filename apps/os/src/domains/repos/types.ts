@@ -113,12 +113,16 @@ export type GithubRepoLink = {
 };
 
 /** What `repo.linkGithub` returns: the recorded link, whether the GitHub
- * repository was created by this call, and the initial mirror push's outcome
- * (a failed initial push does not fail the link — it is journaled on the repo
- * stream and repaired by `pushToGithub()` or the next commit). */
+ * repository was created by this call, and the initial mirror push's outcome.
+ * The compound public-import path reports that push as skipped because the
+ * Artifact already came from GitHub. A failed initial push does not fail the
+ * link — it is journaled and repaired by `pushToGithub()` or the next commit. */
 export type LinkGithubResult = GithubRepoLink & {
   created: boolean;
-  initialPush: { ok: boolean; commitOid?: string; error?: string };
+  initialPush:
+    | { ok: true; commitOid: string }
+    | { ok: true; skipped: true }
+    | { ok: false; error: string };
 };
 
 /** What `repo.syncFromGithub` returns: whether the head moved, the adopted

@@ -66,6 +66,7 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/device/created":
         return recordDomainObject(state, "devices", event);
       case "events.iterate.com/repo/created":
+      case "events.iterate.com/repos/created":
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
         return recordDomainObject(state, "secrets", event);
@@ -202,18 +203,16 @@ export class ProjectProcessor extends StreamProcessor<
               ),
             ),
             // The config repo is an ordinary repo on its own stream. Its
-            // birth batch contains the birth certificate, repo processor
+            // request batch contains the creation intent, repo processor
             // subscription, and the cross-post rule that copies subsequent
-            // config-repo events onto the project stream `/`. The repo
-            // processor cross-posts its own birth certificate for the project
-            // catalog, so replaying the setup batch here would duplicate it.
+            // config-repo events onto the project stream `/`.
             timedStep("create-timing", timing, "config-repo-append", () =>
               appendTo(
                 CONFIG_REPO_PATH,
                 {
-                  type: "events.iterate.com/repo/created",
-                  idempotencyKey: `repo-created:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
-                  payload: { config: {} },
+                  type: "events.iterate.com/repos/create-requested",
+                  idempotencyKey: `repo-create-requested:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
+                  payload: { type: "empty" },
                 },
                 buildDurableObjectProcessorSubscriptionConfiguredEvent({
                   durableObjectName: DurableObjectNameCodec.stringify({
@@ -358,16 +357,18 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
+      case "events.iterate.com/repos/created":
       case "events.iterate.com/repo/ready": {
         // Arrives as a cross-posted copy: the config repo commits its facts
         // on its own stream, and the `cross-post:/` rule armed at create
         // copies them here — this saga only ever reacts to events ON `/`.
-        if (
-          event.payload.projectId !== this.deps.itx.projectId ||
-          event.payload.path !== CONFIG_REPO_PATH ||
-          state.ready ||
-          state.birthCertificate === null
-        ) {
+        const origin = event.source?.crossPostedFrom?.at(-1);
+        const isConfigRepo =
+          event.type === "events.iterate.com/repos/created"
+            ? origin?.projectId === this.deps.itx.projectId && origin.path === CONFIG_REPO_PATH
+            : event.payload.projectId === this.deps.itx.projectId &&
+              event.payload.path === CONFIG_REPO_PATH;
+        if (!isConfigRepo || state.ready || state.birthCertificate === null) {
           return;
         }
         blockProcessorWhile(async () => {

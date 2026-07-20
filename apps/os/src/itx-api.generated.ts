@@ -210,8 +210,6 @@ export interface StreamCollection {
 /** Repo catalog for either a project or the deployment-wide global scope. */
 export interface RepoCollection {
   __describe(): Promise<Description>;
-  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */
-  create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
 }
@@ -916,6 +914,7 @@ export interface OpenApiCollection {
 
 /** Project-scoped repo catalog with reduced-state listing. */
 export interface ProjectRepoCollection extends RepoCollection {
+  __describe(): Promise<Description>;
   /** Known repos, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
 }
@@ -1037,8 +1036,16 @@ export interface SecretCollection {
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   __describe(): Promise<Description>;
-  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
-  create(): Promise<Repo>;
+  /** Request creation and wait for the repo processor saga's `repos/created`
+   * terminal fact. The request chooses an empty seed, a private GitHub pull at
+   * depth one, or a public full-history import performed by Cloudflare
+   * Artifacts outside the Worker isolate. */
+  create(
+    input:
+      | { type: "empty" }
+      | { type: "github-private"; connection: string; owner: string; repo: string }
+      | { type: "github-public"; connection: string; owner: string; repo: string },
+  ): Promise<void>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
   /** Restart the repo's server-side object; the next request boots it fresh. */
@@ -3284,12 +3291,16 @@ export type RepoCommitDetails = RepoLogCommit & {
 };
 
 /** What `repo.linkGithub` returns: the recorded link, whether the GitHub
- * repository was created by this call, and the initial mirror push's outcome
- * (a failed initial push does not fail the link — it is journaled on the repo
- * stream and repaired by `pushToGithub()` or the next commit). */
+ * repository was created by this call, and the initial mirror push's outcome.
+ * The compound public-import path reports that push as skipped because the
+ * Artifact already came from GitHub. A failed initial push does not fail the
+ * link — it is journaled and repaired by `pushToGithub()` or the next commit. */
 export type LinkGithubResult = GithubRepoLink & {
   created: boolean;
-  initialPush: { ok: boolean; commitOid?: string; error?: string };
+  initialPush:
+    | { ok: true; commitOid: string }
+    | { ok: true; skipped: true }
+    | { ok: false; error: string };
 };
 
 /** What `repo.syncFromGithub` returns: whether the head moved, the adopted
@@ -3316,9 +3327,24 @@ export type GithubResetResult = {
  * `stateSchema` — the one definition of the shape.
  */
 export type RepoProcessorState = {
-  birthCertificate: { config: Record<string, never> } | null;
+  birthCertificate:
+    | {
+        request:
+          | { type: "empty" }
+          | { type: "github-private"; connection: string; owner: string; repo: string }
+          | { type: "github-public"; connection: string; owner: string; repo: string };
+        artifactName: string;
+        defaultBranch: string;
+        remote: string;
+      }
+    | { config: unknown }
+    | null;
+  createRequest:
+    | { type: "empty" }
+    | { type: "github-private"; connection: string; owner: string; repo: string }
+    | { type: "github-public"; connection: string; owner: string; repo: string }
+    | null;
   artifactName: string | null;
-  ready: boolean;
   defaultBranch: string | null;
   github: {
     connection: string;

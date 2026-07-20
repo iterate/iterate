@@ -55,6 +55,7 @@ import {
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { linkRepoToGithub } from "./github-link.ts";
 import {
   decideHeadResolution,
   isObservedPushRecord,
@@ -66,7 +67,8 @@ import {
 } from "./repo-head-authority.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
-import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
+import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
+import { importGithubArtifact } from "./artifact-import.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
@@ -131,12 +133,40 @@ export class RepoDurableObject extends DurableObject<Env> {
       // Creation and public mutations all move the same branch. A duplicate
       // at-head creation drive is harmless (the seed is idempotent below), but
       // it must not move the ref between a mutation's checked clone and push.
-      createRepoArtifact: (input) => this.#serializeWrite(() => this.createArtifactRepo(input)),
+      createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
+      importPublicGithubArtifact: (input) =>
+        this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
+      linkGithub: async (input) => {
+        if (this.#name.projectId === null) {
+          throw new Error("GitHub-backed repos require a project-scoped repo.");
+        }
+        await linkRepoToGithub(
+          {
+            ...input,
+            projectId: this.#name.projectId,
+            repoPath: this.#name.path,
+          },
+          {
+            repo: {
+              configureGithubLink: (link) => this.configureGithubLink(link),
+              getGithubLink: () => this.getGithubLink(),
+              pushToGithub: (pushInput) => this.pushToGithub(pushInput),
+            },
+            // The saga is about to adopt GitHub. Pushing starter history first
+            // would be wasted for a public import and rejected for an existing
+            // private repository.
+            skipInitialPush: true,
+          },
+        );
+      },
+      syncPrivateGithub: async () => {
+        await this.syncFromGithub({ depth: 1, force: true });
+      },
       // Sync the current GitHub head, not necessarily the delivery's SHA:
       // GitHub webhooks may arrive out of order, and adopting a newer head
       // also satisfies every older push delivery. syncFromGithub derives a
       // bounded depth that still retains the previous Artifacts head.
-      syncFromGithubPush: async () => await this.syncFromGithub(),
+      syncFromGithubPush: async () => await this.syncFromGithub({ depth: 1 }),
       observeArtifactPush: (input) =>
         this.#observeExternalPush(input.branch, {
           afterCommitOid: input.afterCommitOid,
@@ -1077,7 +1107,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
-    const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+    const previousCommitOid = githubSyncBaseCommitOid({
+      cachedHeadCommitOid: isRepoHeadRecord(previous) ? previous.commitOid : null,
+      pushedFloor: this.#branchAuthority(branch).pushedFloor,
+    });
     assertGithubHistoryDepth(input.depth, "syncFromGithub");
     const token = await this.#mintGithubToken(link);
 
@@ -1433,7 +1466,25 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
+  private async importPublicGithubArtifact(input: { owner: string; repo: string }) {
+    const artifactName = this.artifactName();
+    const timing = { projectId: this.#name.projectId, path: this.#name.path };
+    await timedStep("create-timing", timing, "artifact-import", async () => {
+      await importGithubArtifact(this.requireArtifacts(), {
+        branch: REPO_DEFAULT_BRANCH,
+        name: artifactName,
+        owner: input.owner,
+        repo: input.repo,
+      });
+    });
+    return {
+      artifactName,
+      defaultBranch: REPO_DEFAULT_BRANCH,
+      remote: this.artifactRemote(artifactName),
+    };
+  }
+
+  private async createEmptyArtifactRepo() {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     const { lastPushAt } = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
@@ -1443,7 +1494,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const remote = this.artifactRemote(artifactName);
 
     // A prior push is authoritative evidence that an existing Artifact is
-    // already seeded. Recovery only needs to journal repo/ready; cloning the
+    // already seeded. Recovery only needs to journal repos/created; cloning the
     // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
     if (lastPushAt !== null) return { artifactName, defaultBranch, remote };
 
@@ -1459,7 +1510,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         token,
       }),
     );
-    // `repo/ready` is the creation boundary. Record the seed exactly like
+    // `repos/created` is the creation boundary. Record the seed exactly like
     // every later push so the first read or mutation waits for an Artifacts
     // clone that can actually reach it instead of racing a stale replica.
     this.#recordPushedHead({ branch: defaultBranch, commitOid: seeded.commitOid });
