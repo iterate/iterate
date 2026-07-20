@@ -4980,8 +4980,6 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
     "The project's sandboxes (pets): create({ name, instanceType }), get(path), list(); start/sleep/destroy live on the sandbox.",
-  search:
-    "Search the project's PAST — every conversation (chat/Slack/email/Telegram), webhook (GitHub/Slack), stream event, file, and repo file is indexed: query({ q }) returns scored chunks, each with a ref expression back to the exact source; answer({ q }) gives a cited answer. Search before paging streams with getEvents.",
   scheduler:
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
