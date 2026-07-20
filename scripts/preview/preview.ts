@@ -1532,6 +1532,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewReadyWorkerVersion: { stableForMs: 40_000 },
     paths: [
       "apps/os/**",
+      // The root Playwright suite is part of OS preview e2e. A test or
+      // harness-only change must produce fresh evidence instead of inheriting
+      // the previous head's result.
+      "specs/**",
+      "playwright.config.ts",
+      // The suite also builds and exercises the mobile web app locally.
+      "apps/mobile/**",
       // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
       ".bun-version",
       // OS imports iterate/react, and its preview e2e lane builds and runs the

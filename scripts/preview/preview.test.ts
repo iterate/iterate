@@ -190,7 +190,10 @@ describe("preview workflow scope", () => {
       paths: expect.arrayContaining([
         ".bun-version",
         "apps/dummy-petshop/**",
+        "apps/mobile/**",
+        "playwright.config.ts",
         "packages/iterate/**",
+        "specs/**",
       ]),
       previewDependencies: ["auth", "dummy-petshop"],
       previewTestDependencyBaseUrlEnvVars: {
@@ -200,6 +203,9 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- packages/iterate/**");
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("- specs/**");
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("bun-version-file: .bun-version");
@@ -222,6 +228,28 @@ describe("preview workflow scope", () => {
       "OS_BASE_URL=https://os.iterate-preview-7.com",
       "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
     ]);
+  });
+
+  test("selects OS and its dependencies for a root Playwright-only change", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      githubToken: "test-token",
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      pullRequestBaseSha: "base-sha",
+      pullRequestHeadSha: "current-head",
+      pullRequestNumber: 2140,
+      repositoryFullName: "iterate/iterate",
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["specs/forged-session-repl.spec.ts"],
+      }),
+      probeAppServing: async () => ({ ok: true, detail: "HTTP 200" }),
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
   });
 
   test("refuses to run OS e2e against a missing or stale Petshop deployment", () => {

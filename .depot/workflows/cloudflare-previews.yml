@@ -59,6 +59,9 @@ on:
       - scripts/lib/**
       - apps/auth-example/**
       - apps/os/**
+      - specs/**
+      - playwright.config.ts
+      - apps/mobile/**
       - packages/iterate/**
       - apps/auth/**
       - apps/auth-contract/**
