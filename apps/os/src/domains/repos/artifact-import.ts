@@ -1,4 +1,4 @@
-import { isRepoNotSeededError } from "./utils.ts";
+import { isRepoNotSeededError, RepoNotSeededError } from "./utils.ts";
 
 const READY_ATTEMPTS = 120;
 const READY_RETRY_MS = 1_000;
@@ -22,7 +22,7 @@ async function waitForArtifactReady(
     }
   }
 
-  throw new Error(`Artifact ${name} was not ready after ${READY_ATTEMPTS} attempts.`, {
+  throw new RepoNotSeededError(`Artifact ${name} was not ready after ${READY_ATTEMPTS} attempts.`, {
     cause: lastError,
   });
 }

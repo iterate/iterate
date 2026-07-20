@@ -9,6 +9,7 @@ import {
   repoGithubPushFromWebhookPayload,
   type RepoCommittedFileChange,
 } from "./repo-task-events.ts";
+import { isRepoNotSeededError } from "./utils.ts";
 
 type RepoProcessorDeps = {
   createEmptyArtifact(): Promise<{
@@ -395,6 +396,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         payload: { ...artifact, request },
       };
     } catch (error) {
+      // A bounded vendor attempt may end while the deterministic Artifact is
+      // still materializing. Keep the creation obligation open so the
+      // processor recovery alarm can re-drive it; only settled failures get a
+      // terminal fact.
+      if (isRepoNotSeededError(error)) throw error;
       return {
         type: "events.iterate.com/repos/create-failed",
         idempotencyKey: this.idempotencyKey("create-failed"),

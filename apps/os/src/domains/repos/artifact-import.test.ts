@@ -95,6 +95,32 @@ describe("importGithubArtifact", () => {
     }
   });
 
+  test("leaves creation retryable when the readiness window expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const artifacts = fakeArtifacts();
+      artifacts.import.mockRejectedValueOnce(
+        Object.assign(new Error("already exists"), { code: "ALREADY_EXISTS" }),
+      );
+      artifacts.get.mockRejectedValue(
+        Object.assign(new Error("still importing"), { code: "IMPORT_IN_PROGRESS" }),
+      );
+
+      const imported = importGithubArtifact(artifacts, {
+        branch: "main",
+        name: "project--repo",
+        owner: "iterate",
+        repo: "iterate",
+      });
+      const rejection = expect(imported).rejects.toMatchObject({ name: "RepoNotSeededError" });
+      await vi.runAllTimersAsync();
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("does not hide import failures", async () => {
     const artifacts = fakeArtifacts();
     artifacts.import.mockRejectedValueOnce(
