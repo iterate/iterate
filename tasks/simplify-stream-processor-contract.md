@@ -130,10 +130,34 @@ clean tests. See the last section.
 - **Two files per processor, no more**: `<name>-processor-contract.ts`
   (self-contained: state schema, events, consumes/emits, `processorDeps`) and
   `<name>-processor-implementation.ts` (the class). Tests alongside.
-- **Implementation is `reduce` + `processEvent`, each ONE switch.** A case of
-  up to ~5-10 lines stays inline in the switch; longer cases call a helper
-  named `#reduceSoAndSoEvent` / `#processSoAndSoEvent`.
+- **Implementation is `reduce` + `processEvent`, each ONE switch.** Cases stay
+  inline in the switch (a big case can be the LAST one); only genuinely
+  reusable logic becomes a helper. `processEvent` comes before `reduce`.
+- **The class opens the file** with a generous docstring explaining how the
+  whole processor works end to end; auxiliary types and pure helpers go at
+  the bottom.
 - **Destructure `args` at the top** of each hook.
+- **Event type strings are typed out inline, everywhere** —
+  `"events.iterate.com/agents/context-added"`, never an
+  `AGENT_CONTEXT_ADDED` constant. Duplication for clarity is good so long as
+  refactors are easy and cheap (review round, 2026-07-20).
+- **Schemas are spelled inline in the contract**; declare one outside only
+  when the contract itself uses it twice (e.g. a payload that also appears in
+  the state schema).
+- **Tuning knobs are config, not constants**: every threshold lives in the
+  contract's config schema with a default and a doc comment saying why the
+  value; `<slug>/configured` events merge partial patches
+  (`mergeProcessorConfig` + re-parse), so omitted keys keep their values.
+  Policy-like knobs are objects (`llmRequestRetryPolicy: { maxAttempts,
+  backoffBaseMs, backoffMaxMs }`) so the same shape can be reused elsewhere.
+- **Block vs background, the rule**: per-event consequences (renders,
+  transcriptions — the event is delivered once and never again) use
+  `blockProcessorWhile`; state-derived consequences (anything under
+  `delivery.caughtUp` that a later delivery would re-derive) use
+  `runInBackground`. Don't block without stating the reason at the site.
+- **Events that must never be durable declare `ephemeral: true` in the
+  contract** (EventDefinition flag): every append/parse lane then defaults
+  the envelope flag to true and rejects `ephemeral: false`.
 - **Lanes are chosen at the dispatch site**: `blockProcessorWhile` /
   `runInBackground` are invoked inside `processEvent` itself, never inside
   helpers — helpers are plain async functions, unaware of their lane.
@@ -162,13 +186,23 @@ clean tests. See the last section.
   imports its shapes from users.
 - **Core events come from `processorDeps: [CoreProcessorContract]`** — never
   re-declared locally (`stream/processor-revived`, `stream/woken` are core).
-- **Concrete names over process-words**: `#inFlightLlmCalls` not `#driving`,
-  `#runLlmRequest` not `#drive`. Comments explain the concrete thing ("the
-  LLM call runs for minutes; the journal, not this closure, survives an
-  eviction"), not an abstraction.
-- **Every named constant states why its value** (e.g. `DEBOUNCE_MS = 100` —
-  long enough to coalesce a burst of context events arriving together, short
-  enough to be invisible next to LLM latency).
+- **Concrete names over process-words**: `#inFlightLlmCall` not `#driving`,
+  `#runLlmRequest` not `#drive`, `pendingLlmRequestTrigger` not
+  `wantsTurnSince`. Comments explain the concrete thing ("the LLM call runs
+  for minutes; the journal, not this closure, survives an eviction"), not an
+  abstraction.
+- **Errors ride `stream/error-occurred`** (core-owned): a processor journals
+  its failures as error-occurred events next to the settlement, and the agent
+  transcribes EVERY error-occurred on its stream into model-visible context
+  (`dont-trigger-request` — retries are the fold's job, visibility is the
+  transcript's).
+- **Tests are step scenarios on the generic harness**
+  (`makeProcessorHarness` in `iterate/processors/testing`): tuple steps
+  `["append", ...typed events]` / `["advanceTime", ms]` / `["crash"]` plus
+  function steps for processor-specific fakes; assertions via
+  `toMatchObject` partial matching on `h.events(type)` / `h.state()`. No
+  wrapper functions around append — event literals and spreadable event
+  bundles only. The harness knows nothing about the processor under test.
 
 ## The test case: clean-room agent processor
 
@@ -238,13 +272,35 @@ DONE, split across two PRs:
   filter-aware `caughtUp` framing, "Batches are transport, not semantics"),
   doctrine doc + CLAUDE.md index updated.
 - **This PR (`agent-next-processor`, stacked)** — clean-room processor:
-  `apps/os/src/domains/agents/next/` — contract, implementation,
-  test+harness. 12 tests prove: full turn, burst coalescing (late intent
-  folds to nothing), interrupt mid-flight (abort + cancelled settlement with
-  partial text + zombie collapse), eviction mid-debounce, eviction mid-flight
-  (same-request adoption), two-live-incarnation zombie race (settle-key
-  collapse), expiry, retry backoff to the cap, autonomous loop breaker,
-  script roundtrip, projection/prompt helpers.
+  `apps/os/src/domains/agents/next/` — contract, implementation, tests. 16
+  tests prove: full turn, burst coalescing (late intent folds to nothing),
+  interrupt mid-flight (abort + cancelled settlement with partial text +
+  zombie settle-race loss), eviction mid-debounce, eviction mid-flight
+  (same-request adoption), two-live-incarnation zombie race, expiry with
+  transcribed admission, retry-via-fold to the configured cap, pause/resume
+  breaker, script roundtrip, error transcription, config patch merge, forced
+  chunk ephemerality, projection/prompt helpers.
+
+  Reworked wholesale in the 2026-07-20 review round (41 threads): all
+  constants deleted (event strings typed out inline; tuning constants →
+  config defaults with `agent/configured` partial merge; retry caps →
+  `llmRequestRetryPolicy` object, rate-limited special-casing deleted;
+  system-prompt key and execution-id prefix constants deleted — prod's
+  `agent-output:` prefix reused inline since this REPLACES prod);
+  `agent/loop-stopped` → `agent/paused`/`agent/resumed` mirroring
+  stream/paused/resumed (user input auto-resumes); LLM failures/expiry emit
+  core `stream/error-occurred` next to the settlement and the agent
+  transcribes every error-occurred into context; retries are fold arithmetic
+  (settled(failed) sets the next trigger under the cap — no rendered nudge);
+  framework exports `ReduceArgs`/`ProcessEventArgs` (HookArgCarrier hack
+  deleted); `EventDefinition.ephemeral: true` forcibly marks
+  `llm-response-chunk` ephemeral at every append/parse lane; single
+  `#inFlightLlmCall` slot (at most one open request by construction); settle
+  races resolved by the journal's same-key-different-body rejection with a
+  conflict-tolerant settle append (first writer wins — also fixes Bugbot's
+  harness-masks-conflicts finding, by testing on the shared MemoryStream);
+  tests rewritten as step scenarios on the new generic
+  `makeProcessorHarness` in `iterate/processors/testing`.
 
 ### Outstanding to-do list
 
@@ -264,6 +320,10 @@ DONE, split across two PRs:
   `token-usage-reported` collapse decisions.
 - Quiet-stream expiry alarm (`tasks/agent-llm-deadline-alarm.md`) expressed
   against the clean-room shape.
+- Runner-side `stream/error-occurred` emission for failed background /
+  blocked side-effect work (today the runner journals it for poison skips;
+  processor code journals its own failures) — so "transcribe every error"
+  covers framework-detected failures too.
 
 ### Implementation plan (recorded 2026-07-20 — Jonas at lunch, decisions per his direction)
 

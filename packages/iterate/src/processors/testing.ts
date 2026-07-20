@@ -9,9 +9,10 @@
 import { sameIdempotentEvent } from "./idempotency.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { StreamEventReadInput } from "./rpc-types.ts";
-import type { ProcessorState } from "./processor-contracts.ts";
+import type { ConsumedInput, ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamProcessor, StreamProcessorContract } from "./stream-processor.ts";
+import type { ProcessorProgress, ProcessorProgressStore } from "./stream-processor-runner.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
 
 function emptyThroughputReport() {
@@ -267,4 +268,208 @@ export function driveProcessor<Contract extends StreamProcessorContract, Deps ex
 export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
   const events = Array.isArray(source) ? source : source.events;
   return events.filter((event) => event.type === type);
+}
+
+// =============================================================================
+// Step harness: scenario tests as ordered steps over a durable substrate.
+// =============================================================================
+
+/**
+ * One scenario step. Three built-in kinds plus a function escape hatch:
+ *
+ * - `["append", ...events]` — typed appends (the contract's `consumes`
+ *   vocabulary: what the outside world can put on this processor's stream);
+ * - `["advanceTime", ms]` — move the virtual clock, releasing any harness
+ *   `sleep(...)` calls that come due;
+ * - `["crash"]` — abandon the incarnation like an eviction (runtime state and
+ *   pending closures die; journal, progress, and clock survive);
+ * - `async () => ...` — anything processor-specific (resolve a fake transport,
+ *   assert mid-scenario).
+ *
+ * After every step the harness drives delivery to a fixpoint, so each step
+ * observes the journal consequences of the previous one.
+ */
+export type HarnessStep<Contract extends StreamProcessorContract> =
+  | readonly ["append", ...ConsumedInput<Contract>[]]
+  | readonly ["advanceTime", number]
+  | readonly ["crash"]
+  | (() => unknown);
+
+/** The durable substrate shared across incarnations (and zombie twins). */
+export type HarnessSubstrate = {
+  clock: { now: number };
+  stream: MemoryStream;
+  progress: ProcessorProgressStore<unknown>;
+};
+
+/** What {@link makeProcessorHarness}'s factory receives: base deps plus the
+ * harness's virtual clock/sleep, for processors that take injectable time. */
+export type HarnessProcessorDeps = {
+  stream: ProcessorStream;
+  path: string;
+  projectId: string | null;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+};
+
+export type ProcessorHarness<Contract extends StreamProcessorContract> = {
+  clock: { now: number };
+  stream: MemoryStream;
+  substrate: HarnessSubstrate;
+  /** The current incarnation's runner, for tests that need its full surface.
+   * A method (not a property) so suites can spread the harness into a wider
+   * object without freezing a pre-crash incarnation. */
+  runner(): StreamProcessorRunner<Contract>;
+  /** Run steps in order, driving delivery to a fixpoint after each. */
+  play(...steps: HarnessStep<Contract>[]): Promise<void>;
+  /** Typed append (the contract's `consumes` vocabulary) + drive to fixpoint. */
+  append(...events: ConsumedInput<Contract>[]): Promise<void>;
+  /** Advance the virtual clock, release due sleeps, drive to fixpoint. */
+  advanceTime(ms: number): Promise<void>;
+  /** Abandon this incarnation like an eviction; a fresh one takes over the
+   * same journal/progress/clock. Does NOT deliver — the successor first acts
+   * on the next step, exactly like a real revival. */
+  crash(): void;
+  /** Drive delivery to a fixpoint: repeated catch-up passes (with microtask
+   * drains between them, so settled background work can land its appends)
+   * until the journal head stops moving. */
+  settle(): Promise<void>;
+  /** The runner's committed fold. */
+  state(): ProcessorState<Contract>;
+  /** Committed journal rows, optionally filtered by event type. */
+  events(type?: string): StreamEvent[];
+};
+
+/** In-memory {@link ProcessorProgressStore} with the DO store's fencing check,
+ * so progress survives `crash()` into the successor incarnation. */
+function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
+  let record: ProcessorProgress<unknown> | undefined;
+  return {
+    read: () => (record === undefined ? undefined : structuredClone(record)),
+    commit: (progress, opts) => {
+      const persisted = record?.processing.cursorRevision ?? 0;
+      if (opts.expectedCursorRevision !== persisted) {
+        throw new Error(
+          `progress commit fenced: expected revision ${opts.expectedCursorRevision}, persisted ${persisted}`,
+        );
+      }
+      record = structuredClone(progress);
+    },
+  };
+}
+
+/**
+ * Build a {@link ProcessorHarness}: REAL runner drive over the in-memory
+ * substrate, with virtual time and eviction-faithful `crash()`. Knows nothing
+ * about the processor under test — construct it in `createProcessor` from the
+ * supplied base deps plus whatever fakes the suite owns (LLM transports,
+ * capability hosts). Pass another harness's `substrate` to run a second
+ * incarnation over the SAME journal (the zombie-race setup).
+ */
+export function makeProcessorHarness<Contract extends StreamProcessorContract>(args: {
+  createProcessor: (deps: HarnessProcessorDeps) => StreamProcessor<Contract, object>;
+  path?: string;
+  substrate?: HarnessSubstrate;
+}): ProcessorHarness<Contract> {
+  const path = args.substrate?.stream.path ?? args.path ?? "/harness/processor";
+  const clock = args.substrate?.clock ?? { now: 1_000_000 };
+  const stream = args.substrate?.stream ?? new MemoryStream(path);
+  stream.now = () => clock.now;
+  const progress = args.substrate?.progress ?? makeMemoryProgressStore();
+  const substrate: HarnessSubstrate = { clock, stream, progress };
+
+  // Virtual sleeps: released when `advanceTime` moves the clock past their
+  // deadline. A `crash()` drops the incarnation's pending sleeps unresolved —
+  // the closures awaiting them are dead with the incarnation anyway.
+  let pendingSleeps: { dueAt: number; resolve: () => void }[] = [];
+  const releaseDueSleeps = () => {
+    const [due, pending] = pendingSleeps.reduce<
+      [{ resolve: () => void }[], { dueAt: number; resolve: () => void }[]]
+    >(
+      ([d, p], sleep) => (sleep.dueAt <= clock.now ? [[...d, sleep], p] : [d, [...p, sleep]]),
+      [[], []],
+    );
+    pendingSleeps = pending;
+    for (const sleep of due) sleep.resolve();
+  };
+
+  const incarnate = () => {
+    const processor = args.createProcessor({
+      stream,
+      path,
+      projectId: "proj_harness",
+      now: () => clock.now,
+      sleep: (ms) =>
+        new Promise<void>((resolve) => pendingSleeps.push({ dueAt: clock.now + ms, resolve })),
+    });
+    return new StreamProcessorRunner({
+      processor,
+      stream,
+      durability: { progress: progress as ProcessorProgressStore<ProcessorState<Contract>> },
+      now: () => clock.now,
+      readPageSize: 5,
+    });
+  };
+  let runner = incarnate();
+
+  const settle = async () => {
+    // Fixpoint with a bounded round count: each round drains real microtasks
+    // and macrotasks (so background work released by the previous round can
+    // land its appends), then catches the runner up. Stop when a full round
+    // leaves the journal head unchanged.
+    for (let round = 0; round < 50; round++) {
+      const headBefore = stream.events.at(-1)?.offset ?? 0;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await runner.catchUp();
+      if ((stream.events.at(-1)?.offset ?? 0) === headBefore) return;
+    }
+    throw new Error("harness settle() did not reach a fixpoint in 50 rounds");
+  };
+
+  const append = async (...events: ConsumedInput<Contract>[]) => {
+    await stream.append(...(events as StreamEventInput[]));
+    await settle();
+  };
+
+  const advanceTime = async (ms: number) => {
+    clock.now += ms;
+    releaseDueSleeps();
+    await settle();
+  };
+
+  const crash = () => {
+    runner.dispose();
+    pendingSleeps = [];
+    runner = incarnate();
+  };
+
+  return {
+    clock,
+    stream,
+    substrate,
+    runner: () => runner,
+    append,
+    advanceTime,
+    crash,
+    settle,
+    state: () => runner.currentState,
+    events: (type?: string) =>
+      type === undefined ? [...stream.events] : stream.events.filter((row) => row.type === type),
+    async play(...steps: HarnessStep<Contract>[]) {
+      for (const step of steps) {
+        if (typeof step === "function") {
+          await step();
+          await settle();
+        } else if (step[0] === "append") {
+          const [, ...events] = step;
+          await append(...events);
+        } else if (step[0] === "advanceTime") {
+          await advanceTime(step[1]);
+        } else {
+          crash();
+        }
+      }
+    },
+  };
 }
