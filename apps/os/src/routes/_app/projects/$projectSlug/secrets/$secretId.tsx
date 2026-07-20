@@ -94,6 +94,17 @@ function SecretDetail({
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
+  // Only secrets born `visibility: "readable"` (e.g. the project API key)
+  // answer reveal(); everything else is write-only server-side and the
+  // section below never renders.
+  const revealSecret = useMutation({
+    mutationFn: async () => await itx.secrets.get(secretPath).reveal(),
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const revealedText =
+    typeof revealSecret.data === "string"
+      ? revealSecret.data
+      : JSON.stringify(revealSecret.data, null, 2);
   // TODO: the itx secret surface has no delete verb yet;
   // the delete button returns when it does.
   const form = useForm({
@@ -123,6 +134,7 @@ function SecretDetail({
     <>
       <div className="rounded-lg border bg-card">
         <InfoRow label="Material" value={secret.hasMaterial ? "Stored" : "Missing"} />
+        <InfoRow label="Visibility" value={secret.visibility} />
         <InfoRow
           label="Egress URLs"
           value={secret.egress.urls.length > 0 ? secret.egress.urls.join(", ") : "(none)"}
@@ -132,6 +144,49 @@ function SecretDetail({
         <InfoRow label="Last used by" value={secret.audit.lastUsedBy ?? "(unknown)"} />
         <InfoRow label="Last used URL" value={secret.audit.lastUsedUrl ?? "(unknown)"} />
       </div>
+
+      {secret.visibility === "readable" ? (
+        <div className="space-y-2 rounded-lg border bg-card p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">Value</div>
+            {revealSecret.data === undefined ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => revealSecret.mutate()}
+                disabled={revealSecret.isPending || !secret.hasMaterial}
+              >
+                {revealSecret.isPending ? "Revealing..." : "Reveal"}
+              </Button>
+            ) : (
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(revealedText);
+                    toast.success("Copied");
+                  }}
+                >
+                  Copy
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => revealSecret.reset()}>
+                  Hide
+                </Button>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            This secret was born readable — reveal it as often as you need. Update below to rotate
+            it.
+          </p>
+          {revealSecret.data === undefined ? null : (
+            <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+              {revealedText}
+            </pre>
+          )}
+        </div>
+      ) : null}
 
       <div className="space-y-3 rounded-lg border bg-card p-4">
         <form

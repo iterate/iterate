@@ -6,6 +6,10 @@
  * crosses the RPC boundary.
  */
 
+/** How a secret's material may leave the secret system. Extendable — e.g. a
+ * future "reveal-once". */
+export type SecretVisibility = "write-only" | "readable";
+
 export type SecretCreateInput = {
   /** Complete egress policy established by the birth certificate. */
   egress: { urls: string[] };
@@ -14,13 +18,15 @@ export type SecretCreateInput = {
   /** Optional initial refresh strategy; omitted means no refresh. */
   refresh?: SecretRefresh | null;
   /**
-   * Whether reveal() may return this secret's material (default false —
-   * write-only). IMMUTABLE: declared at birth, never updatable, so a
-   * write-only secret can never be retro-flipped readable. Reserve it for
-   * credentials whose whole purpose is to be shown to the outside — the born
-   * project ingress key at /secrets/project-api-key is the canonical case.
+   * How the material may leave: "write-only" (never — the default and the
+   * classic secret invariant) or "readable" (reveal() answers it, as often
+   * as asked). IMMUTABLE: declared at birth, never updatable, so a
+   * write-only secret can never be retro-flipped readable. Reserve
+   * "readable" for credentials whose whole purpose is to be shown to the
+   * outside — the born project ingress key at /secrets/project-api-key is
+   * the canonical case.
    */
-  readable?: boolean;
+  visibility?: SecretVisibility;
 };
 
 /** Input for replacing secret material or changing its egress and refresh policy. */
@@ -149,8 +155,8 @@ export type SecretDescription = {
   /** Whether the secret processor has folded its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
-  /** Whether reveal() may return the material (a birth-certificate fact). */
-  readable: boolean;
+  /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */
+  visibility: SecretVisibility;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
 };

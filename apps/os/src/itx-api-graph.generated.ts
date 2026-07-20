@@ -2059,20 +2059,20 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "SecretDescription",
     kind: "typeAlias",
     sourceText:
-      "/**\n * A stored secret's public face — its live state and what `__describe()`\n * merges in: usage audit counters, pinned egress URLs, whether material is\n * present, and the configured refresh strategy's kind. Never the material\n * itself: material is write-only and projected away before crossing the RPC\n * boundary.\n */\nexport type SecretDescription = {\n  audit: {\n    lastUsedAt?: string;\n    lastUsedBy?: string;\n    lastUsedUrl?: string;\n    usedCount: number;\n  };\n  egress: { urls: string[] };\n  /** Whether the secret processor has folded its birth certificate. */\n  created: boolean;\n  hasMaterial: boolean;\n  /** Whether reveal() may return the material (a birth-certificate fact). */\n  readable: boolean;\n  /** The configured refresh strategy's kind, or null when none is configured. */\n  refresh: SecretRefresh[\"kind\"] | null;\n};",
+      "/**\n * A stored secret's public face — its live state and what `__describe()`\n * merges in: usage audit counters, pinned egress URLs, whether material is\n * present, and the configured refresh strategy's kind. Never the material\n * itself: material is write-only and projected away before crossing the RPC\n * boundary.\n */\nexport type SecretDescription = {\n  audit: {\n    lastUsedAt?: string;\n    lastUsedBy?: string;\n    lastUsedUrl?: string;\n    usedCount: number;\n  };\n  egress: { urls: string[] };\n  /** Whether the secret processor has folded its birth certificate. */\n  created: boolean;\n  hasMaterial: boolean;\n  /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */\n  visibility: SecretVisibility;\n  /** The configured refresh strategy's kind, or null when none is configured. */\n  refresh: SecretRefresh[\"kind\"] | null;\n};",
     summary:
       "A stored secret's public face — its live state and what `__describe()` merges in: usage audit counters, pinned egress URLs, whether material is present, and the configured refresh strategy's kind.",
     memberSummaries: {},
-    referencedTypeNames: ["SecretRefresh"],
+    referencedTypeNames: ["SecretVisibility", "SecretRefresh"],
   },
   {
     name: "SecretCreateInput",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Public secret capability data shapes. A secret's public live state IS its\n * {@link SecretDescription}: there is deliberately no separate secret processor\n * state type — the internal fold carries the encrypted material, and the DO's\n * processor facade projects it away (write-only material) before anything\n * crosses the RPC boundary.\n */\nexport type SecretCreateInput = {\n  /** Complete egress policy established by the birth certificate. */\n  egress: { urls: string[] };\n  /** Optional initial write-only material. */\n  material?: unknown;\n  /** Optional initial refresh strategy; omitted means no refresh. */\n  refresh?: SecretRefresh | null;\n  /**\n   * Whether reveal() may return this secret's material (default false —\n   * write-only). IMMUTABLE: declared at birth, never updatable, so a\n   * write-only secret can never be retro-flipped readable. Reserve it for\n   * credentials whose whole purpose is to be shown to the outside — the born\n   * project ingress key at /secrets/project-api-key is the canonical case.\n   */\n  readable?: boolean;\n};",
-    summary: "Public secret capability data shapes.",
+      'export type SecretCreateInput = {\n  /** Complete egress policy established by the birth certificate. */\n  egress: { urls: string[] };\n  /** Optional initial write-only material. */\n  material?: unknown;\n  /** Optional initial refresh strategy; omitted means no refresh. */\n  refresh?: SecretRefresh | null;\n  /**\n   * How the material may leave: "write-only" (never — the default and the\n   * classic secret invariant) or "readable" (reveal() answers it, as often\n   * as asked). IMMUTABLE: declared at birth, never updatable, so a\n   * write-only secret can never be retro-flipped readable. Reserve\n   * "readable" for credentials whose whole purpose is to be shown to the\n   * outside — the born project ingress key at /secrets/project-api-key is\n   * the canonical case.\n   */\n  visibility?: SecretVisibility;\n};',
+    summary: "",
     memberSummaries: {},
-    referencedTypeNames: ["SecretRefresh"],
+    referencedTypeNames: ["SecretRefresh", "SecretVisibility"],
   },
   {
     name: "SecretUpdateInput",
@@ -2269,6 +2269,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "Input to the videos capability's `transform`: the source video stream, optional transform options, and the output selection.",
     memberSummaries: {},
     referencedTypeNames: ["CfVideoTransformOptions", "CfVideoOutputOptions"],
+  },
+  {
+    name: "SecretVisibility",
+    kind: "typeAlias",
+    sourceText:
+      '/** How a secret\'s material may leave the secret system. Extendable — e.g. a\n * future "reveal-once". */\nexport type SecretVisibility = "write-only" | "readable";',
+    summary: "How a secret's material may leave the secret system.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "SecretRefresh",

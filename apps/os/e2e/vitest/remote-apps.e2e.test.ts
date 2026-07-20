@@ -36,8 +36,9 @@ test("an external client authenticates with the project-secret credential and ge
   });
   const otherProjectId = await other.projectId;
 
-  // The pairing ceremony: the born ingress secret is READABLE (an immutable
-  // birth-certificate fact), so the operator just reveal()s it — as often as
+  // The pairing ceremony: the born ingress secret has visibility
+  // "readable" (an immutable birth-certificate fact), so the operator just
+  // reveal()s it — as often as
   // they like — and configures their external app with it. The ensure-create
   // only covers the race with the birth seed (create() is idempotent: an
   // already-created secret returns its birth event untouched).
@@ -46,7 +47,7 @@ test("an external client authenticates with the project-secret credential and ge
     .create({
       egress: { urls: [] },
       material: generateProjectApiKeyMaterial(),
-      readable: true,
+      visibility: "readable",
     })
     .catch(() => undefined);
   const apiKey = (await secret.reveal()) as string;
@@ -76,7 +77,7 @@ test("an external client authenticates with the project-secret credential and ge
   }).rejects.toThrow(/no access|not found/i);
 
   // Write-only secrets stay write-only: reveal() on an ordinary secret
-  // (born without the readable flag) refuses.
+  // (born with the default visibility) refuses.
   await project.secrets
     .get("/secrets/write-only-probe")
     .create({ egress: { urls: [] }, material: "sealed" });

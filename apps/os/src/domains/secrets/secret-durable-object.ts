@@ -194,7 +194,7 @@ export class SecretDurableObject extends DurableObject<Env> {
                 egress,
                 ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
                 refresh: input.refresh ?? null,
-                readable: input.readable === true,
+                visibility: input.visibility ?? "write-only",
               },
             },
           } as StreamEventInput,
@@ -361,17 +361,17 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   /**
    * Read the material back — ONLY for a secret whose birth certificate
-   * declared `readable: true`. The flag is immutable (create-time only,
-   * never updatable), so the write-only invariant survives per secret: a
-   * secret born write-only can never be retro-flipped readable. Readable
-   * secrets exist for credentials whose whole purpose is to be SHOWN to the
-   * outside, as often as needed — the born project ingress key is the
-   * canonical case.
+   * declared `visibility: "readable"`. Visibility is immutable (create-time
+   * only, never updatable), so the write-only invariant survives per
+   * secret: a secret born write-only can never be retro-flipped readable.
+   * Readable secrets exist for credentials whose whole purpose is to be
+   * SHOWN to the outside, as often as needed — the born project ingress key
+   * is the canonical case.
    */
   async reveal(): Promise<unknown> {
     const { state } = await this.#snapshotWithOffset();
     assertSecretCreated(state, this.#name.path);
-    if (state.birthCertificate?.config.readable !== true) {
+    if (state.birthCertificate?.config.visibility !== "readable") {
       throw new Error(`secret is write-only (not born readable): ${this.#name.path}`);
     }
     if (state.encryptedMaterial === null) return null;
@@ -824,7 +824,7 @@ function describeSecretState(state: SecretState): SecretDescription {
     created: state.birthCertificate !== null,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
-    readable: state.birthCertificate?.config.readable === true,
+    visibility: state.birthCertificate?.config.visibility ?? "write-only",
     refresh: state.refresh?.kind ?? null,
   };
 }

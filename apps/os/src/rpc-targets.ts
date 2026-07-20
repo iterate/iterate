@@ -5219,7 +5219,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // /secrets/project-api-key — what the `project-secret` /api credential is
     // verified against, inside the Secret DO. Empty egress pin: unlike every
     // other secret it can never be substituted into ANY outbound request.
-    // Born `readable` (an immutable birth-certificate fact): pairing an
+    // Born `visibility: "readable"` (an immutable birth-certificate fact): pairing an
     // external app is reveal()-and-copy, as often as needed; rotation is an
     // ordinary material update. Off the create critical path and idempotent
     // (the DO's create dedupes), so a lost race costs nothing and re-creation
@@ -5231,7 +5231,11 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
         }),
       )
-        .create({ egress: { urls: [] }, material: generateProjectApiKeyMaterial(), readable: true })
+        .create({
+          egress: { urls: [] },
+          material: generateProjectApiKeyMaterial(),
+          visibility: "readable",
+        })
         .catch(() => undefined),
     );
     const project = itxForScope({
