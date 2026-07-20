@@ -41,8 +41,10 @@ export async function appendSyntheticProviderOutput(
       throw new Error("Synthetic provider output could not read the stream's maxOffset.");
     }
     // The requested event only folds into an open request when a trigger is
-    // pending, so the batch leads with a trigger-bearing developer item (no
-    // actor → an external trigger). Everything lands in ONE atomic append:
+    // pending, so the batch leads with a trigger-bearing item. It carries a
+    // user actor so it counts as an EXTERNAL trigger (a no-actor developer
+    // item would read as the agent's own loop feedback and burn autonomous
+    // budget every synthetic turn). Everything lands in ONE atomic append:
     // the requested event consumes the trigger in the same frame and the
     // settled fact closes it before the at-head pass runs, so the processor
     // neither dials a real provider nor journals a stray debounced intent.
@@ -55,6 +57,7 @@ export async function appendSyntheticProviderOutput(
           payload: {
             role: "developer",
             content: "[e2e synthetic provider turn: the next assistant output is injected]",
+            actor: { type: "user", origin: "web" },
             llmRequestPolicy: { behaviour: "after-current-request" },
           },
         }),

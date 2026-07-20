@@ -447,30 +447,36 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     if (!delivery.caughtUp) return;
     if (state.birthCertificate === null) return;
 
-    // Paused: turns stay parked until fresh EXTERNAL input journals the
+    // Paused: NEW turns stay parked until fresh EXTERNAL input journals the
     // resume (self-driven triggers are exactly what the breaker paused).
-    if (state.paused !== null) {
+    // Pause suppresses only the SCHEDULING branch below — an already-open
+    // request is a journaled obligation the adopt/expire branch still has to
+    // settle. The breaker itself only ever pauses when nothing is open, but
+    // `agent/paused` is operator/script-appendable while a request is open;
+    // returning here would strand that request forever after an eviction (a
+    // fresh incarnation, not executing it, could neither run nor expire it
+    // until external input happened to resume the loop). A live incarnation
+    // already drains such a request — the background attempt keeps running
+    // through the pause — so a revived one must adopt it the same way.
+    if (state.paused !== null && state.pendingLlmRequestTrigger?.source === "external") {
       const trigger = state.pendingLlmRequestTrigger;
-      if (trigger?.source === "external") {
-        runInBackground(() =>
-          append({
-            type: "events.iterate.com/agent/resumed",
-            payload: { reason: "external input" },
-            idempotencyKey: this.idempotencyKey(`resume/${trigger.offset}`),
-          }),
-        );
-      }
-      return;
+      runInBackground(() =>
+        append({
+          type: "events.iterate.com/agent/resumed",
+          payload: { reason: "external input" },
+          idempotencyKey: this.idempotencyKey(`resume/${trigger.offset}`),
+        }),
+      );
     }
 
     // A trigger is pending and nothing is open → journal the intent (or trip
-    // the breaker), and STOP. The LLM call does not start here: the requested
-    // event comes back through our own subscription carrying the offset the
-    // journal gave it, and the adopt branch below — the ONE place work ever
-    // starts — picks it up. Starting fresh and recovering after an eviction
-    // are the same code path.
+    // the breaker), and STOP. Suppressed while paused. The LLM call does not
+    // start here: the requested event comes back through our own subscription
+    // carrying the offset the journal gave it, and the adopt branch below —
+    // the ONE place work ever starts — picks it up. Starting fresh and
+    // recovering after an eviction are the same code path.
     const trigger = state.pendingLlmRequestTrigger;
-    if (trigger !== null && state.openRequest === null) {
+    if (state.paused === null && trigger !== null && state.openRequest === null) {
       // Agent birth and inbound input are independent distributed reactions.
       // Hold the trigger until the canonical system-prompt slot has arrived;
       // that context event's own delivery re-runs this pass over the same
@@ -535,9 +541,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // An open request nobody HERE is executing → run it. First time through,
     // that is the normal start (our own requested event arriving at head);
     // after an eviction it is the recovery (the revived fact arriving at
-    // head). Expired → settle it instead, with the error transcribed for the
-    // next turn: answering a stale trigger with a stale context snapshot is
-    // worse than admitting the miss.
+    // head). Runs even while paused: a committed request is drained, never
+    // stranded (see the paused branch above). Expired → settle it instead,
+    // with the error transcribed for the next turn: answering a stale trigger
+    // with a stale context snapshot is worse than admitting the miss.
     const open = state.openRequest;
     if (open !== null && this.#inFlightLlmCall?.requestOffset !== open.requestedAtOffset) {
       if (this.#now() >= open.expiresAt) {

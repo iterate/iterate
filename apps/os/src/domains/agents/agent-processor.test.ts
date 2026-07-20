@@ -1411,6 +1411,55 @@ describe("AgentProcessor stream facts", () => {
     expect(h.state().contextItems.some((item) => item.payload.content === "too late")).toBe(false);
   });
 
+  it("a pause landing while a request is open does NOT strand it: a revived incarnation still adopts it", async () => {
+    // The breaker only ever pauses when nothing is open, but agent/paused is
+    // operator/script-appendable while a request is open. Pause must suppress
+    // only NEW scheduling — an already-open request is a committed obligation
+    // the revival must still adopt (or expire), never leave stuck until some
+    // external message happens to resume the loop.
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    expect(h.state().openRequest).not.toBeNull();
+    expect(h.llm.calls).toHaveLength(1); // the pre-crash attempt
+
+    // An operator pauses while the request is open; pause does not close it.
+    await h.play([
+      "append",
+      { type: "events.iterate.com/agent/paused", payload: { reason: "operator" } },
+    ]);
+    expect(h.state().paused).not.toBeNull();
+    expect(h.state().openRequest).not.toBeNull();
+
+    // Evict: the in-flight attempt dies with the incarnation. The revived
+    // incarnation, still paused, must adopt the open request rather than
+    // returning early and stranding it.
+    await h.play(["crash"], ["advanceTime", 30_000], ["append", REVIVED]);
+    expect(h.events(REQUESTED)).toHaveLength(1); // same request, not a new one
+    expect(h.llm.calls).toHaveLength(2); // adopted and re-dialed despite the pause
+
+    // It settles normally, and no new turn is scheduled while paused.
+    await h.play(() => h.llm.respond("drained while paused"));
+    expect(h.state().openRequest).toBeNull();
+    expect(h.state().paused).not.toBeNull();
+    expect(h.events(REQUESTED)).toHaveLength(1);
+  });
+
+  it("a pause landing while a request is open expires it past its horizon rather than stranding it", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    await h.play([
+      "append",
+      { type: "events.iterate.com/agent/paused", payload: { reason: "operator" } },
+    ]);
+    // Crash, then let the request's whole expiry horizon lapse before revival.
+    await h.play(["crash"], ["advanceTime", 10 * 60_000 + 1], ["append", REVIVED]);
+    expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt; never re-dialed
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "cancelled", reason: "expired" } } },
+    ]);
+    expect(h.state().openRequest).toBeNull();
+  });
+
   it("a synthetic provider turn (trigger + requested + assistant + settled in ONE batch) folds fully and extracts the script without dialing", async () => {
     // The e2e helper appendSyntheticProviderOutput's contract: a raw atomic
     // batch stands in for a whole provider turn. The leading developer item
@@ -1428,6 +1477,9 @@ describe("AgentProcessor stream facts", () => {
         payload: {
           role: "developer",
           content: "[e2e synthetic provider turn: the next assistant output is injected]",
+          // Mirrors appendSyntheticProviderOutput: a user actor makes this an
+          // EXTERNAL trigger (a no-actor developer item would be agent-loop).
+          actor: { type: "user", origin: "web" },
           llmRequestPolicy: { behaviour: "after-current-request" },
         },
       },
