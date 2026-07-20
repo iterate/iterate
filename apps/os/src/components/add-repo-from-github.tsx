@@ -155,14 +155,15 @@ function AddRepoFromGithubWizard({
         owner: input.repo.owner,
         repo: input.repo.name,
       });
-      // Adopt GitHub's main. force: the fresh repo's starter seed is history
-      // GitHub has never seen — GitHub wins. An empty GitHub repository has
-      // nothing to adopt: the link's initial push already seeded it, and the
-      // sync reports changed: false.
+      // Adopt GitHub's complete current main tree without cloning its history
+      // into the Repo Durable Object. force: the fresh repo's starter seed is
+      // history GitHub has never seen — GitHub wins. An empty GitHub repository
+      // has nothing to adopt: the link's initial push already seeded it, and
+      // the sync reports changed: false.
       let sync: { changed: boolean; commitOid: string } | null = null;
       let syncError: string | null = null;
       try {
-        sync = await repo.syncFromGithub({ force: true });
+        sync = await repo.syncFromGithub({ force: true, depth: 1 });
       } catch (error) {
         syncError = error instanceof Error ? error.message : String(error);
       }
