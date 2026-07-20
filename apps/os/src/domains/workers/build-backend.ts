@@ -149,10 +149,19 @@ export function stubBareNpmExternals(modules: Record<string, string>): Record<st
   for (const spec of needed) {
     const path = stubModulePath(spec);
     if (!(path in out)) {
+      // Agent packages (agent-base, *-proxy-agent) are extended with
+      // `class X extends require("agent-base")`. An empty object throws
+      // "Class extends value #<Object> is not a constructor". Export a
+      // no-op class so inheritance and `new` both succeed; real HTTP proxy
+      // behaviour is unused under workerd (native fetch).
       out[path] =
         `"use strict";\n` +
-        `const empty = Object.create(null);\n` +
-        `export default empty;\n` +
+        `class IterateExternalStub {\n` +
+        `  constructor() {}\n` +
+        `}\n` +
+        `IterateExternalStub.default = IterateExternalStub;\n` +
+        `module.exports = IterateExternalStub;\n` +
+        `export default IterateExternalStub;\n` +
         `export const __esModule = true;\n`;
     }
   }

@@ -35,6 +35,7 @@ describe("stubBareNpmExternals", () => {
     expect(out["bundle.js"]).toContain('from "zod"'); // intentional external stays
     expect(out["bundle.js"]).toContain('import "cloudflare:workers"');
     expect(out[".iterate-external/https-proxy-agent.js"]).toContain("export default");
+    expect(out[".iterate-external/https-proxy-agent.js"]).toContain("class IterateExternalStub");
     // Never invent bare package-name module keys.
     expect(out["https-proxy-agent"]).toBeUndefined();
     expect(out["zod"]).toBeUndefined();
