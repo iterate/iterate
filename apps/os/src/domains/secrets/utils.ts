@@ -558,3 +558,23 @@ export function secretErrorResponse(code: SecretErrorCode): Response {
     },
   );
 }
+
+/**
+ * Every project is born with a write-only ingress credential at this path:
+ * the value the `project-secret` /api credential is verified against (inside
+ * the Secret Durable Object — material never leaves the secret system; the
+ * verifier's answer is one bit). Born with an EMPTY egress pin, so unlike
+ * every other secret it can never be substituted into any outbound request:
+ * the ingress key and any egress credentials an external app is dialed with
+ * are deliberately different secrets.
+ */
+export const PROJECT_API_KEY_SECRET_PATH = "/secrets/project-api-key";
+
+/** Random birth material for {@link PROJECT_API_KEY_SECRET_PATH}. Unusable
+ * until the owner overwrites it with a value they hold (secrets.update) —
+ * writing a known value IS the pairing ceremony with an external app. */
+export function generateProjectApiKeyMaterial(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `itxk_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}

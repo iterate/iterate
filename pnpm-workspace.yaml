@@ -1,5 +1,4 @@
 packages:
-  - apps/iterate-com
   - apps/os
   - apps/semaphore
   - apps/*

@@ -82,7 +82,7 @@ Before changing a service, consult first-party docs for the actual libraries in 
 
 Canonical service stack:
 
-- Hono for worker HTTP routing where the app has one (e.g. `apps/auth`, `apps/iterate-com`)
+- Hono for worker HTTP routing where the app has one (e.g. `apps/auth`)
 - TanStack Start in SPA mode
 - TanStack Router file-based routes
 - itx capability handles for OS project runtime surfaces

@@ -32,14 +32,6 @@ function loadWorkflow(file: string): Workflow {
 
 const deploymentWorkflows = [
   {
-    file: ".depot/workflows/ci.yml",
-    group: "deploy-iterate-com-production",
-    jobs: {
-      "deploy-iterate-com": { size: "2x8", timeoutMinutes: 20 },
-      slack_failure: { size: "2x8", timeoutMinutes: 10 },
-    },
-  },
-  {
     file: ".depot/workflows/deploy-auth.yml",
     group: "deploy-auth-dev-global",
     jobs: {
@@ -102,20 +94,6 @@ describe("Depot deployment safety", () => {
       }
     },
   );
-
-  it("deploys iterate.com only for inputs that can change its artifact", () => {
-    const workflow = loadWorkflow(".depot/workflows/ci.yml");
-
-    expect(workflow.on?.push?.paths).toEqual([
-      ".depot/workflows/ci.yml",
-      ".agents/skills/**",
-      "apps/iterate-com/**",
-      "package.json",
-      "pnpm-lock.yaml",
-      "pnpm-workspace.yaml",
-      "patches/**",
-    ]);
-  });
 
   it("redeploys tunnels when its workflow changes", () => {
     const workflow = loadWorkflow(".depot/workflows/deploy-tunnels.yml");

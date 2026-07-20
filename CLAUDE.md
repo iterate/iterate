@@ -95,7 +95,6 @@ the PR ready for review also starts previews. Lease model details:
 | `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
 | `docs/`             | Detailed documentation                                                             |
 | `tasks/`            | Work tracking (markdown + frontmatter)                                             |
-| `apps/iterate-com/` | iterate.com marketing site                                                         |
 
 Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/architecture.md`.
 
@@ -128,6 +127,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 
 - [Dev environments](docs/dev-environments.md) — local dev, minting identities/admin sessions, browsers for agents, preview-from-local
 - [Preview resource GC](docs/preview-resource-gc.md) — how preview slots reclaim their Cloudflare resources: lease-expiry sweep, 3h TTLs, why teardown is decoupled from releasing the slot
+- [Remote apps](docs/remote-apps.md) — independently deployed web apps: connect inbound with the born project API key, mount outbound as an itx capability via `remoteCapability`
 - [Coding style](docs/coding-style.md)
 - [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs

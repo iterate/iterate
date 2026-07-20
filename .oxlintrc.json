@@ -228,18 +228,6 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/*/backend/**/*.ts"],
-      "rules": {
-        "no-console": "error"
-      }
-    },
-    {
-      "files": ["apps/*/backend/**/*test*/**"],
-      "rules": {
-        "no-console": "off"
-      }
-    },
-    {
       "files": ["apps/*-contract/src/**/*.ts"],
       "rules": {
         "iterate/contract-package-imports": "error"

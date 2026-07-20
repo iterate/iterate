@@ -7,7 +7,7 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { listenOnFetchSafePort } from "./test/fetch-safe-port.ts";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { seedPets } from "./pets.ts";
 import { pkceS256, randomSealKey } from "./seal.ts";
 import {
