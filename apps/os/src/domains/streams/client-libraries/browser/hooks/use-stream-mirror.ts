@@ -5,6 +5,7 @@ import {
   type StreamBrowserStore,
 } from "../stream-browser-store.ts";
 import type { BrowserStreamClientFactory } from "../stream-transport.ts";
+import type { BrowserStreamSubscriberUser } from "../browser-subscriber.ts";
 import { CANONICAL_MIRROR_PROCESSORS } from "../canonical-mirror-processors.ts";
 
 /**
@@ -25,10 +26,12 @@ export function useStreamMirror(input: {
   createStreamClient: BrowserStreamClientFactory;
   /** See BrowserStreamConnectionConfig.resetTransport — evict a dead-but-never-closed transport. */
   resetTransport?: () => void;
+  /** Authenticated human announced in this browser subscription's presence metadata. */
+  subscriberUser?: BrowserStreamSubscriberUser;
   projectId: string;
   streamPath: string;
 }): { store: StreamBrowserStore; snapshot: StreamBrowserSnapshot } {
-  const { createStreamClient, resetTransport, projectId, streamPath } = input;
+  const { createStreamClient, resetTransport, subscriberUser, projectId, streamPath } = input;
   // Self-heal for the acquire-to-subscribe gap: React can yield between the
   // render that acquired the runtime and the commit that subscribes (Suspense,
   // lazy chunks — longer than any idle grace), and a runtime disposed inside
@@ -41,12 +44,13 @@ export function useStreamMirror(input: {
       acquireStreamRuntime({
         createStreamClient,
         ...(resetTransport === undefined ? {} : { resetTransport }),
+        ...(subscriberUser === undefined ? {} : { subscriberUser }),
         projectId,
         streamPath,
         processors: CANONICAL_MIRROR_PROCESSORS,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacquireEpoch drives the self-heal re-acquire.
-    [createStreamClient, resetTransport, projectId, streamPath, reacquireEpoch],
+    [createStreamClient, resetTransport, subscriberUser, projectId, streamPath, reacquireEpoch],
   );
   const subscribe = useCallback(
     (listener: () => void) => {

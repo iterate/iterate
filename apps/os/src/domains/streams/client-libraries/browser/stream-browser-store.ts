@@ -62,6 +62,10 @@ import {
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
 import { catchUpDurableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
+import {
+  browserStreamSubscriberDescriptor,
+  type BrowserStreamSubscriberUser,
+} from "./browser-subscriber.ts";
 import { LiveAgentStateChannel, liveAgentStateChannelName } from "./live-agent-state-channel.ts";
 import { acquireDatabase } from "./stream-database-registry.ts";
 import {
@@ -172,6 +176,8 @@ export type BrowserProcessorConfig = {
 type BrowserStreamConnectionConfig = {
   projectId?: string;
   createStreamClient: BrowserStreamClientFactory;
+  /** Authenticated human shown in the stream's ephemeral presence roster. */
+  subscriberUser?: BrowserStreamSubscriberUser;
   streamUrl?: string | URL | ((args: { projectId: string; streamPath: string }) => string | URL);
   /**
    * Evict the transport `createStreamClient` dials through, so the NEXT call
@@ -261,6 +267,7 @@ const runtimeRegistry = new Map<
   {
     runtime: StreamBrowserStore;
     refreshTransport: (transport: BrowserStreamTransport) => void;
+    refreshSubscriberUser: (user: BrowserStreamSubscriberUser | undefined) => void;
     retain: () => void;
   }
 >();
@@ -294,6 +301,7 @@ export function acquireStreamRuntime(
       createStreamClient: args.createStreamClient,
       resetTransport: args.resetTransport,
     });
+    existing.refreshSubscriberUser(args.subscriberUser);
     // A pending idle-dispose must not fire between this acquire and the
     // commit's subscribe() — see retain()'s docstring.
     existing.retain();
@@ -318,6 +326,7 @@ function createStreamRuntime(
 ): {
   runtime: StreamBrowserStore;
   refreshTransport: (transport: BrowserStreamTransport) => void;
+  refreshSubscriberUser: (user: BrowserStreamSubscriberUser | undefined) => void;
   retain: () => void;
 } {
   // Mutable on purpose: re-acquires refresh it (see acquireStreamRuntime), and
@@ -327,6 +336,10 @@ function createStreamRuntime(
     createStreamClient: args.createStreamClient,
     resetTransport: args.resetTransport,
   };
+  // Like the transport, auth session data may refresh while this shared
+  // runtime outlives the render that acquired it. Subscription opens read the
+  // latest identity instead of pinning the creating render's snapshot.
+  let subscriberUser = args.subscriberUser;
   const members = args.processors;
   // A single label for log lines, the debug registry key, and the server
   // subscription key. Each member's OWN slug is used for its storage (tables,
@@ -1471,12 +1484,10 @@ function createStreamRuntime(
         return {
           processor,
           replayAfterOffset,
-          subscriber: {
-            description: "browser",
-            processor: {
-              announcement: announceContract(processor.contract),
-            },
-          },
+          subscriber: browserStreamSubscriberDescriptor({
+            announcement: announceContract(processor.contract),
+            ...(subscriberUser === undefined ? {} : { user: subscriberUser }),
+          }),
           getRuntimeState: capabilities.getRuntimeState,
           ping: capabilities.ping,
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
@@ -2258,6 +2269,9 @@ function createStreamRuntime(
     runtime,
     refreshTransport(next) {
       transport = next;
+    },
+    refreshSubscriberUser(next) {
+      subscriberUser = next;
     },
     // A re-acquire between "last listener unsubscribed" and the idle-dispose
     // timer firing means a render is about to subscribe: cancel the pending
