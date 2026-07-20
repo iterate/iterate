@@ -621,6 +621,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
               .catch(() => undefined);
           },
         });
+        // A non-streaming transport reports no chunks, so its text exists
+        // only in this closure until the success batch commits. Record it as
+        // the in-flight partial BEFORE awaiting that append: an interrupt
+        // racing the append settles cancelled with whatever partial is
+        // recorded, and must not drop a response already delivered whole.
+        if (!inFlight.controller.signal.aborted) {
+          inFlight.partialText = completion.text;
+        }
         const usage = completion.usage;
         await this.#appendUnlessLostIdempotencyRace(args.append, [
           {
