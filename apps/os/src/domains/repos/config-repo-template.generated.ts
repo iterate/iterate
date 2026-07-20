@@ -1114,12 +1114,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       " *\n" +
       " * React is an esm.sh URL import to match the clients.\n" +
       " */\n" +
-      "import {\n" +
-      "  useEffect,\n" +
-      "  useRef,\n" +
-      "  useState,\n" +
-      "  useSyncExternalStore,\n" +
-      "} from \"https://esm.sh/react@19.2.4\";\n" +
+      "import { useEffect, useRef, useState, useSyncExternalStore } from \"https://esm.sh/react@19.2.4\";\n" +
       "\n" +
       "type LiveUpdate<State> =\n" +
       "  | { type: \"snapshot\"; revision: number; state: State }\n" +
