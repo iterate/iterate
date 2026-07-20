@@ -23,28 +23,18 @@ parallel run.
   schema's parse triggers a refold from the journal; the delivery CURSOR
   survives, so old events are re-REDUCED but never re-delivered to
   processEvent.
-- **Old journals must refold correctly.** Two landmines found in the audit:
-  1. Old `agent/llm-request-completed` / `agent/llm-request-cancelled`
-     events MUST be consumed as legacy settlement facts (fold arms that
-     close a matching `openRequest`). Otherwise the first historical
-     `llm-request-requested` opens a request that never settles, every later
-     requested folds to nothing, and the assistant fold-guard drops every
-     subsequent assistant turn — silent conversation loss on refold.
-     `llm-request-scheduled` / `llm-request-started` stay unconsumed
-     (skipped, harmless).
-  2. The COMPACTION fold arm must be ported (a developer context item with
-     `compaction.replacesHistoryThrough`): seal coverage through the
-     barrier, drop history at or below it, retain latest keyed system
-     occurrences. Otherwise compacted conversations refold into the full
-     uncompacted prompt.
-- **Context payload = superset of every historical shape.** The clean room's
-  flat object gains the prod-only fields so ALL committed events parse:
-  `refs` (event/user/file/git-commit), `compaction` (developer role),
-  actor variants `slack`/`telegram`/`email`/`github` alongside
-  user/agent/script/integration. A historical event that fails parse is
-  SKIPPED from the fold — for context items that is conversation loss, so
-  the payload schema is the compatibility contract.
-- **Kept bridge events** (deferred collapse decisions from the jam):
+- **NO historical compatibility** (Jonas, review round 2026-07-20 —
+  supersedes the two "old journals must refold" landmines and the
+  "consumers update additively" rule below as originally written): old
+  journals are NOT required to parse, refold, or render. The legacy
+  vocabulary (`llm-request-scheduled`/`started`/`completed`/`cancelled`,
+  `loop-stopped`, cancel reason `durable-object-crashed`) is deleted
+  everywhere — no legacy consumes, no bridge fold arms, no legacy UI
+  handling. UIs render ONLY the new types. `refs`, the
+  slack/telegram/email/github actor variants, and `compaction` stay in the
+  context payload as LIVE features (integration provenance lanes and the
+  compaction rewrite), not as compatibility.
+- **Kept live events** (deferred collapse decisions from the jam):
   `agents/web-message-sent` (+ the mirror-into-context per-event append,
   `render-web-response@offset`), `agent/token-usage-reported` (emitted with
   the settled batch; feeds compaction trigger + lifetime totals fold + UI
@@ -53,10 +43,9 @@ parallel run.
   by integrations not the agent). `agent/loop-stopped` is NOT kept — the
   breaker is `agent/paused`/`agent/resumed` now; historical loop-stopped
   events are unconsumed and skip.
-- **Consumers update ADDITIVELY.** Old journals render forever, so the UI
-  reducer, llm-request-replay, TUI feed model, mobile chat/feed keep their
-  scheduled/started/completed/cancelled handling for history and GAIN
-  settled/paused/resumed handling for new events.
+- **Consumers render only the new vocabulary** (superseding the earlier
+  additive plan): settled/paused/resumed/processor-revived handling only;
+  every legacy case deleted.
 - **Ported user-space machinery** (from the audit inventory): prompt
   building (protocol prompt, system-prompt-policy gate — no turn until the
   canonical `agent/system-prompt` keyed slot exists, trust demotion incl.

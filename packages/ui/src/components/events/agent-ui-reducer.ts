@@ -542,6 +542,8 @@ const STREAM_PROCESSOR_REVIVED = "events.iterate.com/stream/processor-revived";
 const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
 const STREAM_PAUSED = "events.iterate.com/stream/paused";
 const STREAM_RESUMED = "events.iterate.com/stream/resumed";
+const AGENT_PAUSED = "events.iterate.com/agent/paused";
+const AGENT_RESUMED = "events.iterate.com/agent/resumed";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -937,7 +939,11 @@ function reduceAgentUiEvent(
       });
     }
 
+    // The stream-level facts (the whole stream stops accepting appends) and
+    // the agent-level facts (the turn loop parks — the autonomous breaker, or
+    // an operator) render as the same pause/resume marker rows.
     case STREAM_PAUSED:
+    case AGENT_PAUSED:
       return emitItem(state, items, {
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
@@ -947,6 +953,7 @@ function reduceAgentUiEvent(
       });
 
     case STREAM_RESUMED:
+    case AGENT_RESUMED:
       return emitItem(state, items, {
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,

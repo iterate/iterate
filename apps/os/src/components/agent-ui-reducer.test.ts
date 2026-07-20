@@ -632,6 +632,38 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
+  test("shows agent pause and resume (the turn-loop breaker) as the same marker rows", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/paused",
+        payload: {
+          reason: "autonomous turn limit reached (100 consecutive turns without external input)",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/resumed",
+        payload: { reason: "external input" },
+      },
+    ]);
+
+    expect(state.items).toEqual([
+      {
+        kind: "stream-paused",
+        id: "stream-paused-1",
+        text: "Agent paused",
+        reason: "autonomous turn limit reached (100 consecutive turns without external input)",
+        timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
+      },
+      {
+        kind: "stream-resumed",
+        id: "stream-resumed-2",
+        text: "Agent resumed",
+        reason: "external input",
+        timestampMs: Date.parse("2026-06-11T00:00:02.000Z"),
+      },
+    ]);
+  });
+
   test("settles a completed LLM request at run-level idle even without an assistant message", () => {
     const state = projectRuntime(
       reduceAll([
