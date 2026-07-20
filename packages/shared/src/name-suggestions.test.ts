@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { suggestOrganizationNameFromEmail } from "./name-suggestions.ts";
+import { suggestOrganizationName, suggestOrganizationNameFromEmail } from "./name-suggestions.ts";
+
+describe("suggestOrganizationName", () => {
+  it("prefers the OAuth display name over the email local part", () => {
+    expect(
+      suggestOrganizationName({
+        name: "Jonas Templestein",
+        email: "jonas.huckestein@gmail.com",
+      }),
+    ).toBe("Jonas Templestein's Organization");
+  });
+
+  it("trims the display name before appending the possessive", () => {
+    expect(suggestOrganizationName({ name: "  Ada Lovelace  " })).toBe(
+      "Ada Lovelace's Organization",
+    );
+  });
+
+  it("falls back to the email heuristic when name is missing", () => {
+    expect(suggestOrganizationName({ email: "jonas@nustom.com" })).toBe("Nustom");
+    expect(suggestOrganizationName({ name: "   ", email: "jane.doe@gmail.com" })).toBe("Jane Doe");
+    expect(suggestOrganizationName({})).toBe("");
+  });
+});
 
 describe("suggestOrganizationNameFromEmail", () => {
   it("uses the company domain's first label", () => {

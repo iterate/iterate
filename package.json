@@ -12,14 +12,14 @@
     "os": "cd apps/os && pnpm",
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
-    "iterate": "bun ./packages/iterate/bin/iterate.js",
+    "iterate": "node ./packages/iterate/bin/iterate.js",
     "preview": "trpc-cli scripts/preview/preview.ts",
     "preview:ci": "./scripts/preview/run-ci-locally.sh",
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
     "test:oxlint-plugin": "pnpm --dir lint test",
-    "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace packages/shared --workspace packages/ui --workspace packages/iterate",
+    "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace apps/tanstack --workspace packages/shared --workspace packages/ui --workspace packages/iterate",
     "prepare": "is-ci || husky",
     "spec": "playwright test --config playwright.config.ts",
     "e2e": "pnpm --dir apps/os e2e",
@@ -49,7 +49,7 @@
     "json5": "^2.2.3",
     "knip": "^6.0.5",
     "lint-staged": "^16.2.7",
-    "middlewright": "0.1.2",
+    "middlewright": "0.1.3",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",
     "playwright": "1.60.0",
@@ -64,6 +64,6 @@
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "jose": "^6.2.1",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   }
 }

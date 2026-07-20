@@ -337,7 +337,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     const agentPath = `/agents/list-proof/${crypto.randomUUID()}`;
     const repoPath = `/repos/list-proof/${crypto.randomUUID()}`;
     await Promise.all([
-      project.agents.get(agentPath).create({}),
+      project.agents.get(agentPath).create(),
       project.repos.get(repoPath).create(),
     ]);
     await waitForCondition(
@@ -418,12 +418,23 @@ test("Project egress substitutes path-addressed secrets for explicit and project
         expect.objectContaining({ path: repoPath }),
         expect.objectContaining({ path: secretPath }),
       ]),
-      agents: expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
       repos: expect.arrayContaining([
         expect.objectContaining({ path: "/repos/config" }),
         expect.objectContaining({ path: repoPath }),
       ]),
       secrets: expect.arrayContaining([expect.objectContaining({ path: secretPath })]),
+    });
+    await waitForCondition(
+      async () =>
+        Object.hasOwn((await project.agents.processor.snapshot()).state.agents, agentPath),
+      {
+        description: "agent collection processor to fold the created agent",
+        timeoutMs: 30_000,
+      },
+    );
+    const agentDatabase = (await project.agents.processor.snapshot()).state;
+    expect(agentDatabase.agents).toMatchObject({
+      [agentPath]: expect.objectContaining({ path: agentPath }),
     });
     expect(await project.secrets.list()).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: secretPath })]),

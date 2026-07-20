@@ -26,10 +26,11 @@
 //   journal is exactly-once, the send is at-least-once).
 
 import { stringify as stringifyYaml } from "yaml";
+import { StreamProcessor } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { StreamEvent } from "../streams/schemas.ts";
 import {
+  coerceTelegramId,
   integrationConnectionStreamPath,
   readRecord,
   readString,
@@ -423,13 +424,6 @@ export class TelegramAgentProcessor extends StreamProcessor<
   }
 }
 
-/** Ids ride stream paths and state as strings; the Bot API wants the original
- * integers back where they were integers. */
-function coerceTelegramId(id: string): number | string {
-  const numeric = Number(id);
-  return Number.isSafeInteger(numeric) ? numeric : id;
-}
-
 /** Events that mean "the agent is working now", driving the typing repaint. */
 function isTelegramTypingLifecycleFact(event: { type: string }): boolean {
   return (
@@ -496,14 +490,14 @@ function telegramWebhookAgentInput(
   if (placeholders.length > 0) {
     lines.push(
       "",
-      `Media in this message (not directly viewable in v1 — reply accordingly if asked about it): ${placeholders.join(" ")}`,
+      `Media in this message (file_id is in the raw payload): ${placeholders.join(" ")}`,
     );
   }
   return lines.join("\n");
 }
 
-/** Bracketed placeholders for the media a message carries — the v1 stand-in
- * for actually downloading Telegram files. */
+/** Bracketed hints for the media a message carries; the raw payload retains
+ * the file ids the agent can download through token-safe project egress. */
 function telegramMediaPlaceholders(payload: unknown): string[] {
   const update = readRecord(readRecord(payload)?.body);
   const message =

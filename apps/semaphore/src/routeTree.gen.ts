@@ -13,6 +13,7 @@ import { Route as NotAnAdminRouteImport } from './routes/not-an-admin'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ESplatRouteImport } from './routes/e.$'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppResourcesRouteImport } from './routes/_app/resources'
 import { Route as AppResourcesIndexRouteImport } from './routes/_app/resources.index'
@@ -36,6 +37,11 @@ const AppRoute = AppRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ESplatRoute = ESplatRouteImport.update({
+  id: '/e/$',
+  path: '/e/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
@@ -70,6 +76,7 @@ export interface FileRoutesByFullPath {
   '/not-an-admin': typeof NotAnAdminRoute
   '/resources': typeof AppResourcesRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/e/$': typeof ESplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/resources/': typeof AppResourcesIndexRoute
   '/resources/$type/$slug': typeof AppResourcesTypeSlugRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByTo {
   '/health': typeof HealthRoute
   '/not-an-admin': typeof NotAnAdminRoute
   '/api/$': typeof ApiSplatRoute
+  '/e/$': typeof ESplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/resources': typeof AppResourcesIndexRoute
   '/resources/$type/$slug': typeof AppResourcesTypeSlugRoute
@@ -91,6 +99,7 @@ export interface FileRoutesById {
   '/not-an-admin': typeof NotAnAdminRoute
   '/_app/resources': typeof AppResourcesRouteWithChildren
   '/api/$': typeof ApiSplatRoute
+  '/e/$': typeof ESplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/resources/': typeof AppResourcesIndexRoute
   '/_app/resources/$type/$slug': typeof AppResourcesTypeSlugRoute
@@ -103,6 +112,7 @@ export interface FileRouteTypes {
     | '/not-an-admin'
     | '/resources'
     | '/api/$'
+    | '/e/$'
     | '/api/orpc/$'
     | '/resources/'
     | '/resources/$type/$slug'
@@ -112,6 +122,7 @@ export interface FileRouteTypes {
     | '/health'
     | '/not-an-admin'
     | '/api/$'
+    | '/e/$'
     | '/api/orpc/$'
     | '/resources'
     | '/resources/$type/$slug'
@@ -123,6 +134,7 @@ export interface FileRouteTypes {
     | '/not-an-admin'
     | '/_app/resources'
     | '/api/$'
+    | '/e/$'
     | '/api/orpc/$'
     | '/_app/resources/'
     | '/_app/resources/$type/$slug'
@@ -134,6 +146,7 @@ export interface RootRouteChildren {
   HealthRoute: typeof HealthRoute
   NotAnAdminRoute: typeof NotAnAdminRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  ESplatRoute: typeof ESplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
@@ -165,6 +178,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/e/$': {
+      id: '/e/$'
+      path: '/e/$'
+      fullPath: '/e/$'
+      preLoaderRoute: typeof ESplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/$': {
@@ -235,6 +255,7 @@ const rootRouteChildren: RootRouteChildren = {
   HealthRoute: HealthRoute,
   NotAnAdminRoute: NotAnAdminRoute,
   ApiSplatRoute: ApiSplatRoute,
+  ESplatRoute: ESplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport

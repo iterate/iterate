@@ -30,7 +30,7 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../schemas.ts";
+import type { StreamEvent } from "iterate/processors";
 
 /** Kind prefix for pretty chat rows settled by the agent lens. */
 export const AGENT_KIND_PREFIX = "agent.";
@@ -44,7 +44,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * are disposable caches and must be rebuilt, never interpreted as current
  * state (in particular, they may contain historical ephemeral activity).
  */
-export const BROWSER_FEED_SCHEMA_VERSION = 4;
+export const BROWSER_FEED_SCHEMA_VERSION = 6;
 export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */

@@ -7,8 +7,8 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
-import type { StreamEventBatch } from "../../src/domains/streams/rpc-types.ts";
-import type { StreamEvent } from "../../src/domains/streams/schemas.ts";
+import type { StreamEventBatch } from "iterate/processors";
+import type { StreamEvent } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -672,6 +672,7 @@ test("global cross-posts stay in the global namespace — a project stream is un
   const marker = crypto.randomUUID();
   const globalPath = `/e2e/os-port/cross-post-global/source/${marker}`;
   const targetPath = `/e2e/os-port/cross-post-global/target/${marker}`;
+  const projectId = `prj_${crypto.randomUUID().replaceAll("-", "")}`;
 
   using session = withItxSession();
   using itx = session.authenticate({
@@ -679,8 +680,16 @@ test("global cross-posts stay in the global namespace — a project stream is un
     secret: adminSecret(),
   });
   using project = itx.projects.create({
+    projectId,
     slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
+    waitUntilReady: false,
   });
+
+  // This test needs an existing project namespace, not a concurrently booting
+  // project. Supplying the fixture id avoids the auth mint lane; awaiting the
+  // identity keeps unrelated project bootstrap work out of the cross-post.
+  await project.identity();
+
   using globalSource = itx.streams.get(globalPath);
   using globalTarget = itx.streams.get(targetPath);
   using projectTarget = project.streams.get(targetPath);

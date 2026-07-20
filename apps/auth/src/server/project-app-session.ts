@@ -20,16 +20,21 @@ const ProjectAppSessionClaims = z
 
 type SessionDependencies = {
   secret: string;
-  userHasProject(input: { projectId: string; userId: string }): Promise<boolean>;
+  userCanAccessProject(input: { projectId: string; userId: string }): Promise<boolean>;
 };
 
-/** Mint a short-lived app-origin token only for a current project member. */
+/** Mint a short-lived app-origin token for a current project member or platform admin. */
 export async function mintProjectAppSession(
   rawInput: MintProjectAppSessionInput,
   dependencies: SessionDependencies,
 ): Promise<{ token: string } | null> {
   const input = parseMintInput(rawInput);
-  if (!(await dependencies.userHasProject({ projectId: input.projectId, userId: input.userId }))) {
+  if (
+    !(await dependencies.userCanAccessProject({
+      projectId: input.projectId,
+      userId: input.userId,
+    }))
+  ) {
     return null;
   }
 
@@ -47,11 +52,11 @@ export async function mintProjectAppSession(
   };
 }
 
-/** Verify signature and scope, then re-check membership so revocation is live. */
+/** Verify signature and scope, then re-check access so revocation and admin demotion are live. */
 export async function validateProjectAppSession(
   rawInput: ValidateProjectAppSessionInput,
   dependencies: SessionDependencies,
-): Promise<{ expiresAt: number } | null> {
+): Promise<{ expiresAt: number; userId: string } | null> {
   let input: ReturnType<typeof parseValidateInput>;
   let rawClaims: unknown;
   try {
@@ -66,11 +71,14 @@ export async function validateProjectAppSession(
   const claims = parsed.data;
   if (claims.audience !== input.audience || claims.projectId !== input.projectId) return null;
   if (
-    !(await dependencies.userHasProject({ projectId: claims.projectId, userId: claims.userId }))
+    !(await dependencies.userCanAccessProject({
+      projectId: claims.projectId,
+      userId: claims.userId,
+    }))
   ) {
     return null;
   }
-  return { expiresAt: claims.exp };
+  return { expiresAt: claims.exp, userId: claims.userId };
 }
 
 function parseMintInput(input: MintProjectAppSessionInput) {

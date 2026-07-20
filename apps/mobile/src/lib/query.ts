@@ -1,4 +1,14 @@
-import { QueryClient } from "@tanstack/react-query";
+import { focusManager, QueryClient } from "@tanstack/react-query";
+import { AppState, Platform } from "react-native";
+
+if (Platform.OS !== "web") {
+  focusManager.setEventListener((setFocused) => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      setFocused(state === "active");
+    });
+    return () => subscription.remove();
+  });
+}
 
 // Module-level client so non-React code (the live stream subscription in
 // live-thread.ts) can push server-sent events into the same cache the screens

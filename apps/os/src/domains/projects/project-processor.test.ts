@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryStreamNetwork, driveProcessor } from "iterate/processors/testing";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
-import { MemoryStreamNetwork, driveProcessor } from "../streams/test-helpers.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -55,7 +55,6 @@ function makeHarness(
         return response ?? new Response(null, { status: 204 });
       },
     },
-    search: { ensureIndex: async () => ({ created: true }) },
   } as unknown as ProjectRpcTarget;
   const stream = network.get("/");
   const processor = new ProjectProcessor({
@@ -89,6 +88,8 @@ describe("ProjectProcessor bootstrap", () => {
     expect(network.eventsAt("/").map((event) => event.type)).toEqual([
       "events.iterate.com/project/created",
       "events.iterate.com/capability-host/created",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/notification/created",
       "events.iterate.com/stream/subscription-configured",
     ]);
     expect(network.eventsAt("/scheduler/primary").map((event) => event.type)).toEqual([
@@ -143,13 +144,13 @@ describe("ProjectProcessor bootstrap", () => {
 
     await processorWaitStarted["capability-host"];
     expect(settled).toBe(false);
-    expect(processorWaits).toEqual([{ offset: 3, processor: "capability-host" }]);
+    expect(processorWaits).toEqual([{ offset: 5, processor: "capability-host" }]);
 
     now += 10_000;
     releases["capability-host"]();
     await processorWaitStarted.scheduler;
     expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
+      { offset: 5, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
     ]);
 
@@ -157,7 +158,7 @@ describe("ProjectProcessor bootstrap", () => {
     releases.scheduler();
     await processorWaitStarted.repo;
     expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
+      { offset: 5, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
       { offset: 3, processor: "repo" },
     ]);
@@ -166,7 +167,7 @@ describe("ProjectProcessor bootstrap", () => {
     releases.repo();
     await processorWaitStarted.email;
     expect(processorWaits).toEqual([
-      { offset: 3, processor: "capability-host" },
+      { offset: 5, processor: "capability-host" },
       { offset: 2, processor: "scheduler" },
       { offset: 3, processor: "repo" },
       { offset: 3, processor: "email" },
@@ -228,7 +229,7 @@ describe("ProjectProcessor bootstrap", () => {
 });
 
 describe("ProjectProcessor catalogs", () => {
-  it("keeps physical paths separate from explicitly created domain objects", async () => {
+  it("catalogs physical paths without folding agent collection facts", async () => {
     const { driver, network, stream } = makeHarness();
     await stream.append(PROJECT_CREATED);
     await driver.deliver();
@@ -240,12 +241,7 @@ describe("ProjectProcessor catalogs", () => {
       },
       {
         type: "events.iterate.com/agent/created",
-        payload: {
-          config: {
-            llm: { model: "openai/gpt-5.6-sol" },
-            systemPrompt: "Handle this Slack thread.",
-          },
-        },
+        payload: {},
         source: {
           crossPostedFrom: [
             {
@@ -262,12 +258,9 @@ describe("ProjectProcessor catalogs", () => {
     );
     await driver.deliver();
 
-    await expect(driver.snapshot()).resolves.toMatchObject({
-      state: {
-        agents: [{ path: "/agents/slack/main/C123/ts-1" }],
-        streams: [{ path: "/agents/slack" }],
-      },
-    });
+    const snapshot = await driver.snapshot();
+    expect(snapshot.state).toMatchObject({ streams: [{ path: "/agents/slack" }] });
+    expect(snapshot.state).not.toHaveProperty("agents");
     expect(network.eventsAt("/agents/slack")).toEqual([]);
   });
 });

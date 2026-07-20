@@ -32,7 +32,7 @@ bar is measured on Depot.
 ## Round 4 (2026-07-13/14, PR #1938)
 
 Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
-of heavy merging (subagents/unified messaging, itx.search, stream metrics,
+of heavy merging (subagents/unified messaging, stream metrics,
 MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
 (`preview-e2e-marathon.yml`) against this PR's leased slot, fail fast, root
 cause + fix every failure, merge main into this branch between marathons so
@@ -64,8 +64,8 @@ times across six merged main heads. Detailed per-run log in the PR comments.
 
 Cost (measured; full breakdown in the PR): ~$54 for 101 lane executions ≈
 $0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
-AIG response cache absorbing 46.4% of requests (~$42 saved); AI Search
-fixture indexing $0.31; Depot 8-core compute ~275 min ≈ $4.40.
+AIG response cache absorbing 46.4% of requests (~$42 saved); Depot 8-core
+compute ~275 min ≈ $4.40.
 
 Round-4 lessons (no test-failure fixes needed; the PR carries only the
 slot re-claim above plus a dead-code/doc-drift sweep from the round's
@@ -746,6 +746,25 @@ through a multi-element-safe `anySpinnerVisible()` using
 `filter({ visible: true }).count() > 0`, which needs no strictness. "Any
 visible spinner counts as progress" is the plugin's intended semantic. Worth
 upstreaming to the middlewright package.
+
+### 23. spinner-to-content handoff can false-fail with a 1ms timeout
+
+**Signature:** `dashboard.spec.ts` reports `Timeout 1ms exceeded` waiting for
+the project link, while the failure screenshot and accessibility snapshot
+already contain that exact visible link. The page showed its route/query
+"Loading projects..." indicator continuously until the table replaced it.
+
+**Root cause:** middlewright first polls target readiness, then separately
+checks whether any spinner is visible. React can atomically commit the
+spinner-to-content replacement between those browser reads: the target was
+absent at the last poll, then the spinner was absent at its check. The waiter
+therefore took its no-spinner fast-fail path and gave the now-appearing target
+only 1ms. This is a test-waiter TOCTOU race, not missing product progress UI.
+
+**Fix:** `patches/middlewright@0.1.2.patch` gives the target one 100ms polling
+interval after observing no spinner. A genuine no-spinner failure still fails
+in about a second; an atomic loading-to-ready handoff can complete without a
+false failure.
 
 ### Round 3 targets
 

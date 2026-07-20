@@ -8,6 +8,8 @@ tags: [mobile, itx, iterate-package, consolidation]
 
 # Move apps/mobile onto the shared itx client (`iterate/client` + `iterate/react`)
 
+**Status summary:** not started overall. PR #2084 already wired React Native `AppState` into TanStack Query's `focusManager`, so foreground query reconciliation is no longer part of this task. The shared transport keeper, subscription hooks, online/suspicion signals, package type imports, and e2e dialing consolidation remain.
+
 Mobile is the codebase's last hand-rolled itx transport — the "third keeper"
 (PR #2063's reviews called it exactly that). It duplicates machinery the
 shared client already owns, live-proven in the browser and the chat TUI:
@@ -26,9 +28,10 @@ shared client already owns, live-proven in the browser and the chat TUI:
 - Replace both watchdog lifecycles with `useItxSubscription` /
   `useLiveState` from `iterate/react` (renderer-agnostic; RN is the
   officially-supported TanStack Query precedent).
-- Wire RN wake signals: `AppState` → `focusManager.setFocused`, NetInfo/
-  expo-network → `onlineManager` (TanStack's documented RN pattern), and
-  `reportTransportSuspicion()` on app-foreground for the keeper.
+- [x] ~~Wire `AppState` → `focusManager.setFocused`.~~ _Landed in PR #2084 for native push-enrollment reconciliation._
+- Wire NetInfo/expo-network → `onlineManager` (TanStack's documented RN
+  pattern), and call `reportTransportSuspicion()` on app foreground for the
+  shared keeper once mobile adopts it.
 - Re-point mobile's 10 deep-relative `apps/os/src/itx-api.generated.ts` type
   imports at the package too (absorbed from the deleted
   generated-contract-imports-via-package task; the streams-example-app half

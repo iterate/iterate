@@ -2,9 +2,13 @@
 // Slack webhook router (slack-processor-implementation.ts). Emitted event
 // types, payloads, and idempotency keys are stable wire formats.
 
-import { StreamProcessor } from "../streams/stream-processor.ts";
-import type { EmittedInput } from "../streams/processor-contracts.ts";
-import { agentCreationForPath, EMAIL_AGENT_SYSTEM_PROMPT } from "../agents/agent-defaults.ts";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
+import {
+  agentCreationForPath,
+  EMAIL_AGENT_SYSTEM_PROMPT,
+  EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
+} from "../agents/agent-defaults.ts";
+import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import {
   EmailProcessorContract,
@@ -202,10 +206,28 @@ function emailAgentCreationEvents(input: {
   subject?: string;
   threadId: string;
 }): EmittedInput<typeof EmailProcessorContract>[] {
-  return agentCreationForPath({
+  const subject = normalizeAgentBindingLabel(input.subject);
+  const counterpart = normalizeAgentBindingLabel(input.counterpart);
+  const creation = agentCreationForPath({
     agentPath: input.path,
     projectId: input.projectId,
-    overrides: { systemPrompt: EMAIL_AGENT_SYSTEM_PROMPT },
+    initialEvents: [
+      {
+        type: "events.iterate.com/agent/binding-set",
+        idempotencyKey: `agent/binding:${input.projectId}:${input.path}`,
+        payload: {
+          type: "email_thread",
+          threadId: input.threadId,
+          ...(subject === undefined ? {} : { subject }),
+          ...(counterpart === undefined ? {} : { counterpart }),
+        },
+      },
+    ],
+    systemPromptPolicy: {
+      content: EMAIL_AGENT_SYSTEM_PROMPT,
+      id: "email",
+      revision: EMAIL_AGENT_SYSTEM_PROMPT_REVISION,
+    },
     sibling: {
       birthCertificate: EmailAgentProcessorContract.buildEvent({
         type: "events.iterate.com/email-agent/created",
@@ -220,5 +242,6 @@ function emailAgentCreationEvents(input: {
       }),
       processorSlug: EmailAgentProcessorContract.slug,
     },
-  }).events satisfies EmittedInput<typeof EmailProcessorContract>[];
+  });
+  return creation.events satisfies EmittedInput<typeof EmailProcessorContract>[];
 }

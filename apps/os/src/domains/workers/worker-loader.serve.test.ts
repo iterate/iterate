@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
-// The serve-side resolve matrix: fresh vs stale fallbacks around the builder.
-// The env is faked at the module seam worker-loader.ts actually uses —
-// builder RPC, repo head/snapshot, and the KV cache — so these tests drive
-// resolveWorkerSource exactly like the runner does.
+// The serve-side resolve matrix: fresh vs stale fallbacks around the build
+// backend. The seams worker-loader.ts actually uses are faked — the build
+// backend module, repo head/snapshot, and the KV cache — so these tests
+// drive resolveWorkerSource exactly like the runner does.
 const h = vi.hoisted(() => {
   class FakeKv {
     readonly data = new Map<string, string>();
@@ -16,35 +16,39 @@ const h = vi.hoisted(() => {
     async put(key: string, value: string): Promise<void> {
       this.data.set(key, value);
     }
+    async delete(key: string): Promise<void> {
+      this.data.delete(key);
+    }
   }
   const kv = new FakeKv();
   const state = {
     buildCalls: [] as string[],
+    // When set, executeWorkerBuild blocks until the gate resolves — lets the
+    // stampede-guard tests hold a build "in flight" deterministically.
+    buildGate: undefined as Promise<void> | undefined,
     failBuilds: false,
     failTransport: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
   };
+  const executeWorkerBuild = async (input: { buildKey: string; files: Record<string, string> }) => {
+    state.buildCalls.push(input.buildKey);
+    if (state.buildGate !== undefined) await state.buildGate;
+    if (state.failBuilds) {
+      // Mirror the real backend's classification contract: genuine build
+      // failures carry the NAME (matching is name-based because the real
+      // pipeline's errors may cross RPC hops).
+      const failure = new Error("esbuild exploded");
+      failure.name = "WorkerBuildFailedError";
+      throw failure;
+    }
+    if (state.failTransport) throw new Error("container transport disconnected");
+    return {
+      mainModule: "worker.js",
+      modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
+    };
+  };
   const itxEnv = {
-    BUILDER: {
-      build: async (input: { buildKey: string; files: Record<string, string> }) => {
-        state.buildCalls.push(input.buildKey);
-        if (state.failBuilds) {
-          // Mirror the real builder's classification: a genuine bundler
-          // failure crosses RPC as the NAMED error (name survives, class
-          // identity does not).
-          const failure = new Error("esbuild exploded");
-          failure.name = "WorkerBuildFailedError";
-          throw failure;
-        }
-        if (state.failTransport) throw new Error("RPC receiver disconnected");
-        return {
-          buildKey: input.buildKey,
-          mainModule: "worker.js",
-          modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
-        };
-      },
-    },
     LOADER: { get: () => ({}) },
     REPO: {
       getByName: () => ({
@@ -55,10 +59,11 @@ const h = vi.hoisted(() => {
     WORKER_BUILD_CACHE: kv,
     WORKER_SELF: "os-test",
   };
-  return { itxEnv, kv, state };
+  return { executeWorkerBuild, itxEnv, kv, state };
 });
 
 vi.mock("../../env.ts", () => ({ itxEnv: h.itxEnv }));
+vi.mock("./build-backend.ts", () => ({ executeWorkerBuild: h.executeWorkerBuild }));
 
 const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
 const { resolveWorkerSource } = await import("./worker-loader.ts");
@@ -205,7 +210,7 @@ describe("resolveWorkerSource serve matrix", () => {
         source: repoSource("/repos/f"),
         waitUntil,
       });
-      await expect(blocking).rejects.toThrow("RPC receiver disconnected");
+      await expect(blocking).rejects.toThrow("container transport disconnected");
       await expect(blocking).rejects.not.toSatisfy(isWorkerBuildFailedError);
     } finally {
       h.state.failTransport = false;
@@ -224,6 +229,83 @@ describe("resolveWorkerSource serve matrix", () => {
     expect(h.state.buildCalls.length).toBe(callsAfterBlip + 1);
   });
 
+  test("a blocking same-key retry replays the recorded failure without a rebuild", async () => {
+    // The at-least-once delivery loop retries blocked builds indefinitely; a
+    // deterministically broken source must not boot a builder container per
+    // attempt (that churn starved preview's whole container capacity). Within
+    // the failure record's TTL the retry replays it; a fix commits a new head
+    // and therefore a new key.
+    setCommit("c1", "repo-i-v1", "I1");
+    h.state.failBuilds = true;
+    try {
+      const first = resolveWorkerSource({
+        projectId: "prj_i",
+        source: repoSource("/repos/i"),
+        waitUntil,
+      });
+      await expect(first).rejects.toSatisfy(isWorkerBuildFailedError);
+      const callsAfterFirst = h.state.buildCalls.length;
+
+      const retry = resolveWorkerSource({
+        projectId: "prj_i",
+        source: repoSource("/repos/i"),
+        waitUntil,
+      });
+      await expect(retry).rejects.toSatisfy(isWorkerBuildFailedError);
+      await expect(retry).rejects.toThrow("esbuild exploded");
+      expect(h.state.buildCalls.length).toBe(callsAfterFirst);
+    } finally {
+      h.state.failBuilds = false;
+    }
+  });
+
+  test("a bare repo ref and the canonical default-masked ref share one build key", async () => {
+    // The template's app refs omit exclude masks while defaultProjectWorkerRef
+    // spells them out — resolveFileSource canonicalizes the default so both
+    // hash to one key, or the deploy-time template seed would never match the
+    // apps and every fresh project's first app click would pay a cold build.
+    setCommit("c1", "repo-h-v1", "H1");
+    await resolveWorkerSource({
+      projectId: "prj_h",
+      source: {
+        files: {
+          exclude: [".git/**", "node_modules/**", "dist/**", "build/**"],
+          repoPath: "/repos/h",
+          type: "repo",
+        },
+        options: { entryPoint: "worker.ts" },
+      },
+      waitUntil,
+    });
+    const callsAfterCanonical = h.state.buildCalls.length;
+    // No masks AND no options at all — both defaults (exclude, entryPoint)
+    // canonicalize before the key, so this still hits the same artifact.
+    const bare = await resolveWorkerSource({
+      projectId: "prj_h",
+      source: { files: { repoPath: "/repos/h", type: "repo" } },
+      waitUntil,
+    });
+    expect(bare.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+    expect(h.state.buildCalls.length).toBe(callsAfterCanonical);
+  });
+
+  test("runtime artifacts are project-scoped — one project's build never serves another", async () => {
+    setCommit("c1", "repo-g-v1", "G1");
+    await resolveWorkerSource({ projectId: "prj_g1", source: repoSource("/repos/g"), waitUntil });
+    const callsAfterFirst = h.state.buildCalls.length;
+
+    // Identical source + options, different project: a project-trusted
+    // principal can influence its own builder sandbox's output, so the cache
+    // must NOT answer across projects — prj_g2 pays its own build.
+    const other = await resolveWorkerSource({
+      projectId: "prj_g2",
+      source: repoSource("/repos/g"),
+      waitUntil,
+    });
+    expect(other.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
+    expect(h.state.buildCalls.length).toBe(callsAfterFirst + 1);
+  });
+
   test("inline loader-ready sources bypass the pipeline and carry no serve info", async () => {
     const resolved = await resolveWorkerSource({
       projectId: "prj_e",
@@ -235,5 +317,85 @@ describe("resolveWorkerSource serve matrix", () => {
     });
     expect(resolved.serveInfo).toBeUndefined();
     expect(resolved.mainModule).toBe("main.js");
+  });
+
+  // A project worker is loaded independently by every stream delivering to
+  // it, so one commit fans out into many concurrent cold resolves of ONE
+  // build key. The stampede guard makes the followers wait on the first
+  // resolve's build instead of each launching a duplicate (observed live:
+  // 100 pool builds for 27 distinct keys drowned the builder pool).
+  test("concurrent same-key blocking resolves share one build", async () => {
+    setCommit("c1", "repo-sg-v1", "SG1");
+    const callsBefore = h.state.buildCalls.length;
+    let releaseBuild!: () => void;
+    h.state.buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    vi.useFakeTimers();
+    try {
+      const first = resolveWorkerSource({
+        projectId: "prj_sg",
+        source: repoSource("/repos/sg"),
+        waitUntil,
+      });
+      // The follower must start only after the leader's build is actually in
+      // flight — the guard's presence signal, not test luck.
+      while (h.state.buildCalls.length === callsBefore) await vi.advanceTimersByTimeAsync(1);
+      const second = resolveWorkerSource({
+        projectId: "prj_sg",
+        source: repoSource("/repos/sg"),
+        waitUntil,
+      });
+      releaseBuild();
+      await vi.advanceTimersByTimeAsync(2_500);
+      const [leader, follower] = await Promise.all([first, second]);
+      expect(h.state.buildCalls.length).toBe(callsBefore + 1);
+      expect(follower.modules).toEqual(leader.modules);
+      expect(follower.serveInfo).toMatchObject({ status: "fresh" });
+    } finally {
+      h.state.buildGate = undefined;
+      vi.useRealTimers();
+    }
+  });
+
+  test("a waiting resolve replays the leader's genuine build failure", async () => {
+    setCommit("c1", "repo-sgf-v1", "SGF1");
+    const callsBefore = h.state.buildCalls.length;
+    h.state.failBuilds = true;
+    let releaseBuild!: () => void;
+    h.state.buildGate = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    vi.useFakeTimers();
+    try {
+      const first = resolveWorkerSource({
+        projectId: "prj_sgf",
+        source: repoSource("/repos/sgf"),
+        waitUntil,
+      });
+      while (h.state.buildCalls.length === callsBefore) await vi.advanceTimersByTimeAsync(1);
+      const second = resolveWorkerSource({
+        projectId: "prj_sgf",
+        source: repoSource("/repos/sgf"),
+        waitUntil,
+      });
+      const outcomes = Promise.allSettled([first, second]);
+      releaseBuild();
+      await vi.advanceTimersByTimeAsync(2_500);
+      const [leader, follower] = await outcomes;
+      expect(leader.status).toBe("rejected");
+      expect(follower.status).toBe("rejected");
+      for (const outcome of [leader, follower]) {
+        expect(
+          isWorkerBuildFailedError((outcome as PromiseRejectedResult).reason),
+          "both resolves classify as the same genuine build failure",
+        ).toBe(true);
+      }
+      expect(h.state.buildCalls.length).toBe(callsBefore + 1);
+    } finally {
+      h.state.buildGate = undefined;
+      h.state.failBuilds = false;
+      vi.useRealTimers();
+    }
   });
 });

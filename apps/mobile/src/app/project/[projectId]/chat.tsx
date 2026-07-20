@@ -14,7 +14,7 @@
 //
 // A brand-new chat is just this screen pointed at a fresh /agents/mobile/<ts>
 // path: reading lazily initializes the underlying stream, but the platform
-// requires an explicit agent.create({}) before the first message lands
+// requires an explicit agent.create() before the first message lands
 // (stream processor births are explicit, not implicit-on-first-append) —
 // the send mutation calls it unconditionally, same as the dashboard's
 // new-chat page (routes/.../agents/new.tsx); it's idempotent so it's a
@@ -25,7 +25,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
+  Alert,
+  Clipboard,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -39,6 +42,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
@@ -51,11 +55,12 @@ import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
+import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
 import type { Agent, StreamEvent } from "../../../../../os/src/itx-api.generated.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatScreen() {
-  const { projectId, path } = useLocalSearchParams<{
+  const { projectId, slug, path } = useLocalSearchParams<{
     projectId: string;
     slug?: string;
     path: string;
@@ -91,6 +96,12 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PickedImage[]>([]);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
+  const copyStreamUrl = useMutation({
+    mutationFn: async (url: string) => Clipboard.setString(url),
+    onSuccess: () => {
+      setTimeout(() => copyStreamUrl.reset(), 1_800);
+    },
+  });
   const send = useMutation({
     mutationFn: async (input: { message: string; files: PickedImage[] }) => {
       const itx = await getItxSession(baseUrl!);
@@ -100,7 +111,7 @@ export default function ChatScreen() {
       // idempotency keys), so this is safe whether `path` is a brand-new
       // chat or an already-created one opened from the list — the platform
       // requires an explicit create() before the first message either way.
-      await agent.create({});
+      await agent.create();
       if (input.files.length === 0) {
         await agent.message(input.message);
         return;
@@ -128,6 +139,42 @@ export default function ChatScreen() {
 
   const feed = reduceFeed(path, events.data || []);
   const insets = useSafeAreaInsets();
+  const streamUrl =
+    baseUrl && slug ? buildStreamViewerUrl({ baseUrl, projectSlug: slug, streamPath: path }) : null;
+
+  const runStreamAction = (action: string) => {
+    if (action === "Show raw events") setViewMode("events");
+    if (action === "Show chat") setViewMode("chat");
+    if (action === "Copy stream URL" && streamUrl) {
+      copyStreamUrl.mutate(streamUrl);
+    }
+    if (action === "Open stream in browser" && streamUrl) {
+      void WebBrowser.openBrowserAsync(streamUrl);
+    }
+  };
+  const showStreamMenu = () => {
+    const options = [
+      viewMode === "chat" ? "Show raw events" : "Show chat",
+      ...(streamUrl ? ["Copy stream URL", "Open stream in browser"] : []),
+      "Cancel",
+    ];
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { cancelButtonIndex: options.length - 1, options, title: path },
+        (index) => runStreamAction(options[index] || "Cancel"),
+      );
+      return;
+    }
+    Alert.alert(
+      path,
+      undefined,
+      options.map((option) => ({
+        onPress: () => runStreamAction(option),
+        style: option === "Cancel" ? "cancel" : "default",
+        text: option,
+      })),
+    );
+  };
 
   return (
     <KeyboardAvoidingView
@@ -139,8 +186,13 @@ export default function ChatScreen() {
         options={{
           title: path.replace(/^\/agents\//, ""),
           headerRight: () => (
-            <Pressable onPress={() => setViewMode(viewMode === "chat" ? "events" : "chat")}>
-              <Text style={styles.modeToggle}>{viewMode === "chat" ? "raw" : "chat"}</Text>
+            <Pressable
+              accessibilityLabel="Stream actions"
+              accessibilityRole="button"
+              onPress={showStreamMenu}
+              style={styles.streamMenu}
+            >
+              <Text style={styles.modeToggle}>•••</Text>
             </Pressable>
           ),
         }}
@@ -215,6 +267,16 @@ export default function ChatScreen() {
           {send.error instanceof Error ? send.error.message : String(send.error)}
         </Text>
       ) : null}
+      {copyStreamUrl.isSuccess ? (
+        <View
+          accessibilityLiveRegion="polite"
+          accessibilityRole="alert"
+          pointerEvents="none"
+          style={[styles.toast, { bottom: Math.max(insets.bottom, spacing.sm) + 68 }]}
+        >
+          <Text style={styles.toastText}>Stream URL copied</Text>
+        </View>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -284,9 +346,13 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {message.text !== "" ? (
-        <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
-          {message.text}
-        </Text>
+        isUser ? (
+          <Text style={styles.bubbleUserText} selectable>
+            {message.text}
+          </Text>
+        ) : (
+          <Markdown markdown={message.text} />
+        )
       ) : null}
       {message.files?.map((file) => (
         <MessageAttachment key={file.path} file={file} />
@@ -335,7 +401,9 @@ function EventList({ events }: { events: StreamEvent[] }) {
           <Text style={styles.eventType}>
             {event.offset} · {event.type.replace("events.iterate.com/", "")}
           </Text>
-          {event.payload ? <CodeBlock text={previewPayload(event.payload)} muted /> : null}
+          {event.payload ? (
+            <CodeBlock language="json" text={previewPayload(event.payload)} muted />
+          ) : null}
         </View>
       )}
     />
@@ -356,7 +424,16 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
-  modeToggle: { color: colors.textMuted, fontSize: 14 },
+  streamMenu: {
+    alignItems: "center",
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: "center",
+    width: 46,
+  },
+  modeToggle: { color: colors.textMuted, fontSize: 16, letterSpacing: 1 },
   emptyFlip: { transform: [{ scaleY: -1 }], padding: spacing.lg },
   empty: { color: colors.textMuted, fontSize: 14, lineHeight: 20, textAlign: "center" },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
@@ -484,4 +561,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.sm,
   },
+  toast: {
+    position: "absolute",
+    left: spacing.xl,
+    right: spacing.xl,
+    zIndex: 20,
+    alignItems: "center",
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  toastText: { color: colors.text, fontSize: 13, fontWeight: "600" },
 });

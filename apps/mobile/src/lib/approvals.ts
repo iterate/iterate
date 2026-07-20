@@ -94,6 +94,17 @@ export async function reject(stream: RpcStub<Stream>, offset: number): Promise<v
 
 export type OpenRequest = { offset: number; payload: RequestedPayload; submitted: boolean };
 
+/** Put the approval opened from a notification first without disturbing the queue's other items. */
+export function focusOpenRequest(
+  requests: OpenRequest[],
+  targetOffset: number | null,
+): OpenRequest[] {
+  if (targetOffset === null) return requests;
+  const target = requests.find((request) => request.offset === targetOffset);
+  if (!target) return requests;
+  return [target, ...requests.filter((request) => request.offset !== targetOffset)];
+}
+
 /**
  * The pure reduction: every approval request still open, oldest first, from
  * a flat batch of requested/granted/settled/rejected events (order

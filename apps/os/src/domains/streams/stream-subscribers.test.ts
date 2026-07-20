@@ -6,6 +6,14 @@
 // observational watermark, and the ephemeral lane.
 
 import { describe, expect, it, vi } from "vitest";
+import type {
+  StreamEventBatch,
+  StreamPushEventBatch,
+  StreamSubscriberWakeRequest,
+  StreamWebhookDelivery,
+} from "iterate/processors";
+import { StreamReceiverUnavailableError } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
   CoreProcessorState,
@@ -13,14 +21,6 @@ import type {
 } from "./core-processor-contract.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 import { compileEventSelector } from "./event-selector.ts";
-import type {
-  StreamEventBatch,
-  StreamPushEventBatch,
-  StreamSubscriberWakeRequest,
-  StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { StreamReceiverUnavailableError } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-storage.ts";
 import { StreamSubscribers, type SubscriberDial } from "./stream-subscribers.ts";
 import {
@@ -145,7 +145,11 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(
+  options: {
+    runDurable?: (work: () => Promise<unknown>) => void;
+  } = {},
+) {
   let now = 0;
   let assignedMaxOffset = 0;
   let streamCreatedAt: string | undefined = "stream-v1";
@@ -155,6 +159,8 @@ function makeHarness() {
   const armedAlarms: number[] = [];
   const kept: Promise<unknown>[] = [];
   const egress: { count: number; bytes: number }[] = [];
+  let runtimeChanges = 0;
+  const pendingDeliveryStates: boolean[] = [];
   const configured: Record<string, ConfiguredEntry> = {};
 
   const pokes: StreamSubscriberWakeRequest[] = [];
@@ -200,7 +206,8 @@ function makeHarness() {
   };
 
   let storageReads = 0;
-  const subscribers = new StreamSubscribers({
+  let subscribers!: StreamSubscribers;
+  subscribers = new StreamSubscribers({
     idleTeardownMs: 60_000,
     hooks: {
       readEvents: ({ afterOffset, limit }) => {
@@ -231,9 +238,18 @@ function makeHarness() {
         }
       },
       recordEgress: (count, bytes) => egress.push({ count, bytes }),
+      runtimeChanged: () => {
+        runtimeChanges += 1;
+        pendingDeliveryStates.push(
+          Object.values(subscribers.connectionRuntimeState()).some(
+            (connection) => connection.hasPendingDelivery,
+          ),
+        );
+      },
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
+      runDurable: options.runDurable ?? ((work) => kept.push(work())),
       keepAlive: (promise) => kept.push(promise),
     },
   });
@@ -254,6 +270,8 @@ function makeHarness() {
     facts,
     armedAlarms,
     egress,
+    runtimeChanges: () => runtimeChanges,
+    pendingDeliveryStates: () => pendingDeliveryStates,
     pokes,
     pushes,
     pushOutcomes,
@@ -354,6 +372,22 @@ function makeSink() {
 }
 
 describe("StreamSubscribers", () => {
+  it("hands durable delivery to its scheduler without starting the receiver call", async () => {
+    const scheduled: (() => Promise<unknown>)[] = [];
+    const h = makeHarness({ runDurable: (work) => scheduled.push(work) });
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    h.subscribers.wake();
+
+    expect(scheduled).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+
+    await scheduled[0]!();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
   it("a. push happy path: drains to the tail, acks, and resumes from the cursor", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -705,6 +739,37 @@ describe("StreamSubscribers", () => {
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
+  });
+
+  it("schedules idle teardown on the DO alarm without retaining the current turn", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const connection = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 1, sink: connection.sink });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    h.subscribers.armOrClearIdleAlarm();
+    expect(h.armedAlarms.at(-1)).toBe(60_000);
+
+    // Activity restarts the quiet window. The already-armed earlier alarm may
+    // still fire, but it must only schedule the later deadline, not tear down.
+    h.advanceTo(10_000);
+    h.subscribers.armOrClearIdleAlarm();
+    expect(h.armedAlarms.at(-1)).toBe(70_000);
+    h.advanceTo(60_000);
+    h.subscribers.onAlarm();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.armedAlarms.at(-1)).toBe(70_000);
+
+    h.advanceTo(70_000);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.factsOfType(DISCONNECTED)[0]?.payload).toMatchObject({ reason: "idle" });
   });
 
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {
@@ -1308,6 +1373,38 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
   });
 
+  it("a delivery timeout is receiver unavailability, never poison", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.configure(pushPayload({ onPoison: "skip" }), 0);
+      h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+      h.dialImpl.push = () => new Promise<void>(() => {});
+
+      h.subscribers.wake();
+      const settling = h.settle();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.runAllTimersAsync();
+      await settling;
+
+      // A transport stall says nothing about any individual event. The same
+      // whole batch remains owed, with a normal availability backoff; poison
+      // bisection, skip facts, and cursor movement are all forbidden.
+      expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+        [1, 2, 3],
+      ]);
+      expect(h.row("k")).toMatchObject({
+        ackedOffset: 0,
+        attempt: 1,
+        lastError: "push k timed out after 20000ms",
+      });
+      expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+      expect(h.factsOfType(PARKED)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("y. sustained receiver unavailability parks loudly instead of mass-skipping the backlog", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
@@ -1608,6 +1705,7 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(connection.settleLatencyMs).toBeUndefined();
     // Delivery throughput landed in the stream-level egress hook.
     expect(h.egress).toEqual([{ count: 3, bytes: connection.bytesSent }]);
+    expect(h.runtimeChanges()).toBeGreaterThan(0);
   });
 
   it("push lane records delivery duration, commit→acked settle latency, and bytes", async () => {
@@ -1654,6 +1752,8 @@ describe("StreamSubscribers runtime metrics", () => {
     await h.settle();
     expect(settleBatch).toBeDefined();
     expect(h.subscribers.connectionRuntimeState()["k"]!.settleLatencyMs).toBeUndefined();
+    expect(h.pendingDeliveryStates().slice(-2)).toEqual([false, true]);
+    const runtimeChangesBeforeSettle = h.runtimeChanges();
 
     h.advanceTo(600);
     settleBatch!();
@@ -1663,6 +1763,8 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 598,
       samples: 1,
     });
+    expect(h.pendingDeliveryStates().slice(-3)).toEqual([false, true, false]);
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforeSettle);
   });
 
   it("mutual ping: NTP math cancels responder clock skew; rounds are throttled", async () => {
@@ -1680,6 +1782,7 @@ describe("StreamSubscribers runtime metrics", () => {
 
     h.subscribers.samplePingsSoon();
     h.subscribers.samplePingsSoon(); // throttled: same round
+    const runtimeChangesBeforePing = h.runtimeChanges();
     await h.settle();
     expect(pings).toBe(1);
     // rtt = (t3−t0) − (t2−t1) = 40 − 5, regardless of the 100s skew.
@@ -1687,6 +1790,7 @@ describe("StreamSubscribers runtime metrics", () => {
       last: 35,
       samples: 1,
     });
+    expect(h.runtimeChanges()).toBeGreaterThan(runtimeChangesBeforePing);
 
     h.advanceTo(h.now() + 5_001);
     h.subscribers.samplePingsSoon();

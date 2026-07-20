@@ -28,9 +28,8 @@ import { clearStoredAuth, getStoredAuth, setStoredAuth } from "./storage.ts";
 WebBrowser.maybeCompleteAuthSession();
 
 const SCOPES = ["openid", "profile", "email", "offline_access", "project"];
-// In Expo Go this resolves to an exp:// deep link back into Expo Go; in a
-// standalone/dev-client build it uses the app scheme below. Either way it's
-// what gets dynamically registered, so the two stay consistent per-runtime.
+// The development and standalone builds both use the app scheme below. This
+// exact URI is dynamically registered with the selected deployment.
 const REDIRECT_URI = AuthSession.makeRedirectUri({
   scheme: "iterate",
   path: "oauth/callback",

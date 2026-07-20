@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { resolveAgentPath } from "./utils.ts";
+import { parseAgentPath, resolveAgentPath } from "./utils.ts";
 
 describe("resolveAgentPath", () => {
   it("passes absolute agent paths through", () => {
     expect(resolveAgentPath("/agents/main", undefined)).toBe("/agents/main");
     expect(resolveAgentPath("/agents/main", "/agents/other")).toBe("/agents/main");
+  });
+
+  it.each([
+    "/agents/Uppercase",
+    "/agents/two//segments",
+    "/agents/trailing/",
+    "/agents/has space",
+    "agents/missing-leading-slash",
+  ])("rejects non-canonical absolute path %j instead of repairing it", (path) => {
+    expect(() => parseAgentPath(path)).toThrow("agent path must be canonical");
   });
 
   it("resolves relative paths against the calling agent scope", () => {
@@ -28,7 +38,7 @@ describe("resolveAgentPath", () => {
 
   it("climbing above /agents/ fails the agent-path guard", () => {
     expect(() => resolveAgentPath("../..", "/agents/main/researcher")).toThrow(
-      /must start with "\/agents\/"/,
+      /agent path must be canonical/,
     );
   });
 

@@ -1,8 +1,5 @@
 import { expect, test } from "vitest";
-import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-} from "../../src/domains/streams/stream-processor-runner.ts";
+import { StreamProcessorRunner, type ProcessorProgress } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
   PROJECT_WORKER_FORWARDED_EVENT_TYPE,
@@ -109,7 +106,11 @@ test("Project stream subscribe can observe project worker processEventBatch forw
   await runner.waitUntilEvent({
     predicate: (event) =>
       event.type === PROJECT_WORKER_FORWARDED_EVENT_TYPE && event.payload?.marker === marker,
-    timeoutMs: 8_000,
+    // The forwarding worker was committed above, so the trigger's delivery
+    // blocks on a COLD container build of the new head (30-60s live in the
+    // builder pool, more when queued behind other builds under full-lane
+    // load) before processEventBatch can forward anything.
+    timeoutMs: 180_000,
   });
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exhaustive equality: state must be exactly these keys
   expect(runner.currentState).toEqual({

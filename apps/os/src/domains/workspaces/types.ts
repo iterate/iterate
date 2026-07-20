@@ -1,35 +1,48 @@
 // The workspace capability's itx-facing data shapes, shared by the
-// WorkspaceDurableObject (which produces them) and the Workspace/WorkspaceGit
+// WorkspaceV2DurableObject (which produces them) and the Workspace/WorkspaceGit
 // RpcTargets in rpc-targets.ts (whose signatures publish them).
 
 /**
- * Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`'s
- * `FileInfo`, the shape `readDir`/`glob`/`stat` return.
- */
-export type WorkspaceFileInfo = {
-  createdAt: number;
-  mimeType: string;
-  name: string;
-  path: string;
-  size: number;
-  /** Symlink target, present only on symlinks. */
-  target?: string;
-  type: "directory" | "file" | "symlink";
-  updatedAt: number;
-};
-
-/**
- * One overlay change returned by `WorkspaceGit.status`: a local file that
- * shadows a parent file ("modified"), one the parent does not have ("added"),
- * or a parent file hidden by a local delete ("deleted"). "modified" means
- * shadowed, not necessarily different — the overlay never diffs content.
+ * One overlay change: a local file that shadows a mount file ("modified" —
+ * shadowed, not content-diffed), one the mount does not have ("added"), or a
+ * mount file hidden by a local delete ("deleted").
  */
 export type WorkspaceChange = {
   change: "added" | "deleted" | "modified";
   path: string;
 };
 
-/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */
+/** Per-mount changes plus the unmounted local scratch (never committable). */
+export type WorkspaceStatus = {
+  mounts: {
+    changes: WorkspaceChange[];
+    path: string;
+    policy: "commit-to-main" | "read-only";
+    repoPath: string;
+  }[];
+  unmounted: WorkspaceChange[];
+};
+
+/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
+export type WorkspaceCommitInput = {
+  author?: { email: string; name: string };
+  message: string;
+  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
+  scope?: string;
+};
+
+/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
+export type WorkspaceCommitResult = {
+  branch: string;
+  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
+  changedPaths: string[];
+  commitOid: string;
+  /** The mount the commit was scoped to (its workspace path). */
+  mount: string;
+  repoPath: string;
+};
+
+/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;
@@ -38,13 +51,11 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */
-export type WorkspacePublishResult = {
-  /** The repo branch the commit landed on — the config repo's default (main). */
-  branch: string;
-  /** Paths committed (after .gitignore filtering) plus deletions applied. */
-  changedPaths: string[];
-  commitOid: string;
+/** Input to `WorkspaceGit.log` — one mount's repo history. */
+export type WorkspaceGitLogInput = {
+  limit?: number;
+  /** The mount to read (its mount path). Optional when the table has exactly one mount. */
+  scope?: string;
 };
 
 /** Input to `Workspace.edit` — a safe single-occurrence string replacement. */

@@ -148,6 +148,36 @@ return await itx.projects.get(pid).__describe();
     },
   }),
   projectExample({
+    id: "notify-mobile-device",
+    e2eProven: false,
+    title: "Discover and notify an enrolled phone",
+    description:
+      "Every phone enrolled for this project is a durable itx.devices member. List safe metadata, choose a device, then append the ordinary notification-requested event. The server-side device processor calls Expo/APNs while the app is suspended and journals ticket, receipt, expiry, rejection, or uncertain outcomes on /devices/<deviceId>.",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    fn: async (
+      itx,
+      vars: { body?: string; deviceId?: string; operationId?: string; title?: string },
+    ) => {
+      const devices = await itx.devices.list();
+      const deviceId = vars.deviceId || devices[0]?.deviceId;
+      if (!deviceId) {
+        throw new Error("Open this project in the Iterate development build to enroll a phone.");
+      }
+      const operationId = vars.operationId || crypto.randomUUID();
+      const [requested] = await itx.devices.get(deviceId).append({
+        type: "events.iterate.com/device/notification-requested",
+        idempotencyKey: `device-notification-requested:${operationId}`,
+        payload: {
+          title: vars.title || "Reminder from Iterate",
+          body: vars.body || "This notification was sent by an itx script.",
+          destination: { kind: "project" },
+          expiresAt: Date.now() + 5 * 60_000,
+        },
+      });
+      return { deviceId, requestOffset: requested.offset };
+    },
+  }),
+  projectExample({
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
@@ -460,7 +490,7 @@ return await itx.projects.get(pid).__describe();
     id: "workspace-edit-and-push",
     title: "Edit files in a workspace, then commit them to main",
     description:
-      'A workspace is an instant copy-on-write overlay over the config repo\'s latest main, in a durable virtual filesystem (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. In an agent scope `itx.workspace` is YOUR workspace (mounted at birth); itx.workspaces.get("/workspaces/<name>") addresses any other, and itx.workspaces.get("/") is the shared read-only root (always latest main). Reads see latest main until a local write shadows a path. Changes stay private until git.commit({ message }) — which commits them straight to the config repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and resets the overlay to mirror the new main.',
+      'A workspace is a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. By default the config repo is mounted at "/", so reads see its latest main until a local write shadows a path. In an agent scope `itx.workspace` is YOUR workspace; itx.workspaces.get("/workspaces/<name>") addresses any other (first touch births it with the default mount table, so no create step is needed). Changes stay private until git.commit({ message }) — which commits ONE mount\'s changes straight to that repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and clears just that subtree. More repos mount into the tree via configure({ config: { mounts } }); commits never span mounts (pass { scope } when several are dirty).',
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { workspacePath?: string }) => {
       // The path IS the identity: same path, same filesystem. An agent's own
@@ -479,18 +509,20 @@ return await itx.projects.get(pid).__describe();
         newString: "status: reviewed",
       });
 
-      // What changed vs main, then one call ships it: commit() lands the changes
-      // on the config repo's MAIN branch — the project worker/website redeploys
-      // automatically (no add/push dance, .gitignored files are skipped).
-      const changes = await workspace.git.status();
+      // What changed (grouped by owning mount), then one call ships it:
+      // commit() lands the changes on the mounted repo's MAIN branch — the
+      // project worker/website redeploys automatically (no add/push dance,
+      // .gitignored files are skipped; scope is optional with one dirty mount).
+      const status = await workspace.git.status();
       const committed = await workspace.git.commit({ message: "Workspace example note" });
 
       return {
         readmePresent: readme !== null,
         edited,
-        changes,
+        status,
         commitOid: committed.commitOid,
         committedTo: committed.branch,
+        committedMount: committed.mount,
       };
     },
   }),
@@ -832,7 +864,7 @@ return await itx.projects.get(pid).__describe();
     fn: async (itx, vars: { agentPath?: string; message?: string }) => {
       const agent = itx.agents.get(vars.agentPath ?? "/agents/repl-demo");
       const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create({});
+      if (snapshot.state.birthCertificate === null) await agent.create();
       // The returned value is the committed stream event — the durable record
       // the agent loop reduces into its context projection.
       const sent = await agent.message(vars.message ?? "Hello from the examples catalogue");
@@ -843,7 +875,7 @@ return await itx.projects.get(pid).__describe();
     id: "docs-search-and-get",
     title: "Find working code + types through itx.docs",
     description:
-      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query. (For the project's own content and history, use itx.search.query.)",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { name?: string }) => {
       // MANY related words per query — the search is dumb word matching, so
@@ -867,75 +899,6 @@ return await itx.projects.get(pid).__describe();
         examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
         streamTypesIncludeAppend: streamTypes.includes("append("),
       };
-    },
-  }),
-  projectExample<
-    // The whole point of this entry is DYNAMIC dispatch — walking a hit's ref
-    // expression member by member — so the itx is loosened wholesale; the
-    // static surface cannot know where a ref leads.
-    Record<string, any>
-  >({
-    id: "search-query-and-resolve-ref",
-    // Not in the unattended matrix: on a fresh fixture project the instance
-    // (born with the project) has not finished its first sync, so the corpus
-    // lane is empty-but-warming — the assertion would race the index.
-    e2eProven: false,
-    title: "Search the project, then follow a hit's ref to the real object",
-    description:
-      "itx.search.query({ q }) searches everything the project accumulates (stream events, files, repo files, plus federated itx.docs). Every hit carries kind, context, and usually a `ref` — an itx EXPRESSION (array of steps) leading back to the domain object. Evaluate the ref by walking it: a string step is a property read, an [method, ...args] step is an awaited call. A search result is never a dead end: fetch the real events/file/doc instead of trusting chunk text.",
-    runtimes: ALL_RUNTIMES,
-    fn: async (itx, vars: { q?: string }) => {
-      const found = await itx.search.query({
-        q: vars.q ?? "project setup configuration decisions",
-      });
-      // found.warning is set on a project whose instance was JUST created (first
-      // index in progress) — docs results still return; retry the corpus shortly.
-
-      // Take the best hit that carries a ref and walk the expression back to the
-      // domain object: string step = property read, [method, ...args] = call.
-      const hit = found.results.find((result) => result.ref !== undefined);
-      if (!hit) return { found, note: "no ref-carrying hit yet (index warming?)" };
-
-      let target = itx;
-      for (const step of hit.ref ?? []) {
-        target = typeof step === "string" ? target[step] : await target[step[0]](...step.slice(1));
-      }
-      // For a stream hit target is now the EXACT events the chunk matched; for a
-      // file hit the file; for a repo hit the file text; for a docs hit the doc.
-      return { query: found.searchQuery, kind: hit.kind, context: hit.context, target };
-    },
-  }),
-  projectExample({
-    id: "search-index-custom-document",
-    e2eProven: false,
-    title: "Index your own document into project search (ref required)",
-    description:
-      "itx.search.index({ kind, id, text, ref, title?, context? }) adds derived content — summaries, decisions, digests — to the project's search corpus. `ref` is REQUIRED and must be an itx expression (array) leading back to the source object, so the hit is never a dead end. kind is [a-z0-9._-]+ and must not be streams/files/repos/docs (those are platform-owned). Re-indexing the same (kind, id) overwrites. The document becomes searchable after the next sync (~a minute).",
-    runtimes: ALL_RUNTIMES,
-    fn: async (itx, vars: { kind?: string; id?: string; text?: string; ref?: any[] }) => {
-      // Suppose a decision was made on a stream — index a digest of it. The ref
-      // points back at the exact events (afterOffset/beforeOffset are EXCLUSIVE
-      // bounds, so 41/43 selects offset 42).
-      const { key } = await itx.search.index({
-        kind: vars.kind ?? "decisions",
-        id: vars.id ?? "example-decision",
-        title: "Deploy cadence decision",
-        text: vars.text ?? "We decided to deploy on merge to main, with previews per PR.",
-        context: "Digest of the deploy-cadence discussion",
-        ref: vars.ref ?? [
-          "streams",
-          ["get", "/example"],
-          ["getEvents", { afterOffset: 41, beforeOffset: 43 }],
-        ],
-      });
-
-      // Later: pin the source moment itself too — indexEvent reads the event from
-      // the stream (never trusts caller text) and its hit ref fetches exactly it.
-      // await itx.search.indexEvent({ stream: "/example", offset: 42, note: "decision made here" });
-
-      // Find it again (after the ~minute sync): scope to the custom kind.
-      // const found = await itx.search.query({ q: "deploy cadence", source: "decisions" });
-      return { key };
     },
   }),
   agentExample({
@@ -1829,7 +1792,7 @@ export default class ProjectWorker extends WorkerEntrypoint {
     // "/agents/standup-" + trigger.scheduledFor.slice(0, 10).
     const agent = itx.agents.get("/agents/checkin");
     const snapshot = await agent.processor.snapshot();
-    if (snapshot.state.birthCertificate === null) await agent.create({});
+    if (snapshot.state.birthCertificate === null) await agent.create();
     await agent.message(
       "Scheduled check-in #" + trigger.runCount + ": summarize anything new since last time."
     );

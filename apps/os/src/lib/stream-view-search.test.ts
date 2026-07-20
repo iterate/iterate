@@ -18,6 +18,11 @@ describe("StreamViewSearch", () => {
   it("keeps digit-only script ids after the router parses them as numbers", () => {
     expect(StreamViewSearch.parse({ scriptExecution: 13647 }).scriptExecution).toBe("13647");
   });
+
+  it("keeps deep links to the agent details sheet and drops malformed values", () => {
+    expect(StreamViewSearch.parse({ agent: true }).agent).toBe(true);
+    expect(StreamViewSearch.parse({ agent: "yes" }).agent).toBeUndefined();
+  });
 });
 
 describe("streamViewMode", () => {

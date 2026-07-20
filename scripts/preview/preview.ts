@@ -1546,10 +1546,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // integration e2e talks to the slot's deployed dummy Petshop. Both must
     // finish deploying before OS starts.
     previewDependencies: ["auth", "dummy-petshop"],
-    // Budgets sit ~25% above the observed green floor (deploy ~40s, e2e lane
-    // ~60s as of 2026-07-02). Crossing them warns, never fails.
-    previewDeployBudgetMs: 55_000,
-    previewTestBudgetMs: 80_000,
+    // Budgets sit ~25% above the observed green floor after the TUI, Vitest,
+    // and Playwright lanes became sequential to cap deployed-slot load
+    // (deploy 89–92s, e2e 431–441s as of 2026-07-18). Crossing them warns,
+    // never fails.
+    previewDeployBudgetMs: 115_000,
+    previewTestBudgetMs: 560_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
@@ -1588,10 +1590,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // an RPC wedge before waitForEvent's 90s greeting timeout produced no
         // suite output and survived until Depot killed the entire 10m job.
         `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
-        // The built-package PTY spec, e2e vitest lane, and Playwright specs hit
-        // the same slot but provision independent projects, so they run
-        // concurrently: TUI + vitest in the background, specs in the
-        // foreground. Their logs are replayed once the specs finish.
+        // The built-package PTY spec, e2e vitest lane, and Playwright specs all
+        // hit the same deployed slot. They provision independent projects,
+        // but that does not make their aggregate load independent: overlapping
+        // vitest's eight in-flight tests with Playwright's eight workers caused
+        // project-processor self-pull timeouts while both suites stayed clean
+        // in isolation. Run the three remote suites sequentially so the slot's
+        // tested peak is eight. The browser download above still overlaps the
+        // remote work because it does not touch the slot.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -1606,15 +1612,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // Retry telemetry: the TUI and vitest lanes write the same compact
         // JSON shape (stale files were removed at the top of this script) for
         // preview.ts to fold into the PR body alongside Playwright's report.
-        `E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts > /tmp/os-preview-tui.log 2>&1 & TUI_PID=$!`,
-        `E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 & E2E_PID=$!`,
+        `TUI_OK=0; E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts > /tmp/os-preview-tui.log 2>&1 || TUI_OK=$?`,
+        `E2E_OK=0; E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || E2E_OK=$?`,
         'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
-        // Capture the specs' exit without aborting (set -e) so the vitest lane
-        // always finishes and its log is replayed — a Playwright flake must not
-        // hide (or orphan) the vitest results.
+        // Capture every lane's exit without aborting (set -e), then replay the
+        // redirected logs and fail once all three suites have had a chance to
+        // report their own result.
         `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
-        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
-        'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         "cat /tmp/os-preview-vitest.log",
         "cat /tmp/os-preview-tui.log",
         '[ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
@@ -3651,7 +3655,7 @@ function isNoSlotAvailableError(error: unknown) {
 // worse, stealing a slot), the deploy waits its turn and logs who holds what
 // while it waits. Override with PREVIEW_SLOT_WAIT_MS=0 to fail fast.
 // Bounded so a slotless (or broken-slot) run fails LOUDLY inside the job's
-// 10-minute ceiling instead of being killed silently by it: 2026-07-09's
+// 15-minute ceiling instead of being killed silently by it: 2026-07-09's
 // unerasable-slot loop burned this entire budget per attempt, and external
 // retries stacked those into 15-30 minute walls. 6 minutes still rides out
 // a normal handover (cleanup of a closing PR takes ~2m); a genuinely full

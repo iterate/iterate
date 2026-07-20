@@ -323,7 +323,12 @@ function ReplPromptRow(input: { children?: ReactNode; status: string | null }) {
       <span className="font-mono text-xs text-muted-foreground">iterate&gt;</span>
       <div className="flex items-center gap-2">
         {input.status ? (
-          <span className="text-xs text-muted-foreground">{input.status}</span>
+          <span
+            className="text-xs text-muted-foreground"
+            data-spinner={input.status === "Running..." ? "true" : undefined}
+          >
+            {input.status}
+          </span>
         ) : null}
         {input.children}
       </div>

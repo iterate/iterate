@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "exports": {
-    "./server": "./src/lib/server.ts",
+    "./server": "./src/lib/server-public.ts",
     "./client": "./src/lib/client.ts"
   },
   "scripts": {
@@ -26,7 +26,7 @@
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "seed-oauth-clients": "tsx ./scripts/seed-oauth-clients.ts",
-    "test": "node --import tsx --test scripts/*.test.ts src/**/*.test.ts",
+    "test": "node --import tsx --test scripts/*.test.ts 'src/**/*.test.ts'",
     "test:e2e": "node -e \"if (!process.env.AUTH_BASE_URL) { console.error('AUTH_BASE_URL is required for auth e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts"
   },
   "dependencies": {
@@ -49,7 +49,7 @@
     "react-dom": "^19.2.7",
     "sqlfu": "0.1.1",
     "tailwindcss": "^4.3.2",
-    "zod": "^4.3.6"
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",

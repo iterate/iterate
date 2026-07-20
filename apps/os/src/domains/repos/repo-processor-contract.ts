@@ -1,11 +1,10 @@
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "../streams/processor-contracts.ts";
 import {
-  CoreProcessorContract,
+  defineProcessorContract,
   STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
-import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
-import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+  type ProcessorState,
+} from "iterate/processors";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the
@@ -17,6 +16,7 @@ const GithubLinkPayload = z.object({
   installationId: z.string().trim().min(1),
   owner: z.string().trim().min(1),
   repo: z.string().trim().min(1),
+  repositoryId: z.number().int().positive(),
 });
 
 const RepoTaskChangedPayload = z.object({
@@ -33,23 +33,26 @@ const RepoCommitCompletedPayload = z.object({
 
 const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
 
-export const GithubAgentBirthCertificate = z.strictObject({
-  config: z.strictObject({
-    connection: z.string(),
-    installationId: z.string(),
-    number: z.number().int().positive(),
-    owner: z.string(),
-    repo: z.string(),
-    repoPath: z.string(),
-  }),
-});
-export type GithubAgentBirthCertificate = z.infer<typeof GithubAgentBirthCertificate>;
+const GithubWebhookReceivedPayload = z
+  .object({
+    body: z
+      .object({
+        repository: z.object({ id: z.number().int().positive() }).loose(),
+      })
+      .loose(),
+    delivery: z.object({
+      id: z.string().trim().min(1),
+      name: z.string().trim().min(1),
+    }),
+    installationId: z.string().trim().min(1),
+  })
+  .loose();
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
-    "Projects repo lifecycle, Git activity, task changes, and GitHub routing onto an addressable repo stream.",
+    "Projects repo lifecycle, Git activity, task changes, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     birthCertificate: RepoBirthCertificate.nullable().default(null),
     artifactName: z.string().nullable().default(null),
@@ -217,6 +220,7 @@ export const RepoProcessorContract = defineProcessorContract({
             installationId: "87654321",
             owner: "acme-inc",
             repo: "acme-config",
+            repositoryId: 123456789,
           },
         },
       ],
@@ -227,6 +231,7 @@ export const RepoProcessorContract = defineProcessorContract({
         connection: z.string(),
         owner: z.string(),
         repo: z.string(),
+        repositoryId: z.number().int().positive(),
       }),
       examples: [
         {
@@ -235,6 +240,7 @@ export const RepoProcessorContract = defineProcessorContract({
             connection: "install-87654321",
             owner: "acme-inc",
             repo: "acme-config",
+            repositoryId: 123456789,
           },
         },
       ],
@@ -413,8 +419,8 @@ export const RepoProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/github/webhook-received": {
       description:
-        "One GitHub webhook delivery, captured verbatim on the connection stream and cross-posted here by the repo's linkGithub rule. Maximally loose: bodies are GitHub's, stored rows must always re-parse.",
-      payloadSchema: z.object({}).loose(),
+        "One GitHub push delivery, captured as decoded JSON on the connection stream and cross-posted here by the repo's linkGithub subscription. The trusted envelope is structural while the vendor body stays loose.",
+      payloadSchema: GithubWebhookReceivedPayload,
       examples: [
         {
           description:
@@ -431,40 +437,21 @@ export const RepoProcessorContract = defineProcessorContract({
                   author: { name: "Jane Doe", email: "jane@acme-inc.com" },
                 },
               ],
-              repository: { full_name: "acme-inc/acme-config" },
+              repository: { full_name: "acme-inc/acme-config", id: 123456789 },
               sender: { login: "jane-doe" },
               installation: { id: 87654321 },
             },
-            headers: {
-              githubDelivery: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
-              githubEvent: "push",
+            delivery: {
+              id: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
+              name: "push",
             },
             installationId: "87654321",
           },
         },
       ],
     },
-    "events.iterate.com/github-agent/created": {
-      description: "Birth certificate for the GitHub facet on one pull-request agent stream.",
-      payloadSchema: GithubAgentBirthCertificate,
-      examples: [
-        {
-          description: "The first PR webhook for acme-inc/acme-config#42 created its GitHub facet.",
-          payload: {
-            config: {
-              connection: "install-87654321",
-              installationId: "87654321",
-              number: 42,
-              owner: "acme-inc",
-              repo: "acme-config",
-              repoPath: "/repos/config",
-            },
-          },
-        },
-      ],
-    },
   },
-  processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
+  processorDeps: [CoreProcessorContract],
   consumes: [
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/ready",
@@ -496,14 +483,6 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repo/github-import-started",
     "events.iterate.com/repo/github-import-completed",
     "events.iterate.com/repo/github-import-failed",
-    "events.iterate.com/github/webhook-received",
-    "events.iterate.com/agent/created",
-    "events.iterate.com/agents/context-added",
-    "events.iterate.com/capability-host/created",
-    "events.iterate.com/capability-host/capability-provided",
-    "events.iterate.com/github-agent/created",
-    "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/subscription-removed",
   ],
 });
 

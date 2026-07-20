@@ -90,10 +90,18 @@ Slack Web API calls normally never hold material: the request carries a
 `getSecret(path)` placeholder for the connection's token and traverses project
 egress, which substitutes it inside the Secret Durable Object and records
 `secret/used` audit events. If Slack rejects a live connection's token, trusted
-platform code may retry with the deployment Slack app's recovery token only
+platform code may retry with the deployment Slack app's optional fallback token only
 after `auth.test` proves its team id matches the connection journal. A typo'd
 or disconnected connection still errors loudly instead of silently posting
 with a deployment-wide credential.
+
+That deployment token is an optional outbound fallback, not connection state.
+It can be revoked and must never be used to recreate a project association.
+Only OAuth completion owns the sequence “validated token → secret → router
+birth/subscription → connected fact → global team claim.” A validly signed
+webhook that arrives before the final claim is ACKed and ignored; creating a
+claim beside an unvalidated token therefore produces a false-connected project
+and silent inbound loss rather than a partial restoration.
 
 **Status is a journal tail-fold for every provider** — one machine, no
 per-provider mechanism: `getConnection` pages backwards from the journal head
@@ -217,7 +225,13 @@ GitHub connects as a **GitHub App installation** (deep-link to
   DO mints the installation token on first use and re-mints on 401 — trusted
   DO code signing the App JWT, no worker, no jail.
 - **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
-  with plain WebCrypto, and route on `installation_id`.
+  with plain WebCrypto, and route on `installation_id`. Each delivery is
+  appended once to `/integrations/github/<connection>` with its complete
+  decoded JSON payload plus small associations typed from Octokit's generated
+  payloads: stable repository coordinates, an optional subject pull request,
+  its content author, and mentioned users.
+  The integration does not create agents or decide what a webhook means to a
+  project.
 - **`gh` in sandboxes** works automatically, with no byte handoff: ALL
   container egress (HTTPS included, MITM'd with the container CA) routes
   through the project egress door, so a sandbox holds only a placeholder
@@ -237,9 +251,12 @@ The provided-lane exhibits remain in the catalogue: `github-mcp-connect`
 cannot be shadowed) and `github-webhooks-project-worker` (deliveries landing
 on the project host's own worker).
 
-Linked repositories also route pull-request deliveries into durable
-per-PR agent streams, with bounded LLM context, automatic review policy, and
-label controls. See [GitHub pull-request agents](./github-agents.md).
+A linked repo cross-posts only matching push deliveries to its repo stream so
+the repo processor can import its default branch. Pull-request automation is
+instead ordinary userspace code: the config-repo template shows a project
+worker consuming first-hand connection-stream facts and forwarding them to
+`/agents<repo-path>/pr/<number>`. See
+[GitHub pull-request agents](./github-agents.md).
 
 ## Telegram: the fourth builtin
 
@@ -273,10 +290,12 @@ the redirect machinery:
   destination is a pure function of its chat —
   `/agents/telegram/<connection>/chat-<chatId>` (`/topic-<threadId>` appended
   for forum supergroup topics; ids verbatim, sign included). The
-  `telegram-agent` processor transcribes updates into agent context (v1: media
-  as bracketed placeholders like `[photo]`), ignores bot-authored updates, and
-  sends the `typing` chat action while the agent works; the agent replies via
-  `sendMessage` with the chat id from its own path/inputs.
+  `telegram-agent` processor transcribes updates into agent context (media gets
+  bracketed hints like `[photo]`, while the raw payload retains the `file_id`
+  needed for a token-safe `getFile` + secret-backed egress download), ignores
+  bot-authored updates, and sends the `typing` chat action while the agent
+  works; the agent replies via `sendMessage` with the chat id from its own
+  path/inputs.
 - **Disconnect**: best-effort `deleteWebhook` (through the substituting egress
   path — no material read), then the shared `recordDisconnection`.
 

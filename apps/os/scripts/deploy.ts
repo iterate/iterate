@@ -36,7 +36,7 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import {
   assertDopplerSecretAbsent,
   assertWorkerSecretAbsent,
-  run,
+  runAsync,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
@@ -56,6 +56,7 @@ import {
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
+import { seedTemplateWorkerArtifacts } from "./lib/seed-template-worker-artifact.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
@@ -71,6 +72,20 @@ export function assertPreviewPetshopIntegrationConfigured(
       `${envName} requires ${PREVIEW_PETSHOP_CONFIG} so OS preview e2e can exercise the deployed dummy Petshop.`,
     );
   }
+}
+
+/** Build-only PostHog credentials: available to Vite, never shipped as Worker bindings. */
+export function posthogBuildEnv(secrets: Record<string, string | undefined>) {
+  return {
+    POSTHOG_PERSONAL_API_KEY: requiredBuildSecret(secrets, "POSTHOG_PERSONAL_API_KEY"),
+    POSTHOG_PROJECT_ID: requiredBuildSecret(secrets, "POSTHOG_PROJECT_ID"),
+  };
+}
+
+function requiredBuildSecret(secrets: Record<string, string | undefined>, name: string) {
+  const value = secrets[name]?.trim();
+  if (!value) throw new Error(`${name} is required to upload OS source maps`);
+  return value;
 }
 
 function osSmokes(env: DeployedEnv) {
@@ -133,7 +148,8 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
-    prepare: async (ctx, secretValues, credentials) => {
+    buildEnv: (ctx) => posthogBuildEnv(ctx.secrets),
+    prepare: async (ctx, secretValues) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current
       // Worker before any sidecar or OS version can be deployed.
@@ -189,10 +205,6 @@ export default async function deploy(
       // created here on their next deploy instead of a manual
       // ensure-resources run per environment.
       await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-files`);
-      // SEARCH_BUCKET (itx.search corpus, SPIKE) is likewise bound at upload
-      // time, so existing envs need it created on their next deploy too.
-      await ensureR2Bucket(ctx.cf, `${ctx.env.osWorkerName}-search-index`);
-
       // Sandbox container classes must exist container-enabled BEFORE the
       // exports deploy — the exports reconciliation can't enable namespaces
       // it creates (upstream gap; see ensureContainerClasses). Makes
@@ -207,22 +219,47 @@ export default async function deploy(
         compatibilityDate: COMPATIBILITY_DATE,
       });
 
-      // The sidecars deploy FIRST: the os worker's BUILDER/TYPECHECKER
-      // service bindings are by name, and a binding to a not-yet-existing
-      // script fails the deploy. Sidecars have no secrets and no vite build —
-      // wrangler bundles their entries directly (the toolchain wasm rides as
-      // a wasm module). Builder skew window: between this deploy and the os
-      // deploy (or if the os deploy fails), a bundler/schema-version bump
-      // means the os worker hashes the OLD key prefix while the builder
-      // writes the new one — the cache runs cold (correct output via
-      // by-value returns, every request rebuilds) until the os deploy lands.
-      // If "cache never hits" appears mid-rollout, finish the deploy.
+      // Materialize the sidecar config before the independent build lane
+      // starts. The main Vite build also regenerates this file, but doing it
+      // here avoids racing that write with the sidecar's Wrangler process.
       writeWranglerConfig();
-      for (const sidecarConfig of ["wrangler.builder.jsonc", "wrangler.typechecker.jsonc"]) {
-        run("pnpm", ["exec", "wrangler", "deploy", "--config", sidecarConfig, "--env", ctx.name], {
-          cwd: fileURLToPath(new URL("..", import.meta.url)),
-          env: credentials,
-        });
+    },
+    // Deploy the typechecker sidecar and prebuild the deterministic project
+    // template artifacts while the OS Vite build runs. Both are independent
+    // prerequisites, and deployApp joins every lane before uploading the main
+    // Worker: its TYPECHECKER binding can never target a missing script, and
+    // fresh projects can never observe a version before its artifacts exist.
+    concurrentBuildWork: async (ctx, secretValues, credentials) => {
+      const results = await Promise.allSettled([
+        runAsync(
+          "pnpm",
+          [
+            "exec",
+            "wrangler",
+            "deploy",
+            "--config",
+            "wrangler.typechecker.jsonc",
+            "--env",
+            ctx.name,
+          ],
+          {
+            cwd: fileURLToPath(new URL("..", import.meta.url)),
+            env: credentials,
+          },
+        ),
+        seedTemplateWorkerArtifacts({
+          accountId: ctx.env.cloudflareAccountId,
+          apiToken: credentials.CLOUDFLARE_API_TOKEN!,
+          iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
+          kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
+        }),
+      ]);
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason);
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Typechecker deploy and template seeding both failed");
       }
     },
     smokes: osSmokes,

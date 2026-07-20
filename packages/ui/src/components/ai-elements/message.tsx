@@ -19,7 +19,13 @@ import {
   PaperclipIcon,
   XIcon,
 } from "lucide-react";
-import type { ComponentProps, ComponentType, HTMLAttributes, ReactElement } from "react";
+import type {
+  ComponentProps,
+  ComponentType,
+  HTMLAttributes,
+  ReactElement,
+  ReactNode,
+} from "react";
 import { Suspense, createContext, lazy, memo, useContext, useEffect, useState } from "react";
 import type { StreamdownProps } from "streamdown";
 
@@ -359,11 +365,16 @@ const RichMessageResponse: ComponentType<StreamdownProps> = import.meta.env.SSR
       return { default: Streamdown as ComponentType<StreamdownProps> };
     });
 
-export type MessageResponseProps = StreamdownProps;
+export type MessageResponseProps = StreamdownProps & {
+  /** Optional honest loading UI while the client-only Markdown renderer chunk loads. */
+  loadingFallback?: ReactNode;
+};
 
 export const MessageResponse = memo(
-  ({ className, components, ...props }: MessageResponseProps) => (
-    <Suspense fallback={<PlainMessageResponse className={className} {...props} />}>
+  ({ className, components, loadingFallback, ...props }: MessageResponseProps) => (
+    <Suspense
+      fallback={loadingFallback ?? <PlainMessageResponse className={className} {...props} />}
+    >
       <RichMessageResponse
         className={cn(
           "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
@@ -378,7 +389,9 @@ export const MessageResponse = memo(
       />
     </Suspense>
   ),
-  (prevProps, nextProps) => prevProps.children === nextProps.children
+  (prevProps, nextProps) =>
+    prevProps.children === nextProps.children &&
+    prevProps.loadingFallback === nextProps.loadingFallback
 );
 
 MessageResponse.displayName = "MessageResponse";

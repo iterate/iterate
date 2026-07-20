@@ -5,7 +5,7 @@
 // the live in-flight agent tail.
 
 import { z } from "zod";
-import { defineProcessorContract } from "../../../processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processors";
 import {
   initialBrowserFeedState,
   isCurrentBrowserFeedState,
@@ -14,7 +14,7 @@ import {
 
 export const BrowserFeedContract = defineProcessorContract({
   slug: "browser-feed",
-  version: "0.2.0",
+  version: "0.4.0",
   description:
     "Browser-side projector folding every stream event into the single feed_items table (pretty agent rows and grouped raw rows in one total order) plus live in-flight agent state.",
   // itx derives the empty fold from stateSchema.parse({}). Only that exact

@@ -85,8 +85,12 @@ export function RawEventInspectorContent({
         navigate(nextOffset);
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    // Capture phase: Base UI's DialogPopup (our Sheet) stopPropagates composite
+    // keys (← → ↑ ↓ Home End) on the popup so nested composites stay isolated.
+    // A bubble-only window listener never sees those keydowns while the sheet
+    // is open — which is exactly when this inspector is mounted.
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [navigationEnabled]);
 
   // Parse + reorder only when the underlying row changes, not on every render:

@@ -23,6 +23,7 @@ import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
+import { WORKER_BUILDER_POOL_SIZE } from "../src/domains/workers/builder-pool.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
@@ -116,9 +117,9 @@ export function envShapedVars(env: DeployedEnv) {
 
 const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 
-// One compatibility date for the os worker AND the builder sidecar — a bump
-// that misses one would be silent drift. (Deliberately distinct from
-// WORKER_COMPATIBILITY_DATE in worker-loader.ts: dynamic-worker compat is
+// One compatibility date for the os worker AND the typechecker sidecar — a
+// bump that misses one would be silent drift. (Deliberately distinct from
+// WORKER_COMPATIBILITY_DATE in build-recipe.ts: dynamic-worker compat is
 // hashed into build keys and moves on its own schedule.)
 //
 // Policy: stay on the LATEST — keep this at the newest date the pinned workerd
@@ -129,16 +130,9 @@ const ENV_SHAPED_KEYS = Object.keys(envShapedVars(envs.prd));
 // compatibility_flags below.
 export const COMPATIBILITY_DATE = "2026-07-01";
 
-// The os worker (reader) and the builder (writer) must name the same
-// miniflare namespace in local dev or cache reads never see builds.
 const LOCAL_DEV_BUILD_CACHE_ID = "local-dev-worker-build-cache";
 
-/** The builder sidecar's worker name, derived — never spelled out in envs.ts. */
-function builderWorkerName(osWorkerName: string) {
-  return `${osWorkerName}-builder`;
-}
-
-/** The typechecker sidecar's worker name, derived the same way. */
+/** The typechecker sidecar's worker name, derived — never spelled out in envs.ts. */
 function typecheckerWorkerName(osWorkerName: string) {
   return `${osWorkerName}-typechecker`;
 }
@@ -171,14 +165,23 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
 
 const DO_CLASSES = {
   AGENT: "AgentDurableObject",
+  AGENT_COLLECTION: "AgentCollectionDurableObject",
   CAPABILITY_HOST: "CapabilityHostDurableObject",
+  DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
-  WORKSPACE: "WorkspaceDurableObject",
+  // The deployment's worker-builder pool: stock-SDK sandbox containers that
+  // run dynamic-worker builds, deliberately outside the project sandbox
+  // catalogue (src/domains/workers/builder-pool.ts).
+  WORKER_BUILDER: "WorkerBuilderDurableObject",
+  // Deliberately NOT "WorkspaceDurableObject": declarative exports key
+  // namespaces by class name, and the retired single-parent-overlay workspace
+  // occupied that name — reusing it would inherit the old namespace's storage.
+  WORKSPACE_V2: "WorkspaceV2DurableObject",
   // One sandbox container class PER INSTANCE TYPE (Cloudflare fixes instance_type per
   // class) — bindings and class names come from the canonical table in
   // src/domains/sandboxes/instance-types.ts.
@@ -212,6 +215,11 @@ const DO_EXPORTS = {
       { type: "durable-object", storage: "sqlite" },
     ]),
   ),
+  // The retired single-parent-overlay workspace. Its overlays were disposable
+  // by contract (committed state lives on main); the tombstone destroys the
+  // namespace on the next deploy of each env. Remove once every deployed env
+  // reports "Safe to remove from `exports`".
+  WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -227,8 +235,13 @@ const DO_EXPORTS = {
 const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; production: number }> =
   {
     lite: { preview: 20, production: 50 },
+    // Worker builds no longer draw on this fleet (the builder pool below is
+    // its own app with its own cap) — this budget is pet sandboxes only. The
+    // per-project-builder era saturated 15/15 live; without builders, an e2e
+    // run's own pets use a handful, so preview trades the old headroom to the
+    // builder pool's memory reservation.
     basic: { preview: 10, production: 30 },
-    "standard-1": { preview: 5, production: 20 },
+    "standard-1": { preview: 3, production: 20 },
     "standard-2": { preview: 2, production: 10 },
     "standard-3": { preview: 2, production: 5 },
     "standard-4": { preview: 1, production: 3 },
@@ -301,22 +314,12 @@ function workerBindings(input: {
         service: input.authWorkerName,
         ...(input.authRemote ? { remote: true } : {}),
       },
-      // The builder sidecar (src/builder.ts, wrangler.builder.jsonc): the one
-      // script carrying the dynamic-worker bundler toolchain (esbuild-wasm,
-      // ~14MB) so the product script stays small. Bound by name — deploy.ts
-      // deploys the builder first.
-      { binding: "BUILDER", service: builderWorkerName(input.workerName) },
       // The typechecker sidecar (src/typechecker.ts,
       // wrangler.typechecker.jsonc): the one script carrying the TypeScript
       // compiler (tswasm, ~30MB wasm). Same deploy-first rule as the builder.
       { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
-    // The itx.search per-project instance namespace (env.SEARCH_INSTANCES,
-    // domains/search/search-index.ts). Namespace name = the worker name;
-    // ensure-resources creates it. Instances are created at runtime, one per
-    // project, over the SEARCH_BUCKET below.
-    ai_search_namespaces: [{ binding: "SEARCH_INSTANCES", namespace: input.workerName }],
     browser: { binding: "BROWSER" },
     images: { binding: "IMAGES" },
     media: { binding: "MEDIA" },
@@ -348,9 +351,6 @@ function workerBindings(input: {
     r2_buckets: [
       { binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` },
       { binding: "FILES_BUCKET", bucket_name: `${input.workerName}-files` },
-      // SEARCH_BUCKET: the itx.search corpus (domains/search/search-index.ts) —
-      // derived data an AI Search instance indexes. Same create-if-missing story.
-      { binding: "SEARCH_BUCKET", bucket_name: `${input.workerName}-search-index` },
     ],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see
@@ -363,19 +363,40 @@ function workerBindings(input: {
     // builds and deploys are fast and every size shares one cached image).
     // `instance_type` is the size verbatim: our size names ARE Cloudflare's
     // instance-type names (instance-types.ts).
-    containers: SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
-      class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
-      image: "./sandbox/Dockerfile",
-      instance_type: instanceType,
-      max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
-      // Interactive shell into any running sandbox via `wrangler containers
-      // ssh <instance-id>` (find ids with `wrangler containers instances`).
-      // Account-authenticated + gated on the keys below; opens no public
-      // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
-      // the wrangler schema, so it is set explicitly.
-      ssh: { enabled: true },
-      authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-    })),
+    containers: [
+      ...SANDBOX_INSTANCE_TYPES.map((instanceType) => ({
+        class_name: SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].className,
+        image: "./sandbox/Dockerfile",
+        instance_type: instanceType as string,
+        max_instances: SANDBOX_MAX_INSTANCES[instanceType][input.sandboxCaps ?? "preview"],
+        // Interactive shell into any running sandbox via `wrangler containers
+        // ssh <instance-id>` (find ids with `wrangler containers instances`).
+        // Account-authenticated + gated on the keys below; opens no public
+        // port. See docs/cloudflare-sandboxes.md. `enabled` defaults false in
+        // the wrangler schema, so it is set explicitly.
+        ssh: { enabled: true },
+        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+      })),
+      {
+        // The worker-builder pool: its own app so builder demand can NEVER
+        // compete with pet sandboxes for placement. max_instances equals the
+        // pool size — there are exactly that many member names.
+        //
+        // standard-3 (2 vCPU, 8 GiB), NOT basic: the pool concentrates every
+        // project's builds onto these few containers, and npm install +
+        // wrangler's esbuild bundle are CPU/IO-bound — on basic (1/4 vCPU) an
+        // e2e-style burst ran installs at 73–165s each (observed live), which
+        // blows delivery deadlines fleet-wide. With a 300s sleepAfter the
+        // fleet only exists during build bursts, so the bigger type costs
+        // active-minutes, not idle capacity.
+        class_name: "WorkerBuilderDurableObject",
+        image: "./sandbox/Dockerfile",
+        instance_type: "standard-3",
+        max_instances: WORKER_BUILDER_POOL_SIZE,
+        ssh: { enabled: true },
+        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
+      },
+    ],
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
   };
@@ -505,6 +526,15 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      // Local dev's dynamic-worker build backend: the vite dev server's
+      // host-toolchain endpoint (scripts/worker-build-dev-endpoint.ts).
+      // Deployed envs never set this — they build in the project's builder
+      // sandbox (domains/workers/build-backend.ts).
+      ...(process.env.PORT
+        ? {
+            WORKER_BUILD_DEV_ENDPOINT: `http://localhost:${process.env.PORT}/__dev/worker-build`,
+          }
+        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.
@@ -587,39 +617,9 @@ export const config = {
 };
 
 /**
- * The builder sidecar's config. The builder is deliberately the minimum
- * possible worker around the bundler toolchain: a pure build function
- * (files in, artifact out) whose only binding is the artifact-cache KV — no
- * DOs, no routes, no secrets, no service bindings. Wrangler bundles
- * src/builder.ts directly (no vite); local dev runs it as an auxiliary
- * worker in the same workerd (vite.config.ts). Slated for deletion when
- * builds move into the sandbox container (tasks/os-sandbox-worker-builds.md).
- */
-function builderEnvBlock(env: DeployedEnv) {
-  return {
-    name: builderWorkerName(env.osWorkerName),
-    account_id: env.cloudflareAccountId,
-    kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: env.resources.workerBuildCacheKvId }],
-    observability: OBSERVABILITY,
-  };
-}
-
-export const builderConfig = {
-  $schema: "node_modules/wrangler/config-schema.json",
-  // Env-less service name — see the note on `config.name` above.
-  name: "os-builder",
-  main: "./src/builder.ts",
-  compatibility_date: COMPATIBILITY_DATE,
-  compatibility_flags: ["nodejs_compat"],
-  kv_namespaces: [{ binding: "WORKER_BUILD_CACHE", id: LOCAL_DEV_BUILD_CACHE_ID }],
-  observability: OBSERVABILITY,
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, builderEnvBlock(env)])),
-};
-
-/**
- * The typechecker sidecar's config, cut from the builder's pattern: the
- * minimum possible worker around the TypeScript compiler wasm — a pure
- * function (files in, diagnostics out) with NO bindings at all. Wrangler
+ * The typechecker sidecar's config: the minimum possible worker around the
+ * TypeScript compiler wasm — a pure function (files in, diagnostics out)
+ * with NO bindings at all. Wrangler
  * bundles src/typechecker.ts directly (no vite); local dev runs it as an
  * auxiliary worker in the same workerd (vite.config.ts).
  */
@@ -644,11 +644,6 @@ export const typecheckerConfig = {
 
 /** Write wrangler.jsonc (gitignored) if changed — see writeGeneratedWranglerConfig. */
 export const writeWranglerConfig = () => {
-  writeGeneratedWranglerConfig({
-    configUrl: new URL("../wrangler.builder.jsonc", import.meta.url),
-    appLabel: "apps/os (builder sidecar)",
-    config: builderConfig,
-  });
   writeGeneratedWranglerConfig({
     configUrl: new URL("../wrangler.typechecker.jsonc", import.meta.url),
     appLabel: "apps/os (typechecker sidecar)",

@@ -1,11 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
+import { LiveStateRpcTarget } from "iterate/live-state";
+import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { createStreamProcessorRegistry } from "../streams/stream-processor-registry.ts";
-import type {
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "../streams/rpc-types.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { SlackAgentProcessor } from "../integrations/slack-agent-processor-implementation.ts";
@@ -13,14 +11,12 @@ import { callProjectSlackWebApi, storeSlackFilesForAgent } from "../integrations
 import { TelegramAgentProcessor } from "../integrations/telegram-agent-processor-implementation.ts";
 import { callProjectTelegramBotApi } from "../integrations/telegram-api.ts";
 import { EmailAgentProcessor } from "../email/email-agent-processor-implementation.ts";
-import { GithubAgentProcessor } from "../repos/github-agent-processor-implementation.ts";
-import { connectionOctokit } from "../integrations/github-api.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "../files/project-files.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
-import { AgentProcessor, type AgentProcessorReads } from "./agent-processor-implementation.ts";
-import { AgentProcessorContract } from "./agent-processor-contract.ts";
+import { AgentProcessor } from "./agent-processor-implementation.ts";
+import { AgentProcessorContract, type AgentLiveState } from "./agent-processor-contract.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
@@ -30,11 +26,14 @@ export class AgentDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
+  readonly #registry = createStreamProcessorRegistry<AgentLiveState>(this.ctx, {
     stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    getLiveState: (): AgentLiveState => ({
+      runtimeChange: this.#agentReads.currentState.runtimeChange,
+    }),
   });
   // The DO constructs its processors — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
@@ -51,7 +50,6 @@ export class AgentDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      reads: this.#agentProcessorReads(),
       ai: this.env.AI,
       // Resolved per attempt (not at construction) so a config problem
       // fails the turn with a journaled error instead of bricking the DO.
@@ -77,11 +75,11 @@ export class AgentDurableObject extends DurableObject<Env> {
           projectId: this.#name.projectId,
         }),
       // Oversized script results spill into the agent's OWN workspace (the
-      // same checkout itx.workspace resolves to), so the model can page
+      // same filesystem itx.workspace resolves to), so the model can page
       // through the file instead of blowing its context window. The first
-      // write on a fresh workspace waits for the repo clone.
+      // write on a fresh workspace births it (default mount table).
       writeWorkspaceFile: ({ content, path }) =>
-        this.env.WORKSPACE.getByName(
+        this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
             path: agentWorkspacePath(this.#name.path),
             projectId: this.#name.projectId,
@@ -90,27 +88,17 @@ export class AgentDurableObject extends DurableObject<Env> {
     }),
     { recovery: true },
   );
-  // Runner-backed reads: under runner drive the runner owns the cursors and
-  // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (the processor facade below, and the processor's own
-  // fold reads via #agentProcessorReads) goes through the runner's committed
-  // progress.
+  // Runner-backed reads serve the processor facade and live-state surface.
   readonly #agentReads = this.#registry.reads(this.#agentProcessor);
-
-  /** The agent processor's runner-backed fold reads (the idle debounce's
-   * fire-time staleness check) — lazy closures because #agentReads is built
-   * from the registered processor above; the explicit return type breaks the
-   * field-initializer inference cycle. */
-  #agentProcessorReads(): AgentProcessorReads {
-    return { snapshot: () => this.#agentReads.snapshot() };
-  }
 
   // Registered on every agent host; it only wakes on routed Slack agent
   // streams (`/agents/slack/**`) where the project processor configured its
-  // subscription. Slack-facing side effects are best effort: a failed status
-  // update or reaction must not wedge the processor checkpoint. Registered
-  // WITH recovery (codex review P1): the status paints and 👀 acks are
-  // blocking work, and the held cursor alone only helps while something still
+  // subscription. The processor sequences Slack presentation attempts after
+  // the durable work they acknowledge, but a rejected cosmetic/enrichment
+  // call is explicitly best-effort: it is logged once and never holds the
+  // checkpoint. Actual agent-authored Slack messages use the ordinary itx
+  // capability path instead and remain failure-visible. Registered WITH
+  // recovery because the held cursor alone only helps while something still
   // dials — a SIMULTANEOUS Agent+Stream DO death mid-blocker (a deploy evicts
   // both) leaves nothing armed to redeliver. The alarm's
   // `stream/processor-revived` append cold-boots the stream; the unacknowledged
@@ -126,21 +114,17 @@ export class AgentDurableObject extends DurableObject<Env> {
         // itx.integrations.slack in its script, which fails loudly on its
         // own. The facet birth certificate supplies the named connection;
         // the stream path is deliberately unrelated to processor config.
-        try {
-          await callProjectSlackWebApi({
-            body,
-            connection,
-            method,
-            projectId: this.#name.projectId,
-          });
-        } catch (error) {
-          console.error("[slack-agent] Slack side effect failed", {
-            error,
-            method,
-            path: this.#name.path,
-          });
-        }
+        // The processor owns outcome classification: idempotent Slack errors
+        // are quiet no-ops, while unexpected cosmetic failures are reported
+        // once without holding its durable checkpoint forever.
+        await callProjectSlackWebApi({
+          body,
+          connection,
+          method,
+          projectId: this.#name.projectId,
+        });
       },
+      getAgentRuntimeTransition: () => this.#agentReads.currentState.runtimeChange,
       fetchSlackChannelName: async ({ channel, connection }) => {
         try {
           const result = (await callProjectSlackWebApi({
@@ -152,10 +136,13 @@ export class AgentDurableObject extends DurableObject<Env> {
           const name = result.channel?.name;
           return typeof name === "string" && name.length > 0 ? name : null;
         } catch (error) {
-          console.warn("[slack-agent] conversations.info failed; falling back to channel id", {
-            channel,
-            error,
+          // The channel id is the binding identity; its human-readable name
+          // is optional enrichment. Record the binding without a name when
+          // Slack cannot provide it instead of wedging the route forever.
+          console.warn("[slack-agent] Slack channel-name enrichment failed", {
+            method: "conversations.info",
             path: this.#name.path,
+            reason: error instanceof Error ? error.message : String(error),
           });
           return null;
         }
@@ -174,6 +161,21 @@ export class AgentDurableObject extends DurableObject<Env> {
     }),
     { recovery: true },
   );
+  readonly #slackAgentReads = this.#registry.reads(this.slackAgentProcessor);
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    const present = () => {
+      const transition = this.#agentReads.currentState.runtimeChange;
+      if (transition !== undefined) {
+        this.slackAgentProcessor.presentRuntimeTransition(
+          this.#slackAgentReads.currentState,
+          transition,
+        );
+      }
+    };
+    this.#registry.observeStateChanges(this.#agentProcessor, present);
+    this.#registry.observeStateChanges(this.slackAgentProcessor, present);
+  }
 
   // Registered on every agent host; it only wakes on routed Telegram agent
   // streams (`/agents/telegram/**`) where the project processor configured its
@@ -271,90 +273,6 @@ export class AgentDurableObject extends DurableObject<Env> {
     { recovery: true },
   );
 
-  // Registered on every agent host; it wakes on routed PR agent streams
-  // (`/agents/repos/<slug>/pull-requests/<n>`). Replies leave through the
-  // linked connection's itx.integrations.github Octokit, called by the agent
-  // itself. The platform supplies one best-effort immediate UI affordance:
-  // a 👀 acknowledgement on a fresh trusted mention. Review automation and
-  // its Check Run lifecycle belong to the project config worker. Registered
-  // WITH recovery (codex review P1): the collaborator verification + message
-  // append are consequential blocking work, and the held cursor alone only
-  // helps while something still dials — a SIMULTANEOUS Agent+Stream DO death
-  // mid-verification at raw head leaves nothing armed to redeliver, and the
-  // mention strands. The alarm's `stream/processor-revived` append cold-boots the
-  // stream; the unacknowledged frame redelivers and the verification + turn
-  // append re-run. The eyes reaction stays cosmetic.
-  readonly githubAgentProcessor = this.#registry.register(
-    new GithubAgentProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      isRepositoryCollaborator: async ({ connection, login, owner, repo }) => {
-        try {
-          await connectionOctokit({
-            connection,
-            projectId: this.#name.projectId,
-          }).rest.repos.checkCollaborator({ owner, repo, username: login });
-          return true;
-        } catch (error) {
-          const status =
-            typeof error === "object" && error !== null && "status" in error
-              ? (error as { status?: unknown }).status
-              : undefined;
-          if (status === 404) return false;
-          console.error("[github-agent] GitHub collaborator check failed", {
-            error,
-            login,
-            owner,
-            path: this.#name.path,
-            repo,
-          });
-          throw error;
-        }
-      },
-      addEyesReaction: async ({ connection, kind, owner, repo, targetId }) => {
-        try {
-          const reactions = connectionOctokit({
-            connection,
-            projectId: this.#name.projectId,
-          }).rest.reactions;
-          if (kind === "issue-comment") {
-            await reactions.createForIssueComment({
-              comment_id: targetId,
-              content: "eyes",
-              owner,
-              repo,
-            });
-          } else if (kind === "pull-request-review-comment") {
-            await reactions.createForPullRequestReviewComment({
-              comment_id: targetId,
-              content: "eyes",
-              owner,
-              repo,
-            });
-          } else {
-            await reactions.createForIssue({
-              content: "eyes",
-              issue_number: targetId,
-              owner,
-              repo,
-            });
-          }
-        } catch (error) {
-          // Acknowledgements are cosmetic. A failure must not prevent the
-          // processor from committing and waking the real agent request.
-          console.error("[github-agent] GitHub eyes reaction failed", {
-            error,
-            kind,
-            path: this.#name.path,
-            targetId,
-          });
-        }
-      },
-    }),
-    { recovery: true },
-  );
-
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#registry.wakeStreamSubscriber(args);
   }
@@ -375,5 +293,9 @@ export class AgentDurableObject extends DurableObject<Env> {
     return new StreamProcessorRpcTarget(this.#agentReads, {
       catchUpBeforeSnapshot: () => this.#registry.catchUp(AgentProcessorContract.slug),
     });
+  }
+
+  get liveState() {
+    return new LiveStateRpcTarget<AgentLiveState>(this.#registry);
   }
 }

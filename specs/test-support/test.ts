@@ -7,6 +7,7 @@ import {
   videoMode,
 } from "middlewright";
 import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
+import { screenshot } from "./screenshot.ts";
 
 type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
 
@@ -18,6 +19,7 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
       hydrationWaiter({ timeout: 30_000 }),
       uiErrorReporter(),
       spinnerWaiter({ spinnerTimeout: 30_000 }),
+      screenshot(),
       process.env.VIDEO_MODE === "1" &&
         videoMode({
           skipStackFrames: ["test-support/test.ts"],

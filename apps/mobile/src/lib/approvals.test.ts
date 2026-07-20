@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
-import { deriveOpenRequests, EVENT, safeHost } from "./approvals.ts";
+import { deriveOpenRequests, EVENT, focusOpenRequest, safeHost } from "./approvals.ts";
 
 test("an unresolved request is open", () => {
   const open = deriveOpenRequests([requested(1, "post-echo")]);
@@ -39,6 +39,12 @@ test("a stray reject after a winning grant does not close the hold (the door dec
 test("safeHost falls back to the raw string for an unparseable URL", () => {
   expect(safeHost("https://api.stripe.com/v1/transfers")).toBe("api.stripe.com");
   expect(safeHost("not a url")).toBe("not a url");
+});
+
+test("a notification-targeted approval is focused at the front of the queue", () => {
+  const open = deriveOpenRequests([requested(10, "first"), requested(20, "from-notification")]);
+
+  expect(focusOpenRequest(open, 20).map((request) => request.offset)).toEqual([20, 10]);
 });
 
 function requested(

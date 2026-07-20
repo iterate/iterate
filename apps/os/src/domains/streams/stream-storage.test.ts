@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "./schemas.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { StreamEvent } from "iterate/processors";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
@@ -423,5 +423,23 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(row.attempt).toBe(3); // a reachable host is not a healthy one
     expect(row.lastError).toBe("ingest failing");
     expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
+  });
+});
+
+describe("SqliteSubscriptionCursorStore mutation observation", () => {
+  it("notifies the owning runtime projection after every cursor mutation", () => {
+    const onMutation = vi.fn();
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")), {
+      onMutation,
+    });
+
+    store.ensure("k", 0);
+    store.ack("k", 1);
+    store.advanceWatermark("k", 2);
+    store.nack("k", { attempt: 1, nextAttemptAt: 10, error: "retry" });
+    store.setCursor("k", 3);
+    store.delete("k");
+
+    expect(onMutation).toHaveBeenCalledTimes(6);
   });
 });

@@ -1,5 +1,6 @@
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The markdown file's Code / Preview toggle: a `.md` buffer renders to HTML
@@ -35,7 +36,7 @@ test("toggle a markdown file between Code and its rendered Preview", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Code view: the raw markdown source, including the leading `# ` heading.
-  await page.locator('[data-item-path="demo.md"]').click();
+  await openRepoTreeFile(page, "demo.md");
   await page.locator(".cm-content").filter({ hasText: "# Hello from the repo IDE" }).waitFor();
 
   // Preview renders the markdown: the `# Heading` becomes a real <h1>, with no

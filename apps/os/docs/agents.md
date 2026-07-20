@@ -63,8 +63,11 @@ an agent actor onto third-party data merely to preserve that precedence.
 
 The payload `key` and the event envelope's `idempotencyKey` are deliberately
 different. `idempotencyKey` prevents a processor retry from appending the same
-journal event twice. `key` identifies a logical model-context slot while still
-allowing every real update to remain in the journal.
+journal event twice and therefore names one exact payload forever. Shipped
+policy uses explicit revisioned idempotency keys; changing its content means
+bumping the revision and appending a new occurrence. `key` identifies the
+logical model-context slot, so that new occurrence supersedes only the prior
+value of the same slot while every real update remains in the journal.
 
 ## Projection And Publication
 
@@ -114,8 +117,8 @@ protocol. Each projected item then has a compact header followed by its
 content:
 
 ```text
-@81 key="github/route-context" updates=@17 actor=github:"octocat" refs=["/github/main@240"]
-Pull request #123 was updated. Read the referenced event for the full payload.
+@81 key="github/review-task" updates=@17 refs=["/integrations/github/install-789@240"]
+Review pull request #123 at its immutable head. Read the referenced event for the full payload.
 ```
 
 Only present fields are rendered. The `@offset` is always present, but offsets
@@ -135,6 +138,20 @@ Request bodies are rebuilt by folding consumed events only through the
 bytes even when later events have arrived.
 
 ## Scheduling And Distributed Birth
+
+The public agent birth command is deliberately `agent.create()` with no
+arguments. It installs the generic Agent and Capability Host machinery and the
+shipped base policy. Caller-selected instructions, model configuration, and
+tasks are later stream events. Additional instructions should use their own
+context key and therefore compose with the base policy. An explicit event using
+the same `agent/system-prompt` key updates that well-known slot; authorization
+comes from append access to the stream, not from ownership encoded in the key.
+Use `agent.append(...)` for durable Agent-consumed events; its input union is
+`ConsumedInput<AgentProcessorContract>`, and runtime validation comes from the
+same contract's `parseConsumedInput`. Do not add a wrapper method whose only
+job would be to append one event type. `agent.stream.append(...)` remains the
+raw shared-stream door for events outside the Agent processor's vocabulary and
+intentionally ephemeral events.
 
 User messages, integration-authored developer items, and autonomous
 agent/platform feedback have separate turn-budget semantics. `llmRequestPolicy`
@@ -196,26 +213,18 @@ materialize context in chunked rows and keep only lifecycle metadata plus the
 projection cursor in the generic checkpoint. The logical `context` state and
 provider-neutral rendering boundary do not need to change.
 
-## Breaking Rollout
+## Production Reset
 
-This event and checkpoint contract is a flag-day cutover. Retired agent input,
-message, output, configuration, and system-prompt events are intentionally not
-consumed, and legacy checkpoints are intentionally not accepted. Do not deploy
-this change in place over live projects without first choosing and completing
-one forward rollout:
+This contract starts against an empty production data set. Before deploying
+it, erase the production OS domain data and recreate production through the
+normal recreation procedure, including regenerating project config repos from
+the current template. Do not add a journal migration, compatibility reducer,
+fallback parser, heal path, or tests for the discarded contract.
 
-- erase and recreate the affected projects/agent streams, including regenerating
-  their config repos from the current template; or
-- run a one-time heal through each project's own agent-defaults reaction and
-  overrides, appending its current configuration events to every live agent
-  while omitting (or making non-triggering) the onboarding kickoff, and patch
-  existing config-repo worker/review code to emit `agents/context-added`.
-
-Without that reset or heal, an existing agent has no canonical
-`agent/system-prompt` item, so new triggers remain held, and old config-repo
-code can keep appending retired events that no processor observes. The cutover
-deliberately has no compatibility consumer; completing one of the forward
-rollouts above is a production deployment prerequisite.
+The reset and recreation are part of this change's acceptance proof. Verify
+that newly created agents contain the v2 birth/config/context events, can run a
+script with project capabilities, and leave coherent production traces with no
+unexplained errors before declaring the rollout complete.
 
 ## Authoring Rules
 

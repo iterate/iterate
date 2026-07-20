@@ -48,13 +48,35 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
   for (const event of events) {
     const folded = reduceAgentUi(state, { ...event, streamPath: agentPath } as AgentUiEvent);
     state = folded.endState;
-    settled.push(...folded.items);
+    for (const item of folded.items) {
+      const correctionIndex = settled.findIndex((candidate) => candidate.id === item.id);
+      if (correctionIndex === -1) settled.push(item);
+      else settled[correctionIndex] = item;
+    }
+  }
+  const working = isAgentUiActivityWorking(state.live);
+  if (state.live !== null && !working) {
+    const completed: AgentUiActivity = { ...state.live, status: "done" };
+    const correctionIndex = settled.findIndex((item) => item.id === completed.id);
+    if (correctionIndex === -1) settled.push(completed);
+    else settled[correctionIndex] = completed;
+    return {
+      items: [...settled, ...state.deferredAssistantMessages, ...state.queuedUserMessages],
+      live: null,
+      working: false,
+      state: {
+        ...state,
+        deferredAssistantMessages: [],
+        live: null,
+        queuedUserMessages: [],
+      },
+    };
   }
   const items = [...settled, ...state.queuedUserMessages, ...(state.live ? [state.live] : [])];
   return {
     items,
     live: state.live,
-    working: isAgentUiActivityWorking(state.live),
+    working,
     state,
   };
 }

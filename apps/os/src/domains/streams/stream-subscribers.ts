@@ -26,8 +26,8 @@
 // delivered, lag from cursor), the durable lanes record commit→settled
 // latency on the stream's own clock (wake: the pulled result settling; push/
 // webhook: the awaited ack), and subscribers that hand over a ping capability
-// get NTP-style RTT sampled — observer-driven via runtimeState(), throttled,
-// and purely observational (a failed ping drops the sample, nothing else).
+// get NTP-style RTT sampled when runtime observation begins, throttled, and
+// purely observational (a failed ping drops the sample, nothing else).
 // Ephemeral consumption is deliberately NOT measured here: those results stay
 // unpulled (zero return frames), and the consuming host self-reports through
 // its getRuntimeState capability instead (see subscriber-metrics.ts).
@@ -39,8 +39,7 @@
 // (stream-subscribers.test.ts). The only streams file that knows RPC exists is
 // subscriber-sinks.ts.
 
-import type { ItxExpression } from "../../itx/expression.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -50,8 +49,13 @@ import type {
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
-} from "./rpc-types.ts";
-import { isStreamReceiverUnavailableError } from "./rpc-types.ts";
+} from "iterate/processors";
+import {
+  isStreamReceiverUnavailableError,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
+import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
+import type { ItxExpression } from "../../itx/expression.ts";
 import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
 import type {
   CoreProcessorState,
@@ -71,7 +75,6 @@ import {
   type RetainedProcessEventBatch,
   type RetainedSubscriberPing,
 } from "./subscriber-sinks.ts";
-import { LatencyRing, pingRoundTrip, type LatencyStats } from "./stream-runtime-metrics.ts";
 import {
   computeBackoffMs,
   deliveryId,
@@ -246,32 +249,41 @@ type StreamSubscribersHooks = {
    * the event count and serialized payload bytes it carried (all lanes).
    */
   recordEgress(count: number, bytes: number): void;
+  /** An in-memory runtime-debug field changed; refresh any observed projection. */
+  runtimeChanged(): void;
   /** Injected clock (epoch ms). */
   now(): number;
   /** Injected randomness (backoff jitter); [0, 1) like Math.random. */
   random(): number;
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
+  /**
+   * Run durable delivery in its alarm-owned invocation. The production Stream
+   * DO schedules an immediate alarm when called from an append and runs the
+   * closure only when reconciliation is already inside that alarm turn.
+   */
+  runDurable(work: () => Promise<unknown>): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
 };
 
 export class StreamSubscribers {
   readonly #hooks: StreamSubscribersHooks;
-  /**
-   * How long the stream may hold idle durable delivery connections before
-   * severing them so it (and its subscribers) can hibernate instead of
-   * accruing billable duration on cross-isolate RPC sessions that pin both
-   * DOs. Tracked with an in-memory timer (NOT a DO alarm): the retained sinks
-   * we tear down are in-memory and die on eviction anyway, the DO is always
-   * resident while it holds them (so the timer is guaranteed to fire), and a
-   * durable alarm's only extra power — waking a hibernated DO — is exactly
-   * what we must never do FOR THIS. (The spine's retry alarm is the opposite
-   * case: its state is durable rows, so waking the DO is exactly the point.)
-   */
+  /** How long a quiet configured connection may stay open. */
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
-  #idleTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * In-memory deadline multiplexed onto the Stream DO's existing alarm.
+   *
+   * This MUST NOT be a setTimeout. Workerd adds every actor timer to the
+   * actor's drain set. An append reached from another Durable Object can
+   * return its value promptly while its JS-RPC session remains open waiting
+   * for that timer; the caller then waits on the nested session and can exceed
+   * wall time. An alarm schedules the future turn without retaining this one.
+   * If the Stream is evicted first, its RPC connections are already gone and
+   * the eventual alarm is a harmless no-op.
+   */
+  #idleTeardownAtMs: number | null = null;
 
   // Durable-lane in-memory state. All of it is reconstructible: a DO eviction
   // resets these and the durable rows + folded config re-derive every decision
@@ -345,6 +357,9 @@ export class StreamSubscribers {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
+    if (this.#idleTeardownAtMs !== null && this.#idleTeardownAtMs <= this.#hooks.now()) {
+      this.runIdleTeardownNow();
+    }
     this.wake();
     this.#armAlarmFromStore();
   }
@@ -454,8 +469,9 @@ export class StreamSubscribers {
       ...(delivery.processorSlug === undefined ? {} : { processorSlug: delivery.processorSlug }),
     };
 
-    this.#pokesInFlight.add(subscriptionKey);
-    const work = (async () => {
+    this.#hooks.runDurable(async () => {
+      if (this.#pokesInFlight.has(subscriptionKey)) return;
+      this.#pokesInFlight.add(subscriptionKey);
       try {
         // A poke that outlives its timeout still eventually settles with a
         // RETAINED sink; dropping that undisposed would leak a session-pinning
@@ -528,8 +544,7 @@ export class StreamSubscribers {
       } finally {
         this.#pokesInFlight.delete(subscriptionKey);
       }
-    })();
-    this.#hooks.keepAlive(work);
+    });
   }
 
   /**
@@ -541,8 +556,9 @@ export class StreamSubscribers {
    * can own their cursors. Push delivers per batch; webhook per event.
    */
   #drainPush(subscriptionKey: string): void {
-    this.#pushDrains.add(subscriptionKey);
-    const work = (async () => {
+    this.#hooks.runDurable(async () => {
+      if (this.#pushDrains.has(subscriptionKey)) return;
+      this.#pushDrains.add(subscriptionKey);
       try {
         for (;;) {
           const state = this.#hooks.coreState();
@@ -676,6 +692,7 @@ export class StreamSubscribers {
             subscriptionMetrics.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
           }
           subscriptionMetrics.bytesSent += deliveredBytes;
+          this.#hooks.runtimeChanged();
           // Fenced on the epoch read above: a seek (cursor-set, replacement
           // deliver, remove+recreate) that landed while this delivery was in
           // flight bumped the epoch, and this ack no-ops instead of
@@ -685,15 +702,12 @@ export class StreamSubscribers {
           this.#batchLimits.delete(subscriptionKey);
           this.#consecutiveSkips.delete(subscriptionKey);
         }
+      } catch (error) {
+        console.error("stream push drain failed", { subscriptionKey, error });
       } finally {
         this.#pushDrains.delete(subscriptionKey);
       }
-    })();
-    this.#hooks.keepAlive(
-      work.catch((error: unknown) => {
-        console.error("stream push drain failed", { subscriptionKey, error });
-      }),
-    );
+    });
   }
 
   /**
@@ -903,6 +917,7 @@ export class StreamSubscribers {
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
     if (next !== null) this.#hooks.armAlarm(next);
+    if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   // ===========================================================================
@@ -935,6 +950,7 @@ export class StreamSubscribers {
     this.#batchLimits.delete(subscriptionKey);
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#subscriptionMetrics.delete(subscriptionKey);
+    this.#hooks.runtimeChanged();
   }
 
   #subscriptionMetricsFor(subscriptionKey: string) {
@@ -1120,16 +1136,27 @@ export class StreamSubscribers {
               // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
               state: currentState,
             } satisfies StreamEventBatch,
-            newestCreatedAtMs === undefined || !Number.isFinite(newestCreatedAtMs)
-              ? undefined
-              : {
-                  onSettled: (outcome) => {
-                    if (outcome !== "ok") return;
-                    const settledAtMs = this.#hooks.now();
-                    connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
-                  },
-                },
+            {
+              onSettled: (outcome) => {
+                if (
+                  outcome === "ok" &&
+                  newestCreatedAtMs !== undefined &&
+                  Number.isFinite(newestCreatedAtMs)
+                ) {
+                  const settledAtMs = this.#hooks.now();
+                  connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+                }
+                // `hasPendingDelivery` changed on every durable settle,
+                // including empty/state-only and rejected deliveries that
+                // record no latency sample.
+                this.#hooks.runtimeChanged();
+              },
+            },
           );
+          // The durable wrapper increments its pending count synchronously;
+          // publish that transition before its eventual settle callback
+          // publishes the return to idle.
+          this.#hooks.runtimeChanged();
           await Promise.resolve();
         }
       } finally {
@@ -1159,6 +1186,7 @@ export class StreamSubscribers {
         open = false;
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
+          this.#hooks.runtimeChanged();
         }
         // The ping stub proxies through the same chain the sink retains
         // (wake lane), so it releases before the sink tears that chain down.
@@ -1181,6 +1209,7 @@ export class StreamSubscribers {
     };
 
     this.#connections.set(subscriptionKey, connection);
+    this.#hooks.runtimeChanged();
     this.#hooks.appendFact({
       type: "events.iterate.com/stream/subscriber-connected",
       payload: {
@@ -1239,10 +1268,9 @@ export class StreamSubscribers {
 
   /**
    * One throttled mutual-ping round over every live connection that supplied
-   * a ping capability. Observer-driven: `runtimeState()` triggers it, so RTT
-   * sampling runs only while something is reading runtime state — the debug
-   * panel's poll, or a live browser tab's ~10s liveness probe. A stream with
-   * no browser attached and no debug observer is never pinged. Purely
+   * a ping capability. Observer-driven: a one-shot `runtimeState()` read or a
+   * runtime LiveState observer attaching triggers it. A stream with no debug
+   * observer is never pinged. Purely
    * observational: a failed/garbage/slow ping drops the sample and NOTHING
    * else (liveness stays owned by result-pulling and onRpcBroken); it never
    * wakes pumps and never re-arms the idle timer.
@@ -1275,7 +1303,10 @@ export class StreamSubscribers {
             return; // a subscriber that answers garbage just has no RTT data
           }
           const { rttMs } = pingRoundTrip({ t0, t1: reply.t1, t2: reply.t2 }, t3);
-          if (connection.isLive()) connection.pingRtt.record(rttMs, t3);
+          if (connection.isLive()) {
+            connection.pingRtt.record(rttMs, t3);
+            this.#hooks.runtimeChanged();
+          }
         } catch {
           // Drop the sample; the delivery machinery owns liveness verdicts.
         }
@@ -1342,28 +1373,27 @@ export class StreamSubscribers {
   }
 
   /**
-   * Keep the in-memory idle timer armed only while durable delivery
-   * connections exist (the thing that pins the DO resident). Reset on every
-   * append; cleared once no durable connection remains. No storage writes,
-   * and nothing scheduled against a hibernated DO.
+   * Keep an idle deadline only while configured delivery connections exist.
+   * Every append restarts the quiet window. The owning DO multiplexes this
+   * deadline with delivery-retry deadlines on its single native alarm.
    */
-  armOrClearIdleTimer(): void {
-    if (this.#idleTimer !== undefined) {
-      clearTimeout(this.#idleTimer);
-      this.#idleTimer = undefined;
+  armOrClearIdleAlarm(): void {
+    if (this.#configuredConnectionKeys().length === 0) {
+      this.#idleTeardownAtMs = null;
+      return;
     }
-    if (this.#configuredConnectionKeys().length === 0) return;
-    this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs);
+    this.#idleTeardownAtMs = this.#hooks.now() + this.#idleTeardownMs;
+    this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
 
   /**
    * Deliberately drops every live durable delivery connection so a quiet
    * stream stops pinning subscriber DOs with idle cross-isolate RPC sessions.
    * The durable subscription config is kept, so the next append re-pokes.
-   * The idle timer's action, also exposed for tests / operator use.
+   * The idle alarm's action, also exposed for tests / operator use.
    */
   runIdleTeardownNow(): void {
-    this.#idleTimer = undefined;
+    this.#idleTeardownAtMs = null;
     // Snapshot first: close() mutates the connection table. The whole loop is
     // one synchronous DO turn, so nothing foreign can interleave — the only
     // events appended during it are our own subscriber-disconnected facts.
@@ -1393,6 +1423,10 @@ export class StreamSubscribers {
       if (wedgedKeys.has(subscriptionKey)) continue;
       this.#hooks.store.ack(subscriptionKey, maxOffset);
     }
+    // Disconnect facts append re-entrantly while other connections in the
+    // snapshot may still exist, so their append turns can transiently arm a
+    // fresh idle deadline. The completed teardown owns the final state.
+    this.#idleTeardownAtMs = null;
     if (wedgedKeys.size > 0) queueMicrotask(() => this.wake());
   }
 
@@ -1407,16 +1441,18 @@ export class StreamSubscribers {
  * Bounds one delivery/poke attempt. Without it a wedged receiver (the worst
  * real case: a cold worker build that never completes) holds the drain slot
  * and pins the DO unboundedly, with no nack, no backoff, and no park. On
- * timeout the attempt counts as a failure — the spine backs off and retries;
+ * timeout the receiver is classified as unavailable — the spine backs off
+ * and retries the WHOLE batch without allowing `onPoison: "skip"` to turn a
+ * transport stall into a verdict about healthy events. The bound deliberately
+ * wins before the platform's roughly 30-second nested-RPC cancellation window;
  * a build that was merely slow continues server-side via waitUntil, so the
  * retry hits the warm cache (the same shape #1761's build budget had).
  */
-const DELIVERY_TIMEOUT_MS = 60_000;
+const DELIVERY_TIMEOUT_MS = 20_000;
 
 /**
- * Minimum interval between mutual-ping rounds. Sampling is observer-driven
- * (each `runtimeState()` call requests a round), so this throttle turns the
- * panel's ~2s poll into a ≤1-ping-per-5s-per-connection ceiling.
+ * Minimum interval between mutual-ping rounds. Sampling is observer-driven;
+ * this bounds repeated explicit refreshes/one-shot reads without a ticker.
  */
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 /** Bound on one ping attempt — a reply slower than this isn't a useful RTT sample. */
@@ -1454,7 +1490,7 @@ async function withDeliveryTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           timedOut = true;
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new StreamReceiverUnavailableError(`${label} timed out after ${timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);

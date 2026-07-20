@@ -12,17 +12,17 @@ programs against. When this README and `types.ts` disagree, `types.ts` wins.
 
 ## Layout
 
-| Path                       | What                                                                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`                 | The public itx contract (the design of record)                                                                                                  |
-| `rpc-targets.ts`           | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
-| `auth.ts`                  | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
-| `itx-client.ts`            | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
-| `ingress.ts`               | The shared routing decision (which requests belong to itx)                                                                                      |
-| `project-directory.ts`     | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
-| `env.ts`                   | The single worker's binding contract ([worker topology](../docs/worker-topology.md))                                                            |
-| `worker.ts` / `builder.ts` | The worker entry and the builder sidecar entry                                                                                                  |
-| `domains/`                 | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
+| Path                   | What                                                                                                                                            |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`             | The public itx contract (the design of record)                                                                                                  |
+| `rpc-targets.ts`       | ALL RpcTarget classes: the session/project/agent surfaces, MCP/OpenAPI clients, capability provision, stream subscriptions, egress              |
+| `auth.ts`              | The auth adapter: credentials → `ItxAuth` (see below)                                                                                           |
+| `itx-client.ts`        | `connectItx()` — the Node/CLI client over a Cap'n Web WebSocket                                                                                 |
+| `ingress.ts`           | The shared routing decision (which requests belong to itx)                                                                                      |
+| `project-directory.ts` | Slug → project id resolution against the auth worker, cached in the `PROJECT_DIRECTORY` KV namespace                                            |
+| `env.ts`               | The single worker's binding contract ([worker topology](../docs/worker-topology.md))                                                            |
+| `worker.ts`            | The single worker entry                                                                                                                         |
+| `domains/`             | One folder per domain: `streams`, `projects`, `repos`, `agents`, `secrets`, `workers` (dynamic), `capability-host`, `itx`, `inbound-mcp-server` |
 
 Each domain owns its Durable Object plus a stream-processor contract
 (`*-processor-contract.ts`, pure: event schemas + reducer) and implementation
@@ -41,8 +41,8 @@ live in domain files.
   "itx" is a NAMING CONVENTION, not a class: an itx is normally an instance of
   `ProjectRpcTarget` whose capability host sits at `"/"` — and sometimes at
   `"/agents/…"`, which is what "an agent context" means. Same type either way;
-  a nested scope sees its own mounted capabilities plus everything inherited
-  from enclosing scopes (child → parent → project).
+  a nested scope sees its own mounted capabilities plus everything its
+  journaled fallback host reports (usually the project root, one hop).
 - A **capability host** is the durable dynamic-capability table (and script
   journal) at one scope path — one `CapabilityHostDurableObject` per
   `{projectId, path}`. Host operations are `provideCapability`,
@@ -142,9 +142,10 @@ The itx and agent surfaces have NO dispatch machinery of their own: the
 to the injected capability host, and the host itself carries the same fallback
 (`host.foo.bar(x)` is `host.invokeCapability({ path: ["foo","bar"], args: [x] })`).
 
-The load-bearing asymmetry: **reads chain up, writes stay local.**
-`invokeCapability`/`__describe` fall through to the enclosing scope on a miss
-(agent -> namespace -> project root), so a root mount is visible everywhere.
+The load-bearing asymmetry: **reads fall back, writes stay local.**
+`invokeCapability`/`__describe` follow the scope's birth-certificate `fallback`
+expression on a miss — one direct hop, normally to the project root host, with
+no path-prefix walking — so a root mount is visible everywhere.
 `provideCapability` always mounts on exactly the host you called it on — to
 mount elsewhere, address that scope explicitly via `capabilityHosts.get(path)`.
 
@@ -288,15 +289,15 @@ dynamic isolate gets its scoped itx binding and egress fetcher. A `DynamicWorker
 `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
 `StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
-orthogonal file source plus Cloudflare build options: files come `inline` or
+orthogonal file source plus build options: files come `inline` or
 from a `repo` snapshot (branch late-bound or commit-pinned, masked by
-include/exclude globs), and the builder sidecar (`src/builder.ts` — the only
-script carrying the bundler toolchain) bundles them — multi-file
-TypeScript and `package.json` npm dependencies included — into a KV-cached,
-loader-ready artifact keyed deterministically (see
-`docs/dynamic-worker-build-requirements.md`). Builds are a direct RPC
-(`env.BUILDER.build`, files passed by value); they leave no events in the
-journal, and build failures reach the
+include/exclude globs), and the build pipeline — real `npm install` plus
+pinned wrangler, run in the project's builder sandbox (local dev: the same
+recipe on the host toolchain; `domains/workers/build-recipe.ts`) — bundles
+them, multi-file TypeScript and `package.json` npm dependencies included,
+into a KV-cached, loader-ready artifact keyed deterministically (see
+`docs/dynamic-worker-build-requirements.md`). Builds pass files by value and
+leave no events in the journal; build failures reach the
 caller as plain errors. Inside
 loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the
@@ -304,7 +305,7 @@ default repo's `worker.ts`.
 
 Note: method-returned itx surfaces pipeline on every transport, including
 script isolates over Workers RPC — `await itx.workers.get(ref).method(...)`,
-`await itx.agents.get(path).create({})`, and (after birth)
+`await itx.agents.get(path).create()`, and (after birth)
 `await itx.agents.get(path).message(...)` work as one expression (the
 dynamic-capability fallback lives on the classes' prototype chains, so the
 returned instances are genuine RpcTargets; see
@@ -314,7 +315,7 @@ pattern:
 
 ```ts
 using agent = itx.agents.get(path); // no await
-await agent.create({});
+await agent.create();
 const [sent, description] = await Promise.all([agent.message("hello"), agent.__describe()]);
 ```
 

@@ -12,6 +12,15 @@
 
 import type { ProjectListEntry } from "../../../os/src/itx-api.generated.ts";
 import type { ItxSession } from "./itx-core.ts";
+import type { LastProject } from "./storage.ts";
+
+export function rememberedProjectInScope(
+  remembered: LastProject,
+  projects: ProjectListEntry[],
+): LastProject | null {
+  const current = projects.find((project) => project.id === remembered.id);
+  return current ? { id: current.id, slug: current.slug } : null;
+}
 
 export async function backfillProjectIfMissing(
   itx: ItxSession,
@@ -21,7 +30,7 @@ export async function backfillProjectIfMissing(
   await itx.projects.create({
     projectId: project.id,
     slug: project.slug,
-    waitUntilReady: false,
+    waitUntilReady: true,
     ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
   });
 }

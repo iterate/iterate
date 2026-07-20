@@ -52,20 +52,19 @@ export interface Env {
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
   /**
-   * The builder sidecar (src/builder.ts): bundles dynamic worker source into
-   * loader-ready artifacts, called on artifact-cache misses. The only script
-   * carrying the bundler toolchain (esbuild-wasm, ~14MB) — the "+1" in the
-   * one-worker topology, kept out of this script so the product stays small.
-   * The builder does NOT carry this Env; its whole binding set is the
-   * artifact cache (see its BuilderEnv).
+   * Local dev only: the vite dev server's `/__dev/worker-build` endpoint URL
+   * (generate-wrangler-config.ts sets it under `pnpm dev`). When present,
+   * dynamic worker builds run the shared build recipe on the HOST toolchain
+   * via this endpoint instead of the project's builder sandbox — local dev
+   * has no containers. Never set in deployed envs.
    */
-  BUILDER: Service<import("./domains/workers/builder-entrypoint.ts").BuilderEntrypoint>;
+  WORKER_BUILD_DEV_ENDPOINT?: string;
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types
    * validation and `itx.docs.typecheck`. The only script carrying the
-   * TypeScript compiler (tswasm, ~30MB wasm) — same quarantine story as
-   * BUILDER.
+   * TypeScript compiler (tswasm, ~30MB wasm) quarantined out of the product
+   * script.
    */
   TYPECHECKER: Service<
     import("./domains/typecheck/typechecker-entrypoint.ts").TypecheckerEntrypoint
@@ -74,8 +73,14 @@ export interface Env {
   AGENT: DurableObjectNamespace<
     import("./domains/agents/agent-durable-object.ts").AgentDurableObject
   >;
+  AGENT_COLLECTION: DurableObjectNamespace<
+    import("./domains/agents/agent-collection-durable-object.ts").AgentCollectionDurableObject
+  >;
   CAPABILITY_HOST: DurableObjectNamespace<
     import("./domains/capability-host/capability-host-durable-object.ts").CapabilityHostDurableObject
+  >;
+  DEVICE: DurableObjectNamespace<
+    import("./domains/devices/device-durable-object.ts").DeviceDurableObject
   >;
   PROJECT: DurableObjectNamespace<
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
@@ -104,6 +109,15 @@ export interface Env {
   >;
   SANDBOX_STANDARD_4: DurableObjectNamespace<
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
+  >;
+  /**
+   * The deployment's worker-builder pool — stock SDK sandboxes that run every
+   * dynamic-worker build. Platform infrastructure, not project sandboxes: no
+   * catalogue, no streams, and project code can never reach this binding
+   * (src/domains/workers/builder-pool.ts).
+   */
+  WORKER_BUILDER: DurableObjectNamespace<
+    import("./domains/workers/builder-pool-sandbox.ts").WorkerBuilderDurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is
@@ -143,26 +157,6 @@ export interface Env {
    */
   FILES_BUCKET: R2Bucket;
   /**
-   * SPIKE: the search-index corpus behind `itx.search`
-   * (domains/search/search-index.ts). Stream event segments, itx.files
-   * mirrors, and repo file snapshots are written here under
-   * `{projectId}/{streams|files|repos}/…` keys; a Cloudflare AI Search
-   * instance (`${WORKER_SELF}-search`, created by ensure-resources.ts)
-   * indexes the bucket and `itx.search` queries it with per-project folder
-   * filters. One bucket per env (`${WORKER_SELF}-search-index`). The whole
-   * bucket is derived data — safe to wipe and rebuild.
-   */
-  SEARCH_BUCKET: R2Bucket;
-  /**
-   * The deployment's AI Search namespace (`ai_search_namespaces` binding,
-   * namespace = `${WORKER_SELF}`). itx.search creates ONE INSTANCE PER
-   * PROJECT in it on first use (domains/search/search-index.ts,
-   * ensureProjectSearchInstance) — each instance indexes only that project's
-   * `{projectId}/**` slice of {@link Env.SEARCH_BUCKET}, so search tenancy is
-   * structural. The namespace itself is created by ensure-resources.ts.
-   */
-  SEARCH_INSTANCES: AiSearchNamespace;
-  /**
    * Deploy identity (wrangler `version_metadata` binding). The stream
    * processor hosts' crash-loop breaker keys its backoff budget on the version
    * id so a fresh deploy — the usual antidote to a deterministic crash loop —
@@ -182,8 +176,8 @@ export interface Env {
   WORKER: DurableObjectNamespace<
     import("./domains/workers/stateful-worker-durable-object.ts").StatefulWorkerDurableObject
   >;
-  WORKSPACE: DurableObjectNamespace<
-    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceDurableObject
+  WORKSPACE_V2: DurableObjectNamespace<
+    import("./domains/workspaces/workspace-durable-object.ts").WorkspaceV2DurableObject
   >;
 }
 

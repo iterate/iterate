@@ -1,0 +1,26 @@
+// Checked in (unlike the fleet apps' generated configs): this app is not yet
+// wired into envs.ts / the deploy fleet, so the only environment is local dev
+// and there is nothing to expand per deployment. When it joins the fleet,
+// replace this with a generate-wrangler-config.ts expanded from envs.ts, like
+// apps/streams-example-app.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tanstack",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "exports": {
+    "TodoListDurableObject": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TODO_LIST",
+        "class_name": "TodoListDurableObject",
+      },
+    ],
+  },
+}

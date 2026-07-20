@@ -1,5 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { isPublicAssetRequest } from "./middleware.ts";
+import { isPublicAssetRequest, requestProjectId } from "./middleware.ts";
+
+const projects = [
+  { id: "prj_123", slug: "difference-engine" },
+  { id: "prj_456", slug: "encoded project" },
+];
+
+describe("requestProjectId", () => {
+  it("uses only a project the authenticated user can access", () => {
+    expect(
+      requestProjectId(
+        new Request("https://os.iterate.com/projects/difference-engine/agents"),
+        projects,
+      ),
+    ).toBe("prj_123");
+    expect(
+      requestProjectId(new Request("https://os.iterate.com/projects/not-mine"), projects),
+    ).toBeUndefined();
+  });
+
+  it("accepts a same-origin referrer for server functions but ignores foreign origins", () => {
+    expect(
+      requestProjectId(
+        new Request("https://os.iterate.com/_server", {
+          headers: { referer: "https://os.iterate.com/projects/encoded%20project" },
+        }),
+        projects,
+      ),
+    ).toBe("prj_456");
+    expect(
+      requestProjectId(
+        new Request("https://os.iterate.com/_server", {
+          headers: { referer: "https://attacker.example/projects/difference-engine" },
+        }),
+        projects,
+      ),
+    ).toBeUndefined();
+  });
+});
 
 // /assets/* requests must never run session auth (see the middleware comment:
 // subresource token refreshes race the navigation's refresh and trip the auth

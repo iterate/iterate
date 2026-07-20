@@ -1,10 +1,8 @@
 import { z } from "zod";
-import { ItxExpressionStep } from "../../itx/expression.ts";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
-import {
-  CoreProcessorContract,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-} from "../streams/core-processor-contract.ts";
+import { defineProcessorContract } from "iterate/processors";
+import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type {
   CapabilityProvidedPayload as CapabilityProvidedPayloadType,
   CapabilityRecord as CapabilityRecordType,
@@ -63,7 +61,29 @@ const CapabilityRevokedPayload = z.strictObject({
 
 const CapabilityHostBirthCertificate = z.strictObject({
   config: z.strictObject({}),
+  /**
+   * Where capability reads go on a local miss: an itx expression naming ONE
+   * other host — usually `["capabilityHosts", ["get", "/"]]`, the project
+   * root — or null, which ends resolution here. Journaled at birth and
+   * re-evaluated against this scope's own itx on every fallback read, so the
+   * expression is a durable name, never captured authority. Nullish only so
+   * pre-fallback birth certificates still parse; absent means null.
+   */
+  fallback: ItxExpression.nullish(),
 });
+
+/**
+ * The standard non-root fallback: a capability miss re-resolves directly at
+ * the project root host, in one hop. There is deliberately no multi-level
+ * scope walking — a scope that wants different inheritance journals a
+ * different expression at birth.
+ */
+const PROJECT_ROOT_CAPABILITY_FALLBACK: ItxExpression = ["capabilityHosts", ["get", "/"]];
+
+/** The one platform rule for what a new host at `path` journals as its fallback. */
+export function capabilityFallbackForScope(path: string): ItxExpression | null {
+  return path === "/" ? null : PROJECT_ROOT_CAPABILITY_FALLBACK;
+}
 
 /**
  * Absolute lifetime of a script-run-requested obligation. Recovery can
@@ -75,7 +95,7 @@ export const DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS = 15 * 60_000;
 
 export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "A tiny dynamic capability table and script execution journal.",
   // Brings the core `stream/*` lifecycle events into scope so the obligation
   // reconcile can consume `stream/woken` / `subscriber-connected` as re-check
@@ -106,12 +126,18 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   }),
   events: {
     "events.iterate.com/capability-host/created": {
-      description: "Creates a capability-host processor on this stream.",
+      description:
+        "Creates a capability-host processor on this stream. The birth certificate journals the scope's `fallback`: the itx expression a capability miss follows (usually straight to the project root host), or null at the root.",
       payloadSchema: CapabilityHostBirthCertificate,
       examples: [
         {
-          description: "An empty capability host is born before any mounts are provided.",
-          payload: { config: {} },
+          description: "The project root host is born with no fallback — resolution ends here.",
+          payload: { config: {}, fallback: null },
+        },
+        {
+          description:
+            'An agent scope host is born falling back directly to the project root: a miss at this scope re-resolves at itx.capabilityHosts.get("/").',
+          payload: { config: {}, fallback: ["capabilityHosts", ["get", "/"]] },
         },
       ],
     },

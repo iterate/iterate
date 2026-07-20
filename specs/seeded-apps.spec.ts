@@ -1,5 +1,6 @@
 import { expect } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
+import { E2E_HEAVY_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import {
   signUpWithEmailOtp,
@@ -11,15 +12,26 @@ import { test } from "./test-support/test.ts";
 
 // The seeded config repo's example apps genuinely serve after a project is
 // created: the hello app (stateless WorkerEntrypoint) answers JSON on its own
-// host, and the counter app (stateful Durable Object) renders its mini
+// host, the counter app (stateful Durable Object) renders its mini
 // client-side page, increments over fetch, and repaints from the WebSocket
-// broadcast — all through real project ingress, in a real browser.
-test("the seeded hello and counter apps work after creating a project", async ({
+// broadcast — and the guestbook (a TanStack Start app whose state is a
+// stream-processor fold mirrored into Cap'n Web live state) takes a
+// signature and pushes it live into a second tab — all through real project
+// ingress, in a real browser.
+test("the seeded hello, counter, and guestbook apps work after creating a project", async ({
   baseURL,
   helpers,
   page,
 }) => {
+  test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   await using fixture = await helpers.createFixture("seeded-apps");
+
+  // Kick the guestbook's cold vite build NOW so it overlaps the hello and
+  // counter walks below: the guestbook is public (no auth partial anywhere
+  // on it), so this plain GET reaches the router and its resolve starts the
+  // app's npm install + vite build in the builder pool. The response itself
+  // (a self-refreshing building page) is irrelevant.
+  await page.request.get(appUrl("guestbook", fixture.project.slug, baseURL!)).catch(() => {});
 
   // Hello: an app's first use is a cold worker build; the router serves a
   // self-refreshing "building" page until the artifact lands, so seeing the
@@ -41,6 +53,43 @@ test("the seeded hello and counter apps work after creating a project", async ({
   // the ws broadcast, not the HTTP response.
   await page.getByRole("button", { name: "increment" }).click();
   await page.locator("#n").filter({ hasText: /^1$/ }).waitFor();
+
+  // Guestbook: the seeded repo's second TanStack Start app (vite pipeline,
+  // apps/guestbook) — its state is a stream-processor fold on the project
+  // stream, hosted in the app's own Durable Object and mirrored into Cap'n
+  // Web live state. Its cold build was kicked before the hello walk and has
+  // been running throughout, so this wait only absorbs the tail of it.
+  await page.goto(appUrl("guestbook", fixture.project.slug, baseURL!));
+  await page.getByRole("heading", { name: "Guestbook" }).waitFor({ timeout: 120_000 });
+
+  // The composer enables once the /api Cap'n Web session subscribes; the
+  // entry below comes back over the pushed live-state patch, not the HTTP
+  // response — signing appends to the stream, the wake spine folds it, and
+  // the Durable Object republishes.
+  const note = `note-${crypto.randomUUID().slice(0, 8)}`;
+  await page.getByLabel("your name").fill("Ada");
+  await page.getByLabel("your message").fill(note);
+  await page.getByRole("button", { name: "Sign" }).click();
+  await page.getByText(note).waitFor({ timeout: 30_000 });
+
+  // Multiplayer: a second tab sees the entry over ITS OWN live-state
+  // subscription, and a signature there lands in the first tab without any
+  // reload — the fold's wake delivery repaints every open socket.
+  const second = await page.context().newPage();
+  await second.goto(appUrl("guestbook", fixture.project.slug, baseURL!));
+  await second.getByText(note).waitFor({ timeout: 30_000 });
+  const secondNote = `note-${crypto.randomUUID().slice(0, 8)}`;
+  await second.getByLabel("your name").fill("Grace");
+  await second.getByLabel("your message").fill(secondNote);
+  await second.getByRole("button", { name: "Sign" }).click();
+  // The first tab is a passive observer of a mutation initiated in the
+  // second tab, so it cannot truthfully render mutation progress for
+  // spinner-waiter to follow. Keep the explicit live-delivery bound while
+  // bypassing only the no-spinner 100ms fast-fail for this remote update.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByText(secondNote).waitFor({ timeout: 30_000 });
+  });
+  await second.close();
 });
 
 // Unlike the public examples above, this proof uses a real Auth-backed user
@@ -48,6 +97,7 @@ test("the seeded hello and counter apps work after creating a project", async ({
 // directory on every request, not merely the OS access-token claims used by
 // the suite's usual forged-session fixture.
 test("the seeded internal app authenticates a real project member", async ({ baseURL, page }) => {
+  test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
@@ -77,6 +127,13 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     payload: { marker },
   });
 
+  // Kick the tanstack app's cold vite build NOW so it overlaps the whole
+  // internal-app walk below: /api has no auth gate (it authenticates
+  // in-band), so this plain GET reaches the stateful facet, whose resolve
+  // starts the app's npm install + vite build in the builder pool. The
+  // response itself (an upgrade rejection) is irrelevant.
+  await page.request.get(`${appUrl("tanstack", slug, baseURL!)}api`).catch(() => {});
+
   // The project-app origin has no session yet, even though this browser is
   // already signed in to OS. The auth partial owns the request and renders
   // the form on the app's own origin.
@@ -98,6 +155,26 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     .waitFor({ timeout: 30_000 });
   await page.getByText(marker).waitFor();
 
+  // `/api` is an unauthenticated Cap'n Web root. The page explicitly
+  // exchanges its exact-origin app cookie for an app-defined session target;
+  // only that attenuated target (not project ITX) reaches the browser.
+  await page
+    .locator("#identity")
+    .filter({ hasText: /^authenticated as \S+$/ })
+    .waitFor();
+  const refresh = page.getByRole("button", { name: "refresh over Cap'n Web" });
+
+  // Prove the session's LiveState channel, rather than the initial HTML: add
+  // an event after render, invoke the app-session RPC method, and wait for the
+  // pushed snapshot/patch projection to repaint the page.
+  const liveMarker = `capnweb-live-state-${crypto.randomUUID()}`;
+  await root.append({
+    type: "events.iterate.test/spec/internal-app-live-state",
+    payload: { marker: liveMarker },
+  });
+  await refresh.click();
+  await page.getByText(liveMarker).waitFor();
+
   // Partial-fetch fall-through must preserve the original request. Exercise
   // that contract across the real dynamic-worker + ITX RPC boundary, not just
   // in the auth helper: the protected app reads this POST body after auth has
@@ -108,6 +185,44 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     return { body: await response.text(), status: response.status };
   }, echoBody);
   expect(echo).toEqual({ body: echoBody, status: 200 });
+
+  // The tanstack app is a second member-gated origin on the same project: the
+  // project's shared todo list — a stateful dynamic worker whose rows live in
+  // its Durable Object's SQLite (via sqlfu), served as TanStack-routed SSR
+  // with a Cap'n Web live-state lane. Its own origin has no app cookie yet,
+  // so the auth partial gates it exactly like the internal app did — and the
+  // same OS session carries the "Continue with Iterate" hop. Same worker.ts
+  // The auth gate answers BEFORE any build (the root worker gates the host,
+  // then forwards); the cold vite build was kicked before the internal-app
+  // walk above and has been running throughout, so the heading wait only
+  // absorbs the tail of it (behind the self-refreshing building page).
+  await page.goto(appUrl("tanstack", slug, baseURL!));
+  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 60_000 });
+  await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
+  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 120_000 });
+
+  // The composer works once the Cap'n Web session authenticates (the
+  // "connecting…" status hides), and the add comes back over live state.
+  const todoTitle = `todo-${crypto.randomUUID().slice(0, 8)}`;
+  const composer = page.getByLabel("add a todo");
+  await composer.fill(todoTitle);
+  await composer.press("Enter");
+  await page.getByText(todoTitle).waitFor();
+
+  // Multiplayer: a second tab (same member, same app cookie) sees the row
+  // arrive over ITS OWN live-state subscription, and a toggle there strikes
+  // through here without any reload.
+  const second = await page.context().newPage();
+  await second.goto(appUrl("tanstack", slug, baseURL!));
+  await second.getByText(todoTitle).waitFor({ timeout: 30_000 });
+  await second.getByLabel(`done: ${todoTitle}`).click();
+  await page.locator(`input[aria-label="done: ${todoTitle}"]:checked`).waitFor();
+  await second.close();
+
+  // Durability: the row lives in the app's Durable Object SQLite, so a
+  // fresh page load (new hydration, new /api session) replays it.
+  await page.reload();
+  await page.getByText(todoTitle).waitFor({ timeout: 30_000 });
 
   // Logout is owned by the same partial. It clears the app-host cookie and
   // the redirected request is gated back to the login form.

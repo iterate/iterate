@@ -110,7 +110,7 @@ export function RepoGithubPanel({ projectId, repoPath }: { projectId: string; re
       const agentPath = githubHistoryMergeAgentPath(repoPath);
       const agent = itx.agents.get(agentPath);
       const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create({});
+      if (snapshot.state.birthCertificate === null) await agent.create();
       await agent.message(
         githubHistoryMergeAgentInstructions({
           owner: conflict.owner,

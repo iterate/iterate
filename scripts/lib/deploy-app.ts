@@ -4,7 +4,7 @@ import {
   collectSecrets,
   deployWithSecrets,
   findBuiltWranglerConfig,
-  run,
+  runAsync,
   smoke,
 } from "./deploy-helpers.ts";
 import {
@@ -26,8 +26,9 @@ export interface SmokeProbe {
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
  *   resolve --env → assert resources provisioned → collect secrets →
- *   app-specific prepare (migrations, seeds, config preflight) →
- *   build → deploy code+secrets in one version → smoke-probe → ✅
+ *   app-specific prepare (migrations, seeds, config preflight) → build plus
+ *   explicitly independent prerequisites → deploy code+secrets in one version →
+ *   smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
@@ -81,6 +82,17 @@ export async function deployApp<E extends DeployableEnv>(input: {
     secretValues: Record<string, string>,
     credentials: Record<string, string>,
   ) => Promise<void> | void;
+  /**
+   * Independent prerequisites that may overlap the Vite build but MUST
+   * complete before code upload. Both lanes are joined (including on failure)
+   * before deploy, so this cannot expose a version whose prerequisites are
+   * still running.
+   */
+  concurrentBuildWork?: (
+    ctx: EnvContext<E>,
+    secretValues: Record<string, string>,
+    credentials: Record<string, string>,
+  ) => Promise<void> | void;
   /** Runs after a healthy deploy (e.g. auth's OAuth client seeding). */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
   smokes: (env: E) => SmokeProbe[];
@@ -102,20 +114,38 @@ export async function deployApp<E extends DeployableEnv>(input: {
     CLOUDFLARE_ACCOUNT_ID: ctx.env.cloudflareAccountId,
   };
   const secretValues = collectSecrets(ctx, input.requiredSecrets ?? [], input.optionalSecrets);
+  // Resolve build-only inputs before app-specific preparation mutates any
+  // deployed resource. A missing upload/build credential must fail the whole
+  // deploy before sidecars, queues, buckets, or migrations advance.
+  const buildEnv = input.buildEnv?.(ctx);
 
   await input.prepare?.(ctx, secretValues, credentials);
 
+  const concurrentBuildWork = Promise.resolve().then(() =>
+    input.concurrentBuildWork?.(ctx, secretValues, credentials),
+  );
   let builtConfig: string;
   let extraDeployArgs: string[] | undefined;
   if (input.build === "checked-in-config") {
     builtConfig = "wrangler.jsonc";
     extraDeployArgs = ["--env", ctx.name];
+    await concurrentBuildWork;
   } else {
     rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
-    run("pnpm", ["exec", "vite", "build"], {
-      cwd: input.appRoot,
-      env: { CLOUDFLARE_ENV: ctx.name, ...input.buildEnv?.(ctx) },
-    });
+    const results = await Promise.allSettled([
+      runAsync("pnpm", ["exec", "vite", "build"], {
+        cwd: input.appRoot,
+        env: { CLOUDFLARE_ENV: ctx.name, ...buildEnv },
+      }),
+      concurrentBuildWork,
+    ]);
+    const failures = results
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "App build and concurrent build work both failed");
+    }
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
 

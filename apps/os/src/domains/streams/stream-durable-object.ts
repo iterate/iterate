@@ -1,33 +1,40 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import type { Env } from "../../env.ts";
-import type { Stream } from "../../itx-api.generated.ts";
-import { StreamSubscriptionRpcTarget } from "../../rpc-targets.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
-import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import type {
   ProcessorRuntimeState,
   StreamPushEventBatch,
   StreamSubscriptionHandle,
-} from "./rpc-types.ts";
-import { StreamOffsetConflictError, streamOffsetConflictMessage } from "./rpc-types.ts";
-import type { StreamEvent, StreamEventInput } from "./schemas.ts";
-import { StreamEventInput as StreamEventInputSchema } from "./schemas.ts";
+} from "iterate/processors";
+import { sameIdempotentEvent } from "iterate/processors";
+import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
+import type { StreamEvent, StreamEventInput } from "iterate/processors";
+import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
+import { StreamRuntimeMetrics } from "iterate/processors";
+import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import { streamDeliveryAuthContext } from "../../auth.ts";
+import type { Env } from "../../env.ts";
+import type { Stream } from "../../itx-api.generated.ts";
+import {
+  deploymentItxForInternal,
+  itxForScope,
+  StreamSubscriptionRpcTarget,
+} from "../../rpc-targets.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { buildAcceptCrossPostAppendInputs } from "./cross-post.ts";
 import { compileEventSelector } from "./event-selector.ts";
 import {
   reconcileSubscriptionCursorRows,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
 } from "./stream-storage.ts";
-import {
-  StreamSubscribers,
-  type ConnectionRuntimeState,
-  type SubscriptionRuntimeState,
-} from "./stream-subscribers.ts";
-import { StreamRuntimeMetrics, type StreamThroughputMetrics } from "./stream-runtime-metrics.ts";
+import { StreamSubscribers } from "./stream-subscribers.ts";
+import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import { createSubscriberDial } from "./subscriber-sinks.ts";
-import { STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX } from "./stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
+} from "./stream-unavailable.ts";
 import {
   CORE_STATE_VERSION,
   CoreProcessorContract,
@@ -38,6 +45,138 @@ import {
 
 const DEFAULT_GET_EVENTS_LIMIT = 500;
 const MAX_GET_EVENTS_LIMIT = 500;
+const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
+
+function isStreamPausedError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(STREAM_PAUSED_ERROR_PREFIX)
+  );
+}
+
+/**
+ * Observe fire-and-forget stream-core work without handing a rejected promise
+ * to `waitUntil`. A deployment replaces the current Durable Object
+ * incarnation and rejects its in-flight stub calls; that is a lifecycle
+ * interruption, while an application rejection remains an error.
+ */
+export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work();
+  } catch (error) {
+    if (isStreamPausedError(error)) {
+      console.info("stream core background work reached a paused stream", {
+        message: error.message,
+      });
+      return;
+    }
+    if (isDurableObjectLifecycleError(error)) {
+      console.info("stream core background work interrupted by durable object lifecycle", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    console.error("stream core background work failed", error);
+  }
+}
+
+/**
+ * Cuts durable delivery out of the append request's actor-drain tree.
+ *
+ * A Stream append can itself be nested inside a subscriber processor. If its
+ * post-commit delivery is attached to that append with `ctx.waitUntil`, a
+ * delivery back to the caller closes a cycle: caller waits for append, append
+ * waits for delivery, and delivery waits for caller. Outside an alarm turn we
+ * therefore retain only the short `setAlarm(now)` operation. The alarm starts
+ * a fresh invocation, re-derives owed work from durable cursors, and may then
+ * retain the delivery attempt without holding any append caller open.
+ *
+ * The work closure is deliberately NOT remembered between turns. Its durable
+ * representation is the subscription cursor lag; `onAlarm()` reconciles that
+ * state and supplies a fresh closure even after isolate eviction.
+ */
+type StreamDeliveryAlarmBoundaryHooks = {
+  armAlarm(atMs: number): void;
+  now(): number;
+  waitUntil(work: Promise<unknown>): void;
+};
+
+type StreamAlarmStorage = {
+  setAlarm(atMs: number): Promise<void>;
+};
+
+/**
+ * Issues the native alarm write in the same synchronous storage turn as the
+ * cursor/event write that made delivery necessary. Durable Object output
+ * gates make that load-bearing: a failed setAlarm resets the object and
+ * suppresses its outgoing response, so cursor lag cannot commit as an
+ * acknowledged success without its wakeup.
+ *
+ * Do not add a getAlarm/await before setAlarm. Multiple writes made without
+ * an intervening await coalesce into one implicit transaction. A fresh Stream
+ * incarnation appends `woken`, so its first useful arm is immediate and may
+ * safely replace an inherited later alarm.
+ *
+ * https://developers.cloudflare.com/durable-objects/reference/glossary/#output-gate
+ * https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#understand-how-input-and-output-gates-work
+ */
+export class StreamAlarmArmer {
+  readonly #storage: StreamAlarmStorage;
+  #armedForMs: number | null = null;
+
+  constructor(storage: StreamAlarmStorage) {
+    this.#storage = storage;
+  }
+
+  armNoLaterThan(atMs: number): void {
+    const previous = this.#armedForMs;
+    if (previous !== null && previous <= atMs) return;
+    this.#armedForMs = atMs;
+    try {
+      // Deliberately not awaited or caught: the native output gate owns the
+      // write and turns an asynchronous failure into an invocation failure.
+      void this.#storage.setAlarm(atMs);
+    } catch (cause) {
+      this.#armedForMs = previous;
+      throw new Error("stream alarm arming failed", { cause });
+    }
+  }
+
+  markFired(): void {
+    this.#armedForMs = null;
+  }
+}
+
+export class StreamDeliveryAlarmBoundary {
+  readonly #hooks: StreamDeliveryAlarmBoundaryHooks;
+  #inAlarmTurn = false;
+
+  constructor(hooks: StreamDeliveryAlarmBoundaryHooks) {
+    this.#hooks = hooks;
+  }
+
+  scheduleOrRun(work: () => Promise<unknown>): void {
+    if (this.#inAlarmTurn) {
+      this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
+      return;
+    }
+    // setAlarm is itself an output-gated storage write. Issue it directly in
+    // this append turn: wrapping it in a settling waitUntil would cross the
+    // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#hooks.armAlarm(this.#hooks.now());
+  }
+
+  runAlarmTurn(work: () => void): void {
+    const wasInAlarmTurn = this.#inAlarmTurn;
+    this.#inAlarmTurn = true;
+    try {
+      work();
+    } finally {
+      this.#inAlarmTurn = wasInAlarmTurn;
+    }
+  }
+}
 
 /**
  * The subscription key of the birth-certificate worker feed every
@@ -74,6 +213,8 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  * that touch SQLite/KV must remain synchronous.
  */
 export class StreamDurableObject extends DurableObject<Env> {
+  #liveState!: LiveState<StreamRuntimeDebugState>;
+  #liveStateRefreshScheduled = false;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
@@ -81,9 +222,17 @@ export class StreamDurableObject extends DurableObject<Env> {
    * because the core-state rebuild path also reconciles these rows against
    * the freshly folded config — see #readCoreProcessorState.
    */
-  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql);
+  readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
+    onMutation: () => this.#refreshLiveState(),
+  });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
+  readonly #alarmArmer = new StreamAlarmArmer(this.ctx.storage);
+  readonly #deliveryAlarmBoundary = new StreamDeliveryAlarmBoundary({
+    armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+    now: () => Date.now(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #subscribers = new StreamSubscribers({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
@@ -106,6 +255,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       dial: createSubscriberDial({
         projectId: this.name.projectId,
         exports: this.ctx.exports,
+        createAuthorityRoot: () => this.#createSubscriberAuthorityRoot(),
         onDurableDeliveryError: (subscriptionKey, error) =>
           this.#subscribers.onDurableDeliveryError(subscriptionKey, error),
       }),
@@ -116,21 +266,45 @@ export class StreamDurableObject extends DurableObject<Env> {
         try {
           this.append(event);
         } catch (error) {
+          if (isDurableObjectLifecycleError(error)) {
+            console.info("stream delivery fact append interrupted by durable object lifecycle", {
+              message: error instanceof Error ? error.message : String(error),
+              type: event.type,
+            });
+            return;
+          }
           console.error("stream delivery fact append failed", { type: event.type, error });
         }
       },
-      recordEgress: (count, bytes) => this.#metrics.egress.bump(Date.now(), count, bytes),
+      recordEgress: (count, bytes) => {
+        this.#metrics.egress.bump(Date.now(), count, bytes);
+        this.#refreshLiveState();
+      },
+      runtimeChanged: () => this.#refreshLiveState(),
       now: () => Date.now(),
       random: () => Math.random(),
-      armAlarm: (atMs) => void this.#armAlarmNoLaterThan(atMs),
+      armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
     },
   });
   #coreProcessorState: CoreProcessorState;
 
+  /**
+   * Creates a fresh in-isolate root for one stream delivery evaluation. It
+   * carries narrowly branded delivery auth and owns no Workers RPC lifetime.
+   */
+  #createSubscriberAuthorityRoot(): unknown {
+    const auth = streamDeliveryAuthContext();
+    return this.name.projectId === null
+      ? deploymentItxForInternal({ auth, ctx: this.ctx })
+      : itxForScope({ auth, ctx: this.ctx, path: "/", projectId: this.name.projectId });
+  }
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.#coreProcessorState = this.#readCoreProcessorState();
+    this.#liveState = new LiveState(this.#readRuntimeState());
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
@@ -145,7 +319,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         type: "events.iterate.com/stream/created",
         payload: { projectId: this.name.projectId, path: this.name.path },
       });
-      if (this.name.projectId !== null) {
+      // The standalone streams playground reuses this DO without hosting a
+      // project worker. Do not invent a fake subscriber there: OS's PROJECT
+      // binding is the capability that makes this feed real.
+      if (this.name.projectId !== null && "PROJECT" in this.env) {
         this.append({
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
@@ -159,9 +336,9 @@ export class StreamDurableObject extends DurableObject<Env> {
             onPoison: "skip",
           } satisfies SubscriptionConfiguredPayload,
         });
-        // The standalone streams playground reuses this DO without OS's
-        // PostHog credential or receiver. Deployed OS environments require
-        // the credential, so its presence is the deployment boundary.
+        // The standalone streams playground also has no PostHog credential or
+        // receiver. Deployed OS environments require the credential, so its
+        // presence is the integration boundary.
         if ("APP_CONFIG_POSTHOG" in this.env) this.append(posthogSubscriptionEvent());
       }
     }
@@ -173,32 +350,14 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
   alarm(): void {
-    this.#alarmArmedForMs = null;
+    this.#alarmArmer.markFired();
     // The constructor's `woken` append already ran `#subscribers.wake()` via
     // post-commit fan-out; this call re-arms the alarm for the next due retry
     // (wake() itself only attempts rows whose backoff has elapsed).
-    this.#subscribers.onAlarm();
-    this.#flushCoreProcessorState();
-  }
-
-  /**
-   * The earliest alarm time armed this incarnation, tracked in memory so two
-   * concurrent arms can't race each other through the async getAlarm/setAlarm
-   * pair (both observing null and the LATER one winning). Reset when the
-   * alarm fires; a stale-low value merely re-arms an already-set time.
-   */
-  #alarmArmedForMs: number | null = null;
-
-  /** Move the DO alarm earlier, never later (many rows share one alarm). */
-  async #armAlarmNoLaterThan(atMs: number): Promise<void> {
-    if (this.#alarmArmedForMs !== null && this.#alarmArmedForMs <= atMs) return;
-    this.#alarmArmedForMs = atMs;
-    try {
-      const current = await this.ctx.storage.getAlarm();
-      if (current === null || atMs < current) await this.ctx.storage.setAlarm(atMs);
-    } catch (error) {
-      console.error("stream alarm arming failed", error);
-    }
+    this.#deliveryAlarmBoundary.runAlarmTurn(() => {
+      this.#subscribers.onAlarm();
+      this.#flushCoreProcessorState();
+    });
   }
 
   // ===========================================================================
@@ -309,6 +468,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.length,
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
+    this.#refreshLiveState();
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -324,10 +484,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       newEvents.map((event, index) => ({ event, byteLength: byteLengths[index]! })),
     );
 
-    // Re-arm (or clear) the idle timer against the post-append connection set,
+    // Re-arm (or clear) idle teardown against the post-append connection set,
     // so a stream that just went quiet sheds its durable delivery sessions
-    // and lets both DOs hibernate.
-    this.#subscribers.armOrClearIdleTimer();
+    // and lets both DOs hibernate. This uses the native DO alarm, never an
+    // actor setTimeout that would retain the current JS-RPC invocation.
+    this.#subscribers.armOrClearIdleAlarm();
 
     return events;
   }
@@ -379,6 +540,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   /** The committed head used to pin a recoverable public wait's replay cursor. */
   getMaxOffset(): number {
     return this.#coreProcessorState.maxOffset;
+  }
+
+  /**
+   * Both heads in one read, for exact-offset CAS appends that also need a
+   * fold barrier: `maxOffset` is the raw assignable head (ephemeral rows hold
+   * offsets too — the CAS target), while `maxDurableOffset` is the tail a
+   * default catch-up can actually fold through — the only head a
+   * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
+   * ephemeral suffix that processor reads never see.
+   */
+  getHeadOffsets(): { maxDurableOffset: number; maxOffset: number } {
+    return {
+      maxDurableOffset: this.#log.highestDurableOffset(),
+      maxOffset: this.#coreProcessorState.maxOffset,
+    };
   }
 
   // ===========================================================================
@@ -456,7 +632,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-parked":
         return;
       default:
-        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
+        throw new Error(
+          `${STREAM_PAUSED_ERROR_PREFIX}${args.state.pauseReason ?? "unknown reason"}`,
+        );
     }
   }
 
@@ -893,17 +1071,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
-    let promise: Promise<unknown>;
-    try {
-      promise = work();
-    } catch (error) {
-      console.error("stream core background work failed", error);
-      return;
-    }
-    this.ctx.waitUntil(promise);
-    void promise.catch((error: unknown) => {
-      console.error("stream core background work failed", error);
-    });
+    this.ctx.waitUntil(settleStreamCoreBackgroundWork(work));
   }
 
   // ===========================================================================
@@ -1238,20 +1406,39 @@ export class StreamDurableObject extends DurableObject<Env> {
     return this.#subscribers.getProcessorRuntimeState(args.subscriptionKey);
   }
 
-  runtimeState(): {
-    coreProcessorState: CoreProcessorState;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  } {
+  runtimeState(): StreamRuntimeDebugState {
     // Observer-driven RTT sampling: being asked for runtime state IS the
     // signal someone is watching. The round runs in the background (this
-    // method is synchronous); the caller's next poll reads the samples.
+    // method is synchronous); a later read or live update carries the sample.
     this.#subscribers.samplePingsSoon();
+    return this.#readRuntimeState();
+  }
+
+  /** Push-driven twin of `runtimeState()` for polling-free debug surfaces. */
+  get liveState(): LiveStateRpcTarget<StreamRuntimeDebugState> {
+    return new LiveStateRpcTarget({
+      live: this.#liveState,
+      loadAndRefreshLive: () => {
+        this.#subscribers.samplePingsSoon();
+        this.#liveState.setState(this.#readRuntimeState());
+      },
+    });
+  }
+
+  /** Materialize at most once per mutation burst, and only while observed. */
+  #refreshLiveState(): void {
+    // Cursor reconciliation can reach this before the constructor assigns
+    // #liveState; the optional read is therefore intentional.
+    const liveState = this.#liveState;
+    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
+    this.#liveStateRefreshScheduled = true;
+    queueMicrotask(() => {
+      this.#liveStateRefreshScheduled = false;
+      if (liveState.observed) liveState.setState(this.#readRuntimeState());
+    });
+  }
+
+  #readRuntimeState(): StreamRuntimeDebugState {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
@@ -1294,39 +1481,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 /** Idempotency deduplicates one logical event, not arbitrary writes sharing a
  * key. Provenance is deliberately excluded: a processor may retry the same
  * logical output after a deploy changes its source-version stamp. */
-function sameIdempotentEvent(existing: StreamEvent, requested: StreamEventInput): boolean {
-  return (
-    existing.type === requested.type &&
-    jsonValuesEqual(existing.payload, requested.payload) &&
-    jsonValuesEqual(existing.metadata, requested.metadata) &&
-    existing.ephemeral === requested.ephemeral
-  );
-}
-
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => jsonValuesEqual(value, right[index]))
-    );
-  }
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
-    return false;
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord);
-  return (
-    leftKeys.length === Object.keys(rightRecord).length &&
-    leftKeys.every(
-      (key) =>
-        Object.hasOwn(rightRecord, key) && jsonValuesEqual(leftRecord[key], rightRecord[key]),
-    )
-  );
-}
 
 /**
  * What `append` accepts over the wire: a public event input plus the optional

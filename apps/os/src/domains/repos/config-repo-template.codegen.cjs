@@ -26,16 +26,31 @@ exports.projectRepoTemplateFiles = ({ meta }) => {
     content: fs.readFileSync(path.join(templateDir, relativePath), "utf8"),
     path: relativePath,
   }));
+  // Template files may themselves contain codegen markers (sdk.ts is
+  // synced by one). Left verbatim inside this file's generated block they
+  // would read as the block's own delimiters, so the marker word is
+  // emitted as a unicode escape — same string value, different source
+  // text.
+  const quote = (value) => JSON.stringify(value).replaceAll("codegen:", "\\u0063odegen:");
   return [
     "export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }> = [",
-    ...entries.map((entry) => {
-      // Template files may themselves contain codegen markers (sdk.ts is
-      // synced by one). Left verbatim inside this file's generated block they
-      // would read as the block's own delimiters, so the marker word is
-      // emitted as a unicode escape — same string value, different source
-      // text.
-      const content = JSON.stringify(entry.content).replaceAll("codegen:", "\\u0063odegen:");
-      return `  { path: ${JSON.stringify(entry.path)}, content: ${content} },`;
+    ...entries.flatMap((entry) => {
+      // One emitted line per template source line (each segment keeps its
+      // trailing \n), so git merges this file exactly when it merges the
+      // template folder. A whole file per line meant any two branches
+      // touching the same template file conflicted here even though their
+      // source edits merged cleanly.
+      const segments = entry.content.split(/(?<=\n)/);
+      return [
+        "  {",
+        `    path: ${quote(entry.path)},`,
+        "    content:",
+        ...segments.map(
+          (segment, index) =>
+            `      ${quote(segment)}${index === segments.length - 1 ? "," : " +"}`,
+        ),
+        "  },",
+      ];
     }),
     "];",
   ].join("\n");

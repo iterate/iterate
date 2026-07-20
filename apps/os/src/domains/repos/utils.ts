@@ -9,15 +9,7 @@ type RepoArtifactNameParts = {
 const SEPARATOR = "--";
 const GLOBAL_REPO_ARTIFACT_PROJECT_ID = "global";
 
-/**
- * The project's config repo — an ordinary repo at an ordinary `/repos/*`
- * path, seeded during project bootstrap and the source the default project
- * worker builds from. Keeping the path here lets project creation, project
- * processors, and worker refs share the same address instead of each baking
- * in their own literal. Its events reach the project stream `/` through the
- * `cross-post:/` subscription the bootstrap saga arms on this repo's stream.
- */
-export const CONFIG_REPO_PATH = "/repos/config";
+import { CONFIG_REPO_PATH } from "./paths.ts";
 
 /**
  * The default project worker's build entry point. This shared filename keeps
@@ -27,12 +19,24 @@ export const CONFIG_REPO_PATH = "/repos/config";
 const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
 
 /**
- * Default masks for the default project worker's repo file source: build from
- * the whole repo, minus version control and generated/installed output. The
+ * Default masks for EVERY repo-backed worker file source: build from the
+ * whole repo, minus version control and generated/installed output. The
  * bundler only pulls modules reachable from the entry point, so a broad
  * include keeps user-added helper files importable without ref changes.
+ *
+ * Applied by the resolver whenever a repo source omits `exclude`
+ * (worker-loader.ts resolveFileSource), so a bare `{ type: "repo", repoPath }`
+ * ref — the template's app refs, most userland refs — and the canonical
+ * {@link defaultProjectWorkerRef} hash to the SAME build key and share one
+ * artifact (the deploy-time template seed included). A ref that genuinely
+ * wants those directories passes `exclude: []`.
  */
-const PROJECT_WORKER_SOURCE_EXCLUDE = [".git/**", "node_modules/**", "dist/**", "build/**"];
+export const DEFAULT_REPO_WORKER_SOURCE_EXCLUDE = [
+  ".git/**",
+  "node_modules/**",
+  "dist/**",
+  "build/**",
+];
 
 /**
  * THE canonical ref for a project's default worker: the seeded config repo,
@@ -46,7 +50,7 @@ export function defaultProjectWorkerRef(): StatelessDynamicWorkerRef {
     path: "/",
     source: {
       files: {
-        exclude: PROJECT_WORKER_SOURCE_EXCLUDE,
+        exclude: DEFAULT_REPO_WORKER_SOURCE_EXCLUDE,
         repoPath: CONFIG_REPO_PATH,
         type: "repo",
       },
@@ -70,8 +74,39 @@ export class RepoNotSeededError extends Error {
   override readonly name = RepoNotSeededError.NAME;
 }
 
+const ARTIFACTS_REPO_NOT_READY_CODES = new Set([
+  "NOT_FOUND",
+  "IMPORT_IN_PROGRESS",
+  "FORK_IN_PROGRESS",
+]);
+// The binding exposes both forms; 10200/10302/10303 are the documented
+// numericCode values for the three string codes above.
+const ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES = new Set([10200, 10302, 10303]);
+// Workers RPC can strip ArtifactsError's own code properties. Keep the
+// fallback specific to the service's retryable repository-lifecycle wording.
+const ARTIFACTS_REPO_NOT_READY_MESSAGE =
+  /^Repository "[^"]+" is currently being (?:created|imported|forked)\. The repository is not yet available\. Retry after \d+ seconds\.$/;
+
+function isArtifactsRepoNotReadyError(error: unknown) {
+  if (typeof error !== "object" || error === null) return false;
+  const code = "code" in error ? error.code : undefined;
+  const message = "message" in error ? error.message : undefined;
+  const name = "name" in error ? error.name : undefined;
+  const numericCode = "numericCode" in error ? error.numericCode : undefined;
+  return (
+    (typeof code === "string" && ARTIFACTS_REPO_NOT_READY_CODES.has(code)) ||
+    (name === "ArtifactsError" &&
+      ((typeof numericCode === "number" &&
+        ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES.has(numericCode)) ||
+        (typeof message === "string" && ARTIFACTS_REPO_NOT_READY_MESSAGE.test(message))))
+  );
+}
+
 export function isRepoNotSeededError(error: unknown): boolean {
-  return (error as { name?: string } | null)?.name === RepoNotSeededError.NAME;
+  return (
+    (error as { name?: string } | null)?.name === RepoNotSeededError.NAME ||
+    isArtifactsRepoNotReadyError(error)
+  );
 }
 
 /**
@@ -80,9 +115,10 @@ export function isRepoNotSeededError(error: unknown): boolean {
  * ref (an empty Artifacts remote answers HEAD with a branch that has no
  * commits, observed as either "Could not find refs/heads/master" or "Could
  * not find main" depending on whether isomorphic-git resolves HEAD or an
- * explicitly requested branch), or the Artifacts repo itself missing
- * (`NOT_FOUND` — created lazily by the bootstrap saga). Anything else returns
- * unchanged.
+ * explicitly requested branch), or the Artifacts repo itself missing or not
+ * materialized yet (`NOT_FOUND`, `IMPORT_IN_PROGRESS`, or
+ * `FORK_IN_PROGRESS` — created lazily by the bootstrap saga). Anything else
+ * returns unchanged.
  */
 export function classifyRepoAccessError(error: unknown, branch?: string): unknown {
   const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
@@ -91,7 +127,7 @@ export function classifyRepoAccessError(error: unknown, branch?: string): unknow
     typeof message === "string" &&
     (message === `Could not find ${branch}.` || message === `Could not find ${branch}`);
   const notSeeded =
-    code === "NOT_FOUND" ||
+    isArtifactsRepoNotReadyError(error) ||
     (code === "NotFoundError" &&
       typeof message === "string" &&
       (message.includes("refs/") || missingRequestedBranch));

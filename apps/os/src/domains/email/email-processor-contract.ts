@@ -5,7 +5,7 @@
 // agent context (the `email-agent` processor on the routed stream does that).
 
 import { z } from "zod";
-import { defineProcessorContract } from "../streams/processor-contracts.ts";
+import { defineProcessorContract } from "iterate/processors";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
@@ -176,6 +176,8 @@ export const EmailProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract, CapabilityHostProcessorContract, CoreProcessorContract],
   emits: [
     "events.iterate.com/agent/created",
+    "events.iterate.com/agent/binding-set",
+    "events.iterate.com/agent/configured",
     "events.iterate.com/agents/context-added",
     "events.iterate.com/capability-host/created",
     "events.iterate.com/capability-host/capability-provided",

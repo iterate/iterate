@@ -133,7 +133,7 @@ export async function invokePreferringFlattenedPath({
 // drift in a workerd upgrade fails loudly: the itx e2e "…dynamic worker refs
 // compose" test commits a plain entrypoint worker whose calls only succeed
 // through this fallback.
-function isMissingInvokeCapabilityError(error: unknown): boolean {
+export function isMissingInvokeCapabilityError(error: unknown): boolean {
   if (error instanceof TypeError) {
     return error.message.includes('does not implement the method "invokeCapability"');
   }

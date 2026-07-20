@@ -103,19 +103,21 @@ export default defineConfig({
     // its own project against a deployed slot, so FILES are independent.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // 6 workers × maxConcurrency 2 = peak ~12 concurrent tests. History of
+    // 4 workers × maxConcurrency 2 = peak ~8 concurrent tests. History of
     // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
     // (DO-storage timeouts), 4×3 = ~12 still produced rotating
     // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
-    // while. Since then the slot got materially cheaper per test (#1601
-    // cold creates, #1801 eviction recovery, #1806 drain collapse, #1808
-    // agent processor consolidation), the onboarding smoke pre-warms the
-    // create path before the fan-out, and the lane's 634 test-seconds at
-    // peak 8 left the 8-core Depot box mostly idle at ~186s wall. Peak 12
-    // via FILE parallelism (safer than intra-file per
-    // tasks/raise-e2e-maxconcurrency.md) measured green — revalidate with a
-    // preview-e2e-marathon dispatch when touching either knob.
-    maxWorkers: 6,
+    // while. A later peak-12 revalidation looked green, but the agent-presence
+    // preview lane (2026-07-17) exposed three Cloudflare Durable Object storage
+    // resets during concurrent project births; one was hidden by the suite's
+    // single retry and two recovered inside the birth saga. Re-running the
+    // complete runnable catalogue at peak 8 with retries disabled produced
+    // zero storage resets in the matching trace window. The preview runner
+    // now keeps this peak from overlapping Playwright's eight workers; that
+    // omitted lane-wide load had still produced project-processor timeouts.
+    // Keep this at 4 unless a preview marathon plus trace audit proves a
+    // higher setting clean.
+    maxWorkers: 4,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: 2,
     passWithNoTests: true,

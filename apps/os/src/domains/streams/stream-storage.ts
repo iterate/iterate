@@ -21,8 +21,8 @@
 // persists the batch in one await-free turn.
 
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
-import type { StreamEvent } from "./schemas.ts";
-import { StreamEvent as StreamEventSchema } from "./schemas.ts";
+import type { StreamEvent } from "iterate/processors";
+import { StreamEvent as StreamEventSchema } from "iterate/processors";
 
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
@@ -78,6 +78,19 @@ export class StreamEventLog {
     return (
       this.sql
         .exec<{ offset: number | null }>("select max(offset) as offset from events")
+        .toArray()[0]?.offset ?? 0
+    );
+  }
+
+  /** The highest DURABLE offset — the tail a default (ephemeral-excluding)
+   * catch-up read can actually reach, and so the only head a fold barrier
+   * may wait for. Robust against a future ephemeral-row eviction sweep. */
+  highestDurableOffset(): number {
+    return (
+      this.sql
+        .exec<{
+          offset: number | null;
+        }>("select max(offset) as offset from events where ephemeral = 0")
         .toArray()[0]?.offset ?? 0
     );
   }
@@ -452,8 +465,10 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   #db: ReturnType<
     typeof SqliteSubscriptionCursorStore.db<ReturnType<typeof createDurableObjectClient>>
   >;
+  readonly #onMutation: () => void;
 
-  constructor(sql: SqlStorage) {
+  constructor(sql: SqlStorage, options: { onMutation?: () => void } = {}) {
+    this.#onMutation = options.onMutation ?? (() => undefined);
     // {sql} without transactionSync: this store only holds SqlStorage. That
     // forgoes sqlfu's per-migration transaction, which is fine here — the
     // constructor is await-free, and Durable Object SQLite commits all writes
@@ -487,6 +502,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       epoch: this.#nextEpoch(),
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   ack(subscriptionKey: string, ackedOffset: number, epoch?: number): void {
@@ -496,6 +512,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     } else {
       this.#db.ackFenced({ ...params, epoch });
     }
+    this.#onMutation();
   }
 
   advanceWatermark(subscriptionKey: string, ackedOffset: number): void {
@@ -504,6 +521,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       ackedOffset,
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   nack(
@@ -518,6 +536,7 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       error: args.error.slice(0, 2_000),
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   setCursor(subscriptionKey: string, ackedOffset: number): void {
@@ -527,10 +546,12 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       epoch: this.#nextEpoch(),
       updatedAt: new Date().toISOString(),
     });
+    this.#onMutation();
   }
 
   delete(subscriptionKey: string): void {
     this.#db.delete({ subscriptionKey });
+    this.#onMutation();
   }
 
   minNextAttemptAt(): number | null {

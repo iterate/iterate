@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./schemas.ts";
 import { isWorkerBuildFailedError } from "./artifact-store.ts";
@@ -78,14 +79,28 @@ export function workerBuildingResponse(): Response {
 
 /**
  * The fetch lane's one error classifier: named build-lifecycle errors become
- * their stand-in pages (they cannot cross a fetch hop the way they cross
- * RPC), anything else is the caller's to rethrow. Every fetch-lane hop —
- * ingress, ItxEntrypoint, the stateful worker DO — answers through this so a
- * new serve-side state is added in exactly one place.
+ * their stand-in pages and a modeled observability outcome (they cannot cross
+ * a fetch hop the way they cross RPC), anything else is the caller's to
+ * rethrow. Every fetch-lane hop — ingress, ItxEntrypoint, the stateful worker
+ * DO — answers through this so a new serve-side state is added in exactly one
+ * place.
  */
-export function workerBuildStatusResponse(error: unknown): Response | null {
-  if (isWorkerBuildInProgressError(error)) return workerBuildingResponse();
-  if (isWorkerBuildFailedError(error)) return workerBuildFailedResponse(error);
+export function workerBuildStatus(
+  error: unknown,
+): { outcome: "worker_build_failed" | "worker_building"; response: Response } | null {
+  // RepoNotSeededError: a browser can reach a project host inside the
+  // project's BIRTH window — the config repo's stream exists before its seed
+  // commit lands (../repos/utils.ts), so the source resolve answers "not
+  // seeded YET, retry". That is the building page's exact contract (poll,
+  // self-heal into the app); letting it escape crashed the worker with a
+  // Cloudflare 1101 on a fresh project's first app request (observed live on
+  // preview e2e, 2026-07-17).
+  if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
+    return { outcome: "worker_building", response: workerBuildingResponse() };
+  }
+  if (isWorkerBuildFailedError(error)) {
+    return { outcome: "worker_build_failed", response: workerBuildFailedResponse(error) };
+  }
   return null;
 }
 

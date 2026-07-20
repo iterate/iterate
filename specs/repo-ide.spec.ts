@@ -1,5 +1,7 @@
+import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * The repos mini IDE golden path: a repo page is a small vscode — pierre file
@@ -24,7 +26,7 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   // Open a seeded file from the tree (pierre renders rows in a shadow root;
   // playwright locators pierce it — target the exact path, the template also
   // ships an integrations/waitrose/README.md) and edit it.
-  await page.locator('[data-item-path="README.md"]').click();
+  await openRepoTreeFile(page, "README.md");
   await page.locator(".cm-content").click();
   // Select-all + ArrowRight parks the cursor at the end of the document on
   // every platform (Cmd/Ctrl+End bindings differ between mac and linux).
@@ -71,4 +73,46 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   // Only the unstaged edit remains: Commit widens back to "everything".
   await page.getByRole("button", { name: /^Commit 1$/ }).waitFor();
   await page.getByRole("button", { name: "README.md" }).waitFor();
+});
+
+test("discarding a new file confirms before permanently removing it", async ({
+  helpers,
+  page,
+  baseURL,
+}) => {
+  await using fixture = await helpers.createFixture("repo-ide-discard");
+
+  using itx = await connectAdminItx(baseURL!);
+  using project = itx.projects.get(fixture.project.id);
+  await project.repos.create({ path: "/repos/ide" });
+
+  await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
+  page.videoMode?.setStartTime();
+
+  await page.getByTitle("New file").click();
+  await page.locator("[data-item-rename-input]").fill("draft.md");
+  await page.locator("[data-item-rename-input]").press("Enter");
+  await page.locator(".cm-content").click();
+  await page.keyboard.type("Content that has never been committed.");
+
+  await page.getByRole("button", { name: "Source control" }).click();
+  const discard = page.getByRole("button", { name: "Discard", exact: true });
+
+  const cancelDialogPromise = page.waitForEvent("dialog");
+  const cancelClickPromise = discard.click();
+  const cancelDialog = await cancelDialogPromise;
+  expect(cancelDialog.message()).toBe("Are you sure? You may not be able to recover this file");
+  await cancelDialog.dismiss();
+  await cancelClickPromise;
+  await page.getByText("Content that has never been committed.").waitFor();
+
+  const acceptDialogPromise = page.waitForEvent("dialog");
+  const acceptClickPromise = discard.click();
+  const acceptDialog = await acceptDialogPromise;
+  expect(acceptDialog.message()).toBe("Are you sure? You may not be able to recover this file");
+  await acceptDialog.accept();
+  await acceptClickPromise;
+
+  await page.getByText("No changes.").waitFor();
+  expect(new URL(page.url()).searchParams.get("file")).toBeNull();
 });

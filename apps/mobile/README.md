@@ -7,22 +7,45 @@ app shares — push, widgets) graft on later.
 
 ## Run it on your phone
 
-v1 is a plain Expo Go app — no custom native modules, no Xcode, no Apple
-Developer account:
+Iterate uses its own development client so phone development exercises the
+same bundle identity, app scheme, Keychain, Face ID, and APNs entitlement as
+the native app. Expo Go is not a supported runtime.
 
-1. Install **Expo Go** from the App Store.
-2. `pnpm --dir apps/mobile start` (repo root) and scan the QR code.
+Building for a physical iPhone requires an Expo login, a paid Apple Developer
+membership, and that phone's registered UDID:
 
-Day-to-day JS changes hot-reload through Metro. (A dev-client/native build
-only becomes necessary when a native module lands — e.g. push notifications.)
+```sh
+pnpm --dir apps/mobile dlx eas-cli@21.0.1 login
+pnpm --dir apps/mobile dlx eas-cli@21.0.1 device:create
+pnpm --dir apps/mobile build:development:ios
+pnpm --dir apps/mobile start
+```
 
-**The Expo SDK is deliberately pinned to 54**, not latest: the App Store's
-Expo Go (54.0.2, unchanged since 2025-09) only runs SDK 54 projects — newer
-SDKs error with "Project is incompatible with this version of Expo Go".
-Before bumping `expo`, check what the store actually ships
-(`curl -s "https://itunes.apple.com/lookup?bundleId=host.exp.Exponent" | jq -r '.results[0].version'`);
-if it's still 54.x, a bump means abandoning Expo Go for dev builds (EAS or
-local Xcode).
+Use `build:simulator:ios` for an EAS simulator binary or `build:preview:ios`
+for a production-like internal build without the development launcher. EAS
+performs the native build in the cloud, so local Xcode is not required. After
+installing a development build, enable iOS Developer Mode and use the normal
+`start` command for Metro. Day-to-day JavaScript changes then hot-reload into
+that installed client.
+
+When `apps/mobile/package.json` gains a native module, the already-installed
+client cannot load it from Metro. Build and install a new development client
+before testing that change. The repo workspace's native Markdown renderer is
+one such module; a client built before it landed will fail when opening chat or
+a Markdown preview.
+
+This repository does not contain Apple or Expo credentials. The first signed
+physical-device development build completed through the linked
+`@mishanustom/iterate` EAS project on 2026-07-17; subsequent builds reuse its
+EAS-managed Apple credentials and registered devices. Install a build from its
+EAS dashboard link on a provisioned phone before starting Metro.
+
+The `development` build is ad-hoc internal distribution: only provisioned
+devices can install it, and it contains the development launcher. `preview`
+is the production-like internal lane without that launcher. TestFlight and App
+Store releases use the `production` profile, store distribution signing, and a
+separate EAS Submit/App Store Connect step; a successful development build is
+not silently treated as a releasable binary.
 
 ## Run and test it in a browser
 
@@ -46,9 +69,9 @@ specs.
 
 This is a fast browser-test lane, not an iOS emulator:
 platform-native behavior such as the in-app OAuth handoff, Keychain, Face ID,
-and push notifications still needs Expo Go or a native build. Authenticated
-project/chat fixtures are follow-up work; this first lane stays deterministic
-and credential-free at the signed-out entry point.
+and push notifications still needs the Iterate development build.
+Authenticated project/chat fixtures are follow-up work; this first lane stays
+deterministic and credential-free at the signed-out entry point.
 
 ## Pointing it at a deployment
 
@@ -77,7 +100,22 @@ mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
 `/agents` catalogue, so web/Slack-started chats open and continue here too.
 The thread screen renders only visible messages plus a "working…" row derived
 from in-flight activity (`src/lib/chat.ts`); a live stream subscription pushes
-updates into the query cache (`src/lib/live-thread.ts`).
+updates into the query cache (`src/lib/live-thread.ts`). Assistant messages are
+rendered as selectable Markdown; user messages remain literal text.
+
+## Editing repositories
+
+`/repos` is the first project destination in the drawer. It lists the repos
+exposed by `project.repos`, with `/repos/config` first, and opens a native file
+workspace backed by `Repo.listFiles()`, `readFile()`, and `commitFiles()`.
+Edits, new files, and deletes stay in a local working tree until they are
+committed together. If the remote head changes while local edits exist, commit
+is blocked until the user deliberately reloads.
+
+Markdown files have Preview and Source modes. Preview and assistant chat use
+`react-native-enriched-markdown`; Source uses the bundled CodeMirror editor and
+is canonical. The rich Markdown input is intentionally not used because it
+cannot losslessly represent every repo Markdown block construct.
 
 ## Approving held requests
 
@@ -91,8 +129,8 @@ the private half in the Keychain behind Face ID (`expo-secure-store`'s
 `packages/iterate/src/approval-keys.ts` already uses for CI/non-Mac
 machines, not a fake — every grant is a real signature the platform
 verifies, just without Secure Enclave hardware isolation. See
-`tasks/mobile-approver-upgrades.md` for the gap and what closing it needs
-(all three items require leaving Expo Go for a dev build).
+`tasks/mobile-native-followups.md` for the remaining gap and what closing it
+needs (these capabilities require the native development build).
 
 ## Running examples
 
@@ -105,7 +143,7 @@ whose `runtimes` includes `"run-script"`. Tap Run and it executes via
 server-side script isolate agents use — and shows the JSON result inline.
 Exists so testing a platform feature never needs a laptop CLI step first:
 every mobile feature here is built by agents, so it needs to be fully
-testable from the phone alone. See `tasks/mobile-examples-runner.md`.
+testable from the phone alone. The runner shipped in PR #2059.
 
 ## Verification
 
@@ -115,20 +153,21 @@ testable from the phone alone. See `tasks/mobile-examples-runner.md`.
 | `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                                       |
 | `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip from Node through the app's own dial: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
 | `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                                           |
-| Expo Go on a phone                                            | Native integration: the in-app browser OAuth hop, Keychain/Face ID, and device-specific behavior                                                                                                                                |
+| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                                               |
 
 ## Layout
 
-| Path                       | What                                                                                    |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
-| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
-| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                    |
-| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                           |
-| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
-| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
-| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
-| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
-| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread → approvals → examples     |
+| Path                           | What                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `src/lib/itx-core.ts`          | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
+| `src/lib/auth.ts`              | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
+| `src/lib/chat.ts`              | Pure: stream events → bubbles + working flag; agent path conventions                    |
+| `src/lib/live-thread.ts`       | Live subscription per thread feeding the tanstack-query cache                           |
+| `src/lib/repo-working-tree.ts` | Local source-preserving edits and explicit batch commit state                           |
+| `src/lib/approver-core.ts`     | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
+| `src/lib/approver.ts`          | Face-ID-gated Keychain storage binding for approver-core.ts                             |
+| `src/lib/approvals.ts`         | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
+| `src/lib/examples.ts`          | Filters the shared itx example catalogue to phone-runnable entries                      |
+| `src/app/`                     | expo-router screens: sign-in → projects → chat list → thread, approvals, examples       |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.

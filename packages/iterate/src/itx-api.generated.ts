@@ -81,6 +81,22 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
+   * Canonical identity from the project directory: id, slug (the auth
+   * worker's normalized form — what URLs and ingress hostnames use),
+   * organization, and display name. A directory read only — no project DO
+   * dial — so it is safe pre-birth and cheap to pipeline through
+   * `projects.create()`.
+   */
+  identity(): Promise<ProjectIdentity>;
+  /**
+   * Resolve once the bootstrap saga has committed `project/ready`. Replays
+   * stream history first, so an already-ready project resolves immediately,
+   * and dialing the processor here heals a lost birth wake rather than just
+   * observing. The composable partner of
+   * `projects.create({ waitUntilReady: false })`.
+   */
+  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
+  /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
    * capability (built-ins + dynamic mounts), the children map, and the
    * `Project` declaration in `types` (the full surface is one
@@ -134,7 +150,7 @@ export interface Project {
   /** The docs door: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
-   * overlap. For project CONTENT and history, see itx.search. */
+   * overlap. */
   docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
@@ -150,11 +166,11 @@ export interface Project {
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
+  /** Enrolled phone installations and their durable notification journals. */
+  devices: DeviceCollection;
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
-  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
-  search: Search;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
   /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
@@ -165,7 +181,7 @@ export interface Project {
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
-  /** Path-addressed durable workspaces (`itx.workspaces.get(path)`). */
+  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
    * Platform dispatch point: streams deliver committed event batches here
@@ -213,15 +229,18 @@ export interface ProjectCollection {
   get(idOrSlug: string): Promise<Project>;
   /**
    * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — convenient for scripts
-   * and tests that use the project immediately. Pass
-   * `waitUntilReady: false` to resolve once the `project/created` birth
-   * certificate has been processed
-   * (identity registered, directory primed, bootstrap events appended): the
-   * saga then runs behind the returned handle, and its progress is ordinary
-   * live state (`itx.liveState` — `state.reduced.ready` flips when bootstrap
-   * lands). The dashboard uses the fast path to redirect into the project
-   * instantly and play creation progress from pushes.
+   * bootstrap saga has committed `project/ready` — the right shape for
+   * scripts and pipelined chains that use the project immediately.
+   *
+   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
+   * registered, directory primed, birth events appended. The saga keeps
+   * running behind the returned handle — create still drives processor birth
+   * via a post-response nudge, so no caller has to. Progress is ordinary
+   * live state (`state.reduced.ready` flips when bootstrap lands), and
+   * `waitUntilReady()` on the handle is the composable wait. Pipeline
+   * `identity()` through the create call to learn the canonical slug (auth
+   * may normalize it) in the same round trip — the dashboard does exactly
+   * that, then plays the checklist from live pushes.
    */
   create(args: {
     organizationSlug?: string;
@@ -302,8 +321,14 @@ export interface Ai {
 
 /** A partial fetch: return its response, or continue the app when it returns null. */
 export interface ProjectAuth {
-  /** Bind a project-member gate to this itx's project. */
+  /** Select the project-member policy for this project's auth gate. */
   get(policy: ProjectAuthPolicy): ProjectAuth;
+  /**
+   * Exchange an exact-origin app cookie for its authenticated actor. An app's
+   * unauthenticated Cap'n Web root uses this to construct its own session
+   * RpcTarget; the browser never receives the project's itx.
+   */
+  authenticate(request: Request, credentials: ProjectAuthCredentials): Promise<ProjectAuthActor>;
   /**
    * Own login, callback, logout, and the host-only cookie. Returns null only
    * when this request belongs to a current project member. Like any partial
@@ -359,18 +384,31 @@ export interface Agent {
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
   /** The agent stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<AgentProcessorState>;
+  /** The agent's transient runtime as a push-driven live-state surface. */
+  liveState: LiveStateRpc<AgentLiveState>;
   /** The agent's own event stream. */
   stream: Stream;
+  /**
+   * Append durable events the Agent processor consumes. The input union and
+   * runtime parser both derive from `AgentProcessorContract.consumes`, so the
+   * typed helper cannot drift from the processor. This validates shape and
+   * vocabulary, not state-machine order or provenance, and grants no special
+   * append rights: any project member can append any event through
+   * `stream.append`, with the same reducer meaning for a valid matching event.
+   * `create()` remains the normal birth path. Use `stream.append` for an event
+   * outside the Agent vocabulary or for an intentionally ephemeral event.
+   */
+  append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
   /** The agent's web-chat door (what the user sees). */
   chat: AgentChat;
   /**
-   * Create the agent on this stream. The birth certificate contains only the
-   * processor-owned config; this method also creates the universally paired
-   * capability host, installs both subscriptions, appends any durable
-   * `initialEvents` in the same batch, and returns only after both processors
-   * have durably processed the complete batch.
+   * Create the generic agent machinery on this stream and wait until the
+   * agent, capability-host, and singleton collection processors have reduced
+   * the birth. Configuration, context, and tasks are separate events: append
+   * processor-consumed events through `agent.append()` or use a typed helper
+   * such as `message()` after creation.
    */
-  create(input: AgentCreateInput): Promise<void>;
+  create(): Promise<void>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -390,33 +428,6 @@ export interface Agent {
           files?: Array<{ contentType: string; data: FileData; filename: string }>;
         },
   ): Promise<StreamEvent>;
-  /**
-   * Update this agent's status record — the title, note, and shortStatus that
-   * project surfaces (the agents list, the Slack thread status) show for it.
-   * A MERGE: only the fields you pass change; the platform patches the
-   * busy/idle flag (and what you are doing — waiting for a response vs running code)
-   * into the same record on its own. `shortStatus` completes the sentence
-   * "<agent> is …" (e.g. "comparing flight prices") and is shown verbatim
-   * while the agent works — update it as your work moves through phases.
-   * `note` is a one-or-two-sentence description of the agent or its current
-   * focus; `title` names the agent/conversation; `blocked: true` marks a
-   * turn that ended waiting on a human.
-   */
-  setStatus(input: {
-    title?: string;
-    note?: string;
-    shortStatus?: string;
-    /** Set true when ending a turn to wait on a human (an answer, an
-     * approval, a secret) — surfaces show the agent as blocked instead of
-     * idle. The platform clears it when the next message wakes you. */
-    blocked?: boolean;
-    /** A builtin icon name ("slack" | "github" | "email" | "telegram" |
-     * "web") or an https image URL, shown next to this agent on roster
-     * surfaces. */
-    icon?: string;
-  }): Promise<StreamEvent>;
-  /** Name this agent/conversation — sugar for `setStatus({ title })`. */
-  setTitle(title: string): Promise<StreamEvent>;
   /**
    * Send-and-wait convenience: appends a message and resolves with the
    * agent's next chat reply on this stream. Replies are matched by order, not
@@ -485,8 +496,9 @@ export interface AgentChat {
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
  * the CapabilityHostDurableObject with that name). Mounting is always local to
- * this scope; reads chain up through enclosing scopes inside the Durable
- * Object. `itx.capabilityHost` is the current scope's host;
+ * this scope; on a local miss, reads follow the scope's journaled `fallback`
+ * expression — usually one hop straight to the project root host.
+ * `itx.capabilityHost` is the current scope's host;
  * `itx.capabilityHosts.get("/")` addresses the project root from anywhere —
  * that is how an agent provides a capability to the whole project.
  */
@@ -558,6 +570,10 @@ export interface ProjectStreamCollection extends StreamCollection {
 /** Agent catalog within one project. */
 export interface AgentCollection {
   __describe(): Promise<Description>;
+  processor: WakeableStreamProcessorRpc<AgentCollectionProcessorState>;
+  liveState: LiveStateRpc<AgentCollectionProcessorState>;
+  /** Stateless push sink: forwarding and authorization are its entire job. */
+  processEvent(batch: StreamPushEventBatch): Promise<void>;
   /**
    * The agent control surface at a path (`"/agents/<name>"`, or relative to
    * the calling scope — `".."` climbs). The returned handle is a plain,
@@ -569,7 +585,7 @@ export interface AgentCollection {
    * `agent-handle-pipelining.itx.e2e.test.ts` for the guard.
    */
   get(path: string): Agent;
-  /** Known agents, read from the project processor's reduced state. */
+  /** Known agents, read from the collection processor's reduced database. */
   list(): Promise<StreamListItem[]>;
 }
 
@@ -647,13 +663,12 @@ export interface EmailCapability {
  * the platform's example scripts (most are proven: the test suite runs them
  * unattended against a live project on every change; the rest are marked
  * interactive), the public type surface (the Itx Type Graph), and the
- * capabilities mounted in the caller's scope chain. One door for "how do I
+ * capabilities reachable from the caller's scope. One door for "how do I
  * X?": search first, fetch what the hits name, adapt working code.
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
  * which is why every docstring here tells callers to pass MANY related words
- * — recall comes from the query, not the engine. (For semantic search over
- * the project's own content and history, see itx.search.)
+ * — recall comes from the query, not the engine.
  */
 export interface Docs {
   __describe(): Promise<Description>;
@@ -666,8 +681,7 @@ export interface Docs {
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
    * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc. (For the
-   * project's own content and history, see itx.search.)
+   * the ready-made docs.get call that fetches its full doc.
    */
   search(input: { q: string }): Promise<DocsSearchHit[]>;
   /**
@@ -783,6 +797,17 @@ export interface ProjectIntegrations {
     connection: string;
     provider: BuiltinIntegrationSlug;
   }): Promise<IntegrationConnectionStatus>;
+  /** The immutable Telegram user ids currently authorized for one bot. Empty
+   * means deny-all, including on connections created before this policy was
+   * introduced. */
+  getTelegramAccess(input: { connection: string }): Promise<{ allowedUserIds: string[] }>;
+  /** Replace one Telegram bot's complete user allowlist and wait until the
+   * ingress router has folded it, so the successful response is the access
+   * boundary taking effect—not merely an event being queued. */
+  setTelegramAccess(input: {
+    allowedUserIds: string[];
+    connection: string;
+  }): Promise<{ allowedUserIds: string[] }>;
   /**
    * Connect a Telegram bot by BotFather token — no OAuth, no redirect: getMe
    * validates the token, setWebhook points the bot at this deployment (with a
@@ -868,6 +893,13 @@ export interface ProjectRepoCollection extends RepoCollection {
   list(): Promise<StreamListItem[]>;
 }
 
+/** Enrolled mobile installations within one project. */
+export interface DeviceCollection {
+  __describe(): Promise<Description>;
+  get(deviceId: string): Device;
+  list(): Promise<DeviceDescription[]>;
+}
+
 /**
  * The `itx.sandboxes` built-in. Sandboxes are PETS:
  * `create({ name, instanceType })` is the only way one comes to exist
@@ -914,166 +946,6 @@ export interface SandboxCollection {
   /** Every sandbox stream path in the project (`/sandboxes/...`), including
    * destroyed sandboxes' streams — the stream is the history. */
   list(): Promise<StreamListItem[]>;
-}
-
-/**
- * Search everything this project has accumulated — every conversation (web
- * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
- * stream event, itx.files object, repo file, and custom document — with
- * semantic + keyword retrieval. Every hit carries a `ref` expression that
- * fetches the exact source back, so a result is never a dead end.
- *
- * Mechanics: one Cloudflare AI Search instance per project (born with the
- * project), indexing only that project's slice of the deployment's corpus
- * bucket — tenancy is structural, not a query filter.
- */
-export interface Search {
-  __describe(): Promise<Description>;
-  /**
-   * Ensure this project's search instance exists (idempotent). The project
-   * CREATE SAGA calls this so search is warm from birth; the lazy
-   * query/index paths remain as self-heal for projects that predate it.
-   * Safe to call any time — an existing instance is a no-op.
-   */
-  ensureIndex(): Promise<{ created: boolean }>;
-  /**
-   * Retrieve scored chunks matching a query, scoped to this project's own
-   * search instance. Merges the corpus (streams/files/repos/custom kinds)
-   * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. ONE row per MATCH — distinct event
-   * windows within one stream segment stay distinct rows (full-text-search
-   * semantics); only same-location re-scores collapse. Rows are TINY: kind,
-   * date, context, a ~2-sentence snippet around the match, and the ref that
-   * fetches the whole thing — so the default 30 rows read at a glance and a
-   * result set stays well inside one inline script return. Docs hits carry
-   * synthetic 0.5-band
-   * scores (not comparable to corpus relevance), ride on top of `limit`
-   * corpus chunks (their own cap: min(limit, 5)), and ignore
-   * `scoreThreshold`. On a
-   * project whose instance doesn't exist yet, the instance is created and
-   * docs results return with a `warning` — retry once its first index
-   * completes (typically a minute or two). A warning-free empty result means
-   * the index is live and simply has no match.
-   */
-  query(input: {
-    q: string;
-    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */
-    limit?: number;
-    /** Rewrite the query for retrieval first (extra LLM call). */
-    rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
-    scoreThreshold?: number;
-    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
-    source?: string;
-    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
-    exclude?: readonly string[];
-  }): Promise<SearchQueryResult>;
-  /**
-   * Retrieve matching chunks AND generate an answer from them (RAG). Same
-   * first-touch grammar as `query`: on a project whose instance doesn't
-   * exist yet, the instance is created and an empty-response result returns
-   * with a `warning` — retry shortly. `searchQuery` echoes the input
-   * verbatim (never the rewritten query).
-   */
-  answer(input: {
-    q: string;
-    limit?: number;
-    rewriteQuery?: boolean;
-    scoreThreshold?: number;
-    source?: string;
-    exclude?: readonly string[];
-    /** Optional system prompt for the answer generation. */
-    systemPrompt?: string;
-  }): Promise<SearchAnswerResult>;
-  /**
-   * Add (or replace) one document in the search corpus — the general
-   * mechanism to make derived content (summaries, notes, digests) findable
-   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
-   * domain object the text derives from (e.g. `["streams", ["get", path],
-   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
-   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
-   * not be a reserved platform kind (streams/files/repos/docs); the
-   * serialized ref caps at 500 chars. `id` is stable within
-   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
-   * the one-line descriptor shown on every hit and to the answer model.
-   */
-  index(input: {
-    kind: string;
-    id: string;
-    text: string;
-    /** The itx expression that leads back to the source domain object. */
-    ref: ItxExpression;
-    title?: string;
-    context?: string;
-  }): Promise<{ key: string }>;
-  /**
-   * Pin one stream event into the search corpus by its coordinates — the
-   * domain-object way to make a specific moment findable. The event's content
-   * is read from the stream (never trusted from the caller) and indexed as a
-   * focused document together with the optional `note`; the search hit's
-   * `ref` is the itx expression fetching exactly that event. Idempotent per
-   * (stream, offset).
-   */
-  indexEvent(
-    input: (
-      | {
-          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
-          path: string;
-          stream?: undefined;
-        }
-      | {
-          /** Alias for `path` (the original name of this parameter). */
-          stream: string;
-          path?: undefined;
-        }
-    ) & {
-      /** The event's offset on that stream. */
-      offset: number;
-      /** Optional annotation, indexed alongside the event ("decision made here"). */
-      note?: string;
-    },
-  ): Promise<{ key: string }>;
-  /**
-   * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
-   */
-  indexStream(input: { path: string }): Promise<{ segments: number }>;
-  /**
-   * Snapshot one repo's default-branch HEAD into the search corpus now — the
-   * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing. Returned
-   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
-   * files, and a nonzero `failed` means re-run.
-   */
-  indexRepo(input: { path: string }): Promise<{
-    deleted: number;
-    indexed: number;
-    skipped: number;
-    failed: number;
-  }>;
-  /**
-   * Re-mirror every existing itx.files object into the search corpus — the
-   * backfill verb for files that predate search indexing (puts mirror
-   * incrementally from here on). Counts reflect the actual mirror outcome:
-   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
-   */
-  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;
-  /**
-   * Reindex the WHOLE project — every known stream, every repo's default
-   * branch, every itx.files object — in one crude, idempotent sweep. This is
-   * the backfill/repair verb for projects that predate search indexing (new
-   * writes index automatically); every unit overwrites its own corpus keys,
-   * so re-running (including after a timeout on a huge project) only fills
-   * gaps. Streams run a few at a time; expect minutes on large projects. Per
-   * unit failures are counted, never thrown — nonzero `failed` means re-run.
-   */
-  reindex(): Promise<{
-    streams: { indexed: number; segments: number; failed: number };
-    repos: { indexed: number; failed: number };
-    files: { mirrored: number; skipped: number; failed: number };
-  }>;
 }
 
 /**
@@ -1245,22 +1117,33 @@ export interface DynamicWorkerCollection {
 }
 
 /**
- * Catalog of durable workspaces within one project.
+ * Catalog of durable workspaces within one project: EVENT-SOURCED,
+ * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
+ * always warm). Every workspace is addressed by its FULL path under
+ * `/workspaces/` — the same domain-prefix convention as `/sandboxes/...` and
+ * `/repos/...`: an agent's workspace is the agent path under the prefix
+ * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
+ * scope), and standalone workspaces live under `/workspaces/<anything>`.
  *
- * `get("/")` is the project's ROOT workspace: a read-only, always-fresh
- * materialization of the config repo's main branch. Every other workspace is
- * addressed by its FULL path under `/workspaces/` — the same domain-prefix
- * convention as `/sandboxes/...` and `/repos/...`: an agent's workspace is
- * the agent path under the prefix (`/workspaces/agents/...`, exposed as
- * `itx.workspace` in that agent's scope), and standalone workspaces live
- * under `/workspaces/<anything>`. Non-root workspaces are OVERLAYS over the
- * root: writes stay local, missing reads fall through to latest main — no
- * clone, usable instantly.
+ * A workspace's identity + configuration are stream facts: `create({ path,
+ * mounts })` appends the `workspace/created` birth certificate to the
+ * workspace's own stream; `workspace/configured` patches the mount table. A
+ * workspace touched without an explicit create births itself with the default
+ * table (the config repo mounted at "/", committable) — so `get(path)` is
+ * always usable and behaves like the old single-parent overlay by default.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path — "/" is the read-only root (latest main); others are private overlays. */
+  /** The workspace at a path (first touch births it with the default mount table). */
   get(path: string): Workspace;
+  /**
+   * Create a workspace. Runs entirely inside the workspace Durable Object's
+   * serialized authority: birth is ensured (the certificate is ALWAYS the
+   * default table — identical body, so the idempotency key can never hit the
+   * stream's different-body rejection), then a custom `mounts` table
+   * converges via one validated `workspace/configured` patch. Idempotent.
+   */
+  create(input: { mounts?: Record<string, WorkspaceMount>; path: string }): Promise<Workspace>;
 }
 
 /**
@@ -1349,18 +1232,11 @@ export interface Stream {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling), so a polling debug UI sees RTTs populate.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
-  runtimeState(): Promise<{
-    coreProcessorState: unknown;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  }>;
+  runtimeState(): Promise<StreamRuntimeDebugState>;
+  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
   /**
@@ -1505,6 +1381,17 @@ export interface CloudflareIntegrations {
   videos: CfVideosCapability;
 }
 
+/** One enrolled installation. Push credentials enter only through enroll(). */
+export interface Device {
+  __describe(): Promise<Description & DeviceDescription>;
+  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;
+  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;
+  kill(): Promise<void>;
+  processor: WakeableStreamProcessorRpc<DeviceDescription>;
+  liveState: LiveStateRpc<DeviceDescription>;
+}
+
 /** Path-addressed secret capability. Secret material has no public read API:
  * material never leaves the Secret Durable Object except substituted into a
  * request bound for one of the secret's pinned egress hosts. */
@@ -1531,65 +1418,48 @@ export interface Secret {
 }
 
 /**
- * One durable workspace: a private virtual filesystem living in a Durable
- * Object (no container, always warm). The root workspace (`"/"`) is the
- * read-only, always-fresh materialization of the config repo's main branch.
- * Every other workspace is an OVERLAY over the root: reads see latest main
- * until a local write shadows a path, writes and deletes stay private, and
- * there is no clone — a new workspace is usable instantly. `git.commit`
- * commits the overlay's changes straight to the config repo's MAIN branch
- * (the same lane as `itx.repo.commitFiles`, so the project worker/website
- * redeploys automatically), then the overlay resets to mirror the new main.
- *
- * Constraints: the `.git` name is reserved (platform-managed). Large files
- * are fine (past ~1.5MB they are stored in R2 transparently).
+ * One durable workspace: an event-sourced, mount-routed private filesystem.
+ * Its mount table (getConfig/configure) maps repos into the tree: reads under
+ * a mount fall through to that repo's main at HEAD, writes land in a private
+ * copy-on-write local layer (large files spill to R2 transparently), and
+ * `git.commit({ scope })` turns ONE mount's changes into one commit on that
+ * repo's main (honoring the mount's policy). Paths outside every mount are
+ * private scratch. The `.git` name is reserved (platform-managed).
  */
 export interface Workspace {
   __describe(): Promise<Description>;
-  /** Workspace identity string (debug). */
   whoami(): Promise<string>;
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** File contents, or null when the path does not exist. */
+  /** The workspace stream processor (snapshot/state). */
+  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;
+  /** The folded configuration (birth certificate + configured patches). */
+  getConfig(): Promise<WorkspaceConfig>;
+  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
+  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;
+  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null>;
-  /** Raw file bytes (use for binaries — readFile text-decodes), or null when missing. */
+  /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
-  /**
-   * Wipe the workspace back to pristine: the local layer and every deletion
-   * vanish, leaving a clean view of latest main (on the root, the next read
-   * re-materializes). Uncommitted work is LOST (committed changes live on
-   * main).
-   */
-  reset(): Promise<void>;
-  /**
-   * Un-pin one path: drop the local copy (file or subtree) and any deletion
-   * of it, so the path follows latest main again — the surgical sibling of
-   * reset(). Scoped at-or-below the path; a deleted ancestor directory still
-   * masks it until that ancestor is reverted too.
-   */
-  revert(path: string): Promise<void>;
-  /** Every file path in the merged view (local layer over latest main), sorted. */
-  listAllFiles(): Promise<string[]>;
-  writeFile(path: string, content: string): Promise<void>;
-  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
-  appendFile(path: string, content: string): Promise<void>;
-  /** Delete one file. Returns false when the path did not exist. */
-  deleteFile(path: string): Promise<boolean>;
-  /**
-   * Safely replace text in one file (uncommitted — use `git` to publish).
-   * The `oldString` must match exactly once unless `replaceAll` is true.
-   */
-  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
-  readDir(dir?: string): Promise<WorkspaceFileInfo[]>;
-  glob(pattern: string): Promise<WorkspaceFileInfo[]>;
-  rm(path: string, opts?: { force?: boolean; recursive?: boolean }): Promise<void>;
-  cp(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
-  mv(src: string, dest: string, opts?: { recursive?: boolean }): Promise<void>;
-  /** File metadata, or null when the path does not exist. */
-  stat(path: string): Promise<WorkspaceFileInfo | null>;
+  /** Whether a path exists in the merged view. */
   exists(path: string): Promise<boolean>;
-  /** Git over this workspace's checkout. */
+  /** Write one file into the private overlay. */
+  writeFile(path: string, content: string): Promise<void>;
+  /** Write raw bytes to one file in the private overlay. */
+  writeFileBytes(path: string, data: Uint8Array): Promise<void>;
+  /** Replace an exact string in one file (copies a mount file up first). */
+  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;
+  /** Delete one file (whiteouts a mount copy; false when it did not exist). */
+  deleteFile(path: string): Promise<boolean>;
+  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
+  listAllFiles(): Promise<string[]>;
+  /** Merged file paths matching a glob pattern. */
+  glob(pattern: string): Promise<string[]>;
+  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
+  reset(): Promise<void>;
+  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */
+  revert(path: string): Promise<void>;
+  /** Per-mount git surface. */
   git: WorkspaceGit;
 }
 
@@ -1625,24 +1495,22 @@ export interface CfVideosCapability {
 }
 
 /**
- * The commit surface of an overlay workspace. There is no staging area, no
- * branch, and no separate push: `commit({ message })` turns the workspace's
- * changes (local files minus `.gitignore`d paths, plus deletions) into ONE
- * ordinary commit on the config repo's MAIN branch — the same lane as
- * `itx.repo.commitFiles`, so the project worker/website redeploys
- * automatically. Credentials are internal; no token rides this surface.
+ * The per-mount git surface of a workspace. `status()` groups the overlay's
+ * changes by owning mount (plus the never-committable unmounted scratch);
+ * `commit({ message, scope? })` turns ONE mount's changes into one ordinary
+ * commit on that repo's main via its own `commitFiles` lane — scope may be
+ * omitted when exactly one mount is dirty, and commits never span mounts.
+ * Read-only mounts reject commits. No branches, no push: commit = live on
+ * that repo's main.
  */
 export interface WorkspaceGit {
   __describe(): Promise<Description>;
-  /** Changes vs latest main: added / modified (shadowed, not content-diffed) / deleted. */
-  status(): Promise<WorkspaceChange[]>;
-  /** Commit the workspace's changes to the config repo's main branch (goes live immediately). */
-  commit(input: {
-    author?: { email: string; name: string };
-    message: string;
-  }): Promise<WorkspacePublishResult>;
-  /** The config repo's main-branch history, newest first. */
-  log(input?: { limit?: number }): Promise<WorkspaceGitLogEntry[]>;
+  /** Changes grouped by owning mount, plus the unmounted local scratch. */
+  status(): Promise<WorkspaceStatus>;
+  /** Commit one mount's changes to its repo's main branch. */
+  commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;
+  /** One mount's repo history, newest first. */
+  log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -1739,6 +1607,18 @@ export type ItxAuthToken =
   | { type: "admin"; principal?: string }
   | { type: "user"; principal: string; projectScopes: string[] };
 
+/**
+ * What `itx.identity()` returns: the directory's canonical project record,
+ * with the itx surface's `projectId` field name (the surface always says
+ * `projectId`; `id` is the directory/list convention).
+ */
+export type ProjectIdentity = {
+  projectId: string;
+  slug: string;
+  organizationId: string | null;
+  name: string;
+};
+
 /** What a project itx's `__describe()` returns: the Description convention plus identity and the capability inventory. */
 export type ProjectDescription = Description & {
   capabilities: CapabilityDescription[];
@@ -1784,7 +1664,7 @@ export type ProjectProcessorState = {
   ready: boolean;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
-  agents: { createdAt: string; path: string }[];
+  devices: { createdAt: string; path: string }[];
   repos: { createdAt: string; path: string }[];
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
@@ -1820,6 +1700,7 @@ export type ProjectProcessorState = {
     addedAt: string;
     revokedAt: string | null;
   }[];
+  notificationReady: boolean;
 };
 
 /**
@@ -1831,8 +1712,6 @@ export type ProjectProcessorState = {
  *   catalogs) folded by the project processor. One contributor, not the base.
  * - `streamsIndex` — a materialized view of the project's streams the DO keeps in
  *   its own SQLite (recency, counts). Nothing to do with the processor.
- * - `agents` — the agents roster: every agent stream's merged status record
- *   (busy, title, note, shortStatus), same SQLite home as the streams index.
  * - `liveDemo` — plain DO memory, for the live-state playground.
  *
  * A `useLiveState` selector picks whichever slice a component renders, so a
@@ -1843,8 +1722,6 @@ export type ProjectLiveState = {
   reduced: ProjectProcessorState;
   /** Every stream in the project keyed by path — a materialized SQLite view (recency, counts) the DO maintains. */
   streamsIndex: Record<string, StreamIndexRow>;
-  /** The agents roster keyed by agent path — each agent's merged status record, folded from its status-changed patches. */
-  agents: Record<string, AgentStatusRow>;
   /** Demo (stateful live state): a counter bumped by `itx.liveDemo.increment()`, seen by every watcher. */
   liveDemo: { count: number };
 };
@@ -1940,11 +1817,28 @@ export type StreamPushEventBatch = {
   configuredEvent: Pick<StreamEvent, "type" | "offset" | "createdAt" | "path" | "payload">;
 };
 
-/** Dynamic worker RPC stub plus platform-owned lifecycle operations. */
+/**
+ * Dynamic worker RPC stub plus platform-owned lifecycle operations. The
+ * lifecycle names are platform verbs: a worker method with the same name is
+ * shadowed on this stub (still reachable via
+ * `invokeCapability({ path: [...] })`).
+ */
 export type DynamicWorkerCapability<T extends object = Record<string, unknown>> = T &
   Disposable & {
     /** Abort the stateful worker Durable Object incarnation. Stateless worker refs reject. */
     kill(): Promise<void>;
+    /**
+     * Arm (ms timestamp) — or with null, disarm — the stateful worker's
+     * durable alarm; the fire calls the worker class's own `alarm(alarmInfo)`
+     * method, retried by the platform if it throws. Facets have no native
+     * alarms in workerd, so the hosting Durable Object keeps the real one on
+     * the worker's behalf. Stateless worker refs reject. Inside the worker,
+     * `IterateDurableObject` presents this as the ordinary `ctx.storage`
+     * alarm API automatically.
+     */
+    setAlarm(atMs: number | null): Promise<void>;
+    /** The stateful worker's armed alarm time (ms) or null. Stateless worker refs reject. */
+    getAlarm(): Promise<number | null>;
   };
 
 /** One entry of a session's project catalog (`session.projects.list()`). */
@@ -1969,8 +1863,8 @@ export type CapabilityDescription = {
   providedAtOffset?: number;
   /**
    * The itx scope path this capability is declared at (`"/"`, `"/agents/bla"`, …).
-   * Set when a scope reports capabilities it inherited from an enclosing scope,
-   * so the reader can tell a local mount from an inherited one. Absent on
+   * Set when a scope reports capabilities its fallback host contributed, so
+   * the reader can tell a local mount from an inherited one. Absent on
    * built-ins (they exist at every scope).
    */
   scope?: string;
@@ -2053,20 +1947,6 @@ export type StreamIndexRow = {
   eventCount: number;
 };
 
-/** One row of the agents roster: an agent stream and its merged status record. */
-export type AgentStatusRow = {
-  path: string;
-  /** The merged status record (mergeAgentStatusPatch over the agent's own
-   * status-changed patches — same fold as the agent processor and the Slack
-   * painter, so every surface agrees). */
-  status: AgentStatusRecord;
-  /** Offset of the last folded status-changed event — redelivered batches
-   * fold to nothing past it. */
-  lastEventOffset: number;
-  /** createdAt of that event. */
-  updatedAt: string;
-};
-
 /** The Workers AI binding's per-call options (`env.AI.run`'s third argument),
  * published structurally so itx callers can route a call through a specific
  * AI Gateway configuration — e.g. `{ gateway: { id: "default", skipCache: true } }`. */
@@ -2130,6 +2010,12 @@ export type CfMarkdownConversionResult = {
 /** A declarative access rule for a project-host web app. */
 export type ProjectAuthPolicy = { policy: "project-member" };
 
+/** Browser credentials accepted by a project app's unauthenticated RPC root. */
+export type ProjectAuthCredentials = { type: "from-server-cookie" };
+
+/** Identity proven by the app-origin session, safe for app-defined authorization. */
+export type ProjectAuthActor = { userId: string };
+
 /** A Browser Run quick-action name (`browser.quickAction`'s first argument):
  * what to extract from the rendered page — page content, screenshot, PDF,
  * markdown, accessibility snapshot, scraped elements, structured JSON, links,
@@ -2156,8 +2042,8 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
  * `stateSchema`.
  */
 export type AgentProcessorState = {
-  birthCertificate: { config: { systemPrompt: string; llm: { model: string } } } | null;
-  config: { systemPrompt: string; llm: { model: string } } | null;
+  birthCertificate: Record<string, never> | null;
+  config: { llm: { model: string } } | null;
   context: {
     system: (
       | {
@@ -2426,21 +2312,25 @@ export type AgentProcessorState = {
     { status: "requested" | "started"; model: string; expiresAt: number }
   >;
   activeScriptExecutionIds: string[];
-  status?:
-    | { busy: boolean; phase?: "llm" | "script" | undefined; sinceOffset: number; since: string }
-    | undefined;
-  announcedStatus?:
+  runtimeChange?:
     | {
-        busy?: boolean | undefined;
-        phase?: "llm" | "script" | undefined;
-        sinceOffset?: number | undefined;
-        blocked?: boolean | undefined;
-        title?: string | undefined;
-        note?: string | undefined;
-        shortStatus?: string | undefined;
-        icon?: string | undefined;
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        sinceOffset: number;
+        since: string;
       }
     | undefined;
+  summary: {
+    title?: string | undefined;
+    description?: string | undefined;
+    activity?: string | undefined;
+    waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+    pinned: boolean;
+  };
+  waitingForSinceOffset?: number | undefined;
   tokenUsage: {
     totalInputTokens: number;
     totalOutputTokens: number;
@@ -2449,22 +2339,264 @@ export type AgentProcessorState = {
   };
 };
 
-/** Public agent-creation input. Durable, idempotency-keyed startup inputs
- * commit in the same append as the birth certificates and subscriptions,
- * before create waits for the processors to catch up. */
-export type AgentCreateInput = AgentDefaultsOverrides & {
-  initialEvents?: Array<
-    Omit<StreamEventInput, "ephemeral" | "idempotencyKey"> & { idempotencyKey: string }
-  >;
+/** The transient runtime state pushed by one Agent durable object. */
+export type AgentLiveState = {
+  runtimeChange?:
+    | {
+        runtime: {
+          triggers: { pending: number; runnable: number };
+          llmRequests: { scheduled: number; requested: number; started: number };
+          runningScripts: number;
+        };
+        sinceOffset: number;
+        since: string;
+      }
+    | undefined;
 };
 
-/**
- * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
- * base64 (optionally a full `data:` URL) — that is what Workers AI image
- * models return, and the whole point of accepting strings is piping
- * `itx.ai.run` output straight into storage.
- */
-export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+/** Append input accepted by the Agent processor, derived from its `consumes` contract. */
+export type AgentEventInput =
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/configured",
+      { config: { llm?: { model?: string | undefined } | undefined } }
+    >
+  | TypedConsumedEventInput<"events.iterate.com/agent/created", Record<string, never>>
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-cancelled",
+      | { phase: "scheduled"; reason: "interrupted-by-user-input"; requestId: string }
+      | {
+          phase: "requested";
+          reason: "durable-object-crashed" | "interrupted-by-user-input";
+          llmRequestOffset: number;
+        }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-completed",
+      {
+        durationMs: number;
+        llmRequestOffset: number;
+        result:
+          | { rawResponse?: unknown; status: "success"; usage?: unknown }
+          | { error: { message: string }; rawResponse?: unknown; status: "failure" };
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-requested",
+      { model: string; requestId: string; expiresAt?: number | undefined }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-scheduled",
+      { debounceMs: number; model: string; requestId: string }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/llm-request-started",
+      { llmRequestOffset: number; model: string }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/loop-stopped",
+      { maxAutonomousTurns: number; reason: string; triggerOffset: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/summary-updated",
+      | {
+          title?: string | null | undefined;
+          description?: string | null | undefined;
+          activity?: string | null | undefined;
+          waitingFor?: "external_event" | "timer" | "user_input" | null | undefined;
+          pinned?: boolean | undefined;
+        }
+      | { waitingFor: null; clearWaitingForThroughOffset: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agent/token-usage-reported",
+      {
+        llmRequestOffset: number;
+        model: string;
+        maxContextTokens: number;
+        inputTokens: number;
+        outputTokens: number;
+        cachedInputTokens?: number | undefined;
+        reasoningOutputTokens?: number | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/context-added",
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "system";
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "developer";
+          actor?:
+            | { type: "agent"; path: string }
+            | { type: "script"; executionId: string }
+            | { type: "slack"; userId?: string | undefined; botName?: string | undefined }
+            | { type: "telegram"; userId?: string | undefined; username?: string | undefined }
+            | { type: "email"; address?: string | undefined; name?: string | undefined }
+            | { type: "github"; login?: string | undefined; senderType?: string | undefined }
+            | undefined;
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+          compaction?:
+            | {
+                replacesHistoryThrough: number;
+                usage?:
+                  | {
+                      inputTokens: number;
+                      outputTokens: number;
+                      cachedInputTokens?: number | undefined;
+                      reasoningOutputTokens?: number | undefined;
+                    }
+                  | undefined;
+              }
+            | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "user";
+          actor: { type: "user"; origin: "mcp" | "web" };
+          llmRequestPolicy?:
+            | { behaviour: "dont-trigger-request" }
+            | { behaviour: "interrupt-current-request" }
+            | { behaviour: "after-current-request" }
+            | undefined;
+        }
+      | {
+          content: string;
+          key?: string | undefined;
+          files?:
+            | { contentType: string; filename: string; path: string; size: number; url: string }[]
+            | undefined;
+          refs?:
+            | (
+                | {
+                    type: "event";
+                    streamPath: string;
+                    offset: number;
+                    eventType?: string | undefined;
+                  }
+                | { type: "user"; userId: string }
+                | { type: "file"; path: string }
+                | { type: "git-commit"; repoPath: string; commitOid: string }
+              )[]
+            | undefined;
+          role: "assistant";
+          llmRequestOffset?: number | undefined;
+        }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/agents/web-message-sent",
+      {
+        message: string;
+        files?:
+          | { contentType: string; filename: string; path: string; size: number; url: string }[]
+          | undefined;
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/capability-host/script-run-requested",
+      { code: string; executionId: string; expiresAt: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/capability-host/script-run-settled",
+      {
+        executionId: string;
+        settlement:
+          | { status: "succeeded"; result?: JsonValue | undefined }
+          | {
+              status: "failed";
+              error: string;
+              failureKind: "deadline" | "expired" | "orphaned" | "runtime" | "typecheck";
+              phase: "before-execution" | "execution" | "recovery" | "typecheck";
+              executionMayHaveOccurred: boolean;
+              cancellation: "external-work-may-continue" | "not-applicable";
+            };
+      }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/stream/processor-revived",
+      { [x: string]: unknown; processorSlug: string; revivals: number; version: string }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/stream/subscriber-connected",
+      {
+        subscriptionKey: string;
+        subscriptionType: "configured" | "ephemeral";
+        subscriber?:
+          | {
+              description?: string | undefined;
+              processor?:
+                | {
+                    announcement: {
+                      slug: string;
+                      version: string;
+                      description: string;
+                      consumes: string[];
+                      emits: string[];
+                      ownedEvents: { type: string; description?: string | undefined }[];
+                    };
+                  }
+                | undefined;
+            }
+          | undefined;
+      }
+    >
+  | TypedConsumedEventInput<"events.iterate.com/stream/woken", { incarnationId: string }>;
 
 /** One committed event on a durable stream: type, JSON payload, offset,
  * idempotency key, and provenance (processor stamp / cross-post chain), plus
@@ -2503,6 +2635,14 @@ export type StreamEvent = {
   path: string;
 };
 
+/**
+ * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
+ * base64 (optionally a full `data:` URL) — that is what Workers AI image
+ * models return, and the whole point of accepting strings is piping
+ * `itx.ai.run` output straight into storage.
+ */
+export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream;
+
 /** A file attached to an agent context item: content type, filename, project
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
@@ -2525,6 +2665,31 @@ export type ItxExpression = ItxExpressionStep[];
 /** One known stream in a project's reduced state — the entry shape the
  * collection `list()` methods return: stream path plus creation time. */
 export type StreamListItem = { createdAt: string; path: string };
+
+/** The singleton agent collection processor's reduced database state. */
+export type AgentCollectionProcessorState = {
+  birthCertificate: Record<string, never> | null;
+  agents: Record<
+    string,
+    {
+      path: string;
+      summary: {
+        title?: string | undefined;
+        description?: string | undefined;
+        activity?: string | undefined;
+        waitingFor?: "external_event" | "timer" | "user_input" | undefined;
+        pinned: boolean;
+      };
+      timestamps: {
+        createdAt: string;
+        lastWorkAt: string;
+        summaryUpdatedAt?: string | undefined;
+        activityUpdatedAt?: string | undefined;
+      };
+    }
+  >;
+  waitingForSinceOffsets: Record<string, number>;
+};
 
 /**
  * What `egress.fetch` resolves: a real fetch `Response`, with `json()` pinned
@@ -2775,6 +2940,19 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/** Safe, discoverable metadata for one project-enrolled mobile installation. */
+export type DeviceDescription = {
+  appVersion: string | null;
+  created: boolean;
+  deviceId: string;
+  label: string | null;
+  lastNotificationOpenedAt: string | null;
+  notificationsStatus: "granted" | "revoked" | null;
+  ownerId: string | null;
+  platform: "ios" | "android" | null;
+  revokedAt: string | null;
+};
+
 /** The sandbox processor's reduced lifecycle projection. */
 export type SandboxProcessorState = {
   birthCertificate: {
@@ -2899,22 +3077,6 @@ export type CloudflareSandbox = object & {
   }>;
   /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
-};
-
-/** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
-export type SearchQueryResult = {
-  searchQuery: string;
-  results: SearchResultChunk[];
-  /**
-   * Present when the AI Search corpus was unreachable (e.g. the instance is
-   * not created yet) and only federated docs results are returned.
-   */
-  warning?: string;
-};
-
-/** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */
-export type SearchAnswerResult = SearchQueryResult & {
-  response: string;
 };
 
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
@@ -3100,7 +3262,13 @@ export type RepoProcessorState = {
   artifactName: string | null;
   ready: boolean;
   defaultBranch: string | null;
-  github: { connection: string; installationId: string; owner: string; repo: string } | null;
+  github: {
+    connection: string;
+    installationId: string;
+    owner: string;
+    repo: string;
+    repositoryId: number;
+  } | null;
   githubImport: {
     branch: string;
     requestId: string;
@@ -3139,6 +3307,9 @@ export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
 };
+
+/** One repo mount: the repo a workspace subtree reads from and its commit policy. */
+export type WorkspaceMount = { policy: "commit-to-main" | "read-only"; repoPath: string };
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
@@ -3204,71 +3375,17 @@ export type ProcessorRuntimeState<State = unknown> = {
   runtime?: Record<string, unknown>;
 };
 
-/** Serializable debug view of one live connection, for `runtimeState()`. */
-export type ConnectionRuntimeState = {
-  subscriptionType: StreamSubscriptionType;
-  startedAt: string;
-  cursor: number;
-  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
-  lag: number;
-  batchesSent: number;
-  eventsSent: number;
-  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
-  bytesSent: number;
-  lastDeliveredAt?: string;
-  /**
-   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
-   */
-  settleLatencyMs?: LatencyStats;
-  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
-  pingRttMs?: LatencyStats;
-  /**
-   * The connect-time identity descriptor. The runtime table is the ONLY home
-   * for ephemeral identity — ephemeral connections don't fold into the
-   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
-   * read who's connected from here.
-   */
-  subscriber?: StreamSubscriberDescriptor;
-  /**
-   * True while the last batch handed to this connection's sink is unsettled —
-   * exactly the signal idle teardown consults to classify a sink as wedged.
-   */
-  hasPendingDelivery: boolean;
-};
-
-/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
-export type SubscriptionRuntimeState = {
-  mode: SubscriptionDelivery["mode"];
-  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
-  ackedOffset: number;
-  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
-  lag: number;
-  attempt: number;
-  nextAttemptAt: number | null;
-  lastError: string | null;
-  parkedAtOffset: number | null;
-  /** Whether a live delivery connection currently exists (wake mode). */
-  connected: boolean;
-  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
-  bytesSent?: number;
-  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
-  settleLatencyMs?: LatencyStats;
-  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
-  deliveryDurationMs?: LatencyStats;
-};
-
-/** What `runtimeState()` reports for the stream's own throughput. */
-export type StreamThroughputMetrics = {
-  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
-  measuredSince: string;
-  /** Appends committed (all producers). */
-  ingress: ThroughputReport;
-  /** Deliveries dispatched (all lanes, all subscribers). */
-  egress: ThroughputReport;
+/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */
+export type StreamRuntimeDebugState = {
+  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */
+  coreProcessorState: unknown;
+  runtime: {
+    connections: Record<string, ConnectionRuntimeState>;
+    subscriptions: Record<string, SubscriptionRuntimeState>;
+    metrics: StreamThroughputMetrics;
+    /** SQLite database size in bytes (event log + spine rows + chunks). */
+    storageSizeBytes: number;
+  };
 };
 
 /**
@@ -3346,25 +3463,23 @@ export type LiveStatePatch =
   | { set: unknown }
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
-/** The merged agent status record: the platform-patched busy flag (with its sinceOffset guard) plus the agent-authored title, note, and shortStatus. */
-export type AgentStatusRecord = {
-  busy?: boolean | undefined;
-  phase?: "llm" | "script" | undefined;
-  sinceOffset?: number | undefined;
-  blocked?: boolean | undefined;
-  title?: string | undefined;
-  note?: string | undefined;
-  shortStatus?: string | undefined;
-  icon?: string | undefined;
-};
+/**
+ * A durable processor input. Wake processors never receive ephemeral rows, so
+ * a domain object's processor-typed append door must not claim that they do.
+ */
+type TypedConsumedEventInput<
+  Type extends string = string,
+  Payload = Record<string, unknown>,
+> = Omit<TypedStreamEventInput<Type, Payload>, "ephemeral"> & { ephemeral?: never };
 
-/** Caller-supplied policy overrides, baked into the returned events. A
- * systemPrompt override REPLACES the generic platform prompt wholesale — the
- * caller owns the whole contract, including how the agent acts (codemode). */
-export type AgentDefaultsOverrides = {
-  systemPrompt?: string;
-  model?: string;
-};
+/** JSON subset accepted by WorkerEntrypoint props and script results. */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
 export type FlattenedCapabilityInvocation = {
@@ -3399,42 +3514,33 @@ export type GmailRequestInput = {
  * slug `google`. */
 export type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "telegram" | "waitrose";
 
-/** One retrieved chunk: the matched index document plus its scored text and provenance. */
-export type SearchResultChunk = {
-  /**
-   * The internal corpus key this chunk came from (diagnostic; for federated
-   * docs hits it holds the docs.get fetchCall instead). Use `ref` — not this
-   * — to fetch the source.
-   */
-  filename: string;
-  /**
-   * Relevance in [0, 1] for corpus hits. `kind: "docs"` hits carry synthetic
-   * scores in a descending band from 0.5 — not comparable to corpus
-   * relevance.
-   */
-  score: number;
-  /**
-   * A SHORT snippet around the matching text (~2 sentences). Judge relevance
-   * here; evaluate `ref` for the whole thing.
-   */
-  content: string;
-  /** When the source object was last written (ISO), where the index knows. */
-  date?: string;
-  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
-  kind?: string;
-  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
-  context?: string;
-  /**
-   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors
-   * — evaluate it against the project itx to fetch the real thing instead of
-   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],
-   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream
-   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",
-   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a
-   * repo file, `["docs", ["get", { name }]]` for a docs entry.
-   */
-  ref?: ItxExpression;
+/** Authenticated mobile enrollment metadata plus the write-only Expo push credential. */
+export type DeviceEnrollInput = {
+  appVersion: string;
+  expoPushToken: string;
+  label: string;
+  notificationsStatus: "granted";
+  platform: "ios" | "android";
 };
+
+/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */
+export type DeviceAppendInput =
+  | TypedConsumedEventInput<
+      "events.iterate.com/device/notification-opened",
+      { openedAt: string; requestOffset: number }
+    >
+  | TypedConsumedEventInput<
+      "events.iterate.com/device/notification-requested",
+      {
+        body: string;
+        destination:
+          | { kind: "project" }
+          | { kind: "approvals"; approvalRequestEventOffset: number }
+          | { kind: "agent-chat"; path: string };
+        expiresAt: number;
+        title: string;
+      }
+    >;
 
 /**
  * When a Schedule triggers. Exactly one canonical spelling per shape: a single
@@ -3578,6 +3684,8 @@ export type GithubRepoLink = {
   installationId: string;
   owner: string;
   repo: string;
+  /** GitHub's stable database identity for this repository. */
+  repositoryId: number;
 };
 
 /**
@@ -3620,6 +3728,34 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   updatePolicy?: "block" | "stale-while-rebuild";
 };
 
+/** The workspace processor's reduced state: birth certificate plus folded config. */
+export type WorkspaceProcessorState = {
+  birthCertificate: {
+    config: {
+      mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
+    };
+  } | null;
+  config: { mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }> };
+};
+
+/** A workspace's complete configuration: the mount table, keyed by mount path. */
+export type WorkspaceConfig = {
+  mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
+};
+
+/** A configuration patch: deep-merged per mount point; null unmounts. */
+export type WorkspaceConfigPatch = {
+  mounts?:
+    | Record<
+        string,
+        {
+          policy?: "commit-to-main" | "read-only" | undefined;
+          repoPath?: string | undefined;
+        } | null
+      >
+    | undefined;
+};
+
 /** Input to `Workspace.edit` — a safe single-occurrence string replacement. */
 export type EditWorkspaceFileInput = {
   newString: string;
@@ -3634,71 +3770,73 @@ export type EditWorkspaceFileResult = {
   path: string;
 };
 
-/**
- * Metadata for one workspace filesystem entry — mirrors `@cloudflare/shell`'s
- * `FileInfo`, the shape `readDir`/`glob`/`stat` return.
- */
-export type WorkspaceFileInfo = {
-  createdAt: number;
-  mimeType: string;
-  name: string;
-  path: string;
-  size: number;
-  /** Symlink target, present only on symlinks. */
-  target?: string;
-  type: "directory" | "file" | "symlink";
-  updatedAt: number;
+/** Serializable debug view of one live connection, for `runtimeState()`. */
+export type ConnectionRuntimeState = {
+  subscriptionType: StreamSubscriptionType;
+  startedAt: string;
+  cursor: number;
+  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */
+  lag: number;
+  batchesSent: number;
+  eventsSent: number;
+  /** Serialized payload bytes delivered into this connection's sink (cumulative). */
+  bytesSent: number;
+  lastDeliveredAt?: string;
+  /**
+   * Commit-to-settled latency, stream clock only: `createdAt` of the newest
+   * event in a batch → the pulled batch result settling (the subscriber's
+   * ingest resolved). Durable (wake) lane only — ephemeral results are
+   * disposed unpulled, so ephemeral consumption is self-reported by the host
+   * through `getRuntimeState` instead. Absent until a sample exists.
+   */
+  settleLatencyMs?: LatencyStats;
+  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
+  pingRttMs?: LatencyStats;
+  /**
+   * The connect-time identity descriptor. The runtime table is the ONLY home
+   * for ephemeral identity — ephemeral connections don't fold into the
+   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces
+   * read who's connected from here.
+   */
+  subscriber?: StreamSubscriberDescriptor;
+  /**
+   * True while the last batch handed to this connection's sink is unsettled —
+   * exactly the signal idle teardown consults to classify a sink as wedged.
+   */
+  hasPendingDelivery: boolean;
 };
 
-/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
-export type StreamSubscriptionType = "configured" | "ephemeral";
-
-/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
-export type LatencyStats = {
-  /** Most recent sample (ms). */
-  last: number;
-  p50: number;
-  p95: number;
-  /** Samples currently in the ring (caps at the ring size). */
-  samples: number;
-  /** Epoch ms of the most recent sample. */
-  lastAt: number;
+/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */
+export type SubscriptionRuntimeState = {
+  mode: SubscriptionDelivery["mode"];
+  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */
+  ackedOffset: number;
+  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */
+  lag: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+  parkedAtOffset: number | null;
+  /** Whether a live delivery connection currently exists (wake mode). */
+  connected: boolean;
+  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */
+  bytesSent?: number;
+  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */
+  settleLatencyMs?: LatencyStats;
+  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */
+  deliveryDurationMs?: LatencyStats;
 };
 
-/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
-export type StreamSubscriberDescriptor = {
-  description?: string | undefined;
-  processor?:
-    | {
-        announcement: {
-          slug: string;
-          version: string;
-          description: string;
-          consumes: string[];
-          emits: string[];
-          ownedEvents: { type: string; description?: string | undefined }[];
-        };
-      }
-    | undefined;
-};
-
-/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
-export type SubscriptionDelivery =
-  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
-  | { mode: "push"; expression: ItxExpression }
-  | { mode: "webhook"; url: string };
-
-/**
- * One direction's throughput report: a responsive trailing-5s rate (the
- * number UIs show), the full-minute totals, and the raw 1s series for graphs.
- */
-export type ThroughputReport = {
-  /** Events per second over the trailing 5 seconds. */
-  perSecond5s: number;
-  /** Payload bytes per second over the trailing 5 seconds. */
-  bytesPerSecond5s: number;
-  lastMinute: MinuteWindow;
-  series: ThroughputSeries;
+/** What a stream runtime snapshot reports for the stream's own throughput. */
+export type StreamThroughputMetrics = {
+  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */
+  measuredSince: string;
+  /** ISO timestamp anchoring the trailing windows and final series bucket. */
+  reportedAt: string;
+  /** Appends committed (all producers). */
+  ingress: ThroughputReport;
+  /** Deliveries dispatched (all lanes, all subscribers). */
+  egress: ThroughputReport;
 };
 
 /**
@@ -3735,6 +3873,15 @@ export type StreamPingInput = { t0: number };
  * ping failures drop the sample and never affect delivery or liveness.
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
+
+/** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
+type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
+  StreamEventInput,
+  "payload" | "type"
+> & {
+  type: Type;
+  payload: Payload;
+};
 
 /** Input to the Images capability's `transform`: the source image stream,
  * ordered transform steps, optional overlay draws (watermarks — each with its
@@ -3816,36 +3963,44 @@ export type DynamicWorkerRefBase = {
   source: DynamicWorkerSource;
 };
 
-/** JSON subset accepted by WorkerEntrypoint props and script results. */
-export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
-
-/**
- * One overlay change returned by `WorkspaceGit.status`: a local file that
- * shadows a parent file ("modified"), one the parent does not have ("added"),
- * or a parent file hidden by a local delete ("deleted"). "modified" means
- * shadowed, not necessarily different — the overlay never diffs content.
- */
-export type WorkspaceChange = {
-  change: "added" | "deleted" | "modified";
-  path: string;
+/** Per-mount changes plus the unmounted local scratch (never committable). */
+export type WorkspaceStatus = {
+  mounts: {
+    changes: WorkspaceChange[];
+    path: string;
+    policy: "commit-to-main" | "read-only";
+    repoPath: string;
+  }[];
+  unmounted: WorkspaceChange[];
 };
 
-/** Result of `WorkspaceGit.commit` — the commit landed on the config repo's main. */
-export type WorkspacePublishResult = {
-  /** The repo branch the commit landed on — the config repo's default (main). */
+/** Input to `WorkspaceGit.commit` — one mount's changes become one commit on its repo's main. */
+export type WorkspaceCommitInput = {
+  author?: { email: string; name: string };
+  message: string;
+  /** The mount to commit (its mount path). Optional when exactly one mount is dirty. */
+  scope?: string;
+};
+
+/** Result of `WorkspaceGit.commit` — the commit landed on the scoped mount's repo main. */
+export type WorkspaceCommitResult = {
   branch: string;
-  /** Paths committed (after .gitignore filtering) plus deletions applied. */
+  /** Committed paths, spelled as absolute WORKSPACE paths (mount point included). */
   changedPaths: string[];
   commitOid: string;
+  /** The mount the commit was scoped to (its workspace path). */
+  mount: string;
+  repoPath: string;
 };
 
-/** One commit returned by `WorkspaceGit.log` (the config repo's main history). */
+/** Input to `WorkspaceGit.log` — one mount's repo history. */
+export type WorkspaceGitLogInput = {
+  limit?: number;
+  /** The mount to read (its mount path). Optional when the table has exactly one mount. */
+  scope?: string;
+};
+
+/** One commit returned by `WorkspaceGit.log` (a mounted repo's main history). */
 export type WorkspaceGitLogEntry = {
   author: { email: string; name: string };
   message: string;
@@ -3854,20 +4009,55 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
-/** One rolling-minute throughput window. */
-export type MinuteWindow = {
-  /** Events in the last 60 seconds. */
-  count: number;
-  /** Payload bytes in the last 60 seconds. */
-  bytes: number;
-  /** `count / 60` — the "events/s over the last minute" number. */
-  perSecond: number;
+/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */
+export type StreamSubscriptionType = "configured" | "ephemeral";
+
+/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */
+export type LatencyStats = {
+  /** Most recent sample (ms). */
+  last: number;
+  p50: number;
+  p95: number;
+  /** Samples currently in the ring (caps at the ring size). */
+  samples: number;
+  /** Epoch ms of the most recent sample. */
+  lastAt: number;
 };
 
-/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
-export type ThroughputSeries = {
-  counts: number[];
-  bytes: number[];
+/** Serializable subscriber identity carried on presence facts and the runtime connection table. */
+export type StreamSubscriberDescriptor = {
+  description?: string | undefined;
+  processor?:
+    | {
+        announcement: {
+          slug: string;
+          version: string;
+          description: string;
+          consumes: string[];
+          emits: string[];
+          ownedEvents: { type: string; description?: string | undefined }[];
+        };
+      }
+    | undefined;
+};
+
+/** A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */
+export type SubscriptionDelivery =
+  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }
+  | { mode: "push"; expression: ItxExpression }
+  | { mode: "webhook"; url: string };
+
+/**
+ * One direction's throughput report: a responsive trailing-5s rate (the
+ * number UIs show), the full-minute totals, and the raw 1s series for graphs.
+ */
+export type ThroughputReport = {
+  /** Events per second over the trailing 5 seconds. */
+  perSecond5s: number;
+  /** Payload bytes per second over the trailing 5 seconds. */
+  bytesPerSecond5s: number;
+  lastMinute: MinuteWindow;
+  series: ThroughputSeries;
 };
 
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
@@ -3916,6 +4106,32 @@ export type DynamicWorkerSource = {
 };
 
 /**
+ * One overlay change: a local file that shadows a mount file ("modified" —
+ * shadowed, not content-diffed), one the mount does not have ("added"), or a
+ * mount file hidden by a local delete ("deleted").
+ */
+export type WorkspaceChange = {
+  change: "added" | "deleted" | "modified";
+  path: string;
+};
+
+/** One rolling-minute throughput window. */
+export type MinuteWindow = {
+  /** Events in the last 60 seconds. */
+  count: number;
+  /** Payload bytes in the last 60 seconds. */
+  bytes: number;
+  /** `count / 60` — the "events/s over the last minute" number. */
+  perSecond: number;
+};
+
+/** Per-second buckets over the trailing minute, oldest→newest, length 60. */
+export type ThroughputSeries = {
+  counts: number[];
+  bytes: number[];
+};
+
+/**
  * Where a dynamic worker's source files come from.
  *
  * `inline` supplies the file map directly — the primitive behind run-script and
@@ -3946,45 +4162,35 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * This mirrors Cloudflare's `CreateWorkerOptions` from
- * `@cloudflare/worker-bundler` minus `files` (OS supplies files from the
- * selected {@link WorkerFileSource}) — deliberately not a parallel option
- * language (drift fails typecheck via the assignability pin
- * `workerBuildOptionsMatchCloudflare` below). `bundle: false` is allowed; the
- * invariant is one OS materialization pipeline, not one bundled output file.
- * When the file map has a `package.json` with dependencies, the bundler
- * installs them from the npm registry at build time.
+ * Deliberately small: exactly what the build recipe (build-recipe.ts — real
+ * `npm install` plus wrangler's canonical bundling pipeline) expresses.
+ * When the file map has a `package.json`, dependencies are installed from
+ * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
  */
 export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root (e.g. "worker.ts"). */
+  /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
-  /** Bundle all dependencies into a single output file. Default: true. */
+  /** Bundle to loader-ready output (default: true). `bundle: false` is the
+   * run-script fast path: inline JavaScript that is ALREADY loader-ready
+   * skips the build pipeline entirely. */
   bundle?: boolean;
-  /** Modules kept external ("cloudflare:*" always is). */
-  externals?: string[];
-  /** Target environment. Default: "es2022". */
-  target?: string;
   minify?: boolean;
-  sourcemap?: boolean;
-  /** npm registry URL for dependency installs. */
-  registry?: string;
-  jsx?: "transform" | "preserve" | "automatic";
-  jsxImportSource?: string;
-  define?: Record<string, string>;
-  loader?: Record<string, WorkerBundlerLoader>;
-  conditions?: string[];
+  /**
+   * Which build pipeline turns the source into loader-ready modules.
+   * "wrangler" (default): the platform's own bundle — npm install + wrangler
+   * dry-run, source code is PARSED but never executed. "vite": the source's
+   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes
+   * devDependencies and the build EXECUTES project code in the builder, so
+   * runtime artifacts stay project-scoped and the output is collected from
+   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
+   * dist/client assets, served by a generated wrapper entry).
+   */
+  pipeline?: "wrangler" | "vite";
+  /** Build from this subdirectory of the resolved source: files outside it
+   * are dropped and paths are re-rooted, so a repo can host an app at e.g.
+   * `apps/tanstack/` with its own package.json and config. */
+  rootDir?: string;
+  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
+   * runtime rides in this way). A source's own entry wins over the platform's. */
   virtualModules?: Record<string, string>;
 };
-
-/** Loader names accepted by Cloudflare's worker bundler `loader` option. */
-export type WorkerBundlerLoader =
-  | "js"
-  | "jsx"
-  | "ts"
-  | "tsx"
-  | "json"
-  | "css"
-  | "text"
-  | "binary"
-  | "base64"
-  | "dataurl";
