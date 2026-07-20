@@ -69,11 +69,14 @@ export type ItxAuthCredentials =
   | { type: "impersonate"; secret: string; token: ItxAuthToken }
   /**
    * A project's own long-lived machine credential — for externally deployed
-   * apps that connect back to /api as their project. Verified against the
-   * write-only secret every project is born with at
+   * apps that connect back to /api as their project (docs/remote-apps.md).
+   * Verified against the secret every project is born with at
    * `/secrets/project-api-key` (the comparison happens inside the Secret
-   * Durable Object; material never leaves the secret system). Grants exactly
-   * one project, no admin, no user identity.
+   * Durable Object — this door never receives material, only a one-bit
+   * answer). None of the existing lanes fit this caller: `bearer` is a
+   * user identity, `operator-session` is a short-lived human grant, and
+   * `admin-secret` is deployment-global. Grants exactly one project, no
+   * admin, no user identity.
    */
   | { type: "project-secret"; projectId: string; secret: string };
 
