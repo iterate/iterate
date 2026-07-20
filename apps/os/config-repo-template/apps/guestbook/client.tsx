@@ -195,7 +195,10 @@ export function GuestbookClient() {
 
   const error = liveError ?? (signError.length > 0 ? signError : undefined);
   const entries = state?.entries ?? [];
-  const title = state?.birthCertificate?.config.title ?? "Guestbook";
+  // Only claim the configured title once reduced state has arrived — the
+  // seeded-apps heading wait must not pass on the HTML shell alone.
+  const title =
+    state === undefined ? "Loading…" : (state.birthCertificate?.config.title ?? "Guestbook");
 
   const sign = async (event: FormEvent) => {
     event.preventDefault();

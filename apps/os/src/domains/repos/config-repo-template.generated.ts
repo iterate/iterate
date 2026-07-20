@@ -407,7 +407,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "  const error = liveError ?? (signError.length > 0 ? signError : undefined);\n" +
       "  const entries = state?.entries ?? [];\n" +
-      "  const title = state?.birthCertificate?.config.title ?? \"Guestbook\";\n" +
+      "  // Only claim the configured title once reduced state has arrived — the\n" +
+      "  // seeded-apps heading wait must not pass on the HTML shell alone.\n" +
+      "  const title = state === undefined ? \"Loading…\" : (state.birthCertificate?.config.title ?? \"Guestbook\");\n" +
       "\n" +
       "  const sign = async (event: FormEvent) => {\n" +
       "    event.preventDefault();\n" +
@@ -608,12 +610,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      payload: { message: trimmedMessage, name: trimmedName },\n" +
       "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
       "    });\n" +
+      "    // Pull the append into this host's reduce so liveState subscribers (this\n" +
+      "    // tab and any peer) refresh without waiting on the wake spine's async hop.\n" +
+      "    const { registry } = await this.#freshHost();\n" +
+      "    await registry.catchUp(\"guestbook\");\n" +
+      "    registry.refreshLive();\n" +
       "  }\n" +
       "\n" +
       "  /** Cap'n Web door: public live state + sign. Creates /guestbook on first contact. */\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    await this.#ensureCurrentSubscription();\n" +
       "    const { registry } = await this.#freshHost();\n" +
+      "    // Reduce through stream head before the first live snapshot so a cold\n" +
+      "    // reload after a successful sign shows entries without racing wake.\n" +
+      "    await registry.catchUp(\"guestbook\");\n" +
+      "    await registry.loadAndRefreshLive();\n" +
       "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
       "  }\n" +
       "}\n" +

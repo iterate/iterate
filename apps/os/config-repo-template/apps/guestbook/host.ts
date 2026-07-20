@@ -129,12 +129,21 @@ export class GuestbookApp extends IterateDurableObject {
       payload: { message: trimmedMessage, name: trimmedName },
       idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
     });
+    // Pull the append into this host's reduce so liveState subscribers (this
+    // tab and any peer) refresh without waiting on the wake spine's async hop.
+    const { registry } = await this.#freshHost();
+    await registry.catchUp("guestbook");
+    registry.refreshLive();
   }
 
   /** Cap'n Web door: public live state + sign. Creates /guestbook on first contact. */
   async fetch(request: Request): Promise<Response> {
     await this.#ensureCurrentSubscription();
     const { registry } = await this.#freshHost();
+    // Reduce through stream head before the first live snapshot so a cold
+    // reload after a successful sign shows entries without racing wake.
+    await registry.catchUp("guestbook");
+    await registry.loadAndRefreshLive();
     return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));
   }
 }
