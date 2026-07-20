@@ -163,7 +163,15 @@ const LIVENESS_TIMEOUT_MS = 10_000;
  */
 type Generation = {
   ws: WebSocket | undefined;
+  /**
+   * The capnweb bootstrap stub owns the whole RPC session. Disposing it aborts
+   * every pending import immediately, which is stronger than WebSocket.close()
+   * on a half-open socket (that close handshake may never produce an event).
+   */
+  rpcRoot: RpcStub<UnauthenticatedOs> | undefined;
   connecting: Promise<SessionStub>;
+  /** Settles an imperative waiter if forced retirement happens before publish. */
+  rejectConnecting: (reason?: unknown) => void;
   /** One cheap authenticated round trip proving the transport is alive. */
   ping: (() => Promise<void>) | undefined;
   liveness: ReturnType<typeof setInterval> | undefined;
@@ -288,7 +296,9 @@ function dial(): Generation {
   void promise.catch(() => {});
   const generation: Generation = {
     ws: undefined,
+    rpcRoot: undefined,
     connecting: promise,
+    rejectConnecting: reject,
     ping: undefined,
     liveness: undefined,
     verifying: false,
@@ -351,7 +361,17 @@ function dial(): Generation {
     // The timeout spans the WHOLE dial — TCP/TLS/upgrade AND the authenticate
     // round trip — so a server that accepts the socket but never answers
     // authenticate is a failed dial (close → paced re-dial), not a wedge.
-    const timeout = setTimeout(() => ws.close(), DIAL_TIMEOUT_MS);
+    const timeout = setTimeout(() => {
+      // Do not delegate progress to `close`: a half-open socket can accept the
+      // close request without ever firing a close event. Settle this attempt,
+      // abort its RPC session, and transfer ownership to a fresh dial here.
+      if (current !== generation || established) return;
+      current = undefined;
+      consecutiveDialFailures += 1;
+      reject(new Error("itx WebSocket closed before connecting"));
+      retireGeneration(generation);
+      dial();
+    }, DIAL_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
       // Generation CAS: a superseded generation's late `open` (its successor was
@@ -371,6 +391,7 @@ function dial(): Generation {
       // credentials ride the session cookie on the handshake; configured
       // consumers authenticate with their explicit credentials.
       const unauthenticated = newWebSocketRpcSession<UnauthenticatedOs>(ws);
+      generation.rpcRoot = unauthenticated;
       void (async () => {
         let root: SessionStub;
         try {
@@ -425,11 +446,11 @@ function dial(): Generation {
         }
         established = true;
         publish(root, async () => {
-          // Any round trip proves the transport; authenticate re-presents the
-          // same credentials. Dispose the probe stub so probes don't grow the
-          // cap table.
-          const probe = await unauthenticated.authenticate(target.credentials);
-          (probe as Partial<Disposable>)[Symbol.dispose]?.();
+          // Any round trip proves the transport. Probe the already-authorized
+          // Session capability: re-running authenticate would needlessly
+          // re-verify the cookie/token (and can cross into the auth worker)
+          // every 45 seconds per tab merely to test socket health.
+          await root.__describe();
         });
       })();
     });
@@ -500,14 +521,19 @@ function disposeSession(session: SessionStub): void {
 }
 
 /**
- * FORCED retirement (a reconnect, not an observed close): release resources and
- * CLOSE the socket. capnweb tears the session down — rejecting every pending and
- * future call — only on transport close, and a half-open socket may never fire
- * `close` for us. Callers set `current = undefined` FIRST, so the `close` this
- * triggers won't auto-redial (re-dialing is the caller's job).
+ * FORCED retirement (a reconnect, not an observed close): release resources,
+ * abort capnweb through its bootstrap stub, then ask the socket to close.
+ * Disposing the bootstrap synchronously rejects every pending and future call;
+ * relying on WebSocket.close() alone is insufficient because a half-open socket
+ * may never finish its close handshake or fire `close`. Callers set
+ * `current = undefined` FIRST, so any close event won't auto-redial (re-dialing
+ * is the caller's job).
  */
 function retireGeneration(generation: Generation): void {
   disposeGeneration(generation);
+  generation.rejectConnecting(new Error("itx WebSocket closed before connecting"));
+  generation.rpcRoot?.[Symbol.dispose]?.();
+  generation.rpcRoot = undefined;
   generation.ws?.close();
 }
 
@@ -589,11 +615,11 @@ export function reconnectIterateSession(): void {
 }
 
 /**
- * The three — and only three — transport-close rejections a caller may treat as
- * "the socket died, retry on a fresh one": our own dial-close reject, and
- * capnweb's two aborts when the WebSocket dies (`Peer closed WebSocket:
- * <code> <reason>` after a close frame, `WebSocket connection failed.` on an
- * error event — both capnweb `websocket.ts`). Deliberately NARROW: an
+ * The four — and only four — transport-close rejections a caller may treat as
+ * "the socket died, retry on a fresh one": our own dial-close reject, capnweb's
+ * two WebSocket aborts (`Peer closed WebSocket: <code> <reason>` and
+ * `WebSocket connection failed.`), and capnweb's exact local-shutdown error
+ * from our forced bootstrap disposal. Deliberately NARROW: an
  * application/auth/validation error that merely mentions "WebSocket" must never
  * be mistaken for a transport failure and retried. This is the one discriminant
  * shared by the query retry, the subscribe retry, and the liveness verifier.
@@ -603,7 +629,8 @@ export function isItxTransportError(error: unknown): boolean {
   return (
     message.includes("itx WebSocket closed before connecting") ||
     message.includes("Peer closed WebSocket") ||
-    message.includes("WebSocket connection failed")
+    message.includes("WebSocket connection failed") ||
+    message.includes("RPC session was shut down by disposing the main stub")
   );
 }
 

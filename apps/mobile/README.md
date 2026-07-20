@@ -129,8 +129,8 @@ the private half in the Keychain behind Face ID (`expo-secure-store`'s
 `packages/iterate/src/approval-keys.ts` already uses for CI/non-Mac
 machines, not a fake — every grant is a real signature the platform
 verifies, just without Secure Enclave hardware isolation. See
-`tasks/mobile-native-capabilities.md` for the gap and what closing it needs
-(these capabilities require the native development build).
+`tasks/mobile-native-followups.md` for the remaining gap and what closing it
+needs (these capabilities require the native development build).
 
 ## Running examples
 
@@ -143,7 +143,7 @@ whose `runtimes` includes `"run-script"`. Tap Run and it executes via
 server-side script isolate agents use — and shows the JSON result inline.
 Exists so testing a platform feature never needs a laptop CLI step first:
 every mobile feature here is built by agents, so it needs to be fully
-testable from the phone alone. See `tasks/mobile-examples-runner.md`.
+testable from the phone alone. The runner shipped in PR #2059.
 
 ## Verification
 

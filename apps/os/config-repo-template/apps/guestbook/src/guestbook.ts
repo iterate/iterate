@@ -8,9 +8,9 @@
 // and replay rebuilds it, and every consequential outcome is an event you
 // can read back.
 //
-// GuestbookApp in worker.ts is the hosting half: a Durable Object registry
-// over an itx-dialed stream handle, woken by the durable wake subscription
-// the creation batch (guestbook-ref.ts) configures.
+// GuestbookApp in guestbook-app.ts is the hosting half: a Durable Object
+// registry over an itx-dialed stream handle, woken by the durable wake
+// subscription the creation batch (guestbook-ref.ts) configures.
 import { z } from "zod";
 import {
   defineProcessorContract,
@@ -73,7 +73,7 @@ export const GuestbookProcessorContract = defineProcessorContract({
       ],
     },
   },
-  // Required by `{ recovery: true }` (see worker.ts): a recovery-wired
+  // Required by `{ recovery: true }` (see guestbook-app.ts): a recovery-wired
   // contract must consume the platform revival fact.
   processorDeps: [PLATFORM_STREAM_EVENTS],
   consumes: [

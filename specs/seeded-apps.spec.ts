@@ -82,7 +82,13 @@ test("the seeded hello, counter, and guestbook apps work after creating a projec
   await second.getByLabel("your name").fill("Grace");
   await second.getByLabel("your message").fill(secondNote);
   await second.getByRole("button", { name: "Sign" }).click();
-  await page.getByText(secondNote).waitFor({ timeout: 30_000 });
+  // The first tab is a passive observer of a mutation initiated in the
+  // second tab, so it cannot truthfully render mutation progress for
+  // spinner-waiter to follow. Keep the explicit live-delivery bound while
+  // bypassing only the no-spinner 100ms fast-fail for this remote update.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByText(secondNote).waitFor({ timeout: 30_000 });
+  });
   await second.close();
 });
 

@@ -5,9 +5,9 @@ import { useGuestbook } from "../lib/use-guestbook.ts";
 export const Route = createFileRoute("/")({ component: Guestbook });
 
 // The project's public guestbook. Its state is a stream-processor fold on the
-// project stream at /guestbook (src/worker.ts hosts the processor); this page
-// hydrates, opens /api, and stays live — every open tab repaints the moment
-// anyone signs, and every fifth signature earns a milestone from the
+// project stream at /guestbook (src/guestbook-app.ts hosts the processor);
+// this page hydrates, opens /api, and stays live — every open tab repaints the
+// moment anyone signs, and every fifth signature earns a milestone from the
 // processor's at-head reconcile.
 function Guestbook() {
   const { guestbook, api, error } = useGuestbook();
