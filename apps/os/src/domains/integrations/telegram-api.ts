@@ -45,7 +45,7 @@ export async function callProjectTelegramBotApi(input: {
   method: string;
   projectId: string;
 }): Promise<TelegramBotApiResult> {
-  const placeholder = `getSecret({ path: "${telegramBotTokenSecretPath(input.connection)}" })`;
+  const placeholder = `getSecret("${telegramBotTokenSecretPath(input.connection)}")`;
   const request = new Request(
     `${telegramApiBaseUrl(parseConfig(itxEnv))}/bot${placeholder}/${input.method}`,
     {

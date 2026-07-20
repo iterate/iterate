@@ -71,8 +71,8 @@ describe("secret reference parsing", () => {
     const path = "/secrets/devices/phone/expo-push-token";
     const request = new Request("https://exp.host/--/api/v2/push/send", {
       body: JSON.stringify({
-        nested: [{ token: `getSecret({ path: "${path}" })` }],
-        explanation: `send getSecret({ path: "${path}" }) later`,
+        nested: [{ token: `getSecret("${path}")` }],
+        explanation: `send getSecret("${path}") later`,
       }),
       headers: {
         "content-type": "application/json",
@@ -94,9 +94,9 @@ describe("secret reference parsing", () => {
   test("parses path-only and path+field placeholders across headers", async () => {
     const headers = new Headers({
       authorization:
-        'Basic getSecret({ path: "/secrets/integrations/petshop-home", field: "basicAuth" })',
+        'Basic getSecret("/secrets/integrations/petshop-home", { field: "basicAuth" })',
       "x-token":
-        'Bearer getSecret({ path: "/secrets/integrations/petshop-home/jonas", field: "tokens.access" })',
+        'Bearer getSecret("/secrets/integrations/petshop-home/jonas", { field: "tokens.access" })',
     });
     expect(secretReferencesFromHeaders(headers)).toEqual([
       { field: "basicAuth", path: "/secrets/integrations/petshop-home" },
@@ -111,21 +111,27 @@ describe("secret reference parsing", () => {
   });
 
   test("whole-material placeholder (no field key) parses", () => {
-    const headers = new Headers({ authorization: 'Bearer getSecret({ path: "/secrets/openai" })' });
+    const headers = new Headers({ authorization: 'Bearer getSecret("/secrets/openai")' });
     expect(secretReferencesFromHeaders(headers)).toEqual([{ path: "/secrets/openai" }]);
+  });
+
+  test("does not recognize the obsolete property-bag syntax", () => {
+    const headers = new Headers({
+      authorization: 'Bearer getSecret({ path: "/secrets/openai" })',
+    });
+    expect(secretReferencesFromHeaders(headers)).toEqual([]);
   });
 
   // Telegram's Bot API authenticates in the URL PATH (`/bot<token>/<method>`;
   // there is no header auth), so the placeholder grammar reaches the request
-  // URL too. The URL parser percent-encodes the placeholder's braces/spaces/
-  // quotes when the Request is constructed; parsing must see through that.
+  // URL too. The URL parser percent-encodes the placeholder's quotes when the
+  // Request is constructed; parsing must see through that.
   test("parses placeholders from the request URL (percent-encoded by Request construction)", async () => {
     const path = "/secrets/integrations/telegram/my-bot/bot-token";
-    const request = new Request(
-      `https://api.telegram.org/botgetSecret({ path: "${path}" })/sendMessage`,
-      { method: "POST" },
-    );
-    expect(request.url).toContain("%7B"); // the parser really did encode it
+    const request = new Request(`https://api.telegram.org/botgetSecret("${path}")/sendMessage`, {
+      method: "POST",
+    });
+    expect(request.url).toContain("%22"); // the parser really did encode it
     await expect(secretReferencesFromRequest(request)).resolves.toMatchObject({
       problems: [],
       references: [{ path }],
@@ -138,12 +144,9 @@ describe("secret reference parsing", () => {
 
   test("URL and header placeholders addressing the same secret dedupe to one reference", async () => {
     const path = "/secrets/integrations/telegram/my-bot/bot-token";
-    const request = new Request(
-      `https://api.telegram.org/botgetSecret({ path: "${path}" })/getMe`,
-      {
-        headers: { "x-also": `getSecret({ path: "${path}" })` },
-      },
-    );
+    const request = new Request(`https://api.telegram.org/botgetSecret("${path}")/getMe`, {
+      headers: { "x-also": `getSecret("${path}")` },
+    });
     await expect(secretReferencesFromRequest(request)).resolves.toMatchObject({
       problems: [],
       references: [{ path }],
@@ -170,7 +173,7 @@ describe("secret reference parsing", () => {
 
   test("reports an invalid secret path without throwing", async () => {
     const result = await secretReferencePathsFromRequest(
-      new Request('https://api.example.com/getSecret({ path: "/not-a-secret" })'),
+      new Request('https://api.example.com/getSecret("/not-a-secret")'),
     );
 
     expect(result).toMatchObject({
@@ -212,7 +215,7 @@ describe("secret reference parsing", () => {
 describe("substituteSecretHeaders", () => {
   test("replaces each placeholder with the resolved value", () => {
     const request = new Request("https://api.resend.com/emails", {
-      headers: { authorization: 'Bearer getSecret({ path: "/secrets/resend", field: "apiKey" })' },
+      headers: { authorization: 'Bearer getSecret("/secrets/resend", { field: "apiKey" })' },
     });
     const substituted = substituteSecretHeaders(request, ({ path, field }) => {
       expect(path).toBe("/secrets/resend");
@@ -231,8 +234,8 @@ describe("substituteSecretHeaders", () => {
     const request = new Request("https://petshop.example/gateway-subprotocol", {
       headers: {
         upgrade: "websocket",
-        authorization: `Bearer getSecret({ path: "${path}", field: "accessToken" })`,
-        "sec-websocket-protocol": `petshop.v1, petshop.access-token.getSecret({ path: "${path}", field: "accessToken" })`,
+        authorization: `Bearer getSecret("${path}", { field: "accessToken" })`,
+        "sec-websocket-protocol": `petshop.v1, petshop.access-token.getSecret("${path}", { field: "accessToken" })`,
       },
     });
     const substituted = substituteSecretHeaders(request, ({ path: p, field }) => {
@@ -256,7 +259,7 @@ describe("substituteSecretHeaders", () => {
   // re-encode or git clone/push always 401s.
   test("substitutes a placeholder inside Basic Authorization base64", () => {
     const path = "/secrets/integrations/github/install-42";
-    const placeholder = `getSecret({ path: "${path}", field: "accessToken" })`;
+    const placeholder = `getSecret("${path}", { field: "accessToken" })`;
     const encoded = btoa(`x-access-token:${placeholder}`);
     const request = new Request(
       "https://github.com/acme/repo.git/info/refs?service=git-upload-pack",
@@ -293,8 +296,8 @@ describe("substituteSecretRequest", () => {
     const request = new Request("https://exp.host/--/api/v2/push/send", {
       body: JSON.stringify({
         messages: [
-          { to: `getSecret({ path: "${path}" })` },
-          { to: `getSecret({ path: "${path}", field: "fallback" })` },
+          { to: `getSecret("${path}")` },
+          { to: `getSecret("${path}", { field: "fallback" })` },
         ],
       }),
       headers: {
@@ -316,7 +319,7 @@ describe("substituteSecretRequest", () => {
 
   test("rejects JSON template mode without a JSON content type", async () => {
     const request = new Request("https://exp.host/--/api/v2/push/send", {
-      body: '"getSecret({ path: \\"/secrets/device-token\\" })"',
+      body: '"getSecret(\\"/secrets/device-token\\")"',
       headers: {
         "content-type": "text/plain",
         "x-iterate-secret-template": "json",
@@ -360,8 +363,8 @@ describe("substituteSecretRequest", () => {
   });
 
   test("does not substitute embedded references or JSON object keys", async () => {
-    const embedded = 'Bearer getSecret({ path: "/secrets/device-token" })';
-    const key = 'getSecret({ path: "/secrets/device-token" })';
+    const embedded = 'Bearer getSecret("/secrets/device-token")';
+    const key = 'getSecret("/secrets/device-token")';
     const request = new Request("https://api.example.com/messages", {
       body: JSON.stringify({ [key]: "unchanged", embedded }),
       headers: {
@@ -379,14 +382,11 @@ describe("substituteSecretRequest", () => {
 
   test("substitutes a URL-path placeholder (the Telegram /bot<token>/ shape) and keeps the body", async () => {
     const path = "/secrets/integrations/telegram/my-bot/bot-token";
-    const request = new Request(
-      `https://api.telegram.org/botgetSecret({ path: "${path}" })/sendMessage`,
-      {
-        body: JSON.stringify({ chat_id: 42, text: "hi" }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      },
-    );
+    const request = new Request(`https://api.telegram.org/botgetSecret("${path}")/sendMessage`, {
+      body: JSON.stringify({ chat_id: 42, text: "hi" }),
+      headers: { "content-type": "application/json" },
+      method: "POST",
+    });
     const substituted = await substituteSecretRequest(request, (reference) => {
       expect(reference).toEqual({ path });
       return "123456:AAH-abc_def";
@@ -398,12 +398,9 @@ describe("substituteSecretRequest", () => {
 
   test("substitutes headers and URL together from one resolver", async () => {
     const path = "/secrets/integrations/telegram/my-bot/bot-token";
-    const request = new Request(
-      `https://api.telegram.org/botgetSecret({ path: "${path}" })/getMe`,
-      {
-        headers: { "x-token": `getSecret({ path: "${path}" })` },
-      },
-    );
+    const request = new Request(`https://api.telegram.org/botgetSecret("${path}")/getMe`, {
+      headers: { "x-token": `getSecret("${path}")` },
+    });
     const substituted = await substituteSecretRequest(request, () => "tok");
     expect(substituted.url).toBe("https://api.telegram.org/bottok/getMe");
     expect(substituted.headers.get("x-token")).toBe("tok");
@@ -413,7 +410,7 @@ describe("substituteSecretRequest", () => {
     // %2Fusers is a legitimately percent-encoded path segment; substitution
     // must not decode it just because it scanned the URL for placeholders.
     const request = new Request("https://api.example.com/v1/files/a%2Fb?q=x%20y", {
-      headers: { authorization: 'Bearer getSecret({ path: "/secrets/example" })' },
+      headers: { authorization: 'Bearer getSecret("/secrets/example")' },
     });
     const substituted = await substituteSecretRequest(request, () => "tok");
     expect(substituted.url).toBe(request.url);
@@ -423,7 +420,7 @@ describe("substituteSecretRequest", () => {
   test("a path placeholder substitutes while innocent query params stay byte-identical", async () => {
     const path = "/secrets/integrations/telegram/my-bot/bot-token";
     const request = new Request(
-      `https://api.telegram.org/botgetSecret({ path: "${path}" })/getUpdates?offset=42&q=x%20y`,
+      `https://api.telegram.org/botgetSecret("${path}")/getUpdates?offset=42&q=x%20y`,
       { method: "POST" },
     );
     const substituted = await substituteSecretRequest(request, () => "123456:AAH-abc");
@@ -439,7 +436,7 @@ describe("substituteSecretRequest", () => {
   // provider-side 401.
   test("a placeholder in the query string throws instead of passing through", async () => {
     const request = new Request(
-      'https://api.example.com/v1/lookup?token=getSecret({ path: "/secrets/example" })',
+      'https://api.example.com/v1/lookup?token=getSecret("/secrets/example")',
     );
     await expect(substituteSecretRequest(request, () => "tok")).rejects.toThrow(
       SecretSubstitutionError,

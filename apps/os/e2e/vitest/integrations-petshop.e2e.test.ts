@@ -179,7 +179,7 @@ async function callThroughConnection(
   const response = await project.egress.fetch(
     new Request(`${petshopBaseUrl()}${path}`, {
       headers: {
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+        authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
       },
     }),
   );

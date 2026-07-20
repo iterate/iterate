@@ -53,7 +53,7 @@ test("public secret events can change egress but copied ciphertext cannot follow
   using probe = egressProbeWorker(project);
   expect(
     await probe.probeFetch({
-      headerValue: `Bearer getSecret({ path: "${secretPath}" })`,
+      headerValue: `Bearer getSecret("${secretPath}")`,
       url: attacker.url,
     }),
   ).toEqual({ error: "secret_not_found" });
@@ -161,7 +161,7 @@ test("an in-flight refresh cannot resurrect material after an egress event", asy
 
   using probe = egressProbeWorker(project);
   const request = probe.probeFetch({
-    headerValue: `Bearer getSecret({ path: "${secretPath}", field: "accessToken" })`,
+    headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
     url: `${provider.url}/resource`,
   });
   await refreshStarted;
@@ -226,7 +226,7 @@ test("a repeated refresh event before its snapshot cannot resurrect material", a
 
   using probe = egressProbeWorker(project);
   const request = probe.probeFetch({
-    headerValue: `Bearer getSecret({ path: "${secretPath}", field: "accessToken" })`,
+    headerValue: `Bearer getSecret("${secretPath}", { field: "accessToken" })`,
     url: `${provider.url}/resource`,
   });
   await resourceStarted;
@@ -274,7 +274,7 @@ test("secret egress rejects a cross-origin redirect without forwarding material"
   });
   using probe = egressProbeWorker(project);
   const responseBody = await probe.probeFetch({
-    headerValue: `Bearer getSecret({ path: "${secretPath}" })`,
+    headerValue: `Bearer getSecret("${secretPath}")`,
     url: allowed.url,
   });
 
@@ -308,7 +308,7 @@ test("URL-path secret material is not returned in Response metadata", async () =
   using probe = egressProbeWorker(project);
   const response = await probe.probeSecretResponse({
     secretPath,
-    url: `${new URL(endpoint.url).origin}/botgetSecret({ path: "${secretPath}" })/getMe`,
+    url: `${new URL(endpoint.url).origin}/botgetSecret("${secretPath}")/getMe`,
   });
 
   expect(response).toMatchObject({ url: "", redirected: false });
@@ -356,7 +356,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     });
     expect(JSON.stringify(described)).not.toContain("actual-secret-material");
 
-    const secretReference = `Bearer getSecret({ path: "${secretPath}" })`;
+    const secretReference = `Bearer getSecret("${secretPath}")`;
     const expected = "Bearer actual-secret-material";
 
     const explicitResponse = await project.egress.fetch(
@@ -370,8 +370,8 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     const jsonResponse = await project.egress.fetch(
       new Request(echo.url, {
         body: JSON.stringify({
-          nested: [{ token: `getSecret({ path: "${secretPath}" })` }],
-          note: `Bearer getSecret({ path: "${secretPath}" })`,
+          nested: [{ token: `getSecret("${secretPath}")` }],
+          note: `Bearer getSecret("${secretPath}")`,
         }),
         headers: {
           "content-type": "application/json",
@@ -387,7 +387,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     expect(jsonEcho).toMatchObject({
       body: {
         nested: [{ token: "actual-secret-material" }],
-        note: `Bearer getSecret({ path: "${secretPath}" })`,
+        note: `Bearer getSecret("${secretPath}")`,
       },
     });
     expect(jsonEcho.headers["x-iterate-secret-template"]).toBeUndefined();
@@ -528,7 +528,7 @@ test("Project egress intercept catches explicit and worker fetches before secret
       description: "intercept proof secret to be available",
     });
 
-    const secretReference = `Bearer getSecret({ path: "${secretPath}" })`;
+    const secretReference = `Bearer getSecret("${secretPath}")`;
     using intercept = await project.egress.intercept(async (request) => {
       return Response.json({
         intercepted: true,

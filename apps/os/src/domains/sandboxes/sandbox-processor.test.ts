@@ -97,17 +97,17 @@ describe("SandboxProcessor", () => {
     const { stream, driver } = sandboxHarness();
     await stream.append(
       event("events.iterate.com/sandbox/configured", {
-        env: { GH_TOKEN: 'getSecret({ path: "/secrets/gh" })', FOO: "bar" },
+        env: { GH_TOKEN: 'getSecret("/secrets/gh")', FOO: "bar" },
       }),
       event("events.iterate.com/sandbox/configured", {
-        env: { OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })', FOO: "baz" },
+        env: { OPENAI_API_KEY: 'getSecret("/secrets/openai")', FOO: "baz" },
       }),
     );
     await driver.deliver();
     const snap = await driver.snapshot();
     expect(snap.state.env).toEqual({
-      GH_TOKEN: 'getSecret({ path: "/secrets/gh" })',
-      OPENAI_API_KEY: 'getSecret({ path: "/secrets/openai" })',
+      GH_TOKEN: 'getSecret("/secrets/gh")',
+      OPENAI_API_KEY: 'getSecret("/secrets/openai")',
       FOO: "baz",
     });
   });

@@ -28,7 +28,7 @@ test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
       description: "Codex proof secret processor to fold the OpenAI key",
     });
 
-    const placeholder = `getSecret({ path: "${secretPath}" })`;
+    const placeholder = `getSecret("${secretPath}")`;
     const { path: sandboxPath } = await project.sandboxes.create({
       env: { CODEX_API_KEY: placeholder },
       instanceType: "lite",

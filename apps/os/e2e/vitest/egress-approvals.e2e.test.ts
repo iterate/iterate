@@ -155,7 +155,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     // Invalid secret paths are malformed input, but still pass through
     // method/host/path policy matching so they cannot bypass a deny rule.
     const deniedInvalidSecretPath = await project.egress.fetch(
-      new Request(`${echo.url}/getSecret({ path: "/not-a-secret" })`, { method: "DELETE" }),
+      new Request(`${echo.url}/getSecret("/not-a-secret")`, { method: "DELETE" }),
     );
     await expect(deniedInvalidSecretPath.json()).resolves.toMatchObject({
       error: "egress_denied",

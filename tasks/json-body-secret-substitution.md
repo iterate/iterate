@@ -14,7 +14,7 @@ Project egress can safely place write-only Secret material into JSON API request
 ## Checklist
 
 - [x] Add an explicit JSON-template opt-in; ordinary JSON bodies remain untouched. _`x-iterate-secret-template: json` gates parsing and is consumed before terminal fetch._
-- [x] Recursively replace only complete string values matching `getSecret({ path: ... })` or `getSecret({ path: ..., field: ... })`. _Objects and arrays are traversed after parsing; embedded references and object keys remain unchanged._
+- [x] Recursively replace only complete string values matching `getSecret(path)` or `getSecret(path, { field })`. _Objects and arrays are traversed after parsing; embedded references and object keys remain unchanged._
 - [x] Reject malformed JSON, unsupported content types/modes, oversized bodies, and unresolved marked templates before vendor egress. _Stable Secret error responses cover each invalid request shape and parsing is capped at 1 MiB._
 - [x] Preserve the one-project-secret-per-request rule, origin pins, redirect validation, and usage audit. _Substitution remains inside the Secret Durable Object's existing fetch boundary._
 - [x] Document the public request shape and provide an executable example. _The Secrets design, ADR, ITX description, and Postman Echo example cover marked JSON bodies._

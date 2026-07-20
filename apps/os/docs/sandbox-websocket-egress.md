@@ -22,7 +22,7 @@ await itx.secrets.get(secretPath).update({
 await itx.sandboxes.create({
   name: "codex",
   instanceType: "lite",
-  env: { CODEX_API_KEY: `getSecret({ path: "${secretPath}" })` },
+  env: { CODEX_API_KEY: `getSecret("${secretPath}")` },
 });
 ```
 

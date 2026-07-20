@@ -36,7 +36,7 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
  *   journaled as a `configured` event); values are conventionally
- *   `getSecret({ path })` placeholders substituted only at egress — real
+ *   `getSecret(path)` placeholders substituted only at egress — real
  *   secret material never enters the container. All sandbox egress flows
  *   through project egress policy; there is no direct internet path.
  * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
@@ -101,7 +101,7 @@ export type SandboxCreateInput = {
    * `sleep()` or `destroy()` explicitly. */
   keepAlive?: boolean;
   /** Initial env-var map, merged as if by `setEnvVars` — values are
-   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw
+   * `getSecret(path)` placeholders or non-secret literals, NEVER raw
    * secret material. */
   env?: Record<string, string>;
 };

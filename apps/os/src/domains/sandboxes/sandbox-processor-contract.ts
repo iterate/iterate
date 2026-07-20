@@ -42,8 +42,7 @@ const SANDBOX_EVENTS = {
           instanceType: "basic",
           sleepAfter: "10m",
           env: {
-            GH_TOKEN:
-              'getSecret({ path: "/secrets/integrations/github/acme", field: "accessToken" })',
+            GH_TOKEN: 'getSecret("/secrets/integrations/github/acme", { field: "accessToken" })',
           },
         },
       },
@@ -176,7 +175,7 @@ const SANDBOX_EVENTS = {
   },
   "events.iterate.com/sandbox/configured": {
     description:
-      "The sandbox's env-var map changed (setEnvVars, or `env` at create). `env` is the map set in this change (key → value; null = key unset); values are conventionally `getSecret({ path })` placeholders substituted only at egress, or non-secret literals. NEVER put raw secret material in a value — it lands on this durable stream.",
+      "The sandbox's env-var map changed (setEnvVars, or `env` at create). `env` is the map set in this change (key → value; null = key unset); values are conventionally `getSecret(path)` placeholders substituted only at egress, or non-secret literals. NEVER put raw secret material in a value — it lands on this durable stream.",
     payloadSchema: z.object({ env: z.record(z.string(), z.string().nullable()) }),
     examples: [
       {
@@ -184,8 +183,7 @@ const SANDBOX_EVENTS = {
           "setEnvVars set GH_TOKEN to a getSecret placeholder (substituted only at egress) and unset DEBUG.",
         payload: {
           env: {
-            GH_TOKEN:
-              'getSecret({ path: "/secrets/integrations/github/acme", field: "accessToken" })',
+            GH_TOKEN: 'getSecret("/secrets/integrations/github/acme", { field: "accessToken" })',
             DEBUG: null,
           },
         },

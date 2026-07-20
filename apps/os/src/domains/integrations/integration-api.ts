@@ -174,7 +174,7 @@ async function handleMcpOAuthCallback(input: {
             `The OAuth connection to ${result.mcpUrl} is done. The token is stored write-only at ` +
               `"${result.path}" (pinned to ${result.secret.egress.urls.join(", ")}). Connect with ` +
               `itx.mcp.connect({ url: "${result.mcpUrl}", headers: { authorization: ` +
-              `'Bearer getSecret({ path: "${result.path}", field: "accessToken" })' } }).`,
+              `'Bearer getSecret("${result.path}", { field: "accessToken" })' } }).`,
           );
       } catch (cause) {
         console.error("mcp-oauth: failed to notify", result.notify, cause);

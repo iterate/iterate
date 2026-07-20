@@ -163,7 +163,7 @@ and pushed.
 Every sandbox carries a durable env-var map applied to every command —
 `create({ env })` seeds it, `setEnvVars(vars)` merges into it (the SDK's own method name, made durable) (each call
 emits a `configured` event). Values are conventionally
-`getSecret({ path })` placeholders: the material stays in the secret system
+`getSecret(path)` placeholders: the material stays in the secret system
 and is substituted only at the egress door, so code in the sandbox reads e.g.
 `OPENAI_API_KEY` from its environment and calls the provider while the real
 key never enters the container (or its snapshots). **Never pass raw secret

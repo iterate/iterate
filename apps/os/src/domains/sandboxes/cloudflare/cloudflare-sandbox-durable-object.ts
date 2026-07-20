@@ -64,7 +64,7 @@ const BACKUP_HANDLE_STORAGE_KEY = "iterate-sandbox-workspace-backup-v2";
 /**
  * Durable env-var map for the sandbox (see {@link SandboxDurableObject}).
  * A `Record<string,string>` applied to every command in the container;
- * conventionally ALL_CAPS keys whose values are `getSecret({ path })`
+ * conventionally ALL_CAPS keys whose values are `getSecret(path)`
  * placeholders — so the material stays in the secret system and is injected
  * only at egress, never entering the container.
  */
@@ -1004,7 +1004,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * key. Keeping the SDK's name (rather than a bespoke `configureEnvVars`)
    * means a docs-reading caller can't pick the silently-non-durable spelling.
    *
-   * The intended value shape is a `getSecret({ path })` placeholder: the
+   * The intended value shape is a `getSecret(path)` placeholder: the
    * material then stays in the secret system and is substituted only at egress
    * (the project egress path already does this for any header carrying the
    * placeholder), so code in the sandbox can read e.g. `OPENAI_API_KEY` from

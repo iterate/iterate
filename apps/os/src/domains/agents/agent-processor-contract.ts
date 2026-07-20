@@ -223,7 +223,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // substitutes server-side into matching egress requests via a placeholder:",
   '  await itx.secrets.get("/secrets/acme").create({ egress: { urls: ["https://api.acme.com/"] }, material: "sk-live-..." });',
   '  const me = await itx.egress.fetch("https://api.acme.com/v1/me", {',
-  "    headers: { authorization: 'Bearer getSecret({ path: \"/secrets/acme\" })' },",
+  "    headers: { authorization: 'Bearer getSecret(\"/secrets/acme\")' },",
   "  });",
   "  // Only the USER has the key? NEVER ask for it in chat — mint a form page; when they",
   "  // submit, the secret exists and a message wakes you (full flow: `secret-collect-from-user`):",

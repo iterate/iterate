@@ -20,7 +20,7 @@ test("the Expo adapter distinguishes ticket acceptance from device delivery", as
   expect(result).toEqual({ status: "ok", ticketId: "ticket-123" });
   expect(requests).toHaveLength(1);
   await expect(requests[0]!.json()).resolves.toMatchObject({
-    to: 'getSecret({ path: "/secrets/devices/phone/expo-push-token" })',
+    to: 'getSecret("/secrets/devices/phone/expo-push-token")',
     title: "Reminder",
     body: "Buy milk",
     expiration: Math.floor(Date.parse("2026-07-18T08:05:00Z") / 1_000),

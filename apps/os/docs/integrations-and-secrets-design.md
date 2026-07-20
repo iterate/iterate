@@ -36,7 +36,8 @@ allowlist, an optional refresh strategy, an audit record.
 - `__describe()` — the node's self-report, metadata only (hasMaterial,
   egress, refresh kind, audit); material never leaves, in snapshots or pushes.
 - `fetch(request)` — the only lane material travels. Every request must carry
-  at least one `getSecret({ path[, field] })` placeholder for THIS secret in
+  at least one `getSecret("/secrets/…")` or
+  `getSecret("/secrets/…", { field: "…" })` placeholder for THIS secret in
   its headers, URL path, or explicitly marked JSON body (one request, one secret); the DO substitutes
   from decrypted material and dispatches, after checking the destination
   origin against the pin. Substitution reaches headers plus the URL PATH

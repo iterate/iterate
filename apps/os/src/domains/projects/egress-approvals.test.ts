@@ -138,7 +138,7 @@ describe("canonical approval message", () => {
   const requested = {
     method: "POST",
     url: "https://api.stripe.com/v1/transfers",
-    headers: { authorization: 'Bearer getSecret({ path: "/secrets/stripe/prod" })' },
+    headers: { authorization: 'Bearer getSecret("/secrets/stripe/prod")' },
     bodySha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
     secretPaths: ["/secrets/stripe/prod"],
   };

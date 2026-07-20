@@ -155,7 +155,7 @@ export function githubConnectionSecretPath(connection: string): string {
  * the sandbox `GH_TOKEN` env var can't drift from the material's field name.
  */
 export function githubAccessTokenPlaceholder(connection: string): string {
-  return `getSecret({ path: "${githubConnectionSecretPath(connection)}", field: "accessToken" })`;
+  return `getSecret("${githubConnectionSecretPath(connection)}", { field: "accessToken" })`;
 }
 
 /** Hosts a GitHub connection secret's egress is pinned to: the API (REST +
