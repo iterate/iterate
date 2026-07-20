@@ -78,6 +78,10 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
     return <StreamWakeRow item={item} />;
   }
 
+  if (item.kind === "processor-revived") {
+    return <ProcessorRevivedRow item={item} />;
+  }
+
   if (item.kind === "child-stream-created") {
     return <ChildStreamCreatedRow item={item} projectSlug={projectSlug} />;
   }
@@ -221,13 +225,63 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
           <TooltipContent className="max-w-80 text-left leading-snug">
             <p>
               This can happen when the Durable Object is evicted or crashed, and most often when we
-              do a production deployment. All Durable Objects currently crash and do not recover
-              cleanly; we will fix that in the future.
+              do a production deployment. Processors with in-flight work are revived and adopt it; a
+              revival marker appears in the feed when that happens.
             </p>
           </TooltipContent>
         </Tooltip>
       </div>
       <div className="h-px flex-1 bg-purple-500/45" />
+    </div>
+  );
+}
+
+function ProcessorRevivedRow({
+  item,
+}: {
+  item: Extract<AgentUiItem, { kind: "processor-revived" }>;
+}) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+  const label =
+    item.processorSlug == null ? "Processor revived" : `${item.processorSlug} processor revived`;
+
+  return (
+    <div
+      className="flex items-center gap-3 py-3"
+      data-testid="agent-feed-processor-revived"
+      data-kind="processor-revived"
+    >
+      <div className="h-px flex-1 bg-amber-500/40" />
+      <div className="flex shrink-0 items-center gap-1.5">
+        <time
+          className="font-mono text-xs font-medium text-amber-700 dark:text-amber-300"
+          dateTime={dateTime}
+          title={formatDateTime(item.timestampMs)}
+        >
+          {label}
+        </time>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="What does a processor revival mean?"
+                className="inline-flex size-4 items-center justify-center rounded-full text-amber-700/75 transition-colors hover:text-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60 dark:text-amber-300/75 dark:hover:text-amber-200"
+              />
+            }
+          >
+            <CircleQuestionMarkIcon className="size-3.5" aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-80 text-left leading-snug">
+            <p>
+              This processor's runtime died while it had work in flight (an eviction, crash, or
+              deployment) and the platform revived it. The open work was adopted and continued —
+              nothing was cancelled or lost.
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      <div className="h-px flex-1 bg-amber-500/40" />
     </div>
   );
 }

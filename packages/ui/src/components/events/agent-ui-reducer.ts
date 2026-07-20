@@ -223,12 +223,25 @@ export type AgentUiStreamPauseItem = {
   timestampMs: number;
 };
 
+/** The platform revived a processor whose incarnation died owing background
+ * work. Recovery is adoption — the open request survives and settles normally
+ * — so this renders as a subtle marker, never as a cancelled/failed step. */
+export type AgentUiProcessorRevivedItem = {
+  kind: "processor-revived";
+  id: string;
+  processorSlug?: string;
+  /** Lifetime revival count for this processor, when the payload carries it. */
+  revivals?: number;
+  timestampMs: number;
+};
+
 export type AgentUiItem =
   | AgentUiMessageItem
   | AgentUiActivity
   | AgentUiStreamWakeItem
   | AgentUiChildStreamItem
-  | AgentUiStreamPauseItem;
+  | AgentUiStreamPauseItem
+  | AgentUiProcessorRevivedItem;
 
 export type AgentUiProcessorAnnouncement = {
   slug: string;
@@ -525,6 +538,7 @@ const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
+const STREAM_PROCESSOR_REVIVED = "events.iterate.com/stream/processor-revived";
 const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
 const STREAM_PAUSED = "events.iterate.com/stream/paused";
 const STREAM_RESUMED = "events.iterate.com/stream/resumed";
@@ -891,6 +905,23 @@ function reduceAgentUiEvent(
         kind: "stream-woken",
         id: `stream-woken-${event.offset}`,
         text: STREAM_WAKE_LABEL,
+        timestampMs,
+      });
+    }
+
+    case STREAM_PROCESSOR_REVIVED: {
+      // A processor incarnation died owing background work and the platform
+      // revived it. The open request was ADOPTED and settles normally, so
+      // this is a subtle marker — never a cancelled or failed step.
+      const payload = readPayloadRecord(event);
+      const processorSlug =
+        typeof payload?.processorSlug === "string" ? payload.processorSlug : undefined;
+      const revivals = typeof payload?.revivals === "number" ? payload.revivals : undefined;
+      return emitItem(state, items, {
+        kind: "processor-revived",
+        id: `processor-revived-${event.offset}`,
+        ...(processorSlug === undefined ? {} : { processorSlug }),
+        ...(revivals === undefined ? {} : { revivals }),
         timestampMs,
       });
     }

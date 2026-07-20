@@ -541,6 +541,49 @@ describe("agent-ui reducer", () => {
     expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
   });
 
+  test("shows a subtle processor-revived marker without disturbing a live activity", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "hi" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test", expiresAt: Date.parse("2026-06-11T00:10:00.000Z") },
+      },
+      // The incarnation died mid-turn; the platform revived the processor and
+      // the open request was ADOPTED — it settles normally afterwards.
+      {
+        type: "events.iterate.com/stream/processor-revived",
+        payload: { processorSlug: "agent", revivals: 2, version: "test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          durationMs: 2100,
+          result: { status: "succeeded", text: "hi again" },
+        },
+      },
+    ]);
+
+    // The marker emitted in place; the adopted request still settled as one
+    // ordinary completed step — no cancelled/failed outcome from the crash.
+    expect(state.items).toContainEqual({
+      kind: "processor-revived",
+      id: "processor-revived-3",
+      processorSlug: "agent",
+      revivals: 2,
+      timestampMs: Date.parse("2026-06-11T00:00:03.000Z"),
+    });
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "completed",
+    });
+  });
+
   test("shows child stream creation events in the agent feed", () => {
     const state = reduceAll([
       {

@@ -326,6 +326,12 @@ function FeedItem({ item }: { item: AgentUiItem }) {
       return <ActivityCard activity={item} />;
     case "stream-woken":
       return <Text style={styles.wakeMarker}>— {item.text || "stream woke"} —</Text>;
+    case "processor-revived":
+      return (
+        <Text style={styles.wakeMarker}>
+          — {item.processorSlug == null ? "processor" : `${item.processorSlug} processor`} revived —
+        </Text>
+      );
     case "child-stream-created":
       return <Text style={styles.wakeMarker}>— created child stream {item.childPath} —</Text>;
     case "stream-paused":
