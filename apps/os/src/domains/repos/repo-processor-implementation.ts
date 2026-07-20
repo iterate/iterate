@@ -117,7 +117,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   protected override processEvent(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { blockProcessorWhile, event, state, append, appendTo } = args;
+    const { blockProcessorWhile, event, state, appendTo } = args;
     if (event !== null && event.type === "events.iterate.com/repo/created") {
       blockProcessorWhile(() =>
         appendTo("/", {
@@ -149,7 +149,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]["event"]
     >,
   ): void {
-    const { blockProcessorWhile, state, append, appendTo } = args;
+    const { blockProcessorWhile, state, append } = args;
     if (event.type === "events.iterate.com/repo/created") return;
     if (event.type === "events.iterate.com/repo/cloudflare-artifact-event-received") {
       const push = repoArtifactPushFromEventPayload(event.payload);
