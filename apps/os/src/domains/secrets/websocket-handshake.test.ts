@@ -82,7 +82,7 @@ describe("downstreamHandshakeHeaders", () => {
   test("never invents a subprotocol or forwards an unoffered substituted value", async () => {
     const request = new Request("https://example.com/ws", {
       headers: {
-        "Sec-WebSocket-Protocol": 'getSecret({ path: "/secrets/token" })',
+        "Sec-WebSocket-Protocol": 'getSecret("/secrets/token")',
       },
     });
     const noSelection = await downstreamHandshakeHeaders(request, new Headers());
@@ -98,7 +98,7 @@ describe("downstreamHandshakeHeaders", () => {
   test("replaces an upstream Accept derived from a substituted secret key", async () => {
     const request = new Request("https://example.com/ws", {
       headers: {
-        "Sec-WebSocket-Key": 'getSecret({ path: "/secrets/token" })',
+        "Sec-WebSocket-Key": 'getSecret("/secrets/token")',
       },
     });
     const secretDerivedAccept = await computeSecWebSocketAccept("real-secret-value");
@@ -110,7 +110,7 @@ describe("downstreamHandshakeHeaders", () => {
 
     expect(headers.get("sec-websocket-accept")).not.toBe(secretDerivedAccept);
     expect(headers.get("sec-websocket-accept")).toBe(
-      await computeSecWebSocketAccept('getSecret({ path: "/secrets/token" })'),
+      await computeSecWebSocketAccept('getSecret("/secrets/token")'),
     );
   });
 });

@@ -15,6 +15,7 @@ import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
+import { assertPushTokenSecretRevision } from "../devices/push-token-consistency.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import type {
   SecretCreateInput,
@@ -229,6 +230,41 @@ export class SecretDurableObject extends DurableObject<Env> {
     return result;
   }
 
+  /** @internal Atomically clear material only when the caller still names the
+   * exact material/policy revision it used. This prevents a late provider
+   * rejection from deleting a credential that rotated while the request was
+   * in flight. */
+  clearMaterialIfUpdatedOffset(input: { expectedUpdatedOffset: number }) {
+    const result = this.#updates.then(() => this.#clearMaterialIfUpdatedOffset(input));
+    this.#updates = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async #clearMaterialIfUpdatedOffset(input: { expectedUpdatedOffset: number }): Promise<boolean> {
+    for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.#snapshotWithOffset();
+      if (snapshot.state.updatedOffset !== input.expectedUpdatedOffset) return false;
+      if (snapshot.state.encryptedMaterial === null) return true;
+      try {
+        const [event] = await this.#appendSecretEvent({
+          offset: snapshot.offset + 1,
+          type: "events.iterate.com/secret/updated",
+          payload: { egress: snapshot.state.egress },
+        });
+        await this.#waitUntilProcessed(event!.offset);
+        return true;
+      } catch (error) {
+        if (!isStreamOffsetConflictError(error) || attempt === MAX_MATERIAL_APPEND_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+    throw new Error("unreachable conditional secret clear retry state");
+  }
+
   async #update(input: SecretUpdateInput) {
     if (input.material === undefined && input.egress === undefined && input.refresh === undefined) {
       throw new Error("secret.update requires material, egress, or refresh");
@@ -306,12 +342,25 @@ export class SecretDurableObject extends DurableObject<Env> {
    * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
-    let references;
-    try {
-      references = secretReferencesFromRequest(request);
-    } catch {
-      return secretErrorResponse("secret_reference_required");
-    }
+    return await this.#fetch(request, { kind: "any-revision" });
+  }
+
+  async fetchAtUpdatedOffset(
+    request: Request,
+    input: { expectedUpdatedOffset: number },
+  ): Promise<Response> {
+    return await this.#fetch(request, {
+      kind: "exact-revision",
+      updatedOffset: input.expectedUpdatedOffset,
+    });
+  }
+
+  async #fetch(
+    request: Request,
+    revision: { kind: "any-revision" } | { kind: "exact-revision"; updatedOffset: number },
+  ): Promise<Response> {
+    const { problems, references } = await secretReferencesFromRequest(request);
+    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
     if (references.length === 0) return secretErrorResponse("secret_reference_required");
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
@@ -321,6 +370,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     try {
       let state = await this.#snapshot();
       assertSecretCreated(state, this.#name.path);
+      assertSecretRevision(state, revision);
       assertOriginPinned(request.url, state);
 
       // A refresh-and-retry needs the body twice; clone while it is still
@@ -343,6 +393,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         if (retry === null || !isMintableMiss(error)) throw error;
         await this.#refresh(retry);
         state = await this.#snapshot();
+        assertSecretRevision(state, revision);
         substituted = await this.#substitute(retry.source, state);
         retry = null; // one refresh per request: a just-minted token gets no second go
       }
@@ -364,6 +415,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         return await withWebSocketHandshakeHeaders(request, response);
       }
       const retriedState = await this.#snapshot();
+      assertSecretRevision(retriedState, revision);
       const retried = await this.#substitute(retry.source, retriedState);
       await this.#appendUsed(request.url);
       await this.#assertGithubInstallationUseAuthorized(retriedState.refresh);
@@ -422,7 +474,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     return await constantTimeStringEquals(expected, input.value);
   }
 
-  /** Substitute this secret's placeholders (headers + URL) from decrypted material. */
+  /** Substitute this secret's placeholders (headers, URL path, opted-in JSON) from material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
     const material =
       state.encryptedMaterial === null
@@ -852,6 +904,15 @@ function describeSecretState(state: SecretState): SecretDescription {
 function assertSecretCreated(state: SecretState, path: string): void {
   if (state.birthCertificate === null) {
     throw new Error(`secret has not been created: ${path}`);
+  }
+}
+
+function assertSecretRevision(
+  state: SecretState,
+  revision: { kind: "any-revision" } | { kind: "exact-revision"; updatedOffset: number },
+): void {
+  if (revision.kind === "exact-revision" && state.updatedOffset !== revision.updatedOffset) {
+    assertPushTokenSecretRevision(state.updatedOffset, revision.updatedOffset);
   }
 }
 

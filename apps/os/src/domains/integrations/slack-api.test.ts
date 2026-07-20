@@ -150,7 +150,7 @@ describe("connectionSlackClient", () => {
       // deployment credential.
       for (const request of mocks.requests) {
         expect(request.headers.get("authorization")).toBe(
-          'Bearer getSecret({ path: "/secrets/integrations/slack/main/bot-token" })',
+          'Bearer getSecret("/secrets/integrations/slack/main/bot-token")',
         );
       }
       for (const request of mocks.deploymentRequests) {

@@ -139,17 +139,30 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   protected override processEvent(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { blockProcessorWhile, event, state, append } = args;
+    const { event, state } = args;
     if (state.createRequest === null && state.birthCertificate === null) return;
+    // Per-event blockers register FIRST: `blockProcessorWhile` runs in FIFO
+    // registration order, so the at-head registration below must come after
+    // them — its appends must land after this frame's per-event appends.
+    if (event !== null) this.#processConsumedEvent(args, event);
     // AT-HEAD reconcile (was onCaughtUp): drive the repo's two durable
     // obligations (create, github-import) from the whole fold. ONE outer
     // blocking closure so the create seed+append is awaited before this head
     // event's deferred commit; a mid-catch-up fold never reaches it.
-    if (state.createRequest !== null && args.delivery.caughtUp) {
-      args.blockProcessorWhileCaughtUp(() => this.#reconcileObligations(args));
+    if (args.delivery.caughtUp) {
+      args.blockProcessorWhile(() => this.#reconcileObligations(args));
     }
-    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
-    if (event === null) return;
+  }
+
+  /** The per-event chain, extracted so its early `return`s exit only this
+   * helper and can never skip the at-head registration in `processEvent`. */
+  #processConsumedEvent(
+    args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
+    event: NonNullable<
+      Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0]["event"]
+    >,
+  ): void {
+    const { blockProcessorWhile, state, append } = args;
     if (
       event.type === "events.iterate.com/repos/create-requested" ||
       event.type === "events.iterate.com/repos/created" ||
@@ -285,8 +298,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const request = args.state.createRequest;
-    if (request === null) return;
-    if (args.state.birthCertificate === null) {
+    if (request !== null && args.state.birthCertificate === null) {
       const artifact = await this.#createRepo(request);
       await args.append({
         type: "events.iterate.com/repos/created",

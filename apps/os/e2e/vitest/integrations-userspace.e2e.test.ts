@@ -124,7 +124,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
     expect(search).toEqual({
       operation: "search-products",
       payload: { term: "milk" },
-      sentAuthorization: 'getSecret({ path: "/secrets/integrations/ocado/family/session" })',
+      sentAuthorization: 'getSecret("/secrets/integrations/ocado/family/session")',
       receivedAuthorization: secrets.family,
     });
 
@@ -132,7 +132,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
     expect(basket).toEqual({
       operation: "basket-add",
       payload: { itemId: "item-123" },
-      sentAuthorization: 'getSecret({ path: "/secrets/integrations/ocado/mum/session" })',
+      sentAuthorization: 'getSecret("/secrets/integrations/ocado/mum/session")',
       receivedAuthorization: secrets.mum,
     });
 
@@ -264,7 +264,7 @@ test.skipIf(shouldSkipPetshopE2e())(
         new Request(`${petshop}${path}`, {
           headers: {
             authorization:
-              'Bearer getSecret({ path: "/secrets/integrations/waitrose/mum/session", field: "accessToken" })',
+              'Bearer getSecret("/secrets/integrations/waitrose/mum/session", { field: "accessToken" })',
           },
         }),
       );
@@ -310,7 +310,7 @@ function ocadoWorkerSource(echoUrl: string): string {
     // cannot see its tokens.
     function ocadoSdk(connection) {
       const authorization =
-        'getSecret({ path: "/secrets/integrations/ocado/' + connection + '/session" })';
+        'getSecret("/secrets/integrations/ocado/' + connection + '/session")';
       const call = async (operation, payload) => {
         const response = await fetch(OCADO_API_URL, {
           method: "POST",

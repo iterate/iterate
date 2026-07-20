@@ -28,7 +28,6 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
-import { newWebSocketRpcSession } from "capnweb";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -54,6 +53,10 @@ import {
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
 } from "iterate/live-state";
+import type {
+  ValidateProjectAppSessionInput,
+  ValidatedProjectAppSession,
+} from "@iterate-com/auth-contract/worker";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -291,6 +294,10 @@ import {
   type ProjectAuthPolicy,
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
+import {
+  localProjectAppSessionValidator,
+  verifyProjectAppSessionToken,
+} from "./auth/project-app-session-token.ts";
 import type {
   McpBeginOAuthInput,
   McpBeginOAuthResult,
@@ -2206,77 +2213,6 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   }
 }
 
-/**
- * Externally deployed apps as capabilities. `get(url, { headers })` dials the
- * remote Cap'n Web WebSocket endpoint through PROJECT EGRESS — headers may
- * carry `getSecret({ path: "...", field: "..." })` placeholders, substituted
- * server-side by the referenced secret under its origin pin, so the mount
- * never holds credential material and a re-pointed URL outside the pin fails
- * substitution — and returns the remote session's root stub. Mount one
- * durably as an ordinary itx-expression capability:
- *
- *   capabilityHosts.get("/").provideCapability({
- *     type: "itx-expression",
- *     path: ["todos"],
- *     expression: ["remoteCapability", ["get", "wss://my-todos.example/api",
- *       { headers: { authorization: "Bearer getSecret({ path: \"/secrets/my-todos\", field: \"apiKey\" })" } }]],
- *   })
- *
- * after which `itx.todos.<method>(...)` walks the remote root per invoke —
- * the expression is a NAME, re-dialed from project authority each time, so
- * revoking the mount (or the secret) is the whole off switch.
- */
-class RemoteCapabilityCollectionRpcTarget extends IterateRpcTarget<"RemoteCapabilityCollection"> {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  async __describe(): Promise<Description> {
-    return describeNode({
-      instructions:
-        "Externally deployed Cap'n Web apps: get(url, { headers }) dials the remote WebSocket endpoint through project egress (headers may carry getSecret(...) placeholders — substituted server-side, origin-pinned) and returns the remote session's root stub. Persist a mount with an itx-expression capability naming this call.",
-      children: {
-        get: "Dial a remote Cap'n Web endpoint (ws/wss/http/https URL) and return its root stub.",
-      },
-      parent: "a project itx (itx.remoteCapability)",
-    });
-  }
-
-  /**
-   * Dial `url` (ws/wss — or http/https, upgraded) with `headers` and return
-   * the remote Cap'n Web session's root stub. One dial per call: the session
-   * lives as long as the returned stub graph, and disposal closes it.
-   */
-  async get(url: string, options?: { headers?: Record<string, string> }): Promise<unknown> {
-    const target = new URL(url);
-    if (target.protocol === "ws:") target.protocol = "http:";
-    if (target.protocol === "wss:") target.protocol = "https:";
-    if (target.protocol !== "http:" && target.protocol !== "https:") {
-      throw new Error(`remote capability URL must be ws(s) or http(s), got "${url}"`);
-    }
-    // The upgrade goes through project egress: the approval gate sees the
-    // placeholder-form request, and the referenced secret's own DO
-    // substitutes handshake headers under its origin pin.
-    const headers = new Headers(options?.headers ?? {});
-    headers.set("upgrade", "websocket");
-    const egress = projectEgressFetcher(this.props.ctx.exports, this.props.projectId);
-    const response = await egress.fetch(new Request(target.toString(), { headers }));
-    const webSocket = response.webSocket;
-    if (webSocket === null || webSocket === undefined) {
-      throw new Error(
-        `remote capability endpoint did not accept the WebSocket upgrade: ${response.status} ${await response
-          .text()
-          .catch(() => "")}`.trim(),
-      );
-    }
-    webSocket.accept();
-    // The workerd client socket satisfies the standard listener surface the
-    // Cap'n Web transport uses; the cast bridges the workers-types/DOM gap.
-    return newWebSocketRpcSession(webSocket as unknown as WebSocket);
-  }
-}
-
 /** Enrolled mobile installations within one project. */
 class DeviceCollectionRpcTarget extends IterateRpcTarget<"DeviceCollection"> {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
@@ -2354,11 +2290,11 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
   }
 
   append(...events: DeviceAppendInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(this.props.auth.principal, ...events);
+    return this.durableObjectStub.append(...events);
   }
 
   revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
-    return this.durableObjectStub.revoke(this.props.auth.principal, reason);
+    return this.durableObjectStub.revoke(reason);
   }
 
   kill(): Promise<void> {
@@ -3050,7 +2986,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // refreshes on 401.
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+        authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
         request: args[0] as GmailRequestInput,
         send: (request) =>
           env.SECRET.getByName(
@@ -5049,7 +4985,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
       credentials,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
-      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+      validateSession: projectAppSessionValidator(),
     });
   }
 
@@ -5064,9 +5000,24 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
-      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+      validateSession: projectAppSessionValidator(),
     });
   }
+}
+
+/**
+ * Session validation for project app hosts: local HS256 verification when the
+ * shared secret is configured (the hot per-request path — no auth-worker
+ * hop; the token's TTL bounds membership staleness), else the auth worker's
+ * validate RPC, which also re-checks membership live. The mint side always
+ * stays with the auth worker — it runs once per login, not per request.
+ */
+function projectAppSessionValidator(): (
+  input: ValidateProjectAppSessionInput,
+) => Promise<ValidatedProjectAppSession | null> {
+  const secret = parseConfig(env).projectAppSessionSecret;
+  if (secret === undefined) return (input) => env.AUTH.validateProjectAppSession(input);
+  return localProjectAppSessionValidator(secret.exposeSecret());
 }
 /**
  * THE one table of project built-ins: member name -> one-line blip. The
@@ -5086,8 +5037,6 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   devices:
     "Enrolled phone devices: list() discovers safe metadata; get(deviceId).append(...) requests a push notification.",
   egress: "Project-attributed outbound fetch (+ intercept).",
-  remoteCapability:
-    'Externally deployed Cap\'n Web apps: get(url, { headers }) dials the remote WebSocket endpoint through project egress (headers may carry getSecret(...) placeholders — substituted server-side, origin-pinned) and returns the remote session\'s root stub. Mount one durably: provideCapability({ type: "itx-expression", path: [...], expression: ["remoteCapability", ["get", url, { headers }]] }). See docs/remote-apps.md.',
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
   docs: 'Find working code + types: search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
@@ -5096,6 +5045,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   integrations:
     'Integration connection families: get() selects the first connected account and get("<connection>") selects an exact one; e.g. itx.integrations.slack.get().chat.postMessage(...), gmail.get().request(...), github.get().octokit.rest.repos.get(...). list() enumerates all connections; other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   kill: "Restart the project's server-side object; the next request boots it fresh.",
+  kv: "Durable project key-value store for small policy knobs: get(key), set(key, value), delete(key), list({ prefix? }).",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
@@ -5353,6 +5303,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new LiveDemoRpcTarget(() => this.#projectDo.incrementLiveDemo());
   }
 
+  /** Small durable project key-value store: get/set/delete/list. */
+  get kv(): KvRpcTarget {
+    return new KvRpcTarget(this.#props.projectId);
+  }
+
   /** Workers AI: run(model, body), models(). */
   get ai(): AiRpcTarget {
     return new AiRpcTarget();
@@ -5576,15 +5531,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Dynamic worker refs: get(ref). */
   get workers(): DynamicWorkerCollectionRpcTarget {
     return new DynamicWorkerCollectionRpcTarget({
-      auth: this.#props.auth,
-      ctx: this.#props.ctx,
-      projectId: this.#props.projectId,
-    });
-  }
-
-  /** Externally deployed Cap'n Web apps: get(url, { headers }) → remote root stub, dialed through project egress. */
-  get remoteCapability(): RemoteCapabilityCollectionRpcTarget {
-    return new RemoteCapabilityCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
       projectId: this.#props.projectId,
@@ -5818,6 +5764,15 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
             path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
           }),
         ).verifyMaterialField({ value: secret }),
+      // The project-app-session lane's verifier: local HS256 against the
+      // shared session secret — no auth-worker hop; membership was checked
+      // at mint time and the token's 15-minute TTL bounds revocation lag.
+      verifyProjectAppSession: async (token) => {
+        const secret = this.props.config.projectAppSessionSecret;
+        if (secret === undefined) return null;
+        const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
+        return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
+      },
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }
@@ -6036,7 +5991,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution; intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -6049,7 +6004,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     super();
   }
 
-  /** Outbound fetch with the project's identity and secret substitution. */
+  /** Outbound fetch with project identity and secret substitution. Set
+   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
+   * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }
@@ -6768,6 +6725,85 @@ class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
   }
 }
 
+/**
+ * `itx.kv` — a small durable project key-value store on Workers KV (the
+ * deployment's PROJECT_DIRECTORY namespace, keys prefixed with the project
+ * id). Stateless by design: no Durable Object in the path, so a config
+ * worker can read a policy knob on every request for microseconds (the
+ * canonical example: its reverse-proxy target, flipped between the deployed
+ * app and a dev tunnel). KV is eventually consistent across the edge —
+ * writes are visible immediately in the writing location and within ~60s
+ * everywhere else — which is the right trade for knobs and exactly the
+ * wrong one for data (streams), files (files), or credentials (secrets).
+ * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.
+ */
+class KvRpcTarget extends IterateRpcTarget<"Kv"> {
+  readonly #projectId: string;
+
+  constructor(projectId: string) {
+    super();
+    this.#projectId = projectId;
+  }
+
+  #key(key: string): string {
+    // 256 chars leaves comfortable headroom under Workers KV's 512-BYTE
+    // limit on the full stored key (prefix + project id included); the byte
+    // check catches multibyte keys the char count alone would let through.
+    if (typeof key !== "string" || key.length === 0 || key.length > 256) {
+      throw new Error("kv keys are non-empty strings of at most 256 characters");
+    }
+    const stored = `projectkv:${this.#projectId}:${key}`;
+    if (new TextEncoder().encode(stored).length > 512) {
+      throw new Error("kv key too large once encoded (the full stored key must fit 512 bytes)");
+    }
+    return stored;
+  }
+
+  /** The stored value, or null when the key is absent. */
+  get(key: string): Promise<unknown> {
+    return env.PROJECT_DIRECTORY.get(this.#key(key), "json");
+  }
+
+  /** Store a JSON-serializable value (≤64KiB) under a key (≤512 chars). */
+  async set(key: string, value: unknown): Promise<void> {
+    if (value === undefined || value === null) {
+      throw new Error("kv.set requires a value; use kv.delete to remove a key");
+    }
+    const serialized = JSON.stringify(value);
+    // NaN/Infinity stringify to the literal "null", which would make get()
+    // indistinguishable from an absent key while list() still shows it.
+    if (serialized === undefined || serialized === "null") {
+      throw new Error("kv values must be JSON-serializable (null, NaN, and Infinity are not)");
+    }
+    const serializedBytes = new TextEncoder().encode(serialized).length;
+    if (serializedBytes > 64 * 1024) {
+      throw new Error(`kv value too large (${serializedBytes} > 65536 JSON bytes)`);
+    }
+    await env.PROJECT_DIRECTORY.put(this.#key(key), serialized);
+  }
+
+  /** Remove a key; absent keys are a no-op. */
+  async delete(key: string): Promise<void> {
+    await env.PROJECT_DIRECTORY.delete(this.#key(key));
+  }
+
+  /** Keys only (values are one get away), optionally under a prefix. */
+  async list(input?: { prefix?: string }): Promise<string[]> {
+    const namespacePrefix = `projectkv:${this.#projectId}:`;
+    const prefix = input?.prefix ? this.#key(input.prefix) : namespacePrefix;
+    const names: string[] = [];
+    let cursor: string | undefined;
+    // Paginate to completion — this is a knob store, so the loop is one
+    // iteration in practice, but a truncated list must never look complete.
+    do {
+      const listed = await env.PROJECT_DIRECTORY.list({ prefix, limit: 1000, cursor });
+      for (const entry of listed.keys) names.push(entry.name.slice(namespacePrefix.length));
+      cursor = listed.list_complete ? undefined : listed.cursor;
+    } while (cursor !== undefined);
+    return names;
+  }
+}
+
 type LazyClientDescription = Pick<Partial<Description>, "instructions" | "parent" | "types">;
 
 function lazyPromise<T>(load: () => Promise<T>): () => Promise<T> {
@@ -6828,8 +6864,8 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * send `authorizationUrl` to the user ("click here to connect"). When they
    * sign in, the token is stored write-only at `path` and — if you are an agent
    * — you are messaged so you can continue. Then connect like any bearer MCP:
-   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
-   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret(
+   * "<path>", { field: "accessToken" })' } })`. For a server that just wants a
    * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
    */
   async beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult> {
@@ -7070,7 +7106,7 @@ async function fetchSpec(
   props: OpenApiConnectInput,
   egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
-  // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
+  // Headers can contain getSecret("/secrets/...") placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(

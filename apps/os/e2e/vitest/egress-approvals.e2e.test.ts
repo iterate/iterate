@@ -136,6 +136,32 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       ruleKey: "never-delete",
     });
 
+    // A malformed secret template can never be released, so it must fail
+    // immediately instead of creating an approval that expires later.
+    const malformedHeldResponse = await project.egress.fetch(
+      new Request(echo.url, {
+        body: "{not-json",
+        headers: {
+          "content-type": "application/json",
+          "x-iterate-secret-template": "json",
+        },
+        method: "PUT",
+      }),
+    );
+    await expect(malformedHeldResponse.json()).resolves.toMatchObject({
+      error: "secret_json_template_invalid_body",
+    });
+
+    // Invalid secret paths are malformed input, but still pass through
+    // method/host/path policy matching so they cannot bypass a deny rule.
+    const deniedInvalidSecretPath = await project.egress.fetch(
+      new Request(`${echo.url}/getSecret("/not-a-secret")`, { method: "DELETE" }),
+    );
+    await expect(deniedInvalidSecretPath.json()).resolves.toMatchObject({
+      error: "egress_denied",
+      ruleKey: "never-delete",
+    });
+
     // ── expiry lane: nobody answers and the hold auto-rejects.
     const expiredResponse = await project.egress.fetch(
       new Request(echo.url, { method: "PUT", body: "too slow" }),

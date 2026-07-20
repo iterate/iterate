@@ -279,7 +279,7 @@ the redirect machinery:
   **URL path** (`/bot<token>/<method>`), which is why secret substitution
   reaches the request URL's path — and only its path — per ADR 0005: the
   request carries
-  `/botgetSecret({ path: ... })/<method>` through project egress and the
+  `/botgetSecret("/secrets/…")/<method>` through project egress and the
   Secret DO fills the token in.
 - **Inbound updates** land on the per-bot door path (Telegram payloads don't
   identify the bot), verify the echoed `X-Telegram-Bot-Api-Secret-Token`

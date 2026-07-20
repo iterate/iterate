@@ -8,10 +8,7 @@ import {
   DeviceNotificationDestination,
   DeviceNotificationOutcome,
   DeviceProcessorContract,
-  EncryptedDevicePushToken,
 } from "./device-processor-contract.ts";
-
-type EncryptedPushToken = z.output<typeof EncryptedDevicePushToken> & { offset: number };
 
 export type DevicePushMessage = {
   body: string;
@@ -25,8 +22,9 @@ export type DevicePushMessage = {
 };
 
 export type DevicePushSender = (input: {
-  encryptedPushToken: EncryptedPushToken;
   notification: DevicePushMessage;
+  pushTokenSecretPath: string;
+  pushTokenSecretUpdatedOffset: number;
 }) => Promise<
   { status: "ok"; ticketId: string } | { status: "error"; error: string; message: string }
 >;
@@ -37,6 +35,10 @@ type DevicePushReceipt =
   | { status: "rejected-by-push-service"; error: string; message: string };
 
 type DeviceProcessorDeps = {
+  clearPushToken: (input: {
+    pushTokenSecretPath: string;
+    pushTokenSecretUpdatedOffset: number;
+  }) => Promise<boolean>;
   getReceipt: (ticketId: string) => Promise<DevicePushReceipt>;
   now: () => number;
   repointReceiptAlarm: (atMs: number | null) => Promise<void>;
@@ -63,10 +65,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         return {
           ...state,
           birthCertificate: event.payload,
-          encryptedPushToken: {
-            ...event.payload.config.encryptedPushToken,
-            offset: event.offset,
-          },
+          pushTokenSecretPath: event.payload.config.pushTokenSecretPath,
+          pushTokenSecretUpdatedOffset: event.payload.config.pushTokenSecretUpdatedOffset,
           tokenUpdatedOffset: event.offset,
         };
       case "events.iterate.com/device/push-token-updated":
@@ -77,19 +77,27 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
               ? null
               : {
                   config: {
-                    ...state.birthCertificate.config,
                     appVersion: event.payload.appVersion,
-                    encryptedPushToken: event.payload.encryptedPushToken,
                     label: event.payload.label,
                     notificationsStatus: event.payload.notificationsStatus,
+                    ownerId: event.payload.ownerId,
+                    platform: state.birthCertificate.config.platform,
+                    pushTokenSecretPath: event.payload.pushTokenSecretPath,
+                    pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
                   },
                 },
-          encryptedPushToken: { ...event.payload.encryptedPushToken, offset: event.offset },
+          pushTokenSecretPath: event.payload.pushTokenSecretPath,
+          pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
           revokedAt: null,
           tokenUpdatedOffset: event.offset,
         };
       case "events.iterate.com/device/revoked":
-        return { ...state, encryptedPushToken: null, revokedAt: event.createdAt };
+        return {
+          ...state,
+          pushTokenSecretPath: null,
+          pushTokenSecretUpdatedOffset: null,
+          revokedAt: event.createdAt,
+        };
       case "events.iterate.com/device/notification-requested":
       case "events.iterate.com/notification/requested":
         return {
@@ -185,7 +193,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       );
     }
     if (!args.delivery.caughtUp || args.state.birthCertificate === null) return;
-    const encryptedPushToken = args.state.encryptedPushToken;
+    const pushTokenSecretPath = args.state.pushTokenSecretPath;
     const settlements: {
       requestOffset: number;
       outcome: z.output<typeof DeviceNotificationOutcome>;
@@ -194,7 +202,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       const requestOffset = Number(offset);
       if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
         settlements.push({ requestOffset, outcome: { kind: "expired" } });
-      } else if (notification.status === "requested" && encryptedPushToken === null) {
+      } else if (notification.status === "requested" && pushTokenSecretPath === null) {
         settlements.push({ requestOffset, outcome: { kind: "device-unavailable" } });
       } else if (notification.status === "started" && !this.#liveAttempts.has(requestOffset)) {
         settlements.push({
@@ -218,7 +226,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         return earliest === null || at < earliest ? at : earliest;
       }, null);
     if (settlements.length > 0 || nextReceiptCheck !== null) {
-      args.blockProcessorWhileCaughtUp(async () => {
+      args.blockProcessorWhile(async () => {
         if (settlements.length > 0) {
           await this.append(
             ...settlements.map(({ outcome, requestOffset }) => ({
@@ -233,7 +241,13 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         }
       });
     }
-    if (encryptedPushToken === null || this.projectId === null) return;
+    const pushTokenSecretUpdatedOffset = args.state.pushTokenSecretUpdatedOffset;
+    if (
+      pushTokenSecretPath === null ||
+      pushTokenSecretUpdatedOffset === null ||
+      this.projectId === null
+    )
+      return;
     for (const [offset, notification] of Object.entries(args.state.notifications)) {
       const requestOffset = Number(offset);
       if (
@@ -245,7 +259,12 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       }
       this.#liveAttempts.add(requestOffset);
       args.runInBackground(() =>
-        this.#sendNotification({ encryptedPushToken, notification, requestOffset }),
+        this.#sendNotification({
+          notification,
+          pushTokenSecretPath,
+          pushTokenSecretUpdatedOffset,
+          requestOffset,
+        }),
       );
     }
   }
@@ -303,9 +322,16 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         nextCheckAt = nextCheckAt === null ? retryAt : Math.min(nextCheckAt, retryAt);
       }
     }
+    const pushTokenInvalidated =
+      pushTokenInvalid && state.pushTokenSecretPath !== null
+        ? await this.deps.clearPushToken({
+            pushTokenSecretPath: state.pushTokenSecretPath,
+            pushTokenSecretUpdatedOffset: state.pushTokenSecretUpdatedOffset!,
+          })
+        : false;
     if (pushTokenInvalid || settlements.length > 0) {
       await this.append(
-        ...(pushTokenInvalid
+        ...(pushTokenInvalidated
           ? [
               {
                 type: "events.iterate.com/device/revoked" as const,
@@ -325,8 +351,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   }
 
   async #sendNotification(input: {
-    encryptedPushToken: EncryptedPushToken;
     notification: ProcessorState<DeviceProcessorContract>["notifications"][string];
+    pushTokenSecretPath: string;
+    pushTokenSecretUpdatedOffset: number;
     requestOffset: number;
   }) {
     try {
@@ -336,7 +363,6 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         payload: { requestOffset: input.requestOffset },
       });
       const ticket = await this.deps.send({
-        encryptedPushToken: input.encryptedPushToken,
         notification: {
           body: input.notification.body,
           data: {
@@ -347,10 +373,19 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
           expiresAt: input.notification.expiresAt,
           title: input.notification.title,
         },
+        pushTokenSecretPath: input.pushTokenSecretPath,
+        pushTokenSecretUpdatedOffset: input.pushTokenSecretUpdatedOffset,
       });
       if (ticket.status === "error") {
+        const pushTokenInvalidated =
+          ticket.error === "DeviceNotRegistered"
+            ? await this.deps.clearPushToken({
+                pushTokenSecretPath: input.pushTokenSecretPath,
+                pushTokenSecretUpdatedOffset: input.pushTokenSecretUpdatedOffset,
+              })
+            : false;
         await this.append(
-          ...(ticket.error === "DeviceNotRegistered"
+          ...(pushTokenInvalidated
             ? [
                 {
                   type: "events.iterate.com/device/revoked" as const,

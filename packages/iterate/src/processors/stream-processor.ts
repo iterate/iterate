@@ -62,9 +62,10 @@ export type StreamProcessorBaseDeps = {
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 };
 
-// These arg shapes are intentionally not exported: subclass overrides annotate
-// their args as `Parameters<StreamProcessor<Contract>["method"]>[0]` so there
-// is exactly one spelling.
+// `ReduceArgs` / `ProcessEventArgs` are exported as the one sanctioned
+// spelling for subclass hook annotations: the hooks are `protected`, so
+// `Parameters<StreamProcessor<Contract>["method"]>[0]` is not writable from
+// outside a subclass body.
 //
 // State and events are passed by reference. Hooks must treat them as immutable:
 // `reduce` returns a new state object instead of mutating its input.
@@ -82,7 +83,7 @@ type ReducedEvent<Contract> = {
 type ConsumedEventParseFailure = { parseError: z.ZodError };
 
 /** What `reduce` receives: one consumed event and the state to fold it into. */
-type ReduceArgs<Contract> = {
+export type ReduceArgs<Contract> = {
   event: ConsumedEvent<Contract>;
   state: ProcessorState<Contract>;
 };
@@ -112,22 +113,19 @@ type ReduceArgs<Contract> = {
  * at-head pass (docs/writing-stream-processors.md has the full doctrine).
  */
 type SideEffectHelpers = {
-  /** Hold the cursor (and the next event) until this work completes. */
+  /** Hold the cursor (and the next event) until this work completes.
+   * Registrations run STRICTLY IN REGISTRATION ORDER: each blocker starts
+   * only after the previous one settles, so a later registration in the same
+   * `processEvent` body observes the earlier work's appends. Order
+   * fold-derived work after per-event work by writing it later in the
+   * function — no separate lane needed. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
-  /** Like {@link blockProcessorWhile}, but the work runs only AFTER this
-   * event's own per-event `blockProcessorWhile` work completes — so its appends
-   * land in the journal after the per-event appends. This is the lane for the
-   * at-head reconcile (`delivery.caughtUp`): the reconcile must observe/append
-   * after the head event's own effects (e.g. an interrupt cancel must fold
-   * before the reconcile's lost-debounce re-fire). Restores the ordering the
-   * separate `onCaughtUp` pass used to guarantee. */
-  blockProcessorWhileCaughtUp: (work: () => Promise<unknown>) => void;
   /** A droppable attempt; failures are caught and logged, evictions lose it. */
   runInBackground: (work: () => Promise<unknown>) => void;
 };
 
 /** What `processEvent` receives: one reduction result plus delivery context and helpers. */
-type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
+export type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
   SideEffectHelpers & {
     /**
      * The consumed event being processed — or `null` for the EVENT-LESS at-head
@@ -150,17 +148,9 @@ type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
     append: (...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
     /** Like `append`, onto a sibling stream (resolved via `stream.at(path)`). */
     appendTo: (path: string, ...input: EmittedInput<Contract>[]) => Promise<StreamEvent[]>;
-    streamMaxOffset: number;
     /**
-     * The offset the delivering frame will acknowledge through once all
-     * blocking work completes — the last event offset in the frame, not this
-     * event's offset.
-     */
-    checkpointOffset: number;
-    /**
-     * Honest event-time context (delivery phase, lag behind the observed
-     * head, cursor revision) supplied by the StreamProcessorRunner, the only
-     * driver.
+     * Honest event-time context (delivery phase, observed head, cursor
+     * revision) supplied by the StreamProcessorRunner, the only driver.
      */
     delivery: DeliveryContext;
   };
@@ -208,7 +198,7 @@ type ProcessorSourceStamp = NonNullable<NonNullable<StreamEvent["source"]>["proc
  * protected hooks and append lanes the delivery loop needs, nothing an author
  * or operator could reach for. This is how the runner invokes protected
  * members without widening the author-facing surface — authors still only
- * implement `validate`/`reduce`/`processEvent` (the at-head reconcile is
+ * implement `reduce`/`processEvent` (fold-derived side effects ride
  * `processEvent` under `delivery.caughtUp`), and the runner never sees
  * processor-internal state (it owns its own two-cursor progress).
  */
@@ -273,16 +263,15 @@ export type StreamProcessorDriver<Contract extends StreamProcessorContract> = {
  * hooks, and owns cursors, checkpoints, retry, and recovery — the processor
  * itself is only the hooks.
  *
- * Subclasses override up to three hooks:
+ * Subclasses override up to two hooks:
  *
  * - `reduce` — pure projection of one consumed event into the next state
  * - `processEvent` — synchronous per-event side effects; what most processors
- *   implement. It is ALSO the at-head reconcile: gated on
- *   `args.delivery.caughtUp`, an obligation processor drives undriven
- *   obligations and settles dead ones over the whole fold. `args.event` is
- *   `null` only when a head-reaching scan contained no consumed event; authors
- *   skip their per-event switch but still run state-level reconciliation.
- * - `validate` — the optional pre-commit gate (inline Phase-2 runner only)
+ *   implement. Side effects derived from the whole fold (rather than the
+ *   delivered event) belong here too, guarded by `args.delivery.caughtUp`.
+ *   `args.event` is `null` only when a head-reaching scan contained no
+ *   consumed event; authors skip their per-event switch but can still act on
+ *   the fold.
  *
  * Every hook runs inside the runner's serialized delivery chain: a later
  * frame never starts until the previous one has completed or failed, and the
@@ -392,24 +381,9 @@ export abstract class StreamProcessor<
     return getEventInputSchema({
       type: event.type,
       payloadSchema: eventDefinition.payloadSchema,
+      ephemeral: eventDefinition.ephemeral,
     }).parse(event) as EmittedInput<Contract>;
   }
-
-  /**
-   * OPTIONAL synchronous pre-commit gate. Only an INLINE runner (Phase 2, the
-   * Stream DO's own core processor; see stream-processor-runner.ts) calls
-   * this — it runs during the append turn and THROWS to reject the append.
-   * The post-commit subscriber runner never calls it: by the time a
-   * subscriber sees an event it is already a durable fact, and a fact cannot
-   * be un-appended. Default: accept everything. This is the pre-commit dual
-   * of `blockProcessorWhile` (which holds the cursor post-commit) — the same
-   * "refuse to let this event through until you're satisfied" intent,
-   * expressed at whichever commit position the runner occupies.
-   */
-  protected validate(_args: {
-    event: ConsumedEvent<Contract>;
-    state: ProcessorState<Contract>;
-  }): void {}
 
   /**
    * Pure projection of one consumed event into the next state. Defaults to
@@ -460,6 +434,7 @@ export abstract class StreamProcessor<
     const parsed = cachedEventSchema({
       type: event.type,
       payloadSchema: eventDefinition.payloadSchema,
+      ephemeral: eventDefinition.ephemeral,
     }).safeParse(event);
     if (!parsed.success) return { ok: false, error: parsed.error };
     return { ok: true, event: parsed.data as ConsumedEvent<Contract> };

@@ -42,6 +42,12 @@ export const REQUIRED_SECRETS = [
   "APP_CONFIG_EMAIL_SENDER_DOMAIN",
   "APP_CONFIG_GOOGLE_CLIENT_ID",
   "APP_CONFIG_GOOGLE_CLIENT_SECRET",
+  // Shared with the os app, which verifies project-app-session tokens
+  // locally. REQUIRED here (though the code falls back to the better-auth
+  // secret) because the failure mode of auth minting under one secret while
+  // os verifies under another is a project-host login loop — deploys must
+  // not be able to drift the pair apart.
+  "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
   "APP_CONFIG_SERVICE_AUTH_TOKEN",
   "APP_CONFIG_SIGNUP_ALLOWLIST",
 ];

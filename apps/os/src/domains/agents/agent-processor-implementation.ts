@@ -165,31 +165,42 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   protected override processEvent(
     args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
   ): undefined {
-    const { append, blockProcessorWhile, event, previousState, runInBackground, state } = args;
-    if (state.birthCertificate === null) return;
-    // AT-HEAD reconcile: `delivery.caughtUp` means `state` is the whole
-    // observed fold. The signal rides the last consumed event, or an eventless
-    // pass when the raw tail contains nothing this processor consumes. Drive
-    // or settle open LLM obligations, derive the next
-    // scheduling decision. ONE blocking closure
-    // so the whole pass is awaited as this head event's own work before its
-    // deferred commit; a failure fails the frame and the transport replays it.
-    // A mid-catch-up fold never reaches this branch, so nothing dials env.AI
-    // for a long-settled request.
+    if (args.state.birthCertificate === null) return;
+    // Per-event side effects FIRST. `blockProcessorWhile` registrations run
+    // in strict FIFO order, so the per-event work inside the switch must be
+    // REGISTERED before the at-head pass below — an interrupt's
+    // scheduled-phase cancel has to fold before the lost-debounce re-fire,
+    // or the re-fire wins the fold and the cancel no-ops. The event-less
+    // at-head pass (`event === null`) has no per-event work and falls
+    // straight through to the caughtUp branch.
+    if (args.event !== null) this.#processConsumedEvent(args, args.event);
+    // AT-HEAD pass: `delivery.caughtUp` means `state` is the whole observed
+    // fold. The signal rides the last consumed event, or an eventless pass
+    // when the raw tail contains nothing this processor consumes — which is
+    // exactly what starts an obligation stranded because the stream head is
+    // an unconsumed event (subscriber-disconnected, a foreign fact). Start or
+    // settle open LLM obligations, then derive the next scheduling decision.
+    // ONE blocking closure so the whole pass is awaited as this head event's
+    // own work before its deferred commit; a failure fails the frame and the
+    // transport replays it. A mid-catch-up fold never reaches this branch, so
+    // nothing dials env.AI for a long-settled request.
     if (args.delivery.caughtUp) {
-      // The CAUGHT-UP lane runs AFTER this event's per-event work — so an
-      // interrupt's scheduled-phase cancel (appended in the switch below) folds
-      // BEFORE the reconcile's lost-debounce re-fire, and the cancel wins.
-      args.blockProcessorWhileCaughtUp(async () => {
+      args.blockProcessorWhile(async () => {
         await this.#reconcileLlmObligations(args);
         await this.#reconcileLlmScheduling(args);
       });
     }
-    // Event-less at-head pass: no per-event work, only the caughtUp reconcile
-    // above — which is exactly what drives an obligation stranded because the
-    // stream head is an unconsumed event (subscriber-disconnected, a foreign
-    // fact). This is why the reconcile MUST run without a consumed event.
-    if (event === null) return;
+  }
+
+  /** The per-event switch, extracted so its early `return`s exit only this
+   * helper and can never skip the at-head pass in `processEvent`. */
+  #processConsumedEvent(
+    args: Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0],
+    event: NonNullable<
+      Parameters<StreamProcessor<AgentProcessorContract>["processEvent"]>[0]["event"]
+    >,
+  ): void {
+    const { append, blockProcessorWhile, previousState, runInBackground, state } = args;
     switch (event.type) {
       case "events.iterate.com/agents/web-message-sent": {
         // Files the agent attached to its own message ride the reflection too,
@@ -1135,6 +1146,11 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
           state.pendingTriggerSource === "agent-loop" ? state.autonomousTurnCount + 1 : 0,
       };
     case "events.iterate.com/agent/llm-request-requested": {
+      // Fold-guard: the debounce re-fire of a schedule an interrupt already
+      // cancelled is a harmless journal fact - it must not open an obligation
+      // (the reconciler would start a turn the user retracted) and must not
+      // become current.
+      if (event.payload.requestId === state.cancelledScheduledRequestId) return state;
       const key = String(event.offset);
       const expiresAt =
         event.payload.expiresAt ??
@@ -1218,7 +1234,16 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
         state.currentRequest?.phase === "scheduled" &&
         state.currentRequest.requestId === event.payload.requestId
       ) {
-        return { ...state, currentRequest: null, requestGeneration: state.requestGeneration + 1 };
+        return {
+          ...state,
+          currentRequest: null,
+          requestGeneration: state.requestGeneration + 1,
+          // The cancelled schedule's re-fire may still land (a lost-timer
+          // recovery pass reads the pre-cancel fold). Remembering the id lets
+          // the requested arm fold that late re-fire to nothing. requestIds
+          // are generation-unique, so keeping only the latest is safe.
+          cancelledScheduledRequestId: event.payload.requestId,
+        };
       }
       if (event.payload.phase === "requested") {
         // Always drop the obligation (a crash-cancel may arrive when

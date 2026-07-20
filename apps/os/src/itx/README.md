@@ -467,7 +467,7 @@ await itx.provideCapability({
           // project secrets and is substituted server-side (Law 5)
           return await (await fetch("https://slack.com/api/chat.postMessage", {
             body: JSON.stringify({ channel, text }),
-            headers: { authorization: 'Bearer getSecret({ path: "/secrets/slack-token" })',
+            headers: { authorization: 'Bearer getSecret("/secrets/slack-token")',
                        "content-type": "application/json" },
             method: "POST",
           })).json();

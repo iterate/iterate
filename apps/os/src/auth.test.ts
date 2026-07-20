@@ -138,4 +138,59 @@ describe("resolveItxAuth", () => {
       }),
     ).rejects.toThrow(/missing or invalid auth/);
   });
+
+  it("grants one user on one project for a verified project-app-session credential", async () => {
+    const verifyProjectAppSession = vi
+      .fn()
+      .mockResolvedValue({ projectId: "prj_one", userId: "usr_1" });
+    const auth = await resolveItxAuth({
+      config: config(),
+      credentials: { type: "project-app-session", token: "jwt.jwt.jwt" },
+      headers: new Headers(),
+      requestUrl: `${ORIGIN}/api`,
+      verifyProjectAppSession,
+    });
+
+    expect(verifyProjectAppSession).toHaveBeenCalledWith("jwt.jwt.jwt");
+    expect(auth.isAdmin()).toBe(false);
+    expect(auth.principal).toBe("project-app-session:usr_1@prj_one");
+    expect(auth.canAccessProject("prj_one")).toBe(true);
+    // The token IS the scope: no directory fallback, no other projects.
+    expect(auth.canAccessProject("prj_other")).toBe(false);
+    await expect(async () => auth.assertCanAccessProject("prj_other")).rejects.toThrow(/no access/);
+  });
+
+  it("rejects a project-app-session token the verifier refuses, an empty token, and a missing verifier", async () => {
+    const verifyProjectAppSession = vi.fn().mockResolvedValue(null);
+    await expect(
+      resolveItxAuth({
+        config: config(),
+        credentials: { type: "project-app-session", token: "forged" },
+        headers: new Headers(),
+        requestUrl: `${ORIGIN}/api`,
+        verifyProjectAppSession,
+      }),
+    ).rejects.toThrow(/missing or invalid auth/);
+
+    verifyProjectAppSession.mockClear();
+    await expect(
+      resolveItxAuth({
+        config: config(),
+        credentials: { type: "project-app-session", token: "" },
+        headers: new Headers(),
+        requestUrl: `${ORIGIN}/api`,
+        verifyProjectAppSession,
+      }),
+    ).rejects.toThrow(/missing or invalid auth/);
+    expect(verifyProjectAppSession).not.toHaveBeenCalled();
+
+    await expect(
+      resolveItxAuth({
+        config: config(),
+        credentials: { type: "project-app-session", token: "jwt.jwt.jwt" },
+        headers: new Headers(),
+        requestUrl: `${ORIGIN}/api`,
+      }),
+    ).rejects.toThrow(/missing or invalid auth/);
+  });
 });

@@ -223,7 +223,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "  // substitutes server-side into matching egress requests via a placeholder:",
   '  await itx.secrets.get("/secrets/acme").create({ egress: { urls: ["https://api.acme.com/"] }, material: "sk-live-..." });',
   '  const me = await itx.egress.fetch("https://api.acme.com/v1/me", {',
-  "    headers: { authorization: 'Bearer getSecret({ path: \"/secrets/acme\" })' },",
+  "    headers: { authorization: 'Bearer getSecret(\"/secrets/acme\")' },",
   "  });",
   "  // Only the USER has the key? NEVER ask for it in chat — mint a form page; when they",
   "  // submit, the secret exists and a message wakes you (full flow: `secret-collect-from-user`):",
@@ -530,6 +530,14 @@ export const AgentProcessorContract = defineProcessorContract({
        * collapses into one scheduled event at the stream's append dedup layer.
        */
       requestGeneration: z.number().int().nonnegative().default(0),
+      /**
+       * The requestId of the most recent scheduled-phase cancel (a user
+       * interrupt landing during the debounce window). Its lost-timer re-fire
+       * can still append a requested event from a pre-cancel fold snapshot;
+       * this id makes that late re-fire fold to nothing. requestIds are
+       * generation-unique, so only the latest needs remembering.
+       */
+      cancelledScheduledRequestId: z.string().nullable().default(null),
       /**
        * Failed llm-request-completed events since the last success. Governs
        * whether a failure's error input auto-retries (below the cap) or sits in

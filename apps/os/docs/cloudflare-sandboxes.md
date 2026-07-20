@@ -120,7 +120,7 @@ container's memory) merges into it; `undefined` unsets a key, and every call
 lands as a `sandbox/configured` event on the sandbox's stream.
 
 **The secret never enters the container.** A value like
-`getSecret({ path: "…" })` or `getSecret({ platform: "…" })` is set verbatim as
+`getSecret("…")` or `getSecret({ platform: "…" })` is set verbatim as
 the env var; when code in the sandbox puts it in a request header, the project
 egress path substitutes the real material on the way out (the same allowlist +
 substitution used for all sandbox egress — see

@@ -1,8 +1,8 @@
 // The stream-processor RUNNER: the delivery driver that owns everything a
 // processor author should not — cursors, checkpoint cadence, retry, recovery —
-// so the processor itself can stay pure-ish hooks (validate / reduce /
-// processEvent — the at-head reconcile is processEvent under
-// `delivery.caughtUp`, not a separate hook). Design:
+// so the processor itself can stay pure-ish hooks (reduce / processEvent —
+// fold-derived side effects ride processEvent under `delivery.caughtUp`, not
+// a separate hook). Design:
 // docs/stream-processor-runner-redesign.md; the invariants are pinned by the
 // in-memory harness in stream-processor-runner.test.ts (the executable spec).
 //
@@ -22,7 +22,10 @@
 // invisible to processor semantics (the harness pins this: one batch,
 // singletons, or random partitions of the same journal must produce identical
 // outcomes). `blockProcessorWhile` is therefore a strict per-event barrier,
-// never a per-frame one.
+// never a per-frame one — and registrations within one event run in strict
+// FIFO order (each blocker starts after the previous settles), so authors
+// order fold-derived work after per-event work simply by registering it
+// later.
 //
 // The load-bearing orderings in here are transplanted from the legacy
 // `StreamProcessor.#ingest` (deleted with the host) — the most
@@ -33,8 +36,9 @@
 //     the commit, in the background
 //
 // This file is the Phase-1 `SubscriberRunner`. The Phase-2 `InlineRunner`
-// (the Stream DO's own synchronous commit-path driver, where `validate` gates
-// appends) shares the types below but is gated on a commit-path benchmark.
+// (the Stream DO's own synchronous commit-path driver, where a pre-commit
+// gate could reject appends) shares the types below but is gated on a
+// commit-path benchmark.
 
 import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
@@ -179,8 +183,6 @@ export type DeliveryContext = {
   phase: DeliveryPhase;
   /** The highest stream offset the runner has observed (>= this event's). */
   observedHeadOffset: number;
-  /** How far this event trails `observedHeadOffset`; 0 = at the observed head. */
-  eventsBehindObservedHead: number;
   /**
    * The at-head reconciliation signal: the scan has reached the highest raw
    * stream offset the runner has observed, so `state` is the complete fold it
@@ -575,10 +577,6 @@ export class StreamProcessorRunner<
     );
     if (pending.length === 0 && frameScannedThroughOffset === committedThroughOffset) return;
     const observedHeadOffset = this.#observedHeadOffset;
-    // What this frame will acknowledge through once its blocking work
-    // completes — the legacy `checkpointOffset` semantics, kept verbatim for
-    // the existing `processEvent` signature.
-    const frameCheckpointOffset = frameScannedThroughOffset;
 
     // AT-HEAD is a BATCH property, not a per-event-offset one. If this batch
     // folds through the observed head (its tail is at head — no filtered
@@ -639,35 +637,28 @@ export class StreamProcessorRunner<
           const delivery: DeliveryContext = {
             phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
             observedHeadOffset,
-            eventsBehindObservedHead: Math.max(0, observedHeadOffset - event.offset),
             caughtUp,
             cursorRevision: ctx.revision,
           };
-          const eventBlockers: Promise<unknown>[] = [];
-          // At-head reconcile work is DEFERRED (thunks, not started) and run
-          // only AFTER the per-event blockers complete, so its appends land in
-          // the journal AFTER this event's own per-event appends. That
-          // ordering is load-bearing: e.g. an interrupt's scheduled-phase
-          // cancel (a per-event append) must precede the reconcile's
-          // lost-debounce re-fire (`llm-request-requested`), or the re-fire
-          // wins the fold and the cancel no-ops. It restores the ordering the
-          // old separate `onCaughtUp` pass had (reconcile after per-event work).
-          const atHeadWork: (() => Promise<unknown>)[] = [];
+          // FIFO blocker chain: each registration starts only after the
+          // previous one settles, so a later registration in the same
+          // `processEvent` body observes the earlier registrations' appends.
+          // That ordering is load-bearing: e.g. an interrupt's cancel append
+          // (registered in the per-event switch) must precede a fold-derived
+          // re-fire registered after it, or the re-fire wins the fold and the
+          // cancel no-ops. Registration order replaces the deleted deferred
+          // `blockProcessorWhileCaughtUp` lane.
+          let eventChain: Promise<unknown> = Promise.resolve();
           const whileProcessing = reduction.event;
           this.driver.processEvent({
             event: reduction.event,
             previousState: reduction.previousState,
             state: reduction.state,
-            streamMaxOffset: observedHeadOffset,
-            checkpointOffset: frameCheckpointOffset,
             delivery,
             blockProcessorWhile: (work) => {
-              const attempt = this.#keepAliveBackedWork(work);
-              eventBlockers.push(attempt);
+              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work));
+              eventChain = attempt;
               startedBlockers.push(attempt);
-            },
-            blockProcessorWhileCaughtUp: (work) => {
-              atHeadWork.push(work);
             },
             runInBackground: (work) => this.#runInBackground(work),
             append: (...input) => this.driver.append({ whileProcessing }, input),
@@ -677,13 +668,7 @@ export class StreamProcessorRunner<
           // before the next event's processEvent starts. Background work was
           // registered (keepalive-backed) and deliberately NOT awaited — it
           // may overtake later events.
-          await Promise.all(eventBlockers);
-          // Then the at-head reconcile, AFTER per-event appends have landed.
-          for (const work of atHeadWork) {
-            const attempt = this.#keepAliveBackedWork(work);
-            startedBlockers.push(attempt);
-            await attempt;
-          }
+          await eventChain;
           ctx.state = reduction.state;
         }
         // Non-consumed and malformed events advance both cursors too —
@@ -709,32 +694,27 @@ export class StreamProcessorRunner<
         const delivery: DeliveryContext = {
           phase: "live",
           observedHeadOffset,
-          eventsBehindObservedHead: 0,
           caughtUp: true,
           cursorRevision: ctx.revision,
         };
-        const atHeadWork: (() => Promise<unknown>)[] = [];
-        // With no per-event switch to run, both lanes are equivalent here:
-        // collect the reconcile work and run it before the frame-end commit.
-        const collect = (work: () => Promise<unknown>) => atHeadWork.push(work);
+        // Same FIFO blocker chain as the per-event dispatch; its work is
+        // awaited before the deferred frame-end commit.
+        let passChain: Promise<unknown> = Promise.resolve();
         this.driver.processEvent({
           event: null,
           previousState: ctx.state,
           state: ctx.state,
-          streamMaxOffset: observedHeadOffset,
-          checkpointOffset: frameCheckpointOffset,
           delivery,
-          blockProcessorWhile: collect,
-          blockProcessorWhileCaughtUp: collect,
+          blockProcessorWhile: (work) => {
+            const attempt = passChain.then(() => this.#keepAliveBackedWork(work));
+            passChain = attempt;
+            startedBlockers.push(attempt);
+          },
           runInBackground: (work) => this.#runInBackground(work),
           append: (...input) => this.driver.append({}, input),
           appendTo: (path, ...input) => this.driver.appendTo(path, {}, input),
         });
-        for (const work of atHeadWork) {
-          const attempt = this.#keepAliveBackedWork(work);
-          startedBlockers.push(attempt);
-          await attempt;
-        }
+        await passChain;
       }
       // The frame's scan proof covers omitted rows too. They are deliberate
       // no-ops for this processor, but both cursors must advance across them

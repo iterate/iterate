@@ -600,7 +600,7 @@ return {
 const secret = itx.secrets.get(vars.secretPath ?? "/secrets/example");
 
 // Store the material once, with the URLs it may be substituted into. From
-// here on, egress headers reference it as: getSecret({ path: "..." }).
+// here on, egress headers reference it as: getSecret("...").
 await secret.create({
   egress: { urls: ["https://postman-echo.com/"] },
   material: "demo-" + (vars.note ?? "material"),
@@ -616,7 +616,7 @@ return await secret.__describe();
     e2eProven: false,
     title: "Make a plain HTTP request through project egress",
     description:
-      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers substitute at egress (see secret-postman-echo). External service — interactive-only.",
+      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -664,7 +664,7 @@ return { host, ruleKey, offset: appended.offset };
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service — interactive-only.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with an exact getSecret(path) JSON value, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -679,10 +679,15 @@ await secret.create({
 });
 
 const response = await itx.egress.fetch(
-  new Request("https://postman-echo.com/get?source=itx-secret-example", {
+  new Request("https://postman-echo.com/post?source=itx-secret-example", {
+    method: "POST",
     headers: {
-      "x-itx-secret": \`Bearer getSecret({ path: "\${secretPath}" })\`,
+      "content-type": "application/json",
+      "x-iterate-secret-template": "json",
     },
+    body: JSON.stringify({
+      secret: \`getSecret("\${secretPath}")\`,
+    }),
   }),
 );
 if (!response.ok) {
@@ -693,10 +698,10 @@ if (!response.ok) {
 // plain-JS body's dynamic reads over the echoed shape typecheckable.
 const body = JSON.parse(await response.text());
 const after = await secret.__describe();
-const echoedSecret = body?.headers?.["x-itx-secret"];
+const echoedSecret = body?.json?.secret;
 
 return {
-  echoedSecretMatches: echoedSecret === \`Bearer \${material}\`,
+  echoedSecretMatches: echoedSecret === material,
   hasMaterial: after.hasMaterial,
   materialLeakedInDescription: JSON.stringify(after).includes(material),
   usedCount: after.audit.usedCount,
@@ -745,13 +750,13 @@ return;
 //
 // const api = await itx.openapi.connect({
 //   specUrl: apiOrigin + "/openapi.json",
-//   headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' },
+//   headers: { authorization: 'Bearer getSecret("' + secretPath + '")' },
 // });
 // return await api.__describe(); // operations list — then call them by operationId
 //
 // The same placeholder works on raw requests: itx.egress.fetch(new Request(
 //   apiOrigin + "/v1/me",
-//   { headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' } },
+//   { headers: { authorization: 'Bearer getSecret("' + secretPath + '")' } },
 // ));
 //
 // If the user PASTES the key into chat instead of using the link: that is fine —
@@ -998,7 +1003,7 @@ return { path };
 //
 // const cf = await itx.mcp.connect({
 //   url: mcpUrl,
-//   headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' },
+//   headers: { authorization: 'Bearer getSecret("' + path + '", { field: "accessToken" })' },
 // });
 // return await cf.__describe(); // the server's tools — then call them by name
 //
@@ -1006,7 +1011,7 @@ return { path };
 // future turns), mount the same recipe:
 // await itx.provideCapability({
 //   expression: ["mcp", ["connect", { url: mcpUrl,
-//     headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' } }]],
+//     headers: { authorization: 'Bearer getSecret("' + path + '", { field: "accessToken" })' } }]],
 //   instructions: "Cloudflare MCP server (OAuth). Tool names discovered from the server.",
 //   path: ["cloudflare"],
 //   type: "itx-expression",
@@ -1316,7 +1321,7 @@ await itx.capabilityHosts.get("/").provideCapability({
       "connect",
       {
         url: "https://api.githubcopilot.com/mcp/",
-        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
+        headers: { authorization: \`Bearer getSecret("\${tokenPath}")\` },
       },
     ],
   ],

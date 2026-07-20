@@ -325,6 +325,9 @@ developer's actual Chrome.
 
 ## Preview environments
 
+To expand the fleet rather than use an existing slot, see
+[Adding preview slots](adding-preview-slots.md).
+
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
 and `<proj-slug>.iterate-preview-N.app`. There are nine slots

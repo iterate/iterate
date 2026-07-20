@@ -5,6 +5,16 @@ guaranteed to happen to it: **eviction**. Every deploy evicts every Durable
 Object; hibernation and crashes evict them on their own schedule. A processor
 that is only correct while its incarnation stays alive is not correct.
 
+Two hooks are the whole authoring surface: `reduce` folds each consumed event
+into state, and `processEvent` causes side effects — that is its entire job.
+The same two hooks express very different modalities, and nothing in the
+framework picks one for you. A processor can be a durable message queue,
+where every event must cause its side effect. It can be an agent, where
+events mostly update state and the interesting side effect — start an LLM
+request — is decided by looking at the state, with at most one request in
+flight. It can be a pure projector with no side effects at all. This doc is
+about writing the side-effect half so that any of those survives eviction.
+
 Companion to [domain objects and stream processors](domain-objects-and-stream-processors.md)
 (explicit birth certificates, fold doctrine, naming). This guide covers the
 half that doctrine document takes for granted: side effects, recovery,
@@ -34,9 +44,12 @@ barriers. See
 [Prefer a typed append door to one-event wrapper methods](domain-objects-and-stream-processors.md#prefer-a-typed-append-door-to-one-event-wrapper-methods)
 for the reference implementation and raw-stream escape hatch.
 
-## The model: some processors reconcile obligations
+## State-derived side effects
 
-A processor is two halves plus a comparison:
+A queue-shaped processor needs nothing beyond "handle the event": the side
+effect follows from the event itself. An obligation-carrying processor
+(agent, capability host) additionally uses `processEvent` to compare two
+things:
 
 - **Desired state** — the fold. `reduce` projects journaled facts into "what
   should be the case": open LLM requests, pending script executions, schedules
@@ -44,41 +57,62 @@ A processor is two halves plus a comparison:
 - **Actual state** — the incarnation. Live executions, open sockets, armed
   timers. In-memory, dies with every eviction, **and that is fine** — it is
   never the source of truth.
-- **Reconciliation** — ordinary `processEvent` code under
-  `delivery.caughtUp` compares the two and acts: start attempts for desired
-  work nobody is driving, settle work whose driver died, and do it all through
-  idempotent appends so replays converge. There is no separate reconcile hook.
-  A mid-catch-up fold can still contain obligations whose outcomes sit in the
-  next page, so it must not act. Normally `caughtUp` is true on the last
-  consumed event in a scan that reaches the observed raw head. If that scan
-  contains no consumed event, the runner calls `processEvent` once with
-  `event: null`, the final fold, and `caughtUp: true`; per-event dispatch must
-  therefore guard `event !== null`. Consumes-filtered wake frames get a
-  trailing unfiltered self-pull so an omitted or unconsumed raw tail cannot
-  strand an obligation.
+
+There is no framework concept for the comparison — it is ordinary
+`processEvent` code that reads `state`, checks an in-memory live-set, starts
+work nobody is running, settles work whose runner died, and does it all
+through idempotent appends so replays converge. It is usually guarded by one
+line — `if (!args.delivery.caughtUp) return` — and that guard is a choice,
+not a rule: a queue processor acts on every event and never reads the flag.
+
+`delivery.caughtUp` is the one load-bearing fact catch-up imposes: behind the
+observed head your fold is partial — outcomes may sit in journal pages not
+yet replayed — so state-derived effects fired there act on stale desires. It
+is the filter-aware form of "the stream's max offset at the moment this event
+was dispatched to you": a subset-consuming processor cannot compute that from
+`event.offset` alone (whether the events between it and the raw head are
+consumable is invisible to it — they were never delivered), so the runner
+answers "is anything you'd consume still ahead of you?" precomputed.
+
+Normally `caughtUp` is true on the last consumed event in a scan that reaches
+the observed raw head. If that scan contains no consumed event, the runner
+calls `processEvent` once with `event: null`, the final fold, and
+`caughtUp: true`; per-event dispatch must therefore guard `event !== null`.
+Consumes-filtered wake frames get a trailing unfiltered self-pull so an
+omitted or unconsumed raw tail cannot strand fold-derived work.
 
 The reference implementations, in reading order: the `delivery.caughtUp`
-branch in `AgentProcessor.processEvent` (drive/settle LLM obligations, then
+branch in `AgentProcessor.processEvent` (start/settle LLM obligations, then
 derive scheduling) and `CapabilityHostProcessor` (scripts — same shape,
 different settle policy).
 
 ## Two primitives, two guarantees
 
-Every side effect in a `process*` hook must pick one of these deliberately:
+This is the normal delivery-semantics trade-off, spelled as two helpers.
+`blockProcessorWhile` gives the work **at-least-once** semantics (the
+checkpoint is held; a crash means redelivery; idempotency keys collapse the
+re-run). `runInBackground` alone gives **at-most-once**: the checkpoint
+advances immediately and an eviction loses the closure. Every side effect in
+a `process*` hook must pick one deliberately:
 
-| Primitive                   | Guarantee                                                                              | On eviction                                                     | Use for                                            |
-| --------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------- |
-| `blockProcessorWhile(work)` | at-least-once: checkpoint held, crash ⇒ redelivery, idempotency keys dedupe the re-run | batch redelivered by the spine (lag is visible stream-side)     | **short** must-happen work: appends, forwards      |
-| `runInBackground(work)`     | a **droppable attempt**: checkpoint advances, eviction loses the closure silently      | gone — no evidence, no retry, unless _you_ built the reconciler | attempts whose _outcome_ something else guarantees |
+| Primitive                   | Guarantee                                                                              | On eviction                                                   | Use for                                            |
+| --------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+| `blockProcessorWhile(work)` | at-least-once: checkpoint held, crash ⇒ redelivery, idempotency keys dedupe the re-run | batch redelivered by the spine (lag is visible stream-side)   | **short** must-happen work: appends, forwards      |
+| `runInBackground(work)`     | a **droppable attempt**: checkpoint advances, eviction loses the closure silently      | gone — no evidence, no retry, unless _you_ wrote the recovery | attempts whose _outcome_ something else guarantees |
 
 `blockProcessorWhile` is not for long work: it head-of-line-blocks every later
 event — including the cancellation the user is frantically sending.
+
+Registrations run in strict FIFO order: each blocker starts only after the
+previous one settles, so a later registration in the same `processEvent` body
+observes the earlier work's appends. Order fold-derived work after per-event
+work by writing it later in the function — there is no separate lane.
 
 The question every `runInBackground` callsite must answer in a comment or by
 obvious construction: **"what recovers the outcome if this attempt drops?"**
 Legitimate answers:
 
-- _"the reconciler, via journaled evidence"_ — the obligation pattern below;
+- _"my caughtUp branch restarts it from journaled evidence"_ — the obligation pattern below;
 - _"nothing — the outcome genuinely doesn't matter"_ — telemetry, best-effort
   UX touches (a Slack reaction; these must also be freshness-gated — see
   refold safety below).
@@ -86,11 +120,23 @@ Legitimate answers:
 A naked `runInBackground` around consequential work is the exact bug class
 behind the 2026-06-10 and 2026-07-07 production wedges.
 
+## Batches are transport, not semantics
+
+A delivery batch is a catch-up paging unit and an append-coalescing unit —
+never a semantic unit. The runner reduces and processes ONE event at a time,
+and the harness pins partition invariance: one batch, singletons, or random
+partitions of the same journal must produce identical outcomes
+(`stream-processor-runner.test.ts`). A proposed failure scenario that does
+not reproduce under singleton delivery is not real. High-volume traffic
+(streaming chunks, telemetry) rides ephemeral appends, which never reach
+processor delivery at all — so no future throughput case adds batch semantics
+to this contract either.
+
 ## The obligation pattern
 
 For must-complete work that runs longer than a batch may block (LLM calls,
 scripts), the pattern is **journaled evidence + droppable attempt +
-reconciler**:
+restart from state**:
 
 1. **Evidence**: a `…-requested` event opens the obligation; the fold tracks
    it (with everything needed to start an attempt from state alone — model,
@@ -98,14 +144,14 @@ reconciler**:
    durably **before** the work body runs — and if that append FAILS, the body
    must not run and no completion may be appended: the obligation stays
    `requested`, the failure propagates (marking the keepalive window), and a
-   later reconciliation retries the whole attempt. Release the live-set entry
-   in a `finally` either way, or the reconciler skips the id for the rest of
+   later at-head pass retries the whole attempt. Release the live-set entry
+   in a `finally` either way, or the restart code skips the id for the rest of
    the incarnation. Terminal events (`…-completed`, a cancellation) close the
    obligation and delete it from the fold.
 2. **Attempt**: `runInBackground`, registered in an in-memory live-set
    _synchronously, before any await_, so the same pass never classifies its
    own attempt as undriven.
-3. **Reconciler**: whenever `delivery.caughtUp` is true, walk the fold's open
+3. **Restart from state**: whenever `delivery.caughtUp` is true, walk the fold's open
    obligations against the live-set:
    - `requested` + nobody driving + not expired → **start** (this is both the
      normal start and the lost-before-started recovery — indistinguishable on
@@ -115,11 +161,11 @@ reconciler**:
      **settle as orphaned failure**. Whether settling means fail-or-re-drive
      is a _domain decision_: LLM requests and scripts fail (they may have
      half-executed; the higher level re-derives); an idempotent announcement
-     could re-drive. This is why the reconciler is hand-written per
-     processor, not machinery.
+     could re-drive. This is why this code is hand-written per processor,
+     not machinery.
 
 Settlements reuse the normal completion path's **idempotency keys**, so a
-race between a late attempt and the reconciler — or a full journal refold —
+race between a late attempt and the restart — or a full journal refold —
 collapses to one durable outcome at the append dedup layer.
 
 ## Staleness: wake whenever, act only within the intent's horizon
@@ -131,7 +177,7 @@ how far your fold sits from the stream head) before starting anything.
 
 - **`expiresAt` on the requested event.** The requester stamps it as the
   deadline for the **whole obligation**, including its terminal settlement;
-  it is not merely a latest-start time. The reconciler refuses to start past
+  it is not merely a latest-start time. The processor refuses to start past
   it and settles the obligation as expired instead. A started attempt must
   bound every phase to the remaining budget and reserve a short final window
   for journaling its terminal outcome. This makes late wakes and wedged RPCs
@@ -174,9 +220,9 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
    stream dedupes the replay. This is why the durable forwards (Slack
    router → thread stream, repo → PR-agent stream) need no other gate — a
    refold re-dials the appends and they all collapse.
-2. **An obligation reconciled from the AT-HEAD fold** (the pattern above).
+2. **An obligation restarted from the AT-HEAD fold** (the pattern above).
    Safe because the final fold has absorbed every journaled completion:
-   requested-and-completed pairs cancel out _before_ the reconciler acts.
+   requested-and-completed pairs cancel out _before_ `processEvent` acts.
    The `delivery.caughtUp` branch in `RepoProcessor.processEvent` is the
    minimal creation example—fold `birthCertificate` and `repo/ready`, then
    provision only when the at-head state is born but not ready.
@@ -197,7 +243,7 @@ events** (`append({ ephemeral: true })` — LLM streaming chunks and other
 transient signals). The wake lane drops them from delivery and catch-up reads
 exclude them, so neither a live fold nor a refold ever contains one: you never
 need to filter them out yourself, and you cannot fold or side-effect on one.
-Corollary: anything your fold or reconciler depends on must NOT be appended
+Corollary: anything your fold or `processEvent` depends on must NOT be appended
 ephemeral — the durable truth is always its own event (chunks →
 an assistant-role `agents/context-added` item).
 
@@ -337,14 +383,14 @@ Scenarios every obligation-carrying processor should have (crib from
 - [ ] Every `runInBackground` answers "what recovers the outcome?"
 - [ ] Obligations: requested/started/completed events; fold carries what an
       attempt needs; terminal events delete the entry.
-- [ ] `delivery.caughtUp` reconciler: start undriven fresh work, settle orphans and
+- [ ] `delivery.caughtUp` branch: start undriven fresh work, settle orphans and
       expired intent, idempotency keys shared with the normal path.
-- [ ] `expiresAt` stamped by the requester; reconciler honors it (and the
+- [ ] `expiresAt` stamped by the requester; the at-head branch honors it (and the
       `createdAt + DEFAULT` fallback covers raw appends).
 - [ ] A failed started-append never settles and never leaks the live-set.
 - [ ] Injected `now` dep for anything clock-dependent.
 - [ ] Every vendor side effect is one of the three refold-safe shapes:
-      idempotency-keyed append, at-head fold reconciliation, or
+      idempotency-keyed append, at-head fold comparison, or
       freshness-gated ack — never guarded by event-time state alone.
 - [ ] The refold test: a fresh instance fed the full journal re-executes no
       vendor work, appends nothing new, and converges to the same state.

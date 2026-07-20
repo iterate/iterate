@@ -113,6 +113,8 @@ export interface Project {
   liveState: LiveStateRpc<ProjectLiveState>;
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
   liveDemo: LiveDemo;
+  /** Small durable project key-value store: get/set/delete/list. */
+  kv: Kv;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Browser auth for project-host web apps. */
@@ -181,8 +183,6 @@ export interface Project {
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
-  /** Externally deployed Cap'n Web apps: get(url, { headers }) → remote root stub, dialed through project egress. */
-  remoteCapability: RemoteCapabilityCollection;
   /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
@@ -291,6 +291,29 @@ export interface LiveDemo {
   ticker: LiveStateRpc<{ tick: number; startedAt: number }>;
   /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
   increment(): Promise<void>;
+}
+
+/**
+ * `itx.kv` — a small durable project key-value store on Workers KV (the
+ * deployment's PROJECT_DIRECTORY namespace, keys prefixed with the project
+ * id). Stateless by design: no Durable Object in the path, so a config
+ * worker can read a policy knob on every request for microseconds (the
+ * canonical example: its reverse-proxy target, flipped between the deployed
+ * app and a dev tunnel). KV is eventually consistent across the edge —
+ * writes are visible immediately in the writing location and within ~60s
+ * everywhere else — which is the right trade for knobs and exactly the
+ * wrong one for data (streams), files (files), or credentials (secrets).
+ * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.
+ */
+export interface Kv {
+  /** The stored value, or null when the key is absent. */
+  get(key: string): Promise<unknown>;
+  /** Store a JSON-serializable value (≤64KiB) under a key (≤512 chars). */
+  set(key: string, value: unknown): Promise<void>;
+  /** Remove a key; absent keys are a no-op. */
+  delete(key: string): Promise<void>;
+  /** Keys only (values are one get away), optionally under a prefix. */
+  list(input?: { prefix?: string }): Promise<string[]>;
 }
 
 /** Workers AI binding exposed through itx as a project/agent capability. */
@@ -598,7 +621,9 @@ export interface AgentCollection {
  */
 export interface ProjectEgress {
   __describe(): Promise<Description>;
-  /** Outbound fetch with the project's identity and secret substitution. */
+  /** Outbound fetch with project identity and secret substitution. Set
+   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
+   * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse>;
   /** Install a live egress interceptor (last writer wins); returns a release handle. */
   intercept(handler: ProjectEgressInterceptor): Promise<ProjectEgressIntercept>;
@@ -862,8 +887,8 @@ export interface McpClientCollection {
    * send `authorizationUrl` to the user ("click here to connect"). When they
    * sign in, the token is stored write-only at `path` and — if you are an agent
    * — you are messaged so you can continue. Then connect like any bearer MCP:
-   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
-   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret(
+   * "<path>", { field: "accessToken" })' } })`. For a server that just wants a
    * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
    */
   beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;
@@ -1123,36 +1148,6 @@ export interface DynamicWorkerCollection {
     ref: DynamicWorkerRef,
     options?: DynamicWorkerDispatchOptions,
   ): DynamicWorkerCapability<T>;
-}
-
-/**
- * Externally deployed apps as capabilities. `get(url, { headers })` dials the
- * remote Cap'n Web WebSocket endpoint through PROJECT EGRESS — headers may
- * carry `getSecret({ path: "...", field: "..." })` placeholders, substituted
- * server-side by the referenced secret under its origin pin, so the mount
- * never holds credential material and a re-pointed URL outside the pin fails
- * substitution — and returns the remote session's root stub. Mount one
- * durably as an ordinary itx-expression capability:
- *
- *   capabilityHosts.get("/").provideCapability({
- *     type: "itx-expression",
- *     path: ["todos"],
- *     expression: ["remoteCapability", ["get", "wss://my-todos.example/api",
- *       { headers: { authorization: "Bearer getSecret({ path: \"/secrets/my-todos\", field: \"apiKey\" })" } }]],
- *   })
- *
- * after which `itx.todos.<method>(...)` walks the remote root per invoke —
- * the expression is a NAME, re-dialed from project authority each time, so
- * revoking the mount (or the secret) is the whole off switch.
- */
-export interface RemoteCapabilityCollection {
-  __describe(): Promise<Description>;
-  /**
-   * Dial `url` (ws/wss — or http/https, upgraded) with `headers` and return
-   * the remote Cap'n Web session's root stub. One dial per call: the session
-   * lives as long as the returned stub graph, and disposal closes it.
-   */
-  get(url: string, options?: { headers?: Record<string, string> }): Promise<unknown>;
 }
 
 /**
@@ -1659,7 +1654,17 @@ export type ItxAuthCredentials =
    * `admin-secret` is deployment-global. Grants exactly one project, no
    * admin, no user identity.
    */
-  | { type: "project-secret"; projectId: string; secret: string };
+  | { type: "project-secret"; projectId: string; secret: string }
+  /**
+   * The short-lived user-on-project token auth mints for project app hosts
+   * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
+   * externally deployed app forwards the browser's request as-is, and the app
+   * presents the token here to act AS THAT USER on exactly that project
+   * (docs/remote-apps.md). Verified locally — an HS256 check against the
+   * shared project-app-session secret, no auth-worker hop; membership was
+   * checked at mint time and the 15-minute expiry bounds revocation lag.
+   */
+  | { type: "project-app-session"; token: string };
 
 /** Principal shape for `impersonate` credentials. */
 export type ItxAuthToken =
@@ -2364,6 +2369,7 @@ export type AgentProcessorState = {
   pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;
   requestGeneration: number;
+  cancelledScheduledRequestId: string | null;
   consecutiveLlmFailures: number;
   lastLlmFailureRateLimited: boolean;
   llmRequests: Record<
@@ -2986,7 +2992,7 @@ export type McpBeginOAuthResult = {
    * messages you back so you can continue. */
   authorizationUrl: string;
   /** The `/secrets/…` path the token is stored at. Connect afterwards with
-   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+   * `headers: { authorization: 'Bearer getSecret("<path>", { field: "accessToken" })' }`. */
   path: string;
 };
 
@@ -3043,7 +3049,7 @@ export type SandboxCreateInput = {
    * `sleep()` or `destroy()` explicitly. */
   keepAlive?: boolean;
   /** Initial env-var map, merged as if by `setEnvVars` — values are
-   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw
+   * `getSecret(path)` placeholders or non-secret literals, NEVER raw
    * secret material. */
   env?: Record<string, string>;
 };
@@ -3091,7 +3097,7 @@ export type SandboxInstanceType =
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
  *   journaled as a `configured` event); values are conventionally
- *   `getSecret({ path })` placeholders substituted only at egress — real
+ *   `getSecret(path)` placeholders substituted only at egress — real
  *   secret material never enters the container. All sandbox egress flows
  *   through project egress policy; there is no direct internet path.
  * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
