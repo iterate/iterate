@@ -1470,6 +1470,52 @@ describe("AgentProcessor stream facts", () => {
     expect(h.llm.calls).toHaveLength(0);
   });
 
+  it("a user-actor interrupt at the breaker boundary resets the budget instead of pausing", async () => {
+    // The web Stop control appends a developer item WITH a user actor: an
+    // external trigger. At maxAutonomousTurns a no-actor (agent-loop) trigger
+    // would trip agent/paused; the user's stop must instead refill the budget
+    // and get its own turn.
+    const h = makeAgentHarness();
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { maxAutonomousTurns: 1 } },
+      },
+    ]);
+    // One autonomous turn exhausts the budget.
+    await h.play(["append", agentLoopNote("self-driven trigger")], ["advanceTime", 20_000]);
+    await h.play(() => h.llm.respond("turn 0"));
+    expect(h.state().autonomousTurnCount).toBe(1);
+
+    // The race the Stop control must survive: a self-driven trigger that
+    // WOULD trip the breaker lands in the same frame as the user's stop
+    // (developer role + user actor + interrupt policy). The external trigger
+    // wins the pending slot and refills the budget before any at-head pass.
+    await h.play(
+      [
+        "append",
+        agentLoopNote("self-driven trigger 2"),
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: {
+            role: "developer",
+            content: "The user interrupted the in-progress response from the web chat.",
+            actor: { type: "user", origin: "web" },
+            llmRequestPolicy: { behaviour: "interrupt-current-request" },
+          },
+        },
+      ],
+      ["advanceTime", 20_000],
+    );
+
+    expect(h.events("events.iterate.com/agent/paused")).toHaveLength(0);
+    expect(h.state().paused).toBeNull();
+    expect(h.state().autonomousTurnCount).toBe(0); // external trigger refilled the budget
+    expect(h.llm.calls).toHaveLength(2); // the stop's own turn ran
+  });
+
   it("agent/configured merges partial patches; omitted keys keep their values", async () => {
     const h = makeAgentHarness();
     await h.play([

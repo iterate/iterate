@@ -173,6 +173,24 @@ describe("replayLlmRequest", () => {
     });
   });
 
+  it("recovers the interrupted partial from the settled fact when chunks are gone", () => {
+    const replay = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows(),
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "hi ag",
+          },
+        }),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(replay?.response).toEqual({ text: "hi ag", thinkingText: "", source: "output" });
+  });
+
   it("returns the committed output as the response, with thinking from chunks", () => {
     const chunkRows = [
       row(

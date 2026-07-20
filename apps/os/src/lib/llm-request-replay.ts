@@ -119,7 +119,7 @@ const SettledPayloadSlice = z.looseObject({
       errorMessage: z.string(),
       rawResponse: z.unknown().optional(),
     }),
-    z.looseObject({ status: z.literal("cancelled") }),
+    z.looseObject({ status: z.literal("cancelled"), partialText: z.string().optional() }),
   ]),
 });
 const OutputPayloadSlice = z.looseObject({
@@ -248,6 +248,19 @@ function replayResponse(input: {
   if (outputText != null) return { text: outputText, thinkingText, source: "output" };
   if (streamedText !== "" || thinkingText !== "") {
     return { text: streamedText, thinkingText, source: "chunks" };
+  }
+  // An interrupted request has no committed output, and its chunks are
+  // ephemeral (gone from durable mirrors) — the settled fact's partialText is
+  // the durable record of what streamed before the abort.
+  for (const event of input.events) {
+    if (event.type !== "events.iterate.com/agent/llm-request-settled") continue;
+    const parsed = SettledPayloadSlice.safeParse(event.payload);
+    if (!parsed.success || parsed.data.requestOffset !== input.llmRequestOffset) continue;
+    const result = parsed.data.result;
+    if (result.status === "cancelled" && typeof result.partialText === "string") {
+      return { text: result.partialText, thinkingText, source: "output" };
+    }
+    break;
   }
   return null;
 }

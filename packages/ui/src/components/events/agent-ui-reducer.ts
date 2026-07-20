@@ -706,6 +706,10 @@ function reduceAgentUiEvent(
         typeof result?.errorMessage === "string" ? result.errorMessage : undefined;
       const parsedCancelReason = AgentLlmRequestCancelReason.safeParse(result?.reason);
       const cancelReason = parsedCancelReason.success ? parsedCancelReason.data : null;
+      // The durable record of what streamed before an interrupt. Chunks are
+      // ephemeral, so a rebuild from the journal (refresh, TUI/mobile) has an
+      // empty responseText — the settled fact fills it in.
+      const partialText = typeof result?.partialText === "string" ? result.partialText : null;
       return updateLlmStep(state, requestOffset, (step) =>
         step.outcome != null
           ? step
@@ -714,6 +718,9 @@ function reduceAgentUiEvent(
               status: "done",
               outcome:
                 status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
+              ...(partialText !== null && step.responseText === ""
+                ? { responseText: partialText }
+                : {}),
               ...(typeof payload.durationMs === "number"
                 ? { durationMs: payload.durationMs }
                 : status === "cancelled"

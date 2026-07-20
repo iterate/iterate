@@ -541,6 +541,36 @@ describe("agent-ui reducer", () => {
     expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
   });
 
+  test("a durable rebuild recovers the interrupted partial from the settled fact", () => {
+    // Chunks are ephemeral: a refold from the journal has none, so the step's
+    // streamed text must come from settled.result.partialText.
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test", expiresAt: Date.parse("2026-06-11T00:10:00.000Z") },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "Let me check your cal",
+          },
+        },
+      },
+    ]);
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "cancelled",
+      cancelReason: "interrupted-by-user-input",
+      responseText: "Let me check your cal",
+    });
+  });
+
   test("shows a subtle processor-revived marker without disturbing a live activity", () => {
     const state = reduceAll([
       {
