@@ -3,7 +3,7 @@
 Owner doctrine, updated 2026-07-15 after surveying every hosted stream
 processor. This is the convention for durable domain objects on this platform.
 
-For the practical half—side-effect guarantees, the obligation/drive
+For the practical half—side-effect guarantees, the obligation
 pattern, eviction recovery, staleness policy, and the node test harness—see
 [Writing and testing stream processors](writing-stream-processors.md).
 
