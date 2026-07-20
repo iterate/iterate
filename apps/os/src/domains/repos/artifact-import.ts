@@ -1,17 +1,10 @@
-type GithubArtifactImport = {
-  branch: string;
-  depth: number;
-  owner: string;
-  repo: string;
-};
-
 /** Ask Cloudflare Artifacts to clone a public GitHub repository directly.
  * The deterministic target makes creation retry-safe: recovery after a
  * completed import but before `repo/ready` accepts that exact existing target
  * without ever cloning its contents into the Worker isolate. */
 export async function importGithubArtifact(
   artifacts: Pick<Artifacts, "get" | "import">,
-  input: GithubArtifactImport & { name: string },
+  input: { branch: string; depth: number; name: string; owner: string; repo: string },
   options: {
     pollAttempts?: number;
     pollIntervalMs?: number;
