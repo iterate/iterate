@@ -28,6 +28,7 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import { newWebSocketRpcSession } from "capnweb";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -115,7 +116,11 @@ import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-l
 import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
-import { normalizeSecretPath } from "./domains/secrets/utils.ts";
+import {
+  generateProjectApiKeyMaterial,
+  normalizeSecretPath,
+  PROJECT_API_KEY_SECRET_PATH,
+} from "./domains/secrets/utils.ts";
 import {
   completeConnect,
   connectTelegram,
@@ -2208,6 +2213,77 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
       () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
     );
+  }
+}
+
+/**
+ * Externally deployed apps as capabilities. `get(url, { headers })` dials the
+ * remote Cap'n Web WebSocket endpoint through PROJECT EGRESS — headers may
+ * carry `getSecret({ path: "...", field: "..." })` placeholders, substituted
+ * server-side by the referenced secret under its origin pin, so the mount
+ * never holds credential material and a re-pointed URL outside the pin fails
+ * substitution — and returns the remote session's root stub. Mount one
+ * durably as an ordinary itx-expression capability:
+ *
+ *   capabilityHosts.get("/").provideCapability({
+ *     type: "itx-expression",
+ *     path: ["todos"],
+ *     expression: ["remoteCapability", ["get", "wss://my-todos.example/api",
+ *       { headers: { authorization: "Bearer getSecret({ path: \"/secrets/my-todos\", field: \"apiKey\" })" } }]],
+ *   })
+ *
+ * after which `itx.todos.<method>(...)` walks the remote root per invoke —
+ * the expression is a NAME, re-dialed from project authority each time, so
+ * revoking the mount (or the secret) is the whole off switch.
+ */
+class RemoteCapabilityCollectionRpcTarget extends IterateRpcTarget<"RemoteCapabilityCollection"> {
+  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Externally deployed Cap'n Web apps: get(url, { headers }) dials the remote WebSocket endpoint through project egress (headers may carry getSecret(...) placeholders — substituted server-side, origin-pinned) and returns the remote session's root stub. Persist a mount with an itx-expression capability naming this call.",
+      children: {
+        get: "Dial a remote Cap'n Web endpoint (ws/wss/http/https URL) and return its root stub.",
+      },
+      parent: "a project itx (itx.remoteCapability)",
+    });
+  }
+
+  /**
+   * Dial `url` (ws/wss — or http/https, upgraded) with `headers` and return
+   * the remote Cap'n Web session's root stub. One dial per call: the session
+   * lives as long as the returned stub graph, and disposal closes it.
+   */
+  async get(url: string, options?: { headers?: Record<string, string> }): Promise<unknown> {
+    const target = new URL(url);
+    if (target.protocol === "ws:") target.protocol = "http:";
+    if (target.protocol === "wss:") target.protocol = "https:";
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      throw new Error(`remote capability URL must be ws(s) or http(s), got "${url}"`);
+    }
+    // The upgrade goes through project egress: the approval gate sees the
+    // placeholder-form request, and the referenced secret's own DO
+    // substitutes handshake headers under its origin pin.
+    const headers = new Headers(options?.headers ?? {});
+    headers.set("upgrade", "websocket");
+    const egress = projectEgressFetcher(this.props.ctx.exports, this.props.projectId);
+    const response = await egress.fetch(new Request(target.toString(), { headers }));
+    const webSocket = response.webSocket;
+    if (webSocket === null || webSocket === undefined) {
+      throw new Error(
+        `remote capability endpoint did not accept the WebSocket upgrade: ${response.status} ${await response
+          .text()
+          .catch(() => "")}`.trim(),
+      );
+    }
+    webSocket.accept();
+    // The workerd client socket satisfies the standard listener surface the
+    // Cap'n Web transport uses; the cast bridges the workers-types/DOM gap.
+    return newWebSocketRpcSession(webSocket as unknown as WebSocket);
   }
 }
 
@@ -5126,6 +5202,24 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       "root-append",
       appendRootEvents,
     );
+    // Born credential: every project gets a write-only ingress secret at
+    // /secrets/project-api-key — what the `project-secret` /api credential is
+    // verified against, inside the Secret DO. Empty egress pin: unlike every
+    // other secret it can never be substituted into ANY outbound request.
+    // Random birth material is deliberately unusable; the owner overwrites it
+    // with a value they hold (secrets.update) to pair an external app. Off
+    // the create critical path and idempotent (the DO's create dedupes), so a
+    // lost race costs nothing and re-creation is a no-op.
+    this.props.ctx.waitUntil(
+      env.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: registered.projectId,
+          path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
+        }),
+      )
+        .create({ egress: { urls: [] }, material: generateProjectApiKeyMaterial() })
+        .catch(() => undefined),
+    );
     const project = itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -6074,6 +6168,15 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** Externally deployed Cap'n Web apps: get(url, { headers }) → remote root stub, dialed through project egress. */
+  get remoteCapability(): RemoteCapabilityCollectionRpcTarget {
+    return new RemoteCapabilityCollectionRpcTarget({
+      auth: this.#props.auth,
+      ctx: this.#props.ctx,
+      projectId: this.#props.projectId,
+    });
+  }
+
   /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   get workspaces(): WorkspaceCollectionRpcTarget {
     return new WorkspaceCollectionRpcTarget({
@@ -6337,6 +6440,16 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
       credentials: input,
       headers: this.props.headers,
       requestUrl: this.props.requestUrl,
+      // The project-secret lane's verifier: a one-bit constant-time compare
+      // INSIDE the project's born ingress-credential Secret DO — material
+      // never leaves the secret system, this door included.
+      verifyProjectSecret: ({ projectId, secret }) =>
+        env.SECRET.getByName(
+          DurableObjectNameCodec.stringify({
+            projectId,
+            path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
+          }),
+        ).verifyMaterialField({ value: secret }),
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }

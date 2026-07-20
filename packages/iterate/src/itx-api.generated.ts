@@ -183,6 +183,8 @@ export interface Project {
   repo: Repo;
   /** Dynamic worker refs: get(ref). */
   workers: DynamicWorkerCollection;
+  /** Externally deployed Cap'n Web apps: get(url, { headers }) → remote root stub, dialed through project egress. */
+  remoteCapability: RemoteCapabilityCollection;
   /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
   /**
@@ -1281,6 +1283,36 @@ export interface DynamicWorkerCollection {
 }
 
 /**
+ * Externally deployed apps as capabilities. `get(url, { headers })` dials the
+ * remote Cap'n Web WebSocket endpoint through PROJECT EGRESS — headers may
+ * carry `getSecret({ path: "...", field: "..." })` placeholders, substituted
+ * server-side by the referenced secret under its origin pin, so the mount
+ * never holds credential material and a re-pointed URL outside the pin fails
+ * substitution — and returns the remote session's root stub. Mount one
+ * durably as an ordinary itx-expression capability:
+ *
+ *   capabilityHosts.get("/").provideCapability({
+ *     type: "itx-expression",
+ *     path: ["todos"],
+ *     expression: ["remoteCapability", ["get", "wss://my-todos.example/api",
+ *       { headers: { authorization: "Bearer getSecret({ path: \"/secrets/my-todos\", field: \"apiKey\" })" } }]],
+ *   })
+ *
+ * after which `itx.todos.<method>(...)` walks the remote root per invoke —
+ * the expression is a NAME, re-dialed from project authority each time, so
+ * revoking the mount (or the secret) is the whole off switch.
+ */
+export interface RemoteCapabilityCollection {
+  __describe(): Promise<Description>;
+  /**
+   * Dial `url` (ws/wss — or http/https, upgraded) with `headers` and return
+   * the remote Cap'n Web session's root stub. One dial per call: the session
+   * lives as long as the returned stub graph, and disposal closes it.
+   */
+  get(url: string, options?: { headers?: Record<string, string> }): Promise<unknown>;
+}
+
+/**
  * Catalog of durable workspaces within one project: EVENT-SOURCED,
  * MOUNT-ROUTED workspace filesystems (Durable-Object-hosted, no container,
  * always warm). Every workspace is addressed by its FULL path under
@@ -1764,7 +1796,16 @@ export type ItxAuthCredentials =
   | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string }
   | { type: "operator-session"; token: string }
-  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+  | { type: "impersonate"; secret: string; token: ItxAuthToken }
+  /**
+   * A project's own long-lived machine credential — for externally deployed
+   * apps that connect back to /api as their project. Verified against the
+   * write-only secret every project is born with at
+   * `/secrets/project-api-key` (the comparison happens inside the Secret
+   * Durable Object; material never leaves the secret system). Grants exactly
+   * one project, no admin, no user identity.
+   */
+  | { type: "project-secret"; projectId: string; secret: string };
 
 /** Principal shape for `impersonate` credentials. */
 export type ItxAuthToken =

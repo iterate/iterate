@@ -66,7 +66,16 @@ export type ItxAuthCredentials =
   | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string }
   | { type: "operator-session"; token: string }
-  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+  | { type: "impersonate"; secret: string; token: ItxAuthToken }
+  /**
+   * A project's own long-lived machine credential — for externally deployed
+   * apps that connect back to /api as their project. Verified against the
+   * write-only secret every project is born with at
+   * `/secrets/project-api-key` (the comparison happens inside the Secret
+   * Durable Object; material never leaves the secret system). Grants exactly
+   * one project, no admin, no user identity.
+   */
+  | { type: "project-secret"; projectId: string; secret: string };
 
 /** A request supplied no usable authority. This is a caller outcome at the
  * public authentication door, not a server defect. */
@@ -237,12 +246,35 @@ export async function resolveItxAuth(input: {
   credentials: ItxAuthCredentials;
   headers: Headers;
   requestUrl: string;
+  /** The `project-secret` lane's verifier — dials the project's born
+   * `/secrets/project-api-key` Secret Durable Object for a one-bit
+   * constant-time comparison (rpc-targets wires it; auth stays free of DO
+   * plumbing). Absent means the caller does not serve that lane. */
+  verifyProjectSecret?: (input: { projectId: string; secret: string }) => Promise<boolean>;
 }): Promise<ItxAuthContext> {
   const { config, credentials } = input;
 
   if (credentials.type === "admin-secret") {
     assertAdminSecret(config, credentials.secret);
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+  }
+
+  if (credentials.type === "project-secret") {
+    if (input.verifyProjectSecret === undefined) throw new ItxAuthenticationError();
+    if (credentials.secret.length === 0) throw new ItxAuthenticationError();
+    const verified = await input.verifyProjectSecret({
+      projectId: credentials.projectId,
+      secret: credentials.secret,
+    });
+    if (!verified) throw new ItxAuthenticationError();
+    // Exactly one project, no admin, no user identity — and no directory
+    // fallback: the credential IS the project scope; there is nothing to
+    // widen into.
+    return new ItxAuthContext({
+      isAdmin: false,
+      principal: `project-secret:${credentials.projectId}`,
+      projectIds: [credentials.projectId],
+    });
   }
 
   if (credentials.type === "operator-session") {

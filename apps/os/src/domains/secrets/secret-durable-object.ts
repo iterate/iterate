@@ -358,6 +358,30 @@ export class SecretDurableObject extends DurableObject<Env> {
     }
   }
 
+  /**
+   * Compare one material field (or the whole plain-string material, when
+   * `field` is omitted) against a caller-supplied candidate. The material
+   * never leaves this object — the answer is one bit. This is the verifier
+   * behind the `project-secret` /api credential (auth.ts): the candidate
+   * arrives from the UNAUTHENTICATED door, so the comparison is
+   * constant-time (HMAC both sides under a throwaway key, so neither length
+   * nor prefix leaks through timing) and a missing/uncreated/structured-only
+   * secret answers false rather than throwing.
+   */
+  async verifyMaterialField(input: { field?: string; value: string }): Promise<boolean> {
+    const { state } = await this.#snapshotWithOffset();
+    if (state.encryptedMaterial === null) return false;
+    const material = await this.#decrypt(state.encryptedMaterial, state.egress);
+    let expected: unknown;
+    try {
+      expected = selectSecretField(material, input.field);
+    } catch {
+      return false;
+    }
+    if (typeof expected !== "string" || expected.length === 0) return false;
+    return await constantTimeStringEquals(expected, input.value);
+  }
+
   /** Substitute this secret's placeholders (headers + URL) from decrypted material. */
   async #substitute(request: Request, state: SecretState): Promise<Request> {
     const material =
@@ -788,4 +812,23 @@ function assertSecretCreated(state: SecretState, path: string): void {
   if (state.birthCertificate === null) {
     throw new Error(`secret has not been created: ${path}`);
   }
+}
+
+/**
+ * Constant-time string comparison for the verify lane: HMAC both values under
+ * one throwaway key and compare the fixed-length digests byte-by-byte with no
+ * early exit, so neither content nor LENGTH differences shape the timing.
+ */
+async function constantTimeStringEquals(expected: string, candidate: string): Promise<boolean> {
+  const key = await crypto.subtle.generateKey({ hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+  const encoder = new TextEncoder();
+  const [expectedDigest, candidateDigest] = await Promise.all([
+    crypto.subtle.sign("HMAC", key, encoder.encode(expected)),
+    crypto.subtle.sign("HMAC", key, encoder.encode(candidate)),
+  ]);
+  const a = new Uint8Array(expectedDigest);
+  const b = new Uint8Array(candidateDigest);
+  let difference = 0;
+  for (let i = 0; i < a.length; i += 1) difference |= a[i]! ^ b[i]!;
+  return difference === 0;
 }
