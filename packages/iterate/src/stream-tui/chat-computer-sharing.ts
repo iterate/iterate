@@ -44,7 +44,10 @@ type ProviderProcess = {
     on(event: "data", listener: (chunk: unknown) => void): unknown;
     on(event: "end", listener: () => void): unknown;
   };
-  stderr: { on(event: "data", listener: (chunk: unknown) => void): unknown };
+  stderr: {
+    on(event: "data", listener: (chunk: unknown) => void): unknown;
+    on(event: "end", listener: () => void): unknown;
+  };
   stdin: { end(): unknown };
   on(event: "error", listener: (error: Error) => void): unknown;
   on(event: "exit", listener: (code: number | null) => void): unknown;
@@ -96,12 +99,13 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       let hasExited = false;
       let exitCode: number | null = null;
       let stdoutEnded = false;
+      let stderrEnded = false;
       const publishProviderActivity = (next: ChatComputerSharingSnapshot) => {
         exitIsExplained = false;
         publish(next);
       };
       const finishExit = () => {
-        if (process !== launched || !hasExited || !stdoutEnded) return;
+        if (process !== launched || !hasExited || !stdoutEnded || !stderrEnded) return;
         process = undefined;
         if (exitIsExplained) return;
         publish({
@@ -125,18 +129,27 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       });
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      const processStderrLine = (line: string) => {
+        if (line === "") return;
+        exitIsExplained = true;
+        publish({
+          status: "error",
+          notice: `could not share itx.${input.name}: ${line}`,
+        });
+      };
       launched.stderr.on("data", (chunk) => {
         if (process !== launched) return;
         stderrBuffer += String(chunk);
         const lines = stderrBuffer.split("\n");
         stderrBuffer = lines.pop() || "";
-        for (const line of lines.filter(Boolean)) {
-          exitIsExplained = true;
-          publish({
-            status: "error",
-            notice: `could not share itx.${input.name}: ${line}`,
-          });
-        }
+        for (const line of lines) processStderrLine(line);
+      });
+      launched.stderr.on("end", () => {
+        if (process !== launched) return;
+        processStderrLine(stderrBuffer);
+        stderrBuffer = "";
+        stderrEnded = true;
+        finishExit();
       });
       const processStdoutLine = (line: string) => {
         if (line.trim() === "") return;

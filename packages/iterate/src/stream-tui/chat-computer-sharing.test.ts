@@ -205,7 +205,7 @@ test("reports an unexpected provider exit and allows an explicit retry", async (
 
   sharing.start();
   processes[0]!.emit("exit", 7);
-  await endProviderStdout(processes[0]!);
+  await endProviderOutput(processes[0]!);
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
     notice: "itx.joebloggsComputer stopped unexpectedly (exit 7)",
@@ -227,7 +227,7 @@ test("reports a provider crash even when the last machine call failed", async ()
     `${JSON.stringify({ type: "call-done", id: 1, method: "runSwift", ok: false, error: "permission denied" })}\n`,
   );
   process.emit("exit", 9);
-  await endProviderStdout(process);
+  await endProviderOutput(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
@@ -245,7 +245,7 @@ test("keeps invalid provider output visible after the provider exits", async () 
   sharing.start();
   process.stdout.write("null\n");
   process.emit("exit", 1);
-  await endProviderStdout(process);
+  await endProviderOutput(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
@@ -279,7 +279,7 @@ test("reads a terminal provider status that drains after process exit", async ()
   sharing.start();
   process.emit("exit", 1);
   process.stdout.write(`${JSON.stringify({ type: "status", loggedIn: false })}\n`);
-  await endProviderStdout(process);
+  await endProviderOutput(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
@@ -297,11 +297,29 @@ test("keeps provider diagnostics visible after the provider exits", async () => 
   sharing.start();
   process.stderr.write("capability types did not compile\n");
   process.emit("exit", 1);
-  await endProviderStdout(process);
+  await endProviderOutput(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
     notice: "could not share itx.joebloggsComputer: capability types did not compile",
+  });
+});
+
+test("waits for a final stderr diagnostic before classifying provider exit", async () => {
+  const process = new FakeProviderProcess();
+  const sharing = createChatComputerSharing({
+    launch: () => process,
+    name: "joebloggsComputer",
+  });
+
+  sharing.start();
+  process.emit("exit", 1);
+  await endProviderStdout(process);
+  await endProviderStderr(process, "late provider diagnostic without a newline");
+
+  expect(sharing.snapshot()).toMatchObject({
+    status: "error",
+    notice: "could not share itx.joebloggsComputer: late provider diagnostic without a newline",
   });
 });
 
@@ -316,7 +334,7 @@ test("reports a later crash after the provider recovers from a diagnostic", asyn
   process.stderr.write("temporary provider diagnostic\n");
   process.stdout.write(`${JSON.stringify({ type: "status", loggedIn: true })}\n`);
   process.emit("exit", 2);
-  await endProviderStdout(process);
+  await endProviderOutput(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
@@ -335,4 +353,15 @@ function endProviderStdout(process: FakeProviderProcess) {
     process.stdout.once("end", resolve);
     process.stdout.end();
   });
+}
+
+function endProviderStderr(process: FakeProviderProcess, finalChunk: string) {
+  return new Promise<void>((resolve) => {
+    process.stderr.once("end", resolve);
+    process.stderr.end(finalChunk);
+  });
+}
+
+async function endProviderOutput(process: FakeProviderProcess) {
+  await Promise.all([endProviderStdout(process), endProviderStderr(process, "")]);
 }
