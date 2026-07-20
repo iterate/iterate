@@ -19,8 +19,24 @@ test("public itx discovers an enrolled device and appends a notification request
     platform: "ios",
   });
 
+  const pushTokenSecretPath = "/secrets/devices/phone-test-installation/expo-push-token";
+  using pushTokenSecret = project.secrets.get(pushTokenSecretPath);
+  expect(await pushTokenSecret.__describe()).toMatchObject({
+    created: true,
+    egress: { urls: ["https://exp.host"] },
+    hasMaterial: true,
+  });
+
+  await phone.enroll({
+    appVersion: "e2e-rotated",
+    expoPushToken: "ExponentPushToken[e2e-rotated-never-sent]",
+    label: "E2E phone",
+    notificationsStatus: "granted",
+    platform: "ios",
+  });
+
   expect(await project.devices.list()).toContainEqual({
-    appVersion: "e2e",
+    appVersion: "e2e-rotated",
     created: true,
     deviceId: "phone-test-installation",
     label: "E2E phone",
@@ -55,6 +71,17 @@ test("public itx discovers an enrolled device and appends a notification request
       },
     }),
   );
+  const deviceEvents = await project.streams.get("/devices/phone-test-installation").getEvents();
+  expect(deviceEvents).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/device/push-token-updated",
+      payload: expect.objectContaining({ pushTokenSecretPath }),
+    }),
+  );
+  expect(JSON.stringify(deviceEvents)).not.toContain("ExponentPushToken");
+  expect(JSON.stringify(await project.streams.get(pushTokenSecretPath).getEvents())).not.toContain(
+    "ExponentPushToken",
+  );
 
   using collaboratorSession = withItxSession();
   using collaboratorItx = collaboratorSession.authenticate({
@@ -77,6 +104,6 @@ test("public itx discovers an enrolled device and appends a notification request
         requestOffset: request.offset,
       },
     }),
-  ).rejects.toThrow("only the enrolling user can append device events");
+  ).resolves.toHaveLength(1);
   expect(projectId).toMatch(/^prj_/);
 });

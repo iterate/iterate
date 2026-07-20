@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/live-state";
 import {
-  isStreamOffsetConflictError,
   type ProcessorState,
   type StreamEventInput,
   type StreamSubscriberWakeRequest,
@@ -13,15 +12,14 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { decryptDevicePushToken, encryptDevicePushToken } from "./device-crypto.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
-import { DeviceProcessor } from "./device-processor-implementation.ts";
+import { DeviceProcessor, type DevicePushSender } from "./device-processor-implementation.ts";
 import { getExpoPushReceipt, sendExpoPushNotification } from "./expo-push-client.ts";
 import type { DeviceAppendInput, DeviceDescription, DeviceEnrollInput } from "./types.ts";
 import { PUBLIC_DEVICE_EVENT_TYPES } from "./types.ts";
 
-const MAX_ENROLL_ATTEMPTS = 8;
 const INGEST_WAIT_TIMEOUT_MS = 15_000;
+const EXPO_PUSH_ORIGIN = "https://exp.host";
 
 export class DeviceDurableObject extends DurableObject<Env> {
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
@@ -45,34 +43,25 @@ export class DeviceDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
       now: Date.now,
+      clearPushToken: (input) =>
+        this.#serializeCredentialUpdate(() => this.#clearPushTokenSecret(input)),
       getReceipt: getExpoPushReceipt,
       repointReceiptAlarm: (atMs) => this.#registry.setAlarmSlice("device-receipts", atMs),
-      send: async ({ encryptedPushToken, notification }) => {
-        const state = this.#reads.currentState;
-        const ownerId = state.birthCertificate?.config.ownerId;
-        if (
-          ownerId === undefined ||
-          state.encryptedPushToken?.offset !== encryptedPushToken.offset
-        ) {
+      send: async ({ notification, pushTokenSecretPath }): ReturnType<DevicePushSender> => {
+        const state: ProcessorState<DeviceProcessorContract> = this.#reads.currentState;
+        if (state.pushTokenSecretPath !== pushTokenSecretPath) {
           throw new Error("device push token changed before the attempt began");
         }
-        const token = await decryptDevicePushToken(
-          encryptedPushToken,
-          this.env.SECRET_ENCRYPTION_KEY,
-          {
-            offset: encryptedPushToken.offset,
-            ownerId,
-            path: this.#name.path,
-            projectId: this.#name.projectId,
-          },
+        const secret = this.#pushTokenSecret(pushTokenSecretPath);
+        return await sendExpoPushNotification({ ...notification, pushTokenSecretPath }, (request) =>
+          secret.fetch(request),
         );
-        return await sendExpoPushNotification({ ...notification, token });
       },
     }),
     { recovery: true },
   );
   readonly #reads = this.#registry.reads(this.#deviceProcessor);
-  #enrollments: Promise<void> = Promise.resolve();
+  #credentialUpdates: Promise<void> = Promise.resolve();
 
   wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
     return this.#registry.wakeStreamSubscriber(args);
@@ -106,87 +95,60 @@ export class DeviceDurableObject extends DurableObject<Env> {
   }
 
   enroll(input: DeviceEnrollInput & { ownerId: string }) {
-    const result = this.#enrollments.then(() => this.#enroll(input));
-    this.#enrollments = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.#serializeCredentialUpdate(() => this.#enroll(input));
   }
 
   async #enroll(input: DeviceEnrollInput & { ownerId: string }) {
     assertEnrollInput(input);
-    for (let attempt = 1; attempt <= MAX_ENROLL_ATTEMPTS; attempt += 1) {
-      const snapshot = await this.#snapshot();
-      const existingOwner = snapshot.state.birthCertificate?.config.ownerId;
-      if (existingOwner !== undefined && existingOwner !== input.ownerId) {
-        throw new Error("this device id is already enrolled by another user");
-      }
-      const offset = snapshot.offset + 1;
-      const encryptedPushToken = await encryptDevicePushToken(
-        input.expoPushToken,
-        this.env.SECRET_ENCRYPTION_KEY,
+    const snapshot = await this.#snapshot();
+    const existingOwner = snapshot.state.birthCertificate?.config.ownerId;
+    const pushTokenSecretUpdatedOffset = await this.#putPushTokenSecret(input.expoPushToken);
+    if (existingOwner === undefined) {
+      const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: this.ctx.id.name!,
+        idempotencyKey: `stream/subscription-configured:${this.ctx.id.name!}#${DeviceProcessorContract.slug}`,
+        processor: ["devices", ["get", this.#deviceId], "processor"],
+        processorSlug: DeviceProcessorContract.slug,
+      });
+      const [created, configured] = await this.#stream.append(
         {
-          offset,
-          ownerId: input.ownerId,
-          path: this.#name.path,
-          projectId: this.#name.projectId,
-        },
-      );
-      try {
-        if (existingOwner === undefined) {
-          const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: this.ctx.id.name!,
-            idempotencyKey: `stream/subscription-configured:${this.ctx.id.name!}#${DeviceProcessorContract.slug}`,
-            processor: ["devices", ["get", this.#deviceId], "processor"],
-            processorSlug: DeviceProcessorContract.slug,
-          });
-          const [created, configured] = await this.#stream.append(
-            {
-              type: "events.iterate.com/device/created",
-              idempotencyKey: `device/created:${this.#name.projectId}:${this.#deviceId}`,
-              offset,
-              payload: {
-                config: {
-                  appVersion: input.appVersion,
-                  encryptedPushToken,
-                  label: input.label,
-                  notificationsStatus: input.notificationsStatus,
-                  ownerId: input.ownerId,
-                  platform: input.platform,
-                },
-              },
-            } as StreamEventInput,
-            subscription,
-          );
-          await this.#waitUntilProcessed(Math.max(created!.offset, configured!.offset));
-          return describeDeviceState(this.#reads.currentState, this.#deviceId);
-        }
-        const [updated] = await this.#stream.append({
-          type: "events.iterate.com/device/push-token-updated",
-          offset,
+          type: "events.iterate.com/device/created",
+          idempotencyKey: `device/created:${this.#name.projectId}:${this.#deviceId}`,
           payload: {
-            appVersion: input.appVersion,
-            encryptedPushToken,
-            label: input.label,
-            notificationsStatus: input.notificationsStatus,
+            config: {
+              appVersion: input.appVersion,
+              label: input.label,
+              notificationsStatus: input.notificationsStatus,
+              ownerId: input.ownerId,
+              platform: input.platform,
+              pushTokenSecretPath: this.#pushTokenSecretPath,
+              pushTokenSecretUpdatedOffset,
+            },
           },
-        } as StreamEventInput);
-        await this.#waitUntilProcessed(updated!.offset);
-        return describeDeviceState(this.#reads.currentState, this.#deviceId);
-      } catch (error) {
-        if (!isStreamOffsetConflictError(error) || attempt === MAX_ENROLL_ATTEMPTS) throw error;
-      }
+        } as StreamEventInput,
+        subscription,
+      );
+      await this.#waitUntilProcessed(Math.max(created!.offset, configured!.offset));
+      return describeDeviceState(this.#reads.currentState, this.#deviceId);
     }
-    throw new Error("unreachable device enrollment retry state");
+    const [updated] = await this.#stream.append({
+      type: "events.iterate.com/device/push-token-updated",
+      payload: {
+        appVersion: input.appVersion,
+        label: input.label,
+        notificationsStatus: input.notificationsStatus,
+        ownerId: input.ownerId,
+        pushTokenSecretPath: this.#pushTokenSecretPath,
+        pushTokenSecretUpdatedOffset,
+      },
+    } as StreamEventInput);
+    await this.#waitUntilProcessed(updated!.offset);
+    return describeDeviceState(this.#reads.currentState, this.#deviceId);
   }
 
-  async append(ownerId: string, ...events: DeviceAppendInput[]) {
+  async append(...events: DeviceAppendInput[]) {
     const snapshot = await this.#snapshot();
     if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
-    if (snapshot.state.birthCertificate.config.ownerId !== ownerId) {
-      throw new Error("only the enrolling user can append device events");
-    }
     const parsed = events.map((event) => {
       const consumed = DeviceProcessorContract.parseConsumedInput(event);
       if (!PUBLIC_DEVICE_EVENT_TYPES.has(consumed.type as never)) {
@@ -201,10 +163,18 @@ export class DeviceDurableObject extends DurableObject<Env> {
     return committed;
   }
 
-  async revoke(ownerId: string, reason: "disabled" | "permission-denied" | "sign-out") {
+  revoke(reason: "disabled" | "permission-denied" | "sign-out") {
+    return this.#serializeCredentialUpdate(() => this.#revoke(reason));
+  }
+
+  async #revoke(reason: "disabled" | "permission-denied" | "sign-out") {
     const snapshot = await this.#snapshot();
-    if (snapshot.state.birthCertificate?.config.ownerId !== ownerId) {
-      throw new Error("only the enrolling user can revoke this device");
+    if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
+    if (snapshot.state.pushTokenSecretUpdatedOffset !== null) {
+      await this.#clearPushTokenSecret({
+        pushTokenSecretPath: this.#pushTokenSecretPath,
+        pushTokenSecretUpdatedOffset: snapshot.state.pushTokenSecretUpdatedOffset,
+      });
     }
     const [event] = await this.#stream.append({
       type: "events.iterate.com/device/revoked",
@@ -227,6 +197,43 @@ export class DeviceDurableObject extends DurableObject<Env> {
   async #waitUntilProcessed(offset: number) {
     await this.#registry.catchUp(DeviceProcessorContract.slug);
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
+  }
+
+  get #pushTokenSecretPath(): string {
+    return `/secrets/devices/${this.#deviceId}/expo-push-token`;
+  }
+
+  #pushTokenSecret(path: string) {
+    return this.env.SECRET.getByName(
+      DurableObjectNameCodec.stringify({ path, projectId: this.#name.projectId }),
+    );
+  }
+
+  async #putPushTokenSecret(token: string): Promise<number> {
+    const secret = this.#pushTokenSecret(this.#pushTokenSecretPath);
+    const current = await secret.describe();
+    const input = { egress: { urls: [EXPO_PUSH_ORIGIN] }, material: token };
+    const event = current.created ? await secret.update(input) : await secret.create(input);
+    return event.offset;
+  }
+
+  async #clearPushTokenSecret(input: {
+    pushTokenSecretPath: string;
+    pushTokenSecretUpdatedOffset: number;
+  }): Promise<boolean> {
+    const secret = this.#pushTokenSecret(input.pushTokenSecretPath);
+    return await secret.clearMaterialIfUpdatedOffset({
+      expectedUpdatedOffset: input.pushTokenSecretUpdatedOffset,
+    });
+  }
+
+  #serializeCredentialUpdate<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.#credentialUpdates.then(work);
+    this.#credentialUpdates = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 
