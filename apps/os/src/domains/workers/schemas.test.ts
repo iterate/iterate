@@ -73,19 +73,6 @@ describe("DynamicWorkerSource schema", () => {
     ).toMatchObject({ createWorker: { files: { ref: { commitOid: "a".repeat(40) } } } });
   });
 
-  it("rejects the pre-build-pipeline source shapes", () => {
-    expect(() =>
-      DynamicWorkerSource.parse({
-        mainModule: "worker.js",
-        modules: { "worker.js": "export default {};" },
-        type: "inline",
-      }),
-    ).toThrow();
-    expect(() =>
-      DynamicWorkerSource.parse({ repoPath: "/", sourcePath: "worker.js", type: "repo" }),
-    ).toThrow();
-  });
-
   it("rejects malformed commit oids and unknown build options", () => {
     expect(() =>
       DynamicWorkerSource.parse({

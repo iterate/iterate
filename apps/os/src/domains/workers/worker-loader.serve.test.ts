@@ -218,13 +218,16 @@ describe("resolveWorkerSource", () => {
       source: repoSource("/repos/budgeted-build"),
       waitUntil,
     });
-    await expect(budgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
-    expect(pending).toHaveLength(1);
+    try {
+      await expect(budgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
+      expect(pending).toHaveLength(1);
+    } finally {
+      releaseBuild();
+      await Promise.all(pending.splice(0));
+      h.state.buildGate = undefined;
+    }
     expect(h.state.buildCalls).toEqual(["SLOW"]);
 
-    releaseBuild();
-    await Promise.all(pending.splice(0));
-    h.state.buildGate = undefined;
     const ready = await resolveWorkerSource({
       projectId: "prj_slow",
       source: repoSource("/repos/budgeted-build"),

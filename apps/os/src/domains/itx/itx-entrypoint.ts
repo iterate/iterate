@@ -56,10 +56,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       taken = takeWorkerFetchDispatch(request);
     } catch (error) {
       if (!(error instanceof SyntaxError || error instanceof ZodError)) throw error;
-      return new Response(
-        "invalid x-iterate-worker-dispatch header: expected the current DynamicWorkerRef shape",
-        { status: 400 },
-      );
+      return new Response("invalid x-iterate-worker-dispatch header", { status: 400 });
     }
     if (taken === null) {
       return new Response(

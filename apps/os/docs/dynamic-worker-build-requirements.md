@@ -99,8 +99,8 @@ or refresh policy.
 `@cloudflare/worker-bundler` 0.2.1 is experimental and runs only in workerd.
 Its registry client, package-format support, resolver, esbuild Wasm startup,
 CPU/memory limits, and output behavior are the build system's limits. There is
-no Vite, Tailwind CLI, TanStack Start adapter, lifecycle-script runner, native
-module toolchain, or compatibility shim around it.
+no Vite, Tailwind CLI, TanStack Start adapter, lifecycle-script runner, or
+native module toolchain around it.
 
 The current upstream installer has deliberately narrow npm semantics:
 

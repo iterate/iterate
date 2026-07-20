@@ -224,8 +224,6 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
-  // The retired container-backed dynamic-worker builder. Keep the tombstone
-  // until every environment reports that it is safe to remove.
   WorkerBuilderDurableObject: { type: "durable-object", state: "deleted" },
 };
 

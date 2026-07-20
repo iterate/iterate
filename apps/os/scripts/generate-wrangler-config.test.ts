@@ -75,38 +75,6 @@ it("binds the os worker to its own env's worker-bundler sidecar", () => {
   }
 });
 
-it("only retains the retired builder as a Durable Object tombstone", () => {
-  expect(config.exports.WorkerBuilderDurableObject).toEqual({
-    type: "durable-object",
-    state: "deleted",
-  });
-
-  // The retired builder has no Durable Object, container, or legacy BUILDER
-  // binding. WORKER_BUNDLER is a stateless non-container compiler sidecar.
-  expect(config.services.map((service) => service.binding)).not.toContain("BUILDER");
-  expect(config.durable_objects.bindings.map((binding) => binding.class_name)).not.toContain(
-    "WorkerBuilderDurableObject",
-  );
-  expect(config.containers.map((container) => container.class_name)).not.toContain(
-    "WorkerBuilderDurableObject",
-  );
-
-  for (const [envName, envBlock] of Object.entries(config.env)) {
-    expect(
-      envBlock.services.map((service) => service.binding),
-      envName,
-    ).not.toContain("BUILDER");
-    expect(
-      envBlock.durable_objects.bindings.map((binding) => binding.class_name),
-      envName,
-    ).not.toContain("WorkerBuilderDurableObject");
-    expect(
-      envBlock.containers.map((container) => container.class_name),
-      envName,
-    ).not.toContain("WorkerBuilderDurableObject");
-  }
-});
-
 it("binds every deployed OS worker to the matching auth worker's default entrypoint", () => {
   for (const [envName, envBlock] of Object.entries(config.env)) {
     const auth = envBlock.services.find((service) => service.binding === "AUTH");

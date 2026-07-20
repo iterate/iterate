@@ -127,8 +127,7 @@ The workspace object plays NO role in building. The repos domain already
 exposes commit-pinned snapshots on the repo DO and the bundler runs on an
 in-memory vfs, so the whole path is: repo DO `getFilesSnapshot(commit)` →
 @cloudflare/worker-bundler → esbuild-wasm → KV memo. No clone, shell,
-filesystem, or build container. No backcompat with the old checkout pipeline —
-`workerHost`/checkout storage dies with it.
+filesystem, or build container.
 
 ## The "no longer special" checklist for the project worker
 
