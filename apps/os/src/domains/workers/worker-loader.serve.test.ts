@@ -204,7 +204,7 @@ describe("resolveWorkerSource", () => {
     expect(h.state.buildCalls).toEqual(["ALL FILES"]);
   });
 
-  test("lets a browser request stop waiting while the same build finishes", async () => {
+  test("lets a browser request stop waiting while its build finishes", async () => {
     setCommit("c1", "budgeted-build", "SLOW");
     let releaseBuild!: () => void;
     h.state.buildGate = new Promise<void>((resolve) => {
@@ -218,14 +218,7 @@ describe("resolveWorkerSource", () => {
       waitUntil,
     });
     await expect(budgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
-    const secondBudgeted = resolveWorkerSource({
-      buildBudgetMs: 0,
-      projectId: "prj_slow",
-      source: repoSource("/repos/budgeted-build"),
-      waitUntil,
-    });
-    await expect(secondBudgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(1);
     expect(h.state.buildCalls).toEqual(["SLOW"]);
 
     releaseBuild();

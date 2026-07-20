@@ -39,7 +39,6 @@ export type ResolvedWorkerSource = {
 export type WorkerBindings = Record<string, unknown>;
 
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
-const inFlightArtifactResolutions = new Map<string, Promise<ResolvedWorkerSource>>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 
 export async function resolveWorkerSource({
@@ -100,25 +99,13 @@ async function resolveThroughBuild(input: {
     files: resolved,
     source: input.source,
   });
-  let artifact = resolvedArtifactMemo.get(buildKey);
-  if (artifact === undefined) {
-    let resolution = inFlightArtifactResolutions.get(buildKey);
-    if (resolution === undefined) {
-      resolution = resolveArtifact(buildKey, {
-        projectId: input.projectId,
-        resolved,
-        source: input.source,
-      });
-      inFlightArtifactResolutions.set(buildKey, resolution);
-    }
-    try {
-      artifact = await resolution;
-    } finally {
-      if (inFlightArtifactResolutions.get(buildKey) === resolution) {
-        inFlightArtifactResolutions.delete(buildKey);
-      }
-    }
-  }
+  const artifact =
+    resolvedArtifactMemo.get(buildKey) ??
+    (await resolveArtifact(buildKey, {
+      projectId: input.projectId,
+      resolved,
+      source: input.source,
+    }));
   return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
 }
 

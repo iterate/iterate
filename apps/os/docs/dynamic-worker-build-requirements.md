@@ -85,9 +85,9 @@ artifact until expiry.
 KV stores one JSON record per key: either the complete modules/assets (30-day
 TTL) or a bounded error returned by the worker-bundler call (15-minute TTL).
 Errors before that call (repo reads) and failures reaching or writing KV are
-not cached. Concurrent callers in one OS isolate share the same in-flight
-resolution. Separate isolates may still build the same immutable key and
-converge on its one record; there is no distributed lock.
+not cached. Concurrent cache misses may build the same immutable key; their
+content-addressed writes are identical, and the next request is a hit. There
+is no request-crossing promise or distributed lock.
 
 Browser fetches may stop waiting at a small budget while the same promise
 continues under `waitUntil`; callers see the self-refreshing building page.
