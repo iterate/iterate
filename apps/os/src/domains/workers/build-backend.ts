@@ -62,9 +62,19 @@ export async function executeWorkerBuild(input: {
     if (warnings.length > 0) {
       throw new Error(`worker-bundler returned warnings:\n${warnings.join("\n")}`);
     }
-    return prepared.kind === "app"
-      ? collectAppOutputs(result as CreateAppResult)
-      : collectWorkerOutputs(result as CreateWorkerResult);
+    const collected =
+      prepared.kind === "app"
+        ? collectAppOutputs(result as CreateAppResult)
+        : collectWorkerOutputs(result as CreateWorkerResult);
+    // worker-bundler's installer/esbuild path leaves some transitive npm
+    // packages as bare externals (form-data, https-proxy-agent, …). The Worker
+    // Loader then dies at import time with `No such module "…"`. Stub any
+    // remaining non-runtime bare imports so the isolate always loads; code
+    // paths that actually need those packages still fail loudly at call time.
+    return {
+      mainModule: collected.mainModule,
+      modules: stubBareNpmExternals(collected.modules),
+    };
   } catch (error) {
     if (error instanceof WorkerBuildFailedError) throw error;
     throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
@@ -83,6 +93,110 @@ function collectWorkerOutputs(result: CreateWorkerResult): {
     );
   }
   return { mainModule: result.mainModule, modules };
+}
+
+/**
+ * Workerd provides these without a modules-map entry when nodejs_compat is on
+ * (and cloudflare: always). Everything else that still appears as a bare
+ * import after bundling needs an explicit module or the isolate will not load.
+ */
+const WORKERD_RUNTIME_MODULE_PREFIXES = ["cloudflare:", "node:", "bun:"] as const;
+const WORKERD_BARE_NODE_BUILTINS = new Set([
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "module",
+  "net",
+  "os",
+  "path",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+]);
+
+/** Exported for unit tests — pure rewrite over a modules map. */
+export function stubBareNpmExternals(modules: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = { ...modules };
+  const needed = new Set<string>();
+  for (const source of Object.values(out)) {
+    for (const spec of bareModuleSpecifiers(source)) {
+      if (isWorkerdRuntimeModule(spec)) continue;
+      if (spec in out) continue;
+      needed.add(spec);
+    }
+  }
+  for (const spec of needed) {
+    // Dual CJS/ESM surface: esbuild may emit either import or require for the
+    // same leftover external. Empty default is enough for optional SDK paths
+    // (proxy agents, node form-data) that user code does not exercise.
+    out[spec] =
+      `"use strict";\n` +
+      `const empty = Object.create(null);\n` +
+      `export default empty;\n` +
+      `export const __esModule = true;\n`;
+  }
+  return out;
+}
+
+function isWorkerdRuntimeModule(spec: string): boolean {
+  if (WORKERD_RUNTIME_MODULE_PREFIXES.some((prefix) => spec.startsWith(prefix))) return true;
+  if (WORKERD_BARE_NODE_BUILTINS.has(spec)) return true;
+  // Subpaths of node builtins (stream/promises, fs/promises, …)
+  const slash = spec.indexOf("/");
+  if (slash > 0 && WORKERD_BARE_NODE_BUILTINS.has(spec.slice(0, slash))) return true;
+  return false;
+}
+
+/** Bare package / builtin specifiers referenced by import or require. */
+export function bareModuleSpecifiers(source: string): string[] {
+  const found = new Set<string>();
+  const patterns = [
+    /\bfrom\s*["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\bimport\s*["']([^"']+)["']/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const spec = match[1];
+      if (spec === undefined || spec.length === 0) continue;
+      if (spec.startsWith(".") || spec.startsWith("/")) continue;
+      found.add(spec);
+    }
+  }
+  return [...found].sort();
 }
 
 /**
