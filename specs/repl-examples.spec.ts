@@ -87,7 +87,7 @@ test.describe("itx REPL catalogue examples", () => {
             ),
           ]);
           if (outcome === "error") {
-            const message = await errorEntry.textContent();
+            const message = await errorEntry.getByTestId("itx-repl-error").textContent();
             throw new Error(`REPL entry errored: ${message?.slice(0, 500)}`);
           }
           if (outcome === "timeout") {
