@@ -198,7 +198,7 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   await page.goto(appUrl("tanstack", slug, baseURL!));
   await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 60_000 });
   await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
-  await page.getByRole("heading", { name: "TanStack todos" }).waitFor({ timeout: 120_000 });
+  await page.getByRole("heading", { name: "Todos" }).waitFor({ timeout: 120_000 });
 
   // The composer works once the Cap'n Web session authenticates (the
   // "connecting…" status hides), and the add comes back over live state.

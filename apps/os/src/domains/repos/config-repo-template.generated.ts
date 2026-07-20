@@ -1502,6 +1502,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, request));\n" +
       "  }\n" +
+      "\n" +
+      "  /** Called from the public Cap'n Web root so RpcTargets never reach into\n" +
+      "   * the protected Durable Object `env` (TypeScript rejects that access). */\n" +
+      "  async openSession(\n" +
+      "    request: Request,\n" +
+      "    credentials: ProjectAuthCredentials,\n" +
+      "  ): Promise<TodoSession> {\n" +
+      "    using itx = await this.env.ITX.get();\n" +
+      "    await itx.auth.get({ policy: \"project-member\" }).authenticate(request, credentials);\n" +
+      "    return new TodoSession(this);\n" +
+      "  }\n" +
       "}\n" +
       "\n" +
       "// The unauthenticated Cap'n Web root: exactly the internal app's pattern —\n" +
@@ -1516,9 +1527,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  async authenticate(credentials: ProjectAuthCredentials): Promise<TodoSession> {\n" +
-      "    using itx = await this.app.env.ITX.get();\n" +
-      "    await itx.auth.get({ policy: \"project-member\" }).authenticate(this.request, credentials);\n" +
-      "    return new TodoSession(this.app);\n" +
+      "    return this.app.openSession(this.request, credentials);\n" +
       "  }\n" +
       "}\n" +
       "\n" +

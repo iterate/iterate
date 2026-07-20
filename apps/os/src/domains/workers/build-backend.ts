@@ -7,8 +7,6 @@ import {
 } from "@cloudflare/worker-bundler";
 import { buildFailureMessageFromError, WorkerBuildFailedError } from "./artifact-store.ts";
 import {
-  applyRootDir,
-  assertSafeSourcePath,
   WORKER_BUNDLER_CONDITIONS,
   type PreparedWorkerBuild,
   prepareWorkerBuild,
@@ -72,9 +70,6 @@ export async function executeWorkerBuild(input: {
     throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
   }
 }
-
-/** Re-export pure helpers tests and the seeder still share with the runtime. */
-export { applyRootDir, assertSafeSourcePath, prepareWorkerBuild };
 
 function collectWorkerOutputs(result: CreateWorkerResult): {
   mainModule: string;

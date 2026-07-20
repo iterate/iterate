@@ -145,7 +145,7 @@ export function prepareWorkerBuild(input: {
  * source file already present under the same path wins (caller-supplied
  * virtualModules / package content take precedence).
  */
-export function materializeVirtualModules(
+function materializeVirtualModules(
   files: Record<string, string>,
   virtualModules: Record<string, string>,
 ): Record<string, string> {

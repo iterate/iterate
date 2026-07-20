@@ -113,6 +113,14 @@ export class TanstackTodos extends IterateDurableObject {
   async fetch(request: Request): Promise<Response> {
     return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, request));
   }
+
+  /** Called from the public Cap'n Web root so RpcTargets never reach into
+   * the protected Durable Object `env` (TypeScript rejects that access). */
+  async openSession(request: Request, credentials: ProjectAuthCredentials): Promise<TodoSession> {
+    using itx = await this.env.ITX.get();
+    await itx.auth.get({ policy: "project-member" }).authenticate(request, credentials);
+    return new TodoSession(this);
+  }
 }
 
 // The unauthenticated Cap'n Web root: exactly the internal app's pattern —
@@ -127,9 +135,7 @@ class PublicTodoApi extends RpcTarget {
   }
 
   async authenticate(credentials: ProjectAuthCredentials): Promise<TodoSession> {
-    using itx = await this.app.env.ITX.get();
-    await itx.auth.get({ policy: "project-member" }).authenticate(this.request, credentials);
-    return new TodoSession(this.app);
+    return this.app.openSession(this.request, credentials);
   }
 }
 
