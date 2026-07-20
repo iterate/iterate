@@ -637,6 +637,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return secretErrorResponse("secret_reference_required");
     }
     const platformReferences = platformReferencesFromHeaders(request.headers);
+    if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
+      return secretErrorResponse("secret_reference_required");
+    }
 
     // Platform API-key references (`getSecret({ platform: ... })`) resolve
     // HERE, from typed deployment config against a known origin-pinned
@@ -660,10 +663,6 @@ export class ProjectDurableObject extends DurableObject<Env> {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
       }
-    }
-
-    if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
-      return secretErrorResponse("secret_reference_required");
     }
 
     // One request, one secret: the referenced Secret DO substitutes its own
