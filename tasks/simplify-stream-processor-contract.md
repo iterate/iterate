@@ -141,9 +141,18 @@ clean tests. See the last section.
   `"events.iterate.com/agents/context-added"`, never an
   `AGENT_CONTEXT_ADDED` constant. Duplication for clarity is good so long as
   refactors are easy and cheap (review round, 2026-07-20).
-- **Schemas are spelled inline in the contract**; declare one outside only
-  when the contract itself uses it twice (e.g. a payload that also appears in
-  the state schema).
+- **The contract OPENS its file; schemas are spelled inline in it.** A schema
+  the contract genuinely uses twice becomes a HOISTED FUNCTION below the
+  contract (function declarations dodge the const temporal dead zone) —
+  never a top-of-file export. If the implementation needs a schema slice
+  (config re-parse), it reaches through `contract.stateSchema.shape.<field>`
+  rather than a second export. Prefer restructuring over sharing: the
+  context-added payload went from a four-arm discriminated union with shared
+  spreads to ONE flat object (role enum + optional fields) precisely to kill
+  multi-arm reuse (round 2, 2026-07-20).
+- **Every schema property carries `zod.meta({ description })`** — the schema
+  is the single source of the docs (tasks/zod-schema-docstrings.md tracks
+  extracting hover docstrings from it).
 - **Tuning knobs are config, not constants**: every threshold lives in the
   contract's config schema with a default and a doc comment saying why the
   value; `<slug>/configured` events merge partial patches
@@ -301,6 +310,22 @@ DONE, split across two PRs:
   harness-masks-conflicts finding, by testing on the shared MemoryStream);
   tests rewritten as step scenarios on the new generic
   `makeProcessorHarness` in `iterate/processors/testing`.
+
+  Round 2 (13 threads, commit 7119a3543): contract-first file layout with
+  the one twice-used schema (context-item payload) as a hoisted function
+  below the contract; config inlined into the state schema (implementation
+  re-parses via `stateSchema.shape.config`); context-added union collapsed
+  to one flat object; ONE accumulating `contextItems` list (no
+  system/history lanes — system items sit in place; providers accept
+  mid-history system content); projection simplified to the one-sentence
+  rule (uncovered keyed item replaces in place, covered appends;
+  `lastLlmRequestOffset` is the coverage mark; `updatesOffset` deleted);
+  trigger source renamed `external | agent-loop` (a webhook is not a
+  "user"); `zod.meta({ description })` on every property +
+  tasks/zod-schema-docstrings.md; two Bugbot races fixed with regression
+  tests (pause clears only self-driven triggers so a raced external message
+  survives and auto-resumes; the debounced intent body is deterministic —
+  expiresAt anchors to the trigger — so re-schedulings dedupe on the key).
 
 ### Outstanding to-do list
 
