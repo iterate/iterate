@@ -21,7 +21,7 @@ const network = await vi.hoisted(async () => {
   const state = {
     birthConfig: {} as {
       github?: {
-        artifactImport?: { branch: string; depth: number };
+        artifactImport?: { branch: string; commitOid: string; depth: number };
         owner: string;
         repo: string;
       };
@@ -31,6 +31,7 @@ const network = await vi.hoisted(async () => {
     githubRepoExists: true,
     githubRepoPrivate: false,
     githubRepoPushedAt: "2026-07-20T00:00:00Z" as string | null,
+    githubRepoHeadOid: "github-head-1",
     githubRepositoryId: 101,
     githubCreateStatus: 201,
     pushShouldFail: false,
@@ -59,6 +60,7 @@ const network = await vi.hoisted(async () => {
       state.githubRepoExists = true;
       state.githubRepoPrivate = false;
       state.githubRepoPushedAt = "2026-07-20T00:00:00Z";
+      state.githubRepoHeadOid = "github-head-1";
       state.githubRepositoryId = 101;
       state.githubCreateStatus = 201;
       state.pushShouldFail = false;
@@ -86,6 +88,12 @@ const network = await vi.hoisted(async () => {
                 });
               }
               return Response.json({ message: "Not Found" }, { status: 404 });
+            }
+            if (
+              request.method === "GET" &&
+              /^\/repos\/[^/]+\/[^/]+\/branches\/[^/]+$/.test(url.pathname)
+            ) {
+              return Response.json({ commit: { sha: state.githubRepoHeadOid }, name: "main" });
             }
             if (request.method === "POST" && /^\/orgs\/[^/]+\/repos$/.test(url.pathname)) {
               if (state.githubCreateStatus === 422) {
@@ -264,7 +272,7 @@ describe("linkRepoToGithub", () => {
     seedConnectedFact();
     network.state.birthConfig = {
       github: {
-        artifactImport: { branch: "main", depth: 1 },
+        artifactImport: { branch: "main", commitOid: "github-head-1", depth: 1 },
         owner: "ACME",
         repo: "Widgets",
       },
@@ -280,7 +288,7 @@ describe("linkRepoToGithub", () => {
     seedConnectedFact();
     network.state.birthConfig = {
       github: {
-        artifactImport: { branch: "main", depth: 1 },
+        artifactImport: { branch: "main", commitOid: "github-head-1", depth: 1 },
         owner: "acme",
         repo: "different",
       },
@@ -510,7 +518,11 @@ describe("githubRepositoryImportCandidate", () => {
         projectId: PROJECT_ID,
         repo: "widgets",
       }),
-    ).resolves.toEqual({ defaultBranch: "main", importable: true });
+    ).resolves.toEqual({
+      defaultBranch: "main",
+      headOid: "github-head-1",
+      importable: true,
+    });
   });
 
   test.each([
@@ -527,7 +539,7 @@ describe("githubRepositoryImportCandidate", () => {
         projectId: PROJECT_ID,
         repo: "widgets",
       }),
-    ).resolves.toEqual({ defaultBranch: "main", importable: false });
+    ).resolves.toEqual({ defaultBranch: "main", headOid: null, importable: false });
   });
 });
 

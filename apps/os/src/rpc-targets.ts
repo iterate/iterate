@@ -1448,7 +1448,15 @@ class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRep
       github: {
         owner: github.owner,
         repo: github.repo,
-        ...(imported ? { artifactImport: { branch: candidate.defaultBranch, depth: 1 } } : {}),
+        ...(imported
+          ? {
+              artifactImport: {
+                branch: candidate.defaultBranch,
+                commitOid: candidate.headOid,
+                depth: 1,
+              },
+            }
+          : {}),
       },
     };
 

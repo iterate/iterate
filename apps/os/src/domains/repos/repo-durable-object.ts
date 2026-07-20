@@ -66,7 +66,7 @@ import {
 } from "./repo-head-authority.ts";
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
-import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
+import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifact } from "./artifact-import.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
@@ -1078,7 +1078,10 @@ export class RepoDurableObject extends DurableObject<Env> {
     const link = this.#requireGithubLink();
     const branch = REPO_DEFAULT_BRANCH;
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
-    const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
+    const previousCommitOid = githubSyncBaseCommitOid({
+      cachedHeadCommitOid: isRepoHeadRecord(previous) ? previous.commitOid : null,
+      pushedFloor: this.#branchAuthority(branch).pushedFloor,
+    });
     assertGithubHistoryDepth(input.depth, "syncFromGithub");
     const token = await this.#mintGithubToken(link);
 
@@ -1451,6 +1454,15 @@ export class RepoDurableObject extends DurableObject<Env> {
           owner: input.config.github!.owner,
           repo: input.config.github!.repo,
         });
+      });
+      // The server-side import never materializes the checkout inside this
+      // Durable Object, so it cannot populate the content-hash head cache.
+      // Still record the imported GitHub tip as the durable branch floor: the
+      // first webhook sync can then prove a normal fast-forward instead of
+      // treating the just-imported repository as unrelated history.
+      this.#recordPushedHead({
+        branch: githubImport.branch,
+        commitOid: githubImport.commitOid,
       });
       return {
         artifactName,

@@ -3337,7 +3337,7 @@ export type RepoProcessorState = {
         | {
             owner: string;
             repo: string;
-            artifactImport?: { branch: string; depth: number } | undefined;
+            artifactImport?: { branch: string; commitOid: string; depth: number } | undefined;
           }
         | undefined;
     };
