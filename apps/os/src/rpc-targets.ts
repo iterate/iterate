@@ -2287,11 +2287,11 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
   }
 
   append(...events: DeviceAppendInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(...events);
+    return this.durableObjectStub.append(this.props.auth.principal, ...events);
   }
 
   revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
-    return this.durableObjectStub.revoke(reason);
+    return this.durableObjectStub.revoke(this.props.auth.principal, reason);
   }
 
   kill(): Promise<void> {
