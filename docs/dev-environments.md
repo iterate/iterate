@@ -393,6 +393,18 @@ invariants:
   doppler run --project _shared --config prd -- pnpm preview gc --dry-run
   ```
 
+An eligible PR can request one configured slot by putting an exact standalone
+line in its body:
+
+```text
+preview_environment=preview-17
+```
+
+This selects a slot; it does not opt a draft into previews. The PR must still
+carry the `preview` label, be ready for review, or use an explicit one-off run.
+If the requested slot is unknown or held by another owner, acquisition fails
+without forcing the holder or silently falling back to another slot.
+
 CI and local machines run the **same preview commands against the same
 semaphore**. CI additionally checks the deployment epoch before invoking those
 commands.

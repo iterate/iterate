@@ -18,7 +18,9 @@ ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
 verification is green. Draft PR #2161 is open without a preview label; its
 required checks are green and no review threads are open. Production deployment
-and Semaphore lease publication remain later, separate approval boundaries.
+and Semaphore lease publication remain later, separate approval boundaries. A
+stacked Semaphore compatibility PR and a strict PR-body slot selector now make
+it possible to canary one expanded slot without exposing all ten to old clients.
 
 ## Goal
 
@@ -120,6 +122,11 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   user summary and this ledger current.
   _Draft PR https://github.com/iterate/iterate/pull/2161 is open without the
   `preview` label, so it cannot deploy before the merge/approval boundary._
+- [x] Add a backwards-compatible acquisition allow-list and an exact PR-body
+  slot selector for a controlled expanded-fleet canary.
+  _Stacked PR #2163 keeps old clients on preview-1 through preview-9; this PR
+  requires all configured slugs and accepts one standalone directive such as
+  `preview_environment=preview-17` without bypassing preview eligibility._
 - [ ] Merge the repository change before deploying or leasing the slots.
 - [ ] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
   each slot from current `main`; verify integrations and operational telemetry.

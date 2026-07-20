@@ -236,27 +236,44 @@ async function deployPreviewApps({
       .join(" then ")}`,
   );
 
+  const requestedEnvironment = resolveRequestedPreviewEnvironment(context.pullRequestBody);
+  if (requestedEnvironment) {
+    logPreview(`PR body requests ${requestedEnvironment}`);
+  }
+
   let environmentConfigLease: EnvironmentConfigLease;
   try {
-    environmentConfigLease = await claimEnvironmentConfigLease({
-      eraseSlotData: makePreviewSlotDataEraser(runtime),
-      holder,
-      leaseMs: defaultPreviewLeaseMs,
-      // Surface the wait in the PR body the moment every slot is busy, not
-      // only in workflow logs nobody has open.
-      onFirstWait: async (holderTable) => {
-        await updatePreviewState(context, (state) => ({
-          ...state,
-          notice: [
-            `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
-            holderTable,
-          ].join("\n"),
-        }));
-      },
-      recordedSlug: current.state.environmentConfigLease?.slug ?? null,
-      semaphore,
-      waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
-    });
+    const recordedSlug = current.state.environmentConfigLease?.slug ?? null;
+    environmentConfigLease = requestedEnvironment
+      ? (
+          await assignEnvironmentConfigLease({
+            eraseSlotData: makePreviewSlotDataEraser(runtime),
+            holder,
+            leaseMs: defaultPreviewLeaseMs,
+            recordedSlug,
+            semaphore,
+            wantedSlug: requestedEnvironment,
+          })
+        ).lease
+      : await claimEnvironmentConfigLease({
+          eraseSlotData: makePreviewSlotDataEraser(runtime),
+          holder,
+          leaseMs: defaultPreviewLeaseMs,
+          // Surface the wait in the PR body the moment every slot is busy, not
+          // only in workflow logs nobody has open.
+          onFirstWait: async (holderTable) => {
+            await updatePreviewState(context, (state) => ({
+              ...state,
+              notice: [
+                `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
+                holderTable,
+              ].join("\n"),
+            }));
+          },
+          recordedSlug,
+          semaphore,
+          waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
+        });
   } catch (error) {
     await updatePreviewState(context, (state) => ({
       ...state,
@@ -887,6 +904,7 @@ export async function acquire(options: AcquireOptions) {
   }
 
   const lease = await semaphore.acquireSpecific({
+    allowedSlugs: previewEnvironmentSlugs,
     leaseMs: (options.hours || 3) * 3_600_000,
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -1056,6 +1074,7 @@ export async function reclaim(options: ReclaimOptions = {}) {
   // rather than returning a dirty slot to the pool.
   const holder = `reclaim-${userInfo().username}`;
   const taken = await semaphore.acquireSpecific({
+    allowedSlugs: previewEnvironmentSlugs,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     slug,
     leaseMs: 30 * 60_000,
@@ -1167,6 +1186,7 @@ export async function gc(options: GcOptions = {}) {
       continue;
     }
     const taken = await semaphore.acquireSpecific({
+      allowedSlugs: previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: slot.slug,
       leaseMs: holdMs,
@@ -1983,6 +2003,24 @@ export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map
   };
 }) satisfies EnvironmentConfigLeaseInventoryItem[];
 
+const previewEnvironmentSlugs = environmentConfigLeaseInventory.map((resource) => resource.slug);
+
+function resolveRequestedPreviewEnvironment(body: string): string | null {
+  const matches = [...body.matchAll(/^preview_environment=(preview-\d+)\r?$/gm)];
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error("PR body must contain at most one preview_environment directive");
+  }
+
+  const slug = matches[0]?.[1];
+  if (!slug || !previewEnvironmentSlugs.includes(slug)) {
+    throw new Error(
+      `Unknown preview_environment ${slug || "value"}. Expected one of: ${previewEnvironmentSlugs.join(", ")}`,
+    );
+  }
+  return slug;
+}
+
 type PreviewSemaphoreLease = {
   data: Record<string, unknown>;
   expiresAt: number;
@@ -1994,12 +2032,14 @@ type PreviewSemaphoreLease = {
 
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: {
+    allowedSlugs: string[];
     holder?: string;
     leaseMs: number;
     type: string;
     waitMs?: number;
   }) => Promise<PreviewSemaphoreLease>;
   acquireSpecific: (input: {
+    allowedSlugs: string[];
     force?: boolean;
     holder?: string;
     leaseMs: number;
@@ -2034,6 +2074,7 @@ type PreviewRuntime = {
 type PullRequestPreviewContext = {
   githubToken: string;
   pullRequestBaseSha: string;
+  pullRequestBody: string;
   pullRequestHeadSha: string;
   pullRequestIsDraft: boolean;
   pullRequestLabels: string[];
@@ -2097,10 +2138,10 @@ function createPreviewSemaphoreResourceClient(
   });
 
   return {
-    acquire: ({ holder, leaseMs, type, waitMs }) =>
-      semaphore.resources.acquire({ holder, leaseMs, type, waitMs }),
-    acquireSpecific: ({ force, holder, leaseMs, slug, type }) =>
-      semaphore.resources.acquireSpecific({ force, holder, leaseMs, slug, type }),
+    acquire: ({ allowedSlugs, holder, leaseMs, type, waitMs }) =>
+      semaphore.resources.acquire({ allowedSlugs, holder, leaseMs, type, waitMs }),
+    acquireSpecific: ({ allowedSlugs, force, holder, leaseMs, slug, type }) =>
+      semaphore.resources.acquireSpecific({ allowedSlugs, force, holder, leaseMs, slug, type }),
     release: ({ force, leaseId, slug, type }) =>
       semaphore.resources.release({ force, leaseId, slug, type }),
     list: ({ type }) => semaphore.resources.list({ type }),
@@ -4104,6 +4145,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
       const acquired = await input.semaphore.acquire({
+        allowedSlugs: previewEnvironmentSlugs,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
@@ -4307,6 +4349,7 @@ async function assignEnvironmentConfigLease(input: {
     }
 
     const acquired = await input.semaphore.acquireSpecific({
+      allowedSlugs: previewEnvironmentSlugs,
       leaseMs: input.leaseMs,
       slug: input.wantedSlug,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -4442,6 +4485,7 @@ async function adoptLeaseHeldBySemaphore(input: {
   );
   for (const resource of held) {
     const reissued = await input.semaphore.acquireSpecific({
+      allowedSlugs: previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: resource.slug,
       leaseMs: input.leaseMs,
@@ -4481,6 +4525,7 @@ async function retakeRecordedSlotIfFree(input: {
     return null;
   }
   const retaken = await input.semaphore.acquireSpecific({
+    allowedSlugs: previewEnvironmentSlugs,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     slug: input.recordedSlug,
     leaseMs: input.leaseMs,
@@ -5041,6 +5086,7 @@ async function resolvePullRequestPreviewContext(params: {
   return {
     githubToken: params.githubToken,
     pullRequestBaseSha: pullRequest.data.base.sha,
+    pullRequestBody: pullRequest.data.body || "",
     pullRequestHeadSha: pullRequest.data.head.sha,
     pullRequestIsDraft: pullRequest.data.draft === true,
     pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
@@ -5096,6 +5142,7 @@ export const previewInternals = {
   renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
+  resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,

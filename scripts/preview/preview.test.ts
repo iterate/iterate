@@ -9,6 +9,7 @@ import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
+  environmentConfigLeaseInventory,
   previewInternals,
 } from "./preview.ts";
 
@@ -47,6 +48,7 @@ const {
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
+  resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
@@ -58,6 +60,29 @@ const {
   syncPreviewInventory,
   waitForHttpReadiness,
 } = previewInternals;
+
+test("a PR body can request one configured preview environment", () => {
+  expect(
+    resolveRequestedPreviewEnvironment(`
+Deploy this on the expanded fleet.
+
+preview_environment=preview-17
+`),
+  ).toBe("preview-17");
+});
+
+test("a preview environment directive must be unique and name configured inventory", () => {
+  expect(resolveRequestedPreviewEnvironment("No environment preference.")).toBeNull();
+  expect(() => resolveRequestedPreviewEnvironment("preview_environment=preview-99")).toThrow(
+    /Unknown preview_environment preview-99/,
+  );
+  expect(() =>
+    resolveRequestedPreviewEnvironment(`
+preview_environment=preview-17
+preview_environment=preview-18
+`),
+  ).toThrow(/at most one preview_environment directive/);
+});
 
 test("Auth preview provisioning can target only an approved slot range", () => {
   expect(
@@ -1514,7 +1539,12 @@ describe("claimEnvironmentConfigLease", () => {
 
     expect(lease.slug).toBe("preview-5");
     expect(lease.dopplerConfig).toBe("preview_5");
-    expect(semaphore.acquire).toHaveBeenCalledWith(expect.objectContaining({ holder: "pr-1600" }));
+    expect(semaphore.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedSlugs: environmentConfigLeaseInventory.map((resource) => resource.slug),
+        holder: "pr-1600",
+      }),
+    );
   });
 
   test("adopts a lease the semaphore already attributes to this holder instead of taking a second slot", async () => {
