@@ -294,7 +294,6 @@ export function polyfillEsbuildNodeRequire(
 function nodeRequirePrelude(builtinNames: string[], stubSpecs: string[]): string {
   const names = new Set(builtinNames);
   if (names.size > 0 || stubSpecs.length > 0) {
-    // Common class-extends bases for Slack/axios-shaped graphs.
     names.add("events");
     names.add("stream");
     names.add("util");
@@ -309,52 +308,73 @@ function nodeRequirePrelude(builtinNames: string[], stubSpecs: string[]): string
   const stubEntries = stubSpecs
     .map((spec, i) => `${JSON.stringify(spec)}: __iterate_stub_${i}`)
     .join(",\n  ");
-  const builtinImports = list
-    .map((name) => `import * as __iterate_node_${name} from ${JSON.stringify(`node:${name}`)};`)
-    .join("\n");
-  const builtinEntries = list
-    .flatMap((name) => [
+
+  // Named imports for constructor modules — workerd's `import * as events`
+  // is a Module namespace, so `class X extends require("events")` fails with
+  // "Class extends value #<Object>". Return the real constructors instead.
+  const lines: string[] = [];
+  if (stubImports) lines.push(stubImports);
+  if (list.includes("events")) {
+    lines.push(`import { EventEmitter as __iterate_EventEmitter } from "node:events";`);
+  }
+  if (list.includes("stream")) {
+    lines.push(
+      `import { Readable as __iterate_Readable, Writable as __iterate_Writable, Transform as __iterate_Transform, Duplex as __iterate_Duplex, PassThrough as __iterate_PassThrough } from "node:stream";`,
+    );
+  }
+  for (const name of list) {
+    if (name === "events" || name === "stream") continue;
+    lines.push(`import * as __iterate_node_${name} from ${JSON.stringify(`node:${name}`)};`);
+  }
+
+  const builtinEntries: string[] = [];
+  if (list.includes("events")) {
+    builtinEntries.push(
+      `"events": __iterate_EventEmitter`,
+      `"node:events": __iterate_EventEmitter`,
+    );
+  }
+  if (list.includes("stream")) {
+    builtinEntries.push(`"stream": __iterate_Readable`, `"node:stream": __iterate_Readable`);
+  }
+  for (const name of list) {
+    if (name === "events" || name === "stream") continue;
+    builtinEntries.push(
       `${JSON.stringify(name)}: __iterate_node_${name}`,
       `${JSON.stringify(`node:${name}`)}: __iterate_node_${name}`,
-    ])
-    .join(",\n  ");
+    );
+  }
 
-  return `${stubImports}
-${builtinImports}
+  return `${lines.join("\n")}
 const __iterateStubs = {
   ${stubEntries}
 };
 const __iterateNodeBuiltins = {
-  ${builtinEntries}
+  ${builtinEntries.join(",\n  ")}
 };
-const __iterateNodePrimary = {
-  "events": "EventEmitter",
-  "node:events": "EventEmitter",
-  "stream": "Stream",
-  "node:stream": "Stream",
-  "string_decoder": "StringDecoder",
-  "node:string_decoder": "StringDecoder"
-};
-function __iterateCjsInterop(ns, id) {
-  if (ns == null || typeof ns !== "object") return ns;
-  let main = ns.default;
-  if (main == null) {
-    const primary = __iterateNodePrimary[id];
-    if (primary !== undefined && typeof ns[primary] === "function") main = ns[primary];
-  }
-  if (main == null && (id === "stream" || id === "node:stream") && typeof ns.Readable === "function") {
-    main = ns.Readable;
-  }
-  if (main == null) return ns;
-  if (typeof main === "function" || typeof main === "object") {
-    for (const key of Object.keys(ns)) {
-      if (key === "default") continue;
-      if (!(key in main)) {
-        try { main[key] = ns[key]; } catch { /* read-only */ }
-      }
+function __iterateCjsInterop(mod, id) {
+  if (mod == null) return mod;
+  // Already a constructor (events, stream named imports).
+  if (typeof mod === "function") {
+    if (id === "events" || id === "node:events") {
+      try { mod.EventEmitter = mod; } catch { /* read-only */ }
     }
+    if (id === "stream" || id === "node:stream") {
+      try {
+        mod.Readable = __iterate_Readable;
+        mod.Writable = __iterate_Writable;
+        mod.Transform = __iterate_Transform;
+        mod.Duplex = __iterate_Duplex;
+        mod.PassThrough = __iterate_PassThrough;
+        mod.Stream = __iterate_Readable;
+      } catch { /* read-only */ }
+    }
+    return mod;
   }
-  return main;
+  // Namespace object from import * — prefer .default, else return as-is
+  // (os/path/fs style modules used as objects, not bases).
+  if (typeof mod === "object" && mod.default != null) return mod.default;
+  return mod;
 }
 function __iterateNodeRequire(id) {
   if (Object.prototype.hasOwnProperty.call(__iterateStubs, id)) {
