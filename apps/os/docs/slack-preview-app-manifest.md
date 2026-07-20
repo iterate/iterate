@@ -146,7 +146,12 @@ printf '\n'
 
 response_dir=$(mktemp -d)
 chmod 700 "$response_dir"
-trap 'rm -rf "$response_dir"' EXIT
+cleanup() {
+  unset SLACK_APP_CONFIG_TOKEN
+  rm -f "$response_dir/manifest.yaml" "$response_dir/response.json"
+  rmdir "$response_dir"
+}
+trap cleanup EXIT
 
 jq -n --rawfile manifest "$response_dir/manifest.yaml" \
   '{manifest:$manifest}' |
