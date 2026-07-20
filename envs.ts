@@ -203,6 +203,32 @@ export const envs = {
 
 /** A deployed environment name, e.g. "prd" or "preview_3". */
 export type EnvName = keyof typeof envs;
+export type PreviewEnvName = Extract<EnvName, `preview_${number}`>;
+
+/** Preview environments, derived from the canonical deployed environment map. */
+export const deployedPreviewEnvs = Object.values(envs).filter((env) =>
+  env.dopplerConfig.startsWith("preview_"),
+);
+
+/** Extract the numeric slot from a canonical preview environment. */
+export function previewEnvironmentSlotNumber(env: Pick<DeployedEnv, "dopplerConfig">) {
+  const match = /^preview_(\d+)$/.exec(env.dopplerConfig);
+  if (!match) {
+    throw new Error(`Invalid preview Doppler config ${JSON.stringify(env.dopplerConfig)}.`);
+  }
+  return Number(match[1]);
+}
+
+/** Preview slot numbers used by provisioning and the Semaphore lease inventory. */
+export const previewEnvironmentSlotNumbers = deployedPreviewEnvs.map(previewEnvironmentSlotNumber);
+
+function mapDeployedPreviewEnvs<Value>(
+  mapEnv: (env: (typeof deployedPreviewEnvs)[number]) => Value,
+): Record<PreviewEnvName, Value> {
+  return Object.fromEntries(
+    deployedPreviewEnvs.map((env) => [env.dopplerConfig, mapEnv(env)]),
+  ) as Record<PreviewEnvName, Value>;
+}
 
 /**
  * apps/auth deploys everywhere os does, PLUS `dev_global`
@@ -236,15 +262,7 @@ function authEnvFromDeployedEnv(
 
 export const authEnvs = {
   prd: authEnvFromDeployedEnv(envs.prd, { fixedTestOtpEnabled: false }),
-  preview_1: authEnvFromDeployedEnv(envs.preview_1, { fixedTestOtpEnabled: true }),
-  preview_2: authEnvFromDeployedEnv(envs.preview_2, { fixedTestOtpEnabled: true }),
-  preview_3: authEnvFromDeployedEnv(envs.preview_3, { fixedTestOtpEnabled: true }),
-  preview_4: authEnvFromDeployedEnv(envs.preview_4, { fixedTestOtpEnabled: true }),
-  preview_5: authEnvFromDeployedEnv(envs.preview_5, { fixedTestOtpEnabled: true }),
-  preview_6: authEnvFromDeployedEnv(envs.preview_6, { fixedTestOtpEnabled: true }),
-  preview_7: authEnvFromDeployedEnv(envs.preview_7, { fixedTestOtpEnabled: true }),
-  preview_8: authEnvFromDeployedEnv(envs.preview_8, { fixedTestOtpEnabled: true }),
-  preview_9: authEnvFromDeployedEnv(envs.preview_9, { fixedTestOtpEnabled: true }),
+  ...mapDeployedPreviewEnvs((env) => authEnvFromDeployedEnv(env, { fixedTestOtpEnabled: true })),
   dev_global: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
     dopplerConfig: "dev_global",
@@ -307,7 +325,7 @@ export const semaphoreEnvs = {
   preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
   preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
   preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
-} satisfies Record<string, SemaphoreEnv>;
+} satisfies Record<EnvName, SemaphoreEnv>;
 
 /**
  * apps/tunnels — the captun gateway. prd only; dev tunnels ride prd.
@@ -387,16 +405,8 @@ export const dummyPetshopEnvs = {
     workerName: "dummy-petshop-prd",
     baseUrl: "https://dummy-petshop.iterate.com",
   },
-  preview_1: dummyPetshopPreviewSlot(1),
-  preview_2: dummyPetshopPreviewSlot(2),
-  preview_3: dummyPetshopPreviewSlot(3),
-  preview_4: dummyPetshopPreviewSlot(4),
-  preview_5: dummyPetshopPreviewSlot(5),
-  preview_6: dummyPetshopPreviewSlot(6),
-  preview_7: dummyPetshopPreviewSlot(7),
-  preview_8: dummyPetshopPreviewSlot(8),
-  preview_9: dummyPetshopPreviewSlot(9),
-} satisfies Record<string, DummyPetshopEnv>;
+  ...mapDeployedPreviewEnvs((env) => dummyPetshopPreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, DummyPetshopEnv>;
 
 function streamsExamplePreviewSlot(n: number): StreamsExampleEnv {
   return {
@@ -416,13 +426,5 @@ export const streamsExampleEnvs = {
     baseUrl: "https://streams.iterate.com",
     authBaseUrl: "https://auth.iterate.com",
   },
-  preview_1: streamsExamplePreviewSlot(1),
-  preview_2: streamsExamplePreviewSlot(2),
-  preview_3: streamsExamplePreviewSlot(3),
-  preview_4: streamsExamplePreviewSlot(4),
-  preview_5: streamsExamplePreviewSlot(5),
-  preview_6: streamsExamplePreviewSlot(6),
-  preview_7: streamsExamplePreviewSlot(7),
-  preview_8: streamsExamplePreviewSlot(8),
-  preview_9: streamsExamplePreviewSlot(9),
-} satisfies Record<string, StreamsExampleEnv>;
+  ...mapDeployedPreviewEnvs((env) => streamsExamplePreviewSlot(previewEnvironmentSlotNumber(env))),
+} satisfies Record<EnvName, StreamsExampleEnv>;

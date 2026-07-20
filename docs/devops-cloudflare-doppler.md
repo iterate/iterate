@@ -91,6 +91,11 @@ deploys.
 
 ## Bringing up a new environment
 
+For a new preview slot, use [Adding preview slots](adding-preview-slots.md).
+Preview slots also require lease inventory, OAuth audiences, Doppler branch
+configs, external integration apps, and fleet verification; the steps below
+cover only the shared Cloudflare resource/deploy skeleton.
+
 1. Add the entry to envs.ts (preview slots: `previewSlot(N, {...UNPROVISIONED})`).
 2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
    and prints the IDs to paste into envs.ts.
