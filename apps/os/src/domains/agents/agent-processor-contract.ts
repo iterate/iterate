@@ -531,6 +531,14 @@ export const AgentProcessorContract = defineProcessorContract({
        */
       requestGeneration: z.number().int().nonnegative().default(0),
       /**
+       * The requestId of the most recent scheduled-phase cancel (a user
+       * interrupt landing during the debounce window). Its lost-timer re-fire
+       * can still append a requested event from a pre-cancel fold snapshot;
+       * this id makes that late re-fire fold to nothing. requestIds are
+       * generation-unique, so only the latest needs remembering.
+       */
+      cancelledScheduledRequestId: z.string().nullable().default(null),
+      /**
        * Failed llm-request-completed events since the last success. Governs
        * whether a failure's error input auto-retries (below the cap) or sits in
        * context untriggered (at the cap) — a persistent provider failure must
