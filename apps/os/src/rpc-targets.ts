@@ -1452,7 +1452,6 @@ class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRep
           ? {
               artifactImport: {
                 branch: candidate.defaultBranch,
-                commitOid: candidate.headOid,
                 depth: 1,
               },
             }

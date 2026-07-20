@@ -275,10 +275,7 @@ export async function githubRepositoryImportCandidate(input: {
   owner: string;
   projectId: string;
   repo: string;
-}): Promise<
-  | { defaultBranch: string; headOid: null; importable: false }
-  | { defaultBranch: string; headOid: string; importable: true }
-> {
+}): Promise<{ defaultBranch: string; importable: boolean }> {
   const status = await getConnectionStatus({
     connection: input.connection,
     projectId: input.projectId,
@@ -296,18 +293,9 @@ export async function githubRepositoryImportCandidate(input: {
       response.data.private === false &&
       response.data.default_branch === "main" &&
       response.data.pushed_at !== null;
-    if (!importable) {
-      return { defaultBranch: response.data.default_branch, headOid: null, importable: false };
-    }
-    const branch = await octokit.rest.repos.getBranch({
-      branch: response.data.default_branch,
-      owner: input.owner,
-      repo: input.repo,
-    });
     return {
       defaultBranch: response.data.default_branch,
-      headOid: branch.data.commit.sha,
-      importable: true,
+      importable,
     };
   } catch (error) {
     throw normalizeGithubError(error, input.connection);

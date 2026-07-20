@@ -1447,22 +1447,20 @@ export class RepoDurableObject extends DurableObject<Env> {
     const githubImport = input.config.github?.artifactImport;
     if (githubImport !== undefined) {
       await timedStep("create-timing", timing, "artifact-import", async () => {
-        await importGithubArtifact(this.requireArtifacts(), {
+        const imported = await importGithubArtifact(this.requireArtifacts(), {
           branch: githubImport.branch,
           depth: githubImport.depth,
           name: artifactName,
           owner: input.config.github!.owner,
           repo: input.config.github!.repo,
         });
-      });
-      // The server-side import never materializes the checkout inside this
-      // Durable Object, so it cannot populate the content-hash head cache.
-      // Still record the imported GitHub tip as the durable branch floor: the
-      // first webhook sync can then prove a normal fast-forward instead of
-      // treating the just-imported repository as unrelated history.
-      this.#recordPushedHead({
-        branch: githubImport.branch,
-        commitOid: githubImport.commitOid,
+        // The server-side import never materializes the checkout inside this
+        // Durable Object. Read only its advertised ref (no Git objects) and
+        // record the exact imported tip as the durable branch floor.
+        this.#recordPushedHead({
+          branch: githubImport.branch,
+          commitOid: imported.commitOid,
+        });
       });
       return {
         artifactName,

@@ -5,7 +5,7 @@ const importedConfig = (owner: string, repo: string): RepoBirthConfig => ({
   github: {
     owner,
     repo,
-    artifactImport: { branch: "main", commitOid: "imported-head", depth: 1 },
+    artifactImport: { branch: "main", depth: 1 },
   },
 });
 
@@ -26,12 +26,5 @@ describe("sameRepoBirthConfig", () => {
         importedConfig("iterate", "agents"),
       ),
     ).toBe(false);
-  });
-
-  test("allows a retry after the public repository head advances", () => {
-    const retry = importedConfig("iterate", "iterate");
-    retry.github!.artifactImport!.commitOid = "new-head";
-
-    expect(sameRepoBirthConfig(importedConfig("iterate", "iterate"), retry)).toBe(true);
   });
 });

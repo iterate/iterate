@@ -39,7 +39,6 @@ export const RepoBirthConfig = z.strictObject({
       artifactImport: z
         .strictObject({
           branch: z.string().trim().min(1),
-          commitOid: z.string().trim().min(1),
           depth: z.number().int().positive(),
         })
         .optional(),
@@ -51,9 +50,9 @@ export type RepoBirthConfig = z.infer<typeof RepoBirthConfig>;
 
 /** Repo creation is idempotent only when a retry names the same durable
  * source. GitHub coordinates use GitHub's case-insensitive identity.
- * Connection names and the observed import commit deliberately are not part
- * of that identity: another authorized installation or a newer repository
- * head may safely finish the same creation after birth has committed. */
+ * Connection names deliberately are not part of that identity: another
+ * authorized installation may safely finish the same creation after birth
+ * has committed. */
 export function sameRepoBirthConfig(left: RepoBirthConfig | undefined, right: RepoBirthConfig) {
   if (left?.github === undefined || right.github === undefined) {
     return left?.github === right.github;
