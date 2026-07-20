@@ -5693,6 +5693,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   devices:
     "Enrolled phone devices: list() discovers safe metadata; get(deviceId).append(...) requests a push notification.",
   egress: "Project-attributed outbound fetch (+ intercept).",
+  remoteCapability:
+    'Externally deployed Cap\'n Web apps: get(url, { headers }) dials the remote WebSocket endpoint through project egress (headers may carry getSecret(...) placeholders — substituted server-side, origin-pinned) and returns the remote session\'s root stub. Mount one durably: provideCapability({ type: "itx-expression", path: [...], expression: ["remoteCapability", ["get", url, { headers }]] }). See docs/remote-apps.md.',
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
   docs: 'Find working code + types (HOW — for project content/history see itx.search): search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',

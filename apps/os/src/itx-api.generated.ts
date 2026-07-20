@@ -3858,6 +3858,8 @@ export type SecretDescription = {
   refresh: SecretRefresh["kind"] | null;
 };
 
+/** Input to `itx.secrets.get(path).create` — the birth policy (egress pin,
+ * visibility, refresh strategy) plus optional initial material. */
 export type SecretCreateInput = {
   /** Complete egress policy established by the birth certificate. */
   egress: { urls: string[] };

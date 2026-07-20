@@ -90,6 +90,9 @@ function SecretDetail({
     },
     onSuccess: () => {
       form.reset();
+      // A revealed value on screen is stale the moment material rotates —
+      // drop it so the next look is an explicit fresh reveal.
+      revealSecret.reset();
       toast.success("Secret updated");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
