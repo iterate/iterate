@@ -191,9 +191,7 @@ export class EmailAgentProcessor extends StreamProcessor<
   }: ReduceArgs<EmailAgentProcessorContract>): EmailAgentProcessorState {
     switch (event.type) {
       case "events.iterate.com/email-agent/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("Email agent processor received more than one email-agent/created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,

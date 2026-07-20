@@ -1,11 +1,41 @@
 import { describe, expect, test } from "vitest";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
+import { sandboxCreationEvents } from "./sandbox-defaults.ts";
 import {
   assertSandboxPath,
   githubTokenEnvForConnections,
   sandboxPathFor,
   SANDBOX_GIT_CONFIG_SHELL,
 } from "./utils.ts";
+
+describe("sandboxCreationEvents", () => {
+  test("builds one complete instance-stream birth batch with payload-free identity keys", () => {
+    const first = sandboxCreationEvents({
+      env: { API_TOKEN: 'getSecret("/secrets/api")' },
+      instanceType: "lite",
+      path: "/sandboxes/example",
+      projectId: "prj_test",
+    });
+    const retryWithDifferentConfig = sandboxCreationEvents({
+      env: { API_TOKEN: "different" },
+      instanceType: "lite",
+      path: "/sandboxes/example",
+      projectId: "prj_test",
+    });
+
+    expect(first.map((event) => event.type)).toEqual([
+      "events.iterate.com/sandbox/created",
+      "events.iterate.com/sandbox/configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(first.map((event) => event.idempotencyKey)).toEqual(
+      retryWithDifferentConfig.map((event) => event.idempotencyKey),
+    );
+    expect(first[1]?.payload).toEqual({
+      env: { API_TOKEN: 'getSecret("/secrets/api")' },
+    });
+  });
+});
 
 describe("sandboxPathFor", () => {
   test("a name mints /sandboxes/<name> — flat, no intermediate folders", () => {

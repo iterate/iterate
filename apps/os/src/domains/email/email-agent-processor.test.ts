@@ -81,13 +81,11 @@ function makeEmailAgentHarness(input?: {
 }
 
 describe("EmailAgentProcessor", () => {
-  it("throws when a second email-agent birth certificate is reduced", async () => {
+  it("ignores a second email-agent birth certificate during reduction", async () => {
     const h = makeEmailAgentHarness();
     await h.play(["append", EMAIL_AGENT_BORN]);
-
-    await expect(h.append(EMAIL_AGENT_BORN)).rejects.toThrow(
-      "more than one email-agent/created event",
-    );
+    await h.append(EMAIL_AGENT_BORN);
+    expect(h.state().birthCertificate).toEqual(EMAIL_AGENT_BORN.payload);
   });
 
   it("captures thread context and transcribes inbound mail into triggering agent context", async () => {

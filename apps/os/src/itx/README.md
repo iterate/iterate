@@ -307,7 +307,7 @@ to it through the subscription its creator configured; `itx()` returns the
 core (a method, not a property — workerd does not pipeline calls through
 property accesses, so `node.itx().invoke(…)` stays one round trip).
 
-Creators: `projects.create` appends the project context's creation events
+Creators: `projects.get(slug).create` appends the project context's creation events
 onto the root stream (parent: the platform defaults); the agent DO appends
 its own onto the agent stream (parent: the project context); `extend()`
 appends onto the chosen child path. The Project and Agent DOs keep their

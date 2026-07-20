@@ -5,7 +5,7 @@ import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
 /**
  * The sandbox lifecycle processor — a PURE reducer.
  *
- * HOW IT WORKS, end to end: sandboxes are pets. `itx.sandboxes.create`
+ * HOW IT WORKS, end to end: sandboxes are pets. `itx.sandboxes.get(path).create`
  * appends the name-claiming `sandbox/create-requested` to the `/sandboxes`
  * catalogue stream, and from then on the sandbox Durable Object
  * (cloudflare/cloudflare-sandbox-durable-object.ts) appends every command and
@@ -40,13 +40,9 @@ export class SandboxProcessor extends StreamProcessor<SandboxProcessorContract> 
   protected override reduce({ event, state }: ReduceArgs<SandboxProcessorContract>) {
     switch (event.type) {
       case "events.iterate.com/sandbox/created":
-        // The Durable Object idempotency-keys the birth append
-        // (`sandbox/created:<name>`), so a second created event on one stream
-        // is an invariant violation worth surfacing loudly, not a duplicate
-        // to shrug off.
-        if (state.birthCertificate !== null) {
-          throw new Error("Sandbox processor received more than one sandbox/created event");
-        }
+        // A duplicate committed certificate is harmless here. Conflicting
+        // create payloads are rejected at the stream's idempotency boundary.
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,

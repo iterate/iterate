@@ -232,11 +232,9 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   protected override reduce({ event, state }: ReduceArgs<DeviceProcessorContract>) {
     switch (event.type) {
       case "events.iterate.com/device/created":
-        // The DO idempotency-keys the birth append, so a second created event
-        // is an invariant violation surfaced loudly, never silently merged.
-        if (state.birthCertificate !== null) {
-          throw new Error("device received more than one created event");
-        }
+        // Duplicate birth facts must not wedge an already-committed frame.
+        // Conflicting create retries fail earlier at stream idempotency.
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,

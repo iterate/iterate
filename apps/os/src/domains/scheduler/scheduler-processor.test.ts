@@ -127,13 +127,11 @@ function makeSchedulerHarness(options?: {
 }
 
 describe("SchedulerProcessor reduce", () => {
-  it("throws when a second scheduler birth certificate is reduced", async () => {
+  it("ignores a second scheduler birth certificate during reduction", async () => {
     const h = makeSchedulerHarness();
     await h.play(["append", CREATED]);
-
-    await expect(h.append(CREATED)).rejects.toThrow(
-      "scheduler received more than one created event",
-    );
+    await h.append(CREATED);
+    expect(h.state().birthCertificate).toEqual(CREATED.payload);
   });
 
   it("upserts on schedule-set: re-setting a key replaces code, provenance, and run count", async () => {

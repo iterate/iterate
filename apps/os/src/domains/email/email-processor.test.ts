@@ -94,11 +94,11 @@ function makeRouterHarness(substrate?: {
 }
 
 describe("EmailProcessor (thread router)", () => {
-  it("throws when a second email-router birth certificate is reduced", async () => {
+  it("ignores a second email-router birth certificate during reduction", async () => {
     const h = makeRouterHarness();
     await h.play(["append", ROUTER_BORN]);
-
-    await expect(h.append(ROUTER_BORN)).rejects.toThrow("more than one email/created event");
+    await h.append(ROUTER_BORN);
+    expect(h.state().birthCertificate).toEqual(ROUTER_BORN.payload);
   });
 
   it("creates a thread route keyed by the received event's offset and forwards", async () => {

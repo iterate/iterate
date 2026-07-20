@@ -76,7 +76,7 @@ function ProjectsIndexPage() {
   );
 
   // "Set up" for a project the auth worker knows about but this deployment's
-  // engine does not: re-run `projects.create` on the itx session with the
+  // engine does not: run `projects.get(slug).create` on the itx session with the
   // claim's exact id and slug. The auth side is idempotent
   // (createForOrganization returns the existing row), then the engine
   // bootstrap saga runs.
@@ -84,9 +84,8 @@ function ProjectsIndexPage() {
     mutationFn: async (project: ProjectListEntry) => {
       const organizationSlug = organizationSlugFor(project);
       const session = await connectIterateSession();
-      await session.projects.create({
+      await session.projects.get(project.slug).create({
         projectId: project.id,
-        slug: project.slug,
         ...(organizationSlug === undefined ? {} : { organizationSlug }),
       });
     },

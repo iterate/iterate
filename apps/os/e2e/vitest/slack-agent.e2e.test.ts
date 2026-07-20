@@ -42,7 +42,7 @@ test.skipIf(signingSecret === null)(
 
     using session = withItxSession();
     using root = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = root.projects.create({ slug: `slack-agent-e2e-${runSuffix}` });
+    using project = await root.projects.get(`slack-agent-e2e-${runSuffix}`).create({});
     const { projectId } = await project.__describe();
 
     // --- Seed a claimed workspace without OAuth: fake bot token secret +

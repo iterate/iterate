@@ -24,14 +24,13 @@ import {
   WorkspaceProcessorContract,
   type WorkspaceConfig,
   type WorkspaceConfigPatch,
-  type WorkspaceMount,
 } from "./workspace-processor-contract.ts";
 import {
   mergeWorkspaceConfigPatch,
   WorkspaceProcessor,
 } from "./workspace-processor-implementation.ts";
 import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
-import { normalizeWorkspaceMountKeys, workspaceCreationEvents } from "./utils.ts";
+import { normalizeWorkspaceMountKeys } from "./utils.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 // Configuration appends assert their exact stream offset (no interleaved
@@ -55,10 +54,9 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * `gitCommit({ scope })` turns one mount's changes into one commit on THAT
  * repo's main via its own `commitFiles` lane.
  *
- * A workspace that was never explicitly created births ITSELF on first touch
- * with the default table (the config repo mounted at "/", committable) — a
- * real `workspace/created` on its stream, so every workspace has a birth
- * certificate and agent workspaces need no creation step in any agent lane.
+ * A workspace must be explicitly created before any filesystem or
+ * configuration method can use it. Addressing the Durable Object never births
+ * it; a missing birth certificate is a loud command error.
  *
  * The filesystem/overlay semantics live in {@link WorkspaceCore}; this DO is
  * the thin host wiring storage, the processor's reduced state, and repo stubs
@@ -110,8 +108,8 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   });
   readonly #core = new WorkspaceCore({
     kv: this.ctx.storage.kv,
-    // Fresh per operation: every public op below runs #ensureCreated() first
-    // (catchUp + auto-birth), so this thunk reads already-fresh reduced state.
+    // Fresh per operation: every public op below runs #assertCreated() first,
+    // so this thunk reads already-fresh reduced state.
     mounts: async () => this.#currentConfig().mounts,
     repo: (repoPath) => this.#repoStub(repoPath),
     workspace: this.#workspace,
@@ -127,33 +125,18 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#reads.currentState.config;
   }
 
-  // First-touch auto-birth, single-flighted per incarnation (the certificate's
-  // idempotencyKey makes cross-incarnation and cross-door races collapse).
-  #birth: Promise<void> | undefined;
-
-  /** Pull the reduced state current; append the birth certificate on first
-   * touch. STRICT catch-up (throws): every public operation routes and
+  /** Pull the reduced state current and require an explicit birth certificate.
+   * STRICT catch-up (throws): every public operation routes and
    * classifies against `currentState.config`, and a swallowed catch-up failure
    * would let it proceed on a stale mount table — misrouting reads and commits
    * — when a committed `configured` event exists but has not reduced. Failing
    * the operation loudly is the only safe disposition. */
-  async #ensureCreated(): Promise<void> {
+  async #assertCreated(): Promise<void> {
     await this.#reads.catchUp();
     if (this.#reads.currentState.birthCertificate !== null) return;
-    if (this.#birth === undefined) {
-      this.#birth = (async () => {
-        const committed = await this.#stream.append(
-          ...workspaceCreationEvents({ path: this.#name.path, projectId: this.#name.projectId }),
-        );
-        const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-        await this.#reads.catchUp();
-        await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
-      })().catch((error: unknown) => {
-        this.#birth = undefined;
-        throw error;
-      });
-    }
-    await this.#birth;
+    throw new Error(
+      `workspace "${this.#name.path}" does not exist — create it with itx.workspaces.get(${JSON.stringify(this.#name.path)}).create({})`,
+    );
   }
 
   /**
@@ -209,47 +192,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     throw new Error("unreachable configuration transition retry state");
   }
 
-  /**
-   * Ensure birth, then converge the mount table to `mounts` (when given) —
-   * the whole `itx.workspaces.create` lane under ONE serialized authority, so
-   * concurrent creators cannot interleave stale table diffs. The birth
-   * certificate is ALWAYS the default table (identical body, so the
-   * idempotency key can never hit the stream's different-body rejection);
-   * custom tables are ordinary `configured` patches on top.
-   */
-  async ensureCreatedWith(input: {
-    mounts?: Record<string, WorkspaceMount>;
-  }): Promise<WorkspaceConfig> {
-    // Validate the REQUESTED table before anything becomes durable: an
-    // invalid create must not leave a freshly born default workspace behind.
-    const desired =
-      input.mounts === undefined
-        ? undefined
-        : WorkspaceProcessorContract.stateSchema.shape.config.parse({
-            mounts: normalizeWorkspaceMountKeys(input.mounts),
-          }).mounts;
-    await this.#ensureCreated();
-    if (desired === undefined) return this.#currentConfig();
-    return this.#core.runExclusive(() =>
-      this.#applyConfigTransition((current) => {
-        const sameTable =
-          Object.keys(current.mounts).length === Object.keys(desired).length &&
-          Object.entries(desired).every(
-            ([key, mount]) =>
-              current.mounts[key]?.policy === mount.policy &&
-              current.mounts[key]?.repoPath === mount.repoPath,
-          );
-        if (sameTable) return null;
-        const removals = Object.fromEntries(
-          Object.keys(current.mounts)
-            .filter((key) => !(key in desired))
-            .map((key) => [key, null]),
-        );
-        return { mounts: { ...removals, ...desired } };
-      }),
-    );
-  }
-
   whoami(): string {
     return `workspace ${this.#name.projectId}:${this.#name.path} (event-sourced, mount-routed)`;
   }
@@ -263,7 +205,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   /** The reduced configuration (birth certificate + configured patches). */
   async getConfig(): Promise<WorkspaceConfig> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#currentConfig();
   }
 
@@ -276,7 +218,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
    * patch that would leave a broken table fails loudly at the door.
    */
   async configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     const config: WorkspaceConfigPatch =
       input.config.mounts === undefined
         ? input.config
@@ -307,74 +249,74 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   // -- filesystem ----------------------------------------------------------------
 
   async readFile(path: string): Promise<string | null> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.readFile(path);
   }
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.readFileBytes(path);
   }
 
   async exists(path: string): Promise<boolean> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.exists(path);
   }
 
   async writeFile(path: string, content: string): Promise<void> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.writeFile(path, content);
   }
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.writeFileBytes(path, data);
   }
 
   async edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.edit(input);
   }
 
   async deleteFile(path: string): Promise<boolean> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.deleteFile(path);
   }
 
   async listAllFiles(): Promise<string[]> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.listAllFiles();
   }
 
   async glob(pattern: string): Promise<string[]> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.glob(pattern);
   }
 
   async reset(): Promise<void> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.reset();
   }
 
   async revert(path: string): Promise<void> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.revert(path);
   }
 
   // -- git -------------------------------------------------------------------------
 
   async gitStatus(): Promise<WorkspaceStatus> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.gitStatus();
   }
 
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.gitCommit(input);
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
-    await this.#ensureCreated();
+    await this.#assertCreated();
     return this.#core.gitLog(input);
   }
 

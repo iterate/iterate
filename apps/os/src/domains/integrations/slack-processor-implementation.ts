@@ -138,9 +138,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
   }: ReduceArgs<SlackProcessorContract>): SlackProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("Slack processor received more than one slack/created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/slack/thread-route-configured":
         return {

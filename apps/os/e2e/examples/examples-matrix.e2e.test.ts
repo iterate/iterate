@@ -90,9 +90,9 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
         deadline,
         (async () => {
           using itx = connectGlobal();
-          using project = itx.projects.create({
-            slug: `${PROJECT_SLUG}-${Date.now().toString(36)}`,
-          });
+          using project = await itx.projects
+            .get(`${PROJECT_SLUG}-${Date.now().toString(36)}`)
+            .create({});
           const { projectId } = await project.__describe();
           await bakeProjectWorkerRunner({
             examples: MATRIX_EXAMPLES.filter((example) =>

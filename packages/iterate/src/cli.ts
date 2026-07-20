@@ -368,11 +368,9 @@ export const verifyOsSession = async (input: {
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
   let projectItx: RpcStub<Project> | undefined;
   try {
-    projectItx = (await session.projects.create({
+    projectItx = (await session.projects.get(project.slug).create({
       projectId: project.id,
-      slug: project.slug,
       ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
-      waitUntilReady: false,
     })) as unknown as RpcStub<Project>;
   } catch (error) {
     throw new Error(

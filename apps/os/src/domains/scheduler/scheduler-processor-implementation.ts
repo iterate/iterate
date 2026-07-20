@@ -111,9 +111,7 @@ export class SchedulerProcessor extends StreamProcessor<
   }: ReduceArgs<SchedulerProcessorContract>): SchedulerProcessorState {
     switch (event.type) {
       case "events.iterate.com/scheduler/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("scheduler received more than one created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/scheduler/schedule-set": {
         const payload = event.payload;

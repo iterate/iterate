@@ -43,18 +43,12 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent-collection/created": {
-        if (state.birthCertificate !== null) {
-          throw new Error("agent collection received more than one created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
       }
       case "events.iterate.com/agent/created": {
         const source = crossPostedAgentSource(event);
-        if (state.agents[source.path] !== undefined) {
-          throw new Error(
-            `agent collection received more than one agent/created event for ${source.path}`,
-          );
-        }
+        if (state.agents[source.path] !== undefined) return state;
         return {
           ...state,
           agents: {

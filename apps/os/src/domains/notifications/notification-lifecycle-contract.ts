@@ -19,8 +19,7 @@ export const NotificationLifecycleContract = defineProcessorContract({
     "events.iterate.com/notification/created": {
       description:
         "Birth certificate for the project's notification-policy facet, appended on the " +
-        "project root stream by project bootstrap (and backfilled once, idempotency-keyed " +
-        "on the project id, onto projects born before the facet existed).",
+        "project root stream in the atomic project birth batch.",
       payloadSchema: z.object({
         config: z
           .object({})

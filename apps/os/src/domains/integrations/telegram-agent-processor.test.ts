@@ -135,13 +135,11 @@ function makeAgentHarness(
 }
 
 describe("TelegramAgentProcessor", () => {
-  it("throws when a second Telegram-agent birth certificate is reduced", async () => {
+  it("ignores a second Telegram-agent birth certificate during reduction", async () => {
     const h = makeAgentHarness();
     await h.play(["append", AGENT_BORN]);
-
-    await expect(h.append(AGENT_BORN)).rejects.toThrow(
-      "more than one telegram-agent/created event",
-    );
+    await h.append(AGENT_BORN);
+    expect(h.state().birthCertificate).toEqual(AGENT_BORN.payload);
   });
 
   it("turns a routed human message into triggering agent context, then shows typing", async () => {

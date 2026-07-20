@@ -46,7 +46,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       .meta({
         description:
           "True once project/ready reduced: the config repo exists and the default project " +
-          "worker answered its readiness probe. `projects.create()` callers poll this.",
+          "worker answered its readiness probe. `projects.get(slug).create()` waits for this.",
       }),
     onboardingActive: z
       .boolean()
@@ -145,14 +145,10 @@ export const ProjectProcessorContract = defineProcessorContract({
         description:
           "Enrolled human-approval public keys; once any is active, grants must be signed.",
       }),
-    notificationReady: z
-      .boolean()
-      .default(false)
-      .meta({
-        description:
-          "True once notification/created reduced. While false on a born project, the at-head " +
-          "pass backfills the notification facet (projects born before it existed).",
-      }),
+    notificationReady: z.boolean().default(false).meta({
+      description:
+        "True once the notification/created fact from the atomic project birth batch reduces.",
+    }),
   }),
   events: {
     "events.iterate.com/project/created": {

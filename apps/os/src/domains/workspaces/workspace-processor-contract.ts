@@ -35,7 +35,7 @@ export const WorkspaceProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/workspace/created": {
       description:
-        "Creates a workspace processor on this stream. The birth certificate carries the complete initial configuration (usually the mount table). Appended by itx.workspaces.create, or by the workspace itself on first touch (with the default table: the config repo mounted at '/').",
+        "Creates a workspace processor on this stream. The birth certificate carries the complete default configuration; explicit creation may append an initial configured patch in the same atomic batch.",
       payloadSchema: workspaceBirthCertificateSchema(),
       examples: [
         {

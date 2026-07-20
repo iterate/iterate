@@ -70,12 +70,14 @@ const createFakeSession = (input: {
         ...input.description,
       }),
       projects: {
-        create: async (args: unknown) => {
-          input.onProjectCreate?.(args);
-          return {
-            [Symbol.dispose]: disposeProject,
-          };
-        },
+        get: (_slug: string) => ({
+          create: async (args: unknown) => {
+            input.onProjectCreate?.(args);
+            return {
+              [Symbol.dispose]: disposeProject,
+            };
+          },
+        }),
         list: async () => {
           if (input.listError) throw input.listError;
           return input.projects ?? [];
@@ -433,8 +435,6 @@ describe("resolveChatProject", () => {
 
     expect(createArgs).toEqual({
       projectId: "prj_missing",
-      slug: "missing",
-      waitUntilReady: false,
     });
     expect(fake.disposeProject).toHaveBeenCalledOnce();
   });
@@ -470,8 +470,6 @@ describe("resolveChatProject", () => {
 
     expect(createArgs).toEqual({
       projectId: "prj_default",
-      slug: "default",
-      waitUntilReady: false,
     });
   });
 
@@ -506,8 +504,6 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       organizationSlug: "acme",
       projectId: "prj_org_project",
-      slug: "org-project",
-      waitUntilReady: false,
     });
   });
 

@@ -18,7 +18,7 @@ test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `sandbox-codex-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`sandbox-codex-${crypto.randomUUID()}`).create({});
     using secret = project.secrets.get(secretPath);
     await secret.create({
       egress: { urls: ["https://api.openai.com"] },
@@ -29,10 +29,10 @@ test.skipIf(deployedBaseUrl() === null || !exactCodexProofEnabled)(
     });
 
     const placeholder = `getSecret("${secretPath}")`;
-    const { path: sandboxPath } = await project.sandboxes.create({
+    const sandboxPath = `/sandboxes/codex-proof-${crypto.randomUUID()}`;
+    await project.sandboxes.get(sandboxPath).create({
       env: { CODEX_API_KEY: placeholder },
       instanceType: "lite",
-      name: `codex-proof-${crypto.randomUUID()}`,
     });
     const sandbox = (await project.sandboxes.get(
       sandboxPath,

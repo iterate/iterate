@@ -86,11 +86,11 @@ function makeRouterHarness(substrate?: HarnessSubstrate & { network: MemoryStrea
 }
 
 describe("SlackProcessor (webhook router)", () => {
-  it("throws when a second Slack-router birth certificate is reduced", async () => {
+  it("ignores a second Slack-router birth certificate during reduction", async () => {
     const h = makeRouterHarness();
     await h.play(["append", ROUTER_CREATED]);
-
-    await expect(h.append(ROUTER_CREATED)).rejects.toThrow("more than one slack/created event");
+    await h.append(ROUTER_CREATED);
+    expect(h.state().birthCertificate).toEqual(ROUTER_CREATED.payload);
   });
 
   it("creates a route and forwards the webhook to the routed agent stream", async () => {

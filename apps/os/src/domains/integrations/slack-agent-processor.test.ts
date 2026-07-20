@@ -159,13 +159,11 @@ function makeSlackAgentHarness(input?: {
 }
 
 describe("SlackAgentProcessor", () => {
-  it("throws when a second Slack-agent birth certificate is reduced", async () => {
+  it("ignores a second Slack-agent birth certificate during reduction", async () => {
     const h = makeSlackAgentHarness();
     await h.play(["append", SLACK_AGENT_BORN]);
-
-    await expect(h.append(SLACK_AGENT_BORN)).rejects.toThrow(
-      "more than one slack-agent/created event",
-    );
+    await h.append(SLACK_AGENT_BORN);
+    expect(h.state().birthCertificate).toEqual(SLACK_AGENT_BORN.payload);
   });
 
   it("turns a routed @mention into triggering agent context and adds the eyes reaction", async () => {

@@ -37,7 +37,7 @@ type LlmCompletionEvidence = {
 async function runOnboardingBirthTurn(slug: string): Promise<LlmCompletionEvidence> {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug });
+  using project = await itx.projects.get(slug).create({});
   using agent = project.agents.get("/agents/onboarding");
   await ensureOnboardingAgentReady({ agent });
   const greeting = await agent.stream.waitForEvent({

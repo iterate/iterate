@@ -19,7 +19,7 @@ import type { RequestContext } from "~/request-context.ts";
  * throws during SSR), so SSR loaders read projects through these instead.
  *
  * These are deliberately minimal: the browser talks to the itx session
- * directly (`session.projects.list()` / `session.projects.create()` — see
+ * directly (`session.projects.list()` / `session.projects.get(slug).create()` — see
  * iterate/react consumers). What remains here is only what MUST run
  * server-side:
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
@@ -61,7 +61,7 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  *
  * A brand-new auth signup creates the user/org/project records in auth before
  * OS has a project stream. When that single auth-known project is still
- * missing, this starts the OS bootstrap with `waitUntilReady: false`. Single
+ * missing, this runs the OS bootstrap through the explicit project handle. Single
  * project users then route straight to the onboarding agent stream; that page
  * can render immediately while stream processors catch up.
  *
@@ -119,10 +119,9 @@ export const getRootProjectRedirectServerFn: (input?: {
         decision.project.deploymentStatus === "missing"
       ) {
         try {
-          await projects.create({
+          const project = await projects.get(decision.project.slug);
+          await project.create({
             projectId: decision.project.id,
-            slug: decision.project.slug,
-            waitUntilReady: false,
             ...organizationSlugForProject(context, decision.project),
           });
         } catch {

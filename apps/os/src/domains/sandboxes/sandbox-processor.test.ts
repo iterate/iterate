@@ -65,13 +65,10 @@ describe("SandboxProcessor", () => {
     expect(h.state()).toMatchObject({ running: false, status: "destroyed" });
   });
 
-  it("throws when a second sandbox birth certificate is reduced", async () => {
-    // The Durable Object idempotency-keys the birth append, so a duplicate
-    // created event is an invariant violation the reduce surfaces loudly.
+  it("ignores a second sandbox birth certificate during reduction", async () => {
     const h = makeSandboxHarness();
-    await expect(h.play(["append", CREATED, CREATED])).rejects.toThrow(
-      "more than one sandbox/created event",
-    );
+    await h.play(["append", CREATED, CREATED]);
+    expect(h.state().birthCertificate).toEqual(CREATED.payload);
   });
 
   it("destroyed is terminal — a late-delivered stopped cannot resurrect the status", async () => {

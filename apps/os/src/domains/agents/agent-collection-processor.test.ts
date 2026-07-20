@@ -158,7 +158,7 @@ describe("AgentCollectionStreamProcessor", () => {
     expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
   });
 
-  test("rejects agent facts without provenance, duplicate creations, and summaries before creation", async () => {
+  test("rejects malformed ordering but ignores duplicate creation facts", async () => {
     // Each rejection fails its frame with the cursor held (the runner
     // redelivers, never skips), so every scenario gets a fresh harness.
     await expect(
@@ -169,18 +169,18 @@ describe("AgentCollectionStreamProcessor", () => {
       ]),
     ).rejects.toThrow("without cross-post provenance");
 
-    await expect(
-      makeCollectionHarness().play(["append", COLLECTION_CREATED, COLLECTION_CREATED]),
-    ).rejects.toThrow("more than one created event");
+    const duplicateCollection = makeCollectionHarness();
+    await duplicateCollection.play(["append", COLLECTION_CREATED, COLLECTION_CREATED]);
+    expect(duplicateCollection.state().birthCertificate).toEqual(COLLECTION_CREATED.payload);
 
-    await expect(
-      makeCollectionHarness().play([
-        "append",
-        COLLECTION_CREATED,
-        agentCreatedCopy({ sourceOffset: 1 }),
-        agentCreatedCopy({ sourceOffset: 5 }),
-      ]),
-    ).rejects.toThrow("more than one agent/created event for /agents/researcher");
+    const duplicateAgent = makeCollectionHarness();
+    await duplicateAgent.play([
+      "append",
+      COLLECTION_CREATED,
+      agentCreatedCopy({ sourceOffset: 1 }),
+      agentCreatedCopy({ sourceOffset: 5 }),
+    ]);
+    expect(Object.keys(duplicateAgent.state().agents)).toEqual(["/agents/researcher"]);
 
     await expect(
       makeCollectionHarness().play([

@@ -11,7 +11,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { deviceCreationEvents } from "./device-defaults.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
 import { DeviceProcessor, type DevicePushSender } from "./device-processor-implementation.ts";
 import { getExpoPushReceipt, sendExpoPushNotification } from "./expo-push-client.ts";
@@ -114,17 +114,11 @@ export class DeviceDurableObject extends DurableObject<Env> {
     const existingOwner = snapshot.state.birthCertificate?.config.ownerId;
     const pushTokenSecretUpdatedOffset = await this.#putPushTokenSecret(input.expoPushToken);
     if (existingOwner === undefined) {
-      const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: this.ctx.id.name!,
-        idempotencyKey: `stream/subscription-configured:${this.ctx.id.name!}#${DeviceProcessorContract.slug}`,
-        processor: ["devices", ["get", this.#deviceId], "processor"],
-        processorSlug: DeviceProcessorContract.slug,
-      });
-      const [created, configured] = await this.#appendAfterPushTokenSecretUpdate(
+      const committed = await this.#appendAfterPushTokenSecretUpdate(
         pushTokenSecretUpdatedOffset,
-        {
-          type: "events.iterate.com/device/created",
-          idempotencyKey: `device/created:${this.#name.projectId}:${this.#deviceId}`,
+        ...deviceCreationEvents({
+          deviceId: this.#deviceId,
+          projectId: this.#name.projectId,
           payload: {
             config: {
               appVersion: input.appVersion,
@@ -136,10 +130,11 @@ export class DeviceDurableObject extends DurableObject<Env> {
               pushTokenSecretUpdatedOffset,
             },
           },
-        } as StreamEventInput,
-        subscription,
+        }),
       );
-      await this.#waitUntilProcessed(Math.max(created!.offset, configured!.offset));
+      const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+      if (offset === 0) throw new Error("device enrollment committed no birth events");
+      await this.#waitUntilProcessed(offset);
       return describeDeviceState(this.#reads.currentState, this.#deviceId);
     }
     const [updated] = await this.#appendAfterPushTokenSecretUpdate(pushTokenSecretUpdatedOffset, {

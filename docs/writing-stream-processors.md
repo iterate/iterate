@@ -375,9 +375,11 @@ Scenarios every obligation-carrying processor should have (crib from
 - [ ] A distinct `*/created` event whose payload contains only immutable facts
       required for existence (and may be `{}`); nullable
       `state.birthCertificate` stores its exact payload.
-- [ ] The created reduce arm throws if `birthCertificate` is already set.
-      Stable append idempotency handles command retries; the reducer never
-      hides two actual births.
+- [ ] The created reduce arm returns the existing state when
+      `birthCertificate` is already set. Stable, payload-free creation keys
+      make identical retries dedupe and make same-key/different-body retries
+      fail loudly at append time; reduction must never wedge a committed
+      frame merely because it contains a duplicate birth fact.
 - [ ] Ordinary events stay in the processor's monolithic reducer. Actions
       return before birth, while command/RPC methods that require existence
       assert birth explicitly.

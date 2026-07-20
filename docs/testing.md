@@ -31,7 +31,7 @@ away from.
    `// comment` saying why.
 
 3. **Every test owns its state.** Each e2e test and spec provisions its
-   own project (unique slug; `projects.create` resolves only after the
+   own project (unique slug; `projects.get(slug).create` resolves only after the
    bootstrap saga commits). No shared fixtures, no ordering, no cleanup
    coupling — this is what makes parallel workers and rule 4 sound.
 

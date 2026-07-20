@@ -427,11 +427,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/telegram-agent/created":
-        if (state.birthCertificate !== null) {
-          throw new Error(
-            "Telegram agent processor received more than one telegram-agent/created event",
-          );
-        }
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,

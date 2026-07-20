@@ -447,9 +447,9 @@ export function agentCreationForPath<
   );
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
-    // call, so agent birth never touches the workspace Durable Object. (No
-    // sandbox mount: sandboxes are pets, created explicitly via
-    // itx.sandboxes.create.)
+    // call. AgentRpcTarget.create explicitly births that addressed workspace
+    // before returning the agent handle. (No sandbox mount: sandboxes are
+    // pets, created explicitly via itx.sandboxes.get(path).create.)
     type: "events.iterate.com/capability-host/capability-provided",
     idempotencyKey: `capability-host/workspace-provided:v${AGENT_WORKSPACE_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: {

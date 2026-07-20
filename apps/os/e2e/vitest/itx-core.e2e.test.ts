@@ -53,7 +53,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   });
 
   // TODO project slug should be derived from tests etc as in apps/os
-  using project = itx.projects.create({ slug: "alice-project" });
+  using project = await itx.projects.get("alice-project").create({});
   const description = await project.__describe();
   expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
   expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
@@ -253,7 +253,7 @@ test("Project describe exposes self-describing builtin capabilities", async () =
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "ai-builtin" });
+  using project = await itx.projects.get("ai-builtin").create({});
   const description = await project.__describe();
 
   // Built-ins live in the children map (capabilities holds dynamic mounts

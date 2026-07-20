@@ -23,7 +23,6 @@ test("backfills a project whose OS-side bootstrap never ran", async () => {
     {
       projectId: "prj_a",
       slug: "alpha",
-      waitUntilReady: true,
       organizationSlug: "acme",
     },
   ]);
@@ -38,7 +37,7 @@ test("omits organizationSlug when the project has none", async () => {
     project({ deploymentStatus: "missing", organizationSlug: null }),
   );
 
-  expect(calls).toEqual([{ projectId: "prj_a", slug: "alpha", waitUntilReady: true }]);
+  expect(calls).toEqual([{ projectId: "prj_a", slug: "alpha" }]);
 });
 
 test.each(["ready", "unknown"] as const)(
@@ -68,9 +67,11 @@ function project(overrides: Partial<ProjectListEntry>): ProjectListEntry {
 function fakeItx(onCreate: (args: unknown) => void): ItxSession {
   return {
     projects: {
-      create: async (args: unknown) => {
-        onCreate(args);
-      },
+      get: (slug: string) => ({
+        create: async (args: unknown) => {
+          onCreate({ slug, ...(args as object) });
+        },
+      }),
     },
   } as unknown as ItxSession;
 }

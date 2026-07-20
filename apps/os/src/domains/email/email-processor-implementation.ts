@@ -142,9 +142,7 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
   }: ReduceArgs<EmailProcessorContract>): EmailProcessorState {
     switch (event.type) {
       case "events.iterate.com/email/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("Email processor received more than one email/created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/email/received": {
         const resolution = resolveEmailThread({

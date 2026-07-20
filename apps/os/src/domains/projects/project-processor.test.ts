@@ -15,9 +15,10 @@ import {
   MemoryStreamNetwork,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
-import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
+import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
+import { projectCreationEvents } from "./project-defaults.ts";
 import type {
   ProjectProcessorContract,
   ProjectCustomDomainCloudflareSnapshot,
@@ -189,13 +190,17 @@ describe("ProjectProcessor bootstrap", () => {
       clockAdvanceBySibling: { "capability-host": 10_000, scheduler: 5_000, repo: 5_000 },
     });
 
-    await h.play(["append", PROJECT_CREATED]);
+    await h.stream.append(
+      ...projectCreationEvents({ projectId: "prj_test", payload: PROJECT_CREATED.payload }),
+    );
+    await h.settle();
 
     expect(h.network.eventsAt("/").map((event) => event.type)).toEqual([
       "events.iterate.com/project/created",
-      "events.iterate.com/capability-host/created",
-      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/notification/created",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/capability-host/created",
       "events.iterate.com/stream/subscription-configured",
     ]);
     expect(h.network.eventsAt("/scheduler/primary").map((event) => event.type)).toEqual([
@@ -215,15 +220,15 @@ describe("ProjectProcessor bootstrap", () => {
     });
     expect(h.network.eventsAt("/integrations/email").map((event) => event.type)).toEqual([
       "events.iterate.com/email/created",
-      "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/email/sender-allowed",
+      "events.iterate.com/stream/subscription-configured",
     ]);
 
     // The frame waited for each sibling to reduce its complete birth batch
     // (offset = the batch's last event), against ONE shared shrinking budget:
     // 60s total, minus the 10s + 5s + 5s the earlier waits consumed.
     expect(h.siblingWaits).toEqual([
-      { offset: 5, processor: "capability-host", timeoutMs: 60_000 },
+      { offset: 6, processor: "capability-host", timeoutMs: 60_000 },
       { offset: 2, processor: "scheduler", timeoutMs: 50_000 },
       { offset: 3, processor: "repo", timeoutMs: 45_000 },
       { offset: 3, processor: "email", timeoutMs: 40_000 },
@@ -266,13 +271,11 @@ describe("ProjectProcessor bootstrap", () => {
     expect(settled).toBe(true);
   });
 
-  it("throws when a second project birth certificate is reduced", async () => {
+  it("ignores a second project birth certificate during reduction", async () => {
     const h = makeProjectHarness();
     await h.play(["append", PROJECT_CREATED]);
-
-    await expect(h.play(["append", PROJECT_CREATED])).rejects.toThrow(
-      "more than one project/created",
-    );
+    await h.play(["append", PROJECT_CREATED]);
+    expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
   });
 
   it("waits through a cold-build probe response before marking the project ready", async () => {
@@ -597,59 +600,6 @@ describe("ProjectProcessor egress policy", () => {
 });
 
 // =============================================================================
-// Notification facet backfill
-// =============================================================================
-
-/** A stand-in for the processor version that predates the notification facet:
- * it reduced everything but reacted to nothing, so a project it birthed has no
- * notification/created on its stream. */
-class PreNotificationFacetProjectProcessor extends ProjectProcessor {
-  protected override processEvent(): undefined {
-    return undefined;
-  }
-}
-
-describe("ProjectProcessor notification backfill", () => {
-  it("backfills the notification facet onto a project born before it existed", async () => {
-    // An old incarnation processes the birth without any side effects: the
-    // stream ends up birthed but notification-less, cursor at head.
-    const old = makeProjectHarness({ processorClass: PreNotificationFacetProjectProcessor });
-    await old.play(["append", PROJECT_CREATED]);
-    expect(old.events("events.iterate.com/notification/created")).toHaveLength(0);
-    expect(old.state().notificationReady).toBe(false);
-
-    // Today's processor takes over the same substrate; the next at-head
-    // delivery re-derives the missing facet from state and backfills it.
-    const h = makeProjectHarness({ substrate: old.substrate });
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/stream/child-stream-created",
-        payload: { childPath: "/agents/slack" },
-      },
-    ]);
-
-    expect(h.events("events.iterate.com/notification/created")).toMatchObject([
-      { idempotencyKey: "notification-created:prj_test", payload: { config: {} } },
-    ]);
-    expect(h.events("events.iterate.com/stream/subscription-configured")).toMatchObject([
-      { idempotencyKey: "notification-subscription:prj_test" },
-    ]);
-    expect(h.state().notificationReady).toBe(true);
-
-    // The backfill is idempotent: later deliveries do not re-append.
-    await h.play([
-      "append",
-      {
-        type: "events.iterate.com/stream/child-stream-created",
-        payload: { childPath: "/agents/telegram" },
-      },
-    ]);
-    expect(h.events("events.iterate.com/notification/created")).toHaveLength(1);
-  });
-});
-
-// =============================================================================
 // Full replay
 // =============================================================================
 
@@ -662,8 +612,11 @@ describe("ProjectProcessor full replay", () => {
     // idempotency keys dedupe — a same-key-different-body append would be
     // REJECTED and wedge the frame.
     const h = makeProjectHarness();
+    await h.stream.append(
+      ...projectCreationEvents({ projectId: "prj_test", payload: PROJECT_CREATED.payload }),
+    );
+    await h.settle();
     await h.play(
-      ["append", PROJECT_CREATED],
       ["append", CONFIG_REPO_READY],
       [
         "append",

@@ -71,7 +71,7 @@ export const SandboxProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/sandbox/create-requested": {
       description:
-        "itx.sandboxes.create was called: the claimed path, the requested instance type (fixed for the sandbox's whole life) and any initial config. UNLIKE every other sandbox event this lands on the /sandboxes CATALOGUE stream, idempotency-keyed by path — the append IS the atomic name claim, and its instance type is what routes get(path) to the right container namespace. Setup follows; `created` (on the sandbox's own stream) confirms it.",
+        "itx.sandboxes.get(path).create was called: the claimed path, the requested instance type (fixed for the sandbox's whole life) and any initial config. UNLIKE every other sandbox event this lands on the /sandboxes CATALOGUE stream, idempotency-keyed by path — the append IS the atomic name claim, and its instance type is what routes get(path) to the right container namespace. Setup follows; `created` (on the sandbox's own stream) confirms it.",
       payloadSchema: z.object({
         path: z.string().meta({
           description:
@@ -96,7 +96,7 @@ export const SandboxProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            'itx.sandboxes.create claims "/sandboxes/main": a basic instance that sleeps after 10 idle minutes, with a getSecret-placeholder env var substituted only at egress.',
+            'itx.sandboxes.get("/sandboxes/main").create claims a basic instance that sleeps after 10 idle minutes, with a getSecret-placeholder env var substituted only at egress.',
           payload: {
             path: "/sandboxes/main",
             instanceType: "basic",

@@ -92,8 +92,7 @@ import {
   installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
-import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
-import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
+import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
@@ -109,15 +108,19 @@ import {
   assertSandboxPath,
   sandboxCreateClaimKey,
   assertValidSleepAfter,
-  sandboxPathFor,
 } from "./domains/sandboxes/utils.ts";
 import {
   SandboxProcessorContract,
   type SandboxProcessorState,
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
-import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
+import {
+  agentWorkspacePath,
+  normalizeWorkspacePath,
+  workspaceCreationEvents,
+} from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
+import { schedulerCreationEvents } from "./domains/scheduler/scheduler-defaults.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import {
   generateProjectApiKeyMaterial,
@@ -222,7 +225,7 @@ import type {
   ProjectDescription,
 } from "./domains/itx/describe.ts";
 import type { CfExecutionContext } from "./domains/itx/utils.ts";
-import type { CloudflareSandbox, SandboxCreateInput } from "./domains/sandboxes/utils.ts";
+import type { SandboxCreateInput } from "./domains/sandboxes/utils.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -330,10 +333,7 @@ import type { ProjectProcessorState } from "./domains/projects/project-processor
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
-import {
-  SchedulerProcessorContract,
-  type SchedulerProcessorState,
-} from "./domains/scheduler/scheduler-processor-contract.ts";
+import type { SchedulerProcessorState } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type {
   EditWorkspaceFileInput,
   EditWorkspaceFileResult,
@@ -981,22 +981,11 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
   }
 
   /** Create this Scheduler and return only after it has processed the complete birth batch. */
-  async create(): Promise<void> {
-    const durableObjectName = DurableObjectNameCodec.stringify({
-      path: this.props.path,
-      projectId: this.props.projectId,
-    });
+  async create(_input: Record<string, never> = {}): Promise<SchedulerRpcTarget> {
     const committed = await this.#stream.append(
-      {
-        type: "events.iterate.com/scheduler/created",
-        idempotencyKey: `scheduler-created:${this.props.projectId}:${this.props.path}`,
-        payload: { config: {} },
-      },
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName,
-        idempotencyKey: `scheduler-subscription:${this.props.projectId}:${this.props.path}`,
-        processor: ["schedulers", ["get", this.props.path], "processor"],
-        processorSlug: SchedulerProcessorContract.slug,
+      ...schedulerCreationEvents({
+        path: this.props.path,
+        projectId: this.props.projectId,
       }),
     );
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
@@ -1005,6 +994,7 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       offset,
       timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
     });
+    return this;
   }
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
@@ -1069,10 +1059,6 @@ function rootStream(props: { auth: ItxAuth; projectId: string | null }) {
     projectId: props.projectId,
     path: "/",
   });
-}
-
-function streamDurableObjectName(props: { projectId: string | null; path: string }) {
-  return DurableObjectNameCodec.stringify(props, { allowNullProjectId: true });
 }
 
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
@@ -1554,82 +1540,36 @@ async function agentBootProjectFacts(
 }
 
 /**
- * The `itx.sandboxes` built-in. Sandboxes are PETS:
- * `create({ name, instanceType })` is the only way one comes to exist
- * (nothing mints a sandbox implicitly — `get` refuses paths that were never
- * created), names are one path segment (`/sandboxes/<name>` — no intermediate
- * folders in the stream tree), and the sandbox itself carries the imperative
- * lifecycle (`start`/`sleep`/`destroy`).
- *
- * `get(path)` returns the sandbox Durable Object's own RPC stub —
- * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
- * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding
- * code here. Confinement is by name: the stub is minted from this project's
- * id plus the validated path, after the same project-access assert every
- * collection performs.
- *
- * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
- * instance type per container class (instance-types.ts), so each type is its
- * own Durable Object namespace and routing needs the type. The `/sandboxes`
- * catalogue stream is the directory: `create` journals `create-requested`
- * there (idempotency-keyed by path, so the stream's native dedup makes the
- * FIRST claim on a name authoritative — races settle atomically in one
- * append) BEFORE touching any container namespace, and `get` routes by the
- * claim's instance type. The catalogue and not the sandbox's own stream
- * because reads materialize streams (any wake appends `created`/`woken`):
- * routing a `get` through the sandbox's own stream would mint a junk stream
- * for every typo'd path, and addressing must never create.
+ * One address-first sandbox handle. Addressing never creates or even chooses
+ * a container namespace. `create(input)` claims the path in the catalogue,
+ * lets the selected Durable Object append and reduce its own birth batch, and
+ * returns this handle. Every later SDK call resolves the durable claim and is
+ * receiver-preservingly replayed onto the real Cloudflare Sandbox stub.
  */
-class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
-  async __describe(): Promise<Description> {
-    return describeNode({
-      instructions:
-        "The project's sandboxes — real Linux containers, explicitly created and kept like pets. create({ name, instanceType? }) makes one at /sandboxes/<name> (names are one path segment; instance types are Cloudflare's, fixed for life: lite, basic (default), standard-1..4 — https://developers.cloudflare.com/containers/platform-details/limits/); get(path) returns its bare Cloudflare Sandbox SDK stub (exec, files, processes, sessions, gitCheckout, code interpreter, tunnels — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/restart()/destroy()/kill() and __describe() like every node. processor(path) and liveState(path) expose its hosted reducer and push-driven lifecycle projection (including `running`). The first command boots the container; after sleepAfter idle it is snapshotted and torn down — /workspace survives via the snapshot, nothing else does. Nothing is preinstalled beyond the stock image (Ubuntu, Node, Bun, git).",
-      children: {
-        create: "Create a sandbox (strict: existing/destroyed names are errors). Returns { path }.",
-        get: "The sandbox at a created path (boots the container on first use).",
-        list: "Every sandbox stream path in the project (including destroyed sandboxes' streams — the stream is the history).",
-        liveState: "Push-driven reduced lifecycle state for a sandbox path.",
-        processor: "The sandbox path's hosted lifecycle reducer.",
-      },
-      parent: "a project itx (itx.sandboxes)",
-    });
-  }
-
-  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
+    assertSandboxPath(props.path);
   }
 
-  /** The instance type's own container namespace — see instance-types.ts for
-   * why instance types are separate Durable Object classes. */
-  #namespace(instanceType: SandboxInstanceType) {
-    const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof typeof env;
-    return env[binding] as DurableObjectNamespace<SandboxDurableObject>;
-  }
-
-  #stub(path: string, instanceType: SandboxInstanceType) {
-    return this.#namespace(instanceType).getByName(
-      DurableObjectNameCodec.stringify({ projectId: this.props.projectId, path }),
-    );
-  }
-
-  /** The `/sandboxes` catalogue stream — the directory of every sandbox ever
-   * requested in the project (one `create-requested` per name, idempotency-
-   * keyed by path). One stream for the whole domain, so looking a name up
-   * never materializes anything but the catalogue itself. */
   get #catalogue() {
     return env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ projectId: this.props.projectId, path: "/sandboxes" }),
     );
   }
 
-  /** The name claim journaled for a path (the catalogue's `create-requested`
-   * event), or undefined if no create was ever requested there. Its instance
-   * type is what routes the path to the right container namespace. */
-  async #claim(path: string): Promise<{ instanceType: SandboxInstanceType } | undefined> {
+  #stub(instanceType: SandboxInstanceType) {
+    const binding = SANDBOX_INSTANCE_TYPE_BINDINGS[instanceType].binding as keyof typeof env;
+    const namespace = env[binding] as DurableObjectNamespace<SandboxDurableObject>;
+    return namespace.getByName(
+      DurableObjectNameCodec.stringify({ projectId: this.props.projectId, path: this.props.path }),
+    );
+  }
+
+  async #claim(): Promise<{ instanceType: SandboxInstanceType } | undefined> {
     const event = await this.#catalogue.getEvent({
-      idempotencyKey: sandboxCreateClaimKey(path),
+      idempotencyKey: sandboxCreateClaimKey(this.props.path),
     });
     if (event === undefined) return undefined;
     return {
@@ -1639,66 +1579,49 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     };
   }
 
-  /** Resolve the claimed container namespace without requiring the pet to be
-   * usable. Processor delivery and state inspection must keep working after
-   * the sandbox's public command door has been tombstoned. */
-  async #claimedStub(path: string) {
-    const asserted = assertSandboxPath(path);
-    const claim = await this.#claim(asserted);
+  async #claimedStub() {
+    const claim = await this.#claim();
     if (claim === undefined) {
       throw new Error(
-        `sandbox "${asserted}" does not exist — sandboxes are created explicitly: itx.sandboxes.create({ name, instanceType })`,
+        `sandbox "${this.props.path}" does not exist — create it with itx.sandboxes.get(${JSON.stringify(this.props.path)}).create({})`,
       );
     }
-    return { path: asserted, stub: this.#stub(asserted, claim.instanceType) };
+    return this.#stub(claim.instanceType);
   }
 
-  /** The sandbox's hosted reducer. Kept on the collection as an isolate-side
-   * relay because `get(path)` deliberately returns the bare SDK stub, and a
-   * Workers RPC property read cannot itself be pipelined through. */
-  processor(path: string): WakeableStreamProcessorRpc<SandboxProcessorState> {
-    return new ProcessorRelayRpcTarget<SandboxProcessorState>({
-      auth: this.props.auth,
-      host: async () => (await this.#claimedStub(path)).stub as unknown as ProcessorHostStub,
-    });
+  async #usableStub() {
+    const stub = await this.#claimedStub();
+    await stub.assertCreated({ path: this.props.path, projectId: this.props.projectId });
+    return stub;
   }
 
-  /** Push-driven reduced lifecycle state for one sandbox, including a
-   * destroyed sandbox whose command door is no longer usable. */
-  liveState(path: string): LiveStateRpc<SandboxProcessorState> {
-    return new LiveStateRelayRpcTarget<SandboxProcessorState>(
-      async () =>
-        (await this.#claimedStub(path))
-          .stub as unknown as LiveStateDurableObjectStub<SandboxProcessorState>,
-    );
+  async __describe(): Promise<Description> {
+    const claim = await this.#claim();
+    if (claim === undefined) {
+      return describeNode({
+        instructions: `A not-yet-created sandbox handle at "${this.props.path}". Call create({ instanceType?, sleepAfter?, keepAlive?, env? }) before using the Cloudflare Sandbox SDK surface.`,
+        children: { create: "Create this sandbox and return this handle." },
+        parent: "sandboxes.get(path)",
+      });
+    }
+    return (await replayPathCall(await this.#usableStub(), {
+      args: [],
+      path: ["__describe"],
+    })) as Description;
   }
 
-  /** Create a sandbox. Strict: an existing or destroyed path is an error.
-   * Returns the path to `get`. */
-  async create(
-    input: SandboxCreateInput,
-  ): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }> {
+  /** Claim, birth, and configure this sandbox; strict after a completed birth. */
+  async create(input: SandboxCreateInput = {}): Promise<SandboxRpcTarget> {
     const instanceType = SandboxInstanceType.parse(
       input.instanceType ?? DEFAULT_SANDBOX_INSTANCE_TYPE,
     );
-    const path = sandboxPathFor(input.name);
-    // Validate everything the journal records BEFORE journaling it — a
-    // rejected create must leave no trace.
     if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
-    // Claim the name first: append the create-requested to the catalogue,
-    // idempotency-keyed by path. The stream dedups by key atomically, so the
-    // event that comes back IS the authoritative claim — ours if the name was
-    // free, the original if it was ever claimed before (including by a racing
-    // creator). Only a matching instance type may proceed to the container
-    // namespace: the Durable Object there is the strict authority on whether
-    // the sandbox is live, destroyed, or (after a create that died between
-    // this append and its call) still to be born — the retry heals it.
     const [claim] = await this.#catalogue.append(
       SandboxProcessorContract.buildEvent({
         type: "events.iterate.com/sandbox/create-requested",
-        idempotencyKey: sandboxCreateClaimKey(path),
+        idempotencyKey: sandboxCreateClaimKey(this.props.path),
         payload: {
-          path,
+          path: this.props.path,
           instanceType,
           sleepAfter: input.sleepAfter,
           keepAlive: input.keepAlive,
@@ -1707,21 +1630,22 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
       }),
     );
     if (claim === undefined) {
-      throw new Error(`sandbox "${path}": the catalogue append returned no event`);
+      throw new Error(`sandbox "${this.props.path}": the catalogue append returned no event`);
     }
     const parsedClaim = SandboxProcessorContract.parseEvent(claim);
     if (parsedClaim.type !== "events.iterate.com/sandbox/create-requested") {
       throw new Error(
-        `sandbox "${path}": catalogue claim has unexpected type "${parsedClaim.type}"`,
+        `sandbox "${this.props.path}": catalogue claim has unexpected type "${parsedClaim.type}"`,
       );
     }
-    if (parsedClaim.payload.path !== path) {
-      throw new Error(`sandbox "${path}": catalogue claim points at "${parsedClaim.payload.path}"`);
-    }
-    const claimedType = parsedClaim.payload.instanceType;
-    if (claimedType !== instanceType) {
+    if (parsedClaim.payload.path !== this.props.path) {
       throw new Error(
-        `sandbox "${path}" was already requested as instance type "${claimedType}" — names are unique per project; pick a new name`,
+        `sandbox "${this.props.path}": catalogue claim points at "${parsedClaim.payload.path}"`,
+      );
+    }
+    if (parsedClaim.payload.instanceType !== instanceType) {
+      throw new Error(
+        `sandbox "${this.props.path}" was already requested as instance type "${parsedClaim.payload.instanceType}" — names are unique per project; pick a new path`,
       );
     }
     const claimedEnv =
@@ -1733,29 +1657,119 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
               value ?? undefined,
             ]),
           );
-    return await this.#stub(path, instanceType).create({
+    await this.#stub(instanceType).create({
       env: claimedEnv,
       instanceType,
       keepAlive: parsedClaim.payload.keepAlive,
-      path,
+      path: this.props.path,
       projectId: this.props.projectId,
       sleepAfter: parsedClaim.payload.sleepAfter,
     });
+    return this;
   }
 
-  /** The sandbox at a path. Throws unless the path was created (and not destroyed). */
-  async get(path: string): Promise<CloudflareSandbox> {
-    const { path: asserted, stub } = await this.#claimedStub(path);
-    // Getting never creates: the sandbox proves it was created (and not
-    // destroyed) before the stub reaches the caller. Container runtimes do
-    // not reliably surface `ctx.id.name`, so this call also re-asserts the
-    // identity create() recorded — see SandboxDurableObject.assertCreated.
-    await stub.assertCreated({ path: asserted, projectId: this.props.projectId });
-    return stub;
+  /** The sandbox's hosted lifecycle reducer. */
+  get processor(): WakeableStreamProcessorRpc<SandboxProcessorState> {
+    return new ProcessorRelayRpcTarget<SandboxProcessorState>({
+      auth: this.props.auth,
+      host: async () => (await this.#claimedStub()) as unknown as ProcessorHostStub,
+    });
   }
 
-  /** Every sandbox stream path in the project (`/sandboxes/...`), including
-   * destroyed sandboxes' streams — the stream is the history. */
+  /** Push-driven reduced lifecycle state, including after permanent destroy. */
+  get liveState(): LiveStateRpc<SandboxProcessorState> {
+    return new LiveStateRelayRpcTarget<SandboxProcessorState>(
+      async () =>
+        (await this.#claimedStub()) as unknown as LiveStateDurableObjectStub<SandboxProcessorState>,
+    );
+  }
+
+  start(): Promise<void> {
+    return this.invokeCapability({ args: [], path: ["start"] }) as Promise<void>;
+  }
+
+  sleep(): Promise<void> {
+    return this.invokeCapability({ args: [], path: ["sleep"] }) as Promise<void>;
+  }
+
+  restart(): Promise<void> {
+    return this.invokeCapability({ args: [], path: ["restart"] }) as Promise<void>;
+  }
+
+  destroy(): Promise<void> {
+    return this.invokeCapability({ args: [], path: ["destroy"] }) as Promise<void>;
+  }
+
+  kill(): Promise<void> {
+    return this.invokeCapability({ args: [], path: ["kill"] }) as Promise<void>;
+  }
+
+  exec(
+    command: string,
+    options?: {
+      cwd?: string;
+      encoding?: string;
+      env?: Record<string, string | undefined>;
+      timeout?: number;
+    },
+  ): Promise<{
+    success: boolean;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    command: string;
+    duration: number;
+    timestamp: string;
+    sessionId?: string;
+  }> {
+    return this.invokeCapability({
+      args: options === undefined ? [command] : [command, options],
+      path: ["exec"],
+    }) as Promise<{
+      success: boolean;
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      command: string;
+      duration: number;
+      timestamp: string;
+      sessionId?: string;
+    }>;
+  }
+
+  /** Replay any undeclared Cloudflare Sandbox SDK path onto the claimed stub. */
+  async invokeCapability(call: { args: unknown[]; path: string[] }): Promise<unknown> {
+    return await replayPathCall(await this.#usableStub(), call);
+  }
+}
+
+/** Path-addressed sandbox catalogue. `get` is pure addressing; creation lives on the handle. */
+class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        'The project\'s path-addressed Linux sandboxes. get("/sandboxes/<name>") returns a possibly nonexistent handle; call handle.create({ instanceType?, sleepAfter?, keepAlive?, env? }) before the Cloudflare Sandbox SDK surface. Instance types are fixed for life.',
+      children: {
+        get: "A possibly nonexistent sandbox handle; addressing does not create.",
+        list: "Every sandbox stream path, including destroyed sandboxes.",
+      },
+      parent: "a project itx (itx.sandboxes)",
+    });
+  }
+
+  get(path: string): SandboxRpcTarget {
+    return new SandboxRpcTarget({
+      auth: this.props.auth,
+      path: assertSandboxPath(path),
+      projectId: this.props.projectId,
+    });
+  }
+
   list(): Promise<StreamListItem[]> {
     return projectProcessorState(this.props.projectId).then((state) =>
       state.streams.filter((stream) => stream.path.startsWith("/sandboxes/")),
@@ -1772,22 +1786,17 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
  * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
  * scope), and standalone workspaces live under `/workspaces/<anything>`.
  *
- * A workspace's identity + configuration are stream facts: `create({ path,
- * mounts })` appends the `workspace/created` birth certificate to the
- * workspace's own stream; `workspace/configured` patches the mount table. A
- * workspace touched without an explicit create births itself with the default
- * table (the config repo mounted at "/", committable) — so `get(path)` is
- * always usable and behaves like the old single-parent overlay by default.
+ * A workspace's identity + configuration are stream facts. `get(path)` only
+ * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
+ * batch. Every birth-requiring method fails loudly until that explicit create.
  */
 class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/", committable — the classic overlay); create({ path, mounts }) additionally converges a custom mount table (mount path → { repoPath, policy }) via one workspace/configured patch — the birth certificate itself is always the default table. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. The default mounts the config repo at "/" with commit-to-main policy; a supplied mount table is committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
       children: {
-        create:
-          "Ensure the workspace at a path and converge its mount table ({ path, mounts? }); idempotent — birth always carries the default table, custom tables land as one configured patch.",
-        get: "The workspace at a path (first touch births it with the default mount table).",
+        get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
       },
       parent: "a project itx (itx.workspaces)",
     });
@@ -1798,39 +1807,13 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
     props.auth.assertCanAccessProject(props.projectId);
   }
 
-  /** The workspace at a path (first touch births it with the default mount table). */
+  /** A workspace handle at a path. Addressing never creates it. */
   get(path: string): WorkspaceRpcTarget {
     return new WorkspaceRpcTarget({
       auth: this.props.auth,
       path: normalizeWorkspacePath(path),
       projectId: this.props.projectId,
     });
-  }
-
-  /**
-   * Create a workspace. Runs entirely inside the workspace Durable Object's
-   * serialized authority: birth is ensured (the certificate is ALWAYS the
-   * default table — identical body, so the idempotency key can never hit the
-   * stream's different-body rejection), then a custom `mounts` table
-   * converges via one validated `workspace/configured` patch. Idempotent.
-   */
-  async create(input: {
-    mounts?: Record<string, WorkspaceMount>;
-    path: string;
-  }): Promise<WorkspaceRpcTarget> {
-    const path = normalizeWorkspacePath(input.path);
-    const workspace = new WorkspaceRpcTarget({
-      auth: this.props.auth,
-      path,
-      projectId: this.props.projectId,
-    });
-    // The whole lane runs inside the workspace Durable Object under its
-    // serialized authority (birth is idempotent; a custom table converges via
-    // one configured patch) — concurrent creators cannot interleave.
-    await workspace.durableObjectStub.ensureCreatedWith({
-      mounts: input.mounts === undefined ? undefined : normalizeWorkspaceMountKeys(input.mounts),
-    });
-    return workspace;
   }
 }
 
@@ -1848,6 +1831,8 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return describeNode({
       instructions: `A workspace at "${this.props.path}" (event-sourced, mount-routed). Its mount table (getConfig/configure) maps repos into the tree — by default the config repo is mounted at "/", so reads see the repo's latest main until a local write shadows a path. Writes stay in a private overlay; git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is optional when one mount is dirty). Paths outside every mount are private scratch.`,
       children: {
+        create:
+          "Create this workspace with the default config-repo mount or an exact custom mount table; waits through the atomic birth batch and returns this handle.",
         configure:
           "Patch configuration ({ config: { mounts } }) — deep-merged per mount point: unknown keys add mounts, partial values edit one mount, null removes one. Appends workspace/configured.",
         deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",
@@ -1885,6 +1870,34 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         projectId: this.props.projectId,
       }),
     );
+  }
+
+  get #stream(): StreamRpcTarget {
+    return new StreamRpcTarget({
+      auth: this.props.auth,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  /** Explicitly create this workspace and wait through its complete birth batch. */
+  async create(
+    input: { mounts?: Record<string, WorkspaceMount> } = {},
+  ): Promise<WorkspaceRpcTarget> {
+    const committed = await this.#stream.append(
+      ...workspaceCreationEvents({
+        ...(input.mounts === undefined ? {} : { mounts: input.mounts }),
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (offset === 0) throw new Error("workspace create committed no events");
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
+    return this;
   }
 
   whoami(): Promise<string> {
@@ -2310,6 +2323,13 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
     );
   }
 
+  /**
+   * Enroll remains a named device-vocabulary door instead of generic create:
+   * it first routes the private Expo push token into the device's Secret,
+   * then appends the device certificate and processor subscription atomically
+   * after that Secret offset. Re-enrollment rotates the credential without
+   * rebirthing the Device.
+   */
   enroll(input: DeviceEnrollInput): Promise<DeviceDescription> {
     return this.durableObjectStub.enroll({ ...input, ownerId: this.props.auth.principal });
   }
@@ -4003,8 +4023,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * Create the generic agent machinery on this stream and wait until the
-   * agent, capability-host, and singleton collection processors have reduced
-   * the birth. The optional payload is the `agent/created` birth certificate
+   * agent, capability-host, singleton collection, and explicitly-created
+   * workspace processors have reduced their births. The optional payload is
+   * the `agent/created` birth certificate
    * (arbitrary birth facts; defaults to `{}`). Configuration, context, and
    * tasks remain separate events: append processor-consumed events through
    * `agent.append()` or use a typed helper such as `message()` after creation.
@@ -4013,6 +4034,12 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * over an existing agent with a different payload fails loudly.
    */
   async create(payload?: AgentCreateInput): Promise<AgentRpcTarget> {
+    const workspace = new WorkspaceRpcTarget({
+      auth: this.#props.auth,
+      path: agentWorkspacePath(this.#path),
+      projectId: this.#props.projectId,
+    });
+    const workspaceReady = workspace.create({});
     const creation = agentCreationForPath({
       agentPath: this.#path,
       projectId: this.#props.projectId,
@@ -4046,6 +4073,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         path: this.#path,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
+      workspaceReady,
     ]);
     return this;
   }
@@ -4428,10 +4456,9 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Project catalog: get("prj_..." or a slug) and create({ slug }) vend a project itx; list() enriches with deployment status.',
+        'Project catalog: get("prj_..." or a slug) returns a handle; an unknown slug is a prospective handle whose create({ organizationSlug?, projectId? }) registers and births the project. list() enriches known projects with deployment status.',
       children: {
-        create: "Create a project; returns its itx.",
-        get: "The itx for a project id or slug.",
+        get: "A known project itx or a prospective slug handle; addressing does not create.",
         list: "The session's projects with deployment status.",
       },
       parent: "session.projects",
@@ -4456,11 +4483,12 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       directory: env.PROJECT_DIRECTORY,
       identifier: idOrSlug,
     });
-    // A miss is genuine (garbage, or a slug with no directory row): fail loudly
-    // rather than manufacture a phantom namespace — itx state is namespaced by
-    // whatever string lands as the project id.
     if (projectId === null) {
-      throw new Error(`no project "${idOrSlug}" (unknown project id or slug)`);
+      return new ProjectRpcTarget({
+        auth: this.props.auth,
+        ctx: this.props.ctx,
+        prospectiveSlug: idOrSlug,
+      });
     }
     // Claims can lag right after a create; the auth context may consult the
     // project directory and widen itself before access is granted. Cap'n Web
@@ -4472,225 +4500,6 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       path: "/",
       projectId,
     });
-  }
-
-  /**
-   * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — the right shape for
-   * scripts and pipelined chains that use the project immediately.
-   *
-   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
-   * registered, directory primed, birth events appended. The saga keeps
-   * running behind the returned handle — create still drives processor birth
-   * via a post-response nudge, so no caller has to. Progress is ordinary
-   * live state (`state.reduced.ready` flips when bootstrap lands), and
-   * `waitUntilReady()` on the handle is the composable wait. Pipeline
-   * `identity()` through the create call to learn the canonical slug (auth
-   * may normalize it) in the same round trip — the dashboard does exactly
-   * that, then plays the checklist from live pushes.
-   */
-  async create(args: {
-    organizationSlug?: string;
-    projectId?: string;
-    slug: string;
-    waitUntilReady?: boolean;
-  }): Promise<ProjectRpcTarget> {
-    const registered = await timedStep("create-timing", { slug: args.slug }, "auth-register", () =>
-      this.#registerProject(args),
-    );
-    const timing = { projectId: registered.projectId };
-    args.projectId = registered.projectId;
-    // The auth worker may normalize the slug (slugify); adopt its canonical
-    // form so stream events agree with the directory and ingress hostnames.
-    args.slug = registered.slug;
-    // The creating session can use the project immediately; a signed-in user's
-    // claims catch up on the next token refresh (directory fallback covers the
-    // gap for other connections).
-    widenProjectAccess(this.props.auth, registered.projectId);
-    // Prime the slug->id directory cache so the post-create navigation (and
-    // the first project-host request) never miss into the auth worker.
-    await timedStep("create-timing", timing, "prime-directory", () =>
-      primeProjectDirectory(env.PROJECT_DIRECTORY, {
-        id: registered.projectId,
-        slug: registered.slug,
-        organizationId: registered.organizationId,
-        name: registered.slug,
-      }),
-    );
-
-    const stream = rootStream({
-      auth: this.props.auth,
-      projectId: args.projectId,
-    });
-
-    const creatorEmail = userPrincipalOf(this.props.auth)?.email;
-    const appendRootEvents = () =>
-      retryStreamUnavailableOnce(
-        () =>
-          stream.append(
-            {
-              type: "events.iterate.com/project/created",
-              idempotencyKey: `project-created:${registered.projectId}`,
-              payload: {
-                config: {
-                  onboardingActive: true,
-                  slug: registered.slug,
-                  ...(creatorEmail === undefined ? {} : { creatorEmail }),
-                },
-              },
-            },
-            NotificationProcessorContract.buildEvent({
-              type: "events.iterate.com/notification/created",
-              idempotencyKey: `notification-created:${registered.projectId}`,
-              payload: { config: {} },
-            }),
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: streamDurableObjectName({
-                projectId: registered.projectId,
-                path: "/",
-              }),
-              processor: ["processor"],
-              processorSlug: ProjectProcessorContract.slug,
-            }),
-            buildDurableObjectProcessorSubscriptionConfiguredEvent({
-              durableObjectName: streamDurableObjectName({
-                projectId: registered.projectId,
-                path: "/",
-              }),
-              processor: ["notificationProcessor"],
-              processorSlug: NotificationProcessorContract.slug,
-            }),
-          ),
-        (error) => {
-          console.info("project create: root stream lifecycle reset; replaying birth batch once", {
-            projectId: registered.projectId,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        },
-      );
-    const [created, subscription] = await timedStep(
-      "create-timing",
-      timing,
-      "root-append",
-      appendRootEvents,
-    );
-    // Born credential: every project gets an ingress secret at
-    // /secrets/project-api-key — what the `project-secret` /api credential is
-    // verified against, inside the Secret DO. Empty egress pin: unlike every
-    // other secret it can never be substituted into ANY outbound request.
-    // Born `visibility: "readable"` (an immutable birth-certificate fact):
-    // pairing an external app is reveal()-and-copy, as often as needed;
-    // rotation is an ordinary material update. The DO's create dedupes, so
-    // re-seeding is a no-op: the ready path below AWAITS one seed (a
-    // waitUntilReady caller finds the key existing), the fast path only
-    // nudges it, and a failed nudge is logged — the documented pairing flow
-    // (docs/remote-apps.md) ensure-creates before reveal(), which heals a
-    // permanently lost seed.
-    const seedProjectApiKey = () =>
-      env.SECRET.getByName(
-        DurableObjectNameCodec.stringify({
-          projectId: registered.projectId,
-          path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
-        }),
-      )
-        .create({
-          egress: { urls: [] },
-          material: generateProjectApiKeyMaterial(),
-          visibility: "readable",
-        })
-        .then(
-          () => undefined,
-          (error: unknown) => {
-            console.warn("project create: api-key seed failed (ensure-create on reveal heals)", {
-              projectId: registered.projectId,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          },
-        );
-    const project = itxForScope({
-      auth: this.props.auth,
-      ctx: this.props.ctx,
-      path: "/",
-      projectId: args.projectId,
-    });
-    // Both lanes drive processor birth through the same wait; they differ
-    // only in who pays for it. A create must never leave its caller parked
-    // behind a wedged processor indefinitely: one project birth frame has a
-    // shared 60s sibling-barrier deadline; 75s leaves 15s for
-    // durable-delivery backoff and transport redial.
-    const driveBirth = (step: string) =>
-      timedStep("create-timing", timing, step, () =>
-        project.processor.waitUntilProcessed({
-          offset: Math.max(created.offset, subscription.offset),
-          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-        }),
-      );
-    // Fast path: identity + directory + birth events are enough for callers
-    // that watch the saga as live state. Nobody is left waiting, so create
-    // itself must stay the guaranteed birth driver: nudge the processor
-    // after this response instead of parking the caller behind it. A failed
-    // nudge is telemetry, not a create failure — durable delivery retries
-    // and the checklist's stall detector cover the rest.
-    if (args.waitUntilReady === false) {
-      this.props.ctx.waitUntil(seedProjectApiKey());
-      this.props.ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
-      return project;
-    }
-
-    await timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey);
-    await driveBirth("wait-project-birth");
-    await timedStep("create-timing", timing, "wait-project-ready", () => project.waitUntilReady());
-    return project;
-  }
-
-  /**
-   * Register the project with the auth worker before any itx state exists.
-   *
-   * The auth worker is the project directory and the id authority. The user
-   * lane creates the org-owned directory row (which is what later puts the
-   * project into the user's claims); the admin lane only needs an id. Admin
-   * callers may bring their own id (test fixtures); we never mint prj_ ids
-   * locally when the directory is configured.
-   *
-   * EVERY user principal takes the user lane, including platform-admin users
-   * creating from the dashboard. Admin-ness must not reroute a human create
-   * into the fixture lane: that lane mints a bare id with no org-owned
-   * directory row, so the project would never enter the creator's claims
-   * (project list, slug routes) and org members could never find it. The
-   * mint-only lane is for principal-less admin credentials (admin API secret,
-   * trusted-internal) whose fixtures live outside any customer organization.
-   */
-  async #registerProject(args: {
-    organizationSlug?: string;
-    projectId?: string;
-    slug: string;
-  }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
-    const userPrincipal = userPrincipalOf(this.props.auth);
-
-    if (userPrincipal) {
-      const organizationSlug = resolveOrganizationSlugForCreate(
-        userPrincipal,
-        args.organizationSlug,
-      );
-      const result = await env.AUTH.createProjectForOrganization({
-        organizationSlug,
-        name: args.slug,
-        slug: args.slug,
-        ...(args.projectId === undefined ? {} : { id: args.projectId }),
-      });
-      if (!result.ok) throw new Error(result.message);
-      const created = result.project;
-      return { organizationId: created.organizationId, projectId: created.id, slug: created.slug };
-    }
-
-    if (!this.props.auth.isAdmin()) {
-      throw new Error(`principal "${this.props.auth.principal}" cannot create projects`);
-    }
-    if (args.projectId !== undefined) {
-      return { organizationId: null, projectId: args.projectId, slug: args.slug };
-    }
-    const minted = await env.AUTH.mintProjectId();
-    return { organizationId: null, projectId: minted.id, slug: args.slug };
   }
 
   /**
@@ -5087,7 +4896,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   repos: "Repo catalog by path.",
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
-    "The project's sandboxes (pets): create({ name, instanceType }), get(path), list(); start/sleep/destroy live on the sandbox.",
+    'The project\'s sandboxes (pets): get("/sandboxes/<name>").create({ instanceType? }), list(); start/sleep/destroy live on the sandbox handle.',
   scheduler:
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
@@ -5096,10 +4905,10 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   worker: "The default repo-backed project worker.",
   workers: "Dynamic worker refs: get(ref).",
   workspaces:
-    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns one (first touch births it with the config repo mounted at "/" — the classic instant overlay); create({ path, mounts }) converges a custom mount table via one configured patch; git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
+    'Event-sourced, mount-routed workspaces by path: get("/workspaces/<name>") returns a possibly nonexistent handle; handle.create({ mounts? }) commits the atomic birth batch. git.commit({ scope? }) commits per mount. An agent\'s own workspace is itx.workspace.',
 };
 
-type ProjectRpcTargetProps = {
+type ExistingProjectRpcTargetProps = {
   auth: ItxAuth;
   // This scope's own capability host. Its `path` decides which scope this itx
   // IS — `"/"` for the project root, `/agents/bla` for an agent context. It is
@@ -5109,6 +4918,14 @@ type ProjectRpcTargetProps = {
   ctx: CfExecutionContext;
   projectId: string;
 };
+
+type ProspectiveProjectRpcTargetProps = {
+  auth: ItxAuth;
+  ctx: CfExecutionContext;
+  prospectiveSlug: string;
+};
+
+type ProjectRpcTargetProps = ExistingProjectRpcTargetProps | ProspectiveProjectRpcTargetProps;
 
 /**
  * The server-side **itx** — the object an `async (itx) => { … }` script holds and
@@ -5152,17 +4969,199 @@ type ProjectDurableObjectRpc = {
 export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // Private for the same reason as the other capability surfaces: public
   // member names are capability namespace (see ITX_SURFACE_MEMBER_NAMES).
-  readonly #props: ProjectRpcTargetProps;
+  #props: ProjectRpcTargetProps;
 
   constructor(props: ProjectRpcTargetProps) {
     super();
-    props.auth.assertCanAccessProject(props.projectId);
+    if ("projectId" in props) props.auth.assertCanAccessProject(props.projectId);
     this.#props = props;
+  }
+
+  get #existingProps(): ExistingProjectRpcTargetProps {
+    if (!("projectId" in this.#props)) {
+      throw new Error(
+        `project "${this.#props.prospectiveSlug}" does not exist — create it with session.projects.get(${JSON.stringify(this.#props.prospectiveSlug)}).create({})`,
+      );
+    }
+    return this.#props;
+  }
+
+  get #capabilityHost(): CapabilityHostRpcTarget {
+    return this.#existingProps.capabilityHost;
+  }
+
+  get #projectId(): string {
+    return this.#existingProps.projectId;
   }
 
   /** The project this itx is scoped into. */
   get projectId(): string {
-    return this.#props.projectId;
+    return this.#projectId;
+  }
+
+  /**
+   * Register (for a prospective slug), append the complete root birth batch,
+   * drive both armed processors through it, wait for `project/ready`, and
+   * return this same handle. Addressing an unknown slug is side-effect free.
+   */
+  async create(
+    args: { organizationSlug?: string; projectId?: string } = {},
+  ): Promise<ProjectRpcTarget> {
+    if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
+      throw new Error("project create() is only available on the project-root handle");
+    }
+
+    let registered: { organizationId: string | null; projectId: string; slug: string };
+    if ("prospectiveSlug" in this.#props) {
+      const prospective = this.#props;
+      registered = await timedStep(
+        "create-timing",
+        { slug: prospective.prospectiveSlug },
+        "auth-register",
+        () =>
+          this.#registerProject({
+            ...args,
+            slug: prospective.prospectiveSlug,
+          }),
+      );
+      const timing = { projectId: registered.projectId };
+      widenProjectAccess(prospective.auth, registered.projectId);
+      await timedStep("create-timing", timing, "prime-directory", () =>
+        primeProjectDirectory(env.PROJECT_DIRECTORY, {
+          id: registered.projectId,
+          slug: registered.slug,
+          organizationId: registered.organizationId,
+          name: registered.slug,
+        }),
+      );
+      const existing: ExistingProjectRpcTargetProps = {
+        auth: prospective.auth,
+        capabilityHost: new CapabilityHostRpcTarget({
+          auth: prospective.auth,
+          ctx: prospective.ctx,
+          path: "/",
+          projectId: registered.projectId,
+        }),
+        ctx: prospective.ctx,
+        projectId: registered.projectId,
+      };
+      existing.auth.assertCanAccessProject(existing.projectId);
+      this.#props = existing;
+    } else {
+      if (args.projectId !== undefined && args.projectId !== this.#projectId) {
+        throw new Error(
+          `project create() received id "${args.projectId}" for handle "${this.#projectId}"`,
+        );
+      }
+      const identity = await this.identity();
+      registered = {
+        organizationId: identity.organizationId,
+        projectId: identity.projectId,
+        slug: identity.slug,
+      };
+    }
+
+    const timing = { projectId: registered.projectId };
+    const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
+    const committed = await timedStep("create-timing", timing, "root-append", () =>
+      retryStreamUnavailableOnce(
+        () =>
+          rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
+            ...projectCreationEvents({
+              projectId: registered.projectId,
+              payload: {
+                config: {
+                  onboardingActive: true,
+                  slug: registered.slug,
+                  ...(creatorEmail === undefined ? {} : { creatorEmail }),
+                },
+              },
+            }),
+          ),
+        (error) => {
+          console.info("project create: root stream lifecycle reset; replaying birth batch once", {
+            projectId: registered.projectId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
+      ),
+    );
+    const maxOffset = Math.max(...committed.map((event) => event.offset));
+
+    // The ingress API key is a sibling Secret birth with its own atomic
+    // builder/create barrier. It remains outside the root stream batch because
+    // secret material never belongs in the project journal.
+    await timedStep("create-timing", timing, "seed-project-api-key", () =>
+      env.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: registered.projectId,
+          path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
+        }),
+      )
+        .create({
+          egress: { urls: [] },
+          material: generateProjectApiKeyMaterial(),
+          visibility: "readable",
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => {
+            console.warn("project create: api-key seed failed (ensure-create on reveal heals)", {
+              projectId: registered.projectId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          },
+        ),
+    );
+    await timedStep("create-timing", timing, "wait-project-birth", () =>
+      Promise.all([
+        this.processor.waitUntilProcessed({
+          offset: maxOffset,
+          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+        }),
+        this.notificationProcessor.waitUntilProcessed({
+          offset: maxOffset,
+          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+        }),
+      ]),
+    );
+    await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
+    return this;
+  }
+
+  /** Register a prospective project with the auth-owned directory/id authority. */
+  async #registerProject(args: {
+    organizationSlug?: string;
+    projectId?: string;
+    slug: string;
+  }): Promise<{ organizationId: string | null; projectId: string; slug: string }> {
+    const userPrincipal = userPrincipalOf(this.#props.auth);
+    if (userPrincipal) {
+      const organizationSlug = resolveOrganizationSlugForCreate(
+        userPrincipal,
+        args.organizationSlug,
+      );
+      const result = await env.AUTH.createProjectForOrganization({
+        organizationSlug,
+        name: args.slug,
+        slug: args.slug,
+        ...(args.projectId === undefined ? {} : { id: args.projectId }),
+      });
+      if (!result.ok) throw new Error(result.message);
+      return {
+        organizationId: result.project.organizationId,
+        projectId: result.project.id,
+        slug: result.project.slug,
+      };
+    }
+    if (!this.#props.auth.isAdmin()) {
+      throw new Error(`principal "${this.#props.auth.principal}" cannot create projects`);
+    }
+    if (args.projectId !== undefined) {
+      return { organizationId: null, projectId: args.projectId, slug: args.slug };
+    }
+    const minted = await env.AUTH.mintProjectId();
+    return { organizationId: null, projectId: minted.id, slug: args.slug };
   }
 
   /**
@@ -5170,16 +5169,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * worker's normalized form — what URLs and ingress hostnames use),
    * organization, and display name. A directory read only — no project DO
    * dial — so it is safe pre-birth and cheap to pipeline through
-   * `projects.create()`.
+   * `projects.get(slug).create()`.
    */
   async identity(): Promise<ProjectIdentity> {
     // readProjectById folds transient KV read errors into null; one retry
     // keeps a blip from reporting a just-created project as missing.
     const record =
-      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId)) ??
-      (await readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId));
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#projectId)) ??
+      (await readProjectById(env.PROJECT_DIRECTORY, this.#projectId));
     if (record == null) {
-      throw new Error(`Project ${this.#props.projectId} is missing from the project directory.`);
+      throw new Error(`Project ${this.#projectId} is missing from the project directory.`);
     }
     return {
       projectId: record.id,
@@ -5193,8 +5192,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Resolve once the bootstrap saga has committed `project/ready`. Replays
    * stream history first, so an already-ready project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
-   * observing. The composable partner of
-   * `projects.create({ waitUntilReady: false })`.
+   * observing. `create()` already waits here; this remains useful when a
+   * caller receives an existing handle while a bootstrap is in flight.
    */
   async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
     // snapshot() pulls the journal through the registry's catch-up, so this
@@ -5207,7 +5206,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         () => undefined,
       ),
     );
-    await rootStream({ auth: this.#props.auth, projectId: this.#props.projectId }).waitForEvent({
+    await rootStream({ auth: this.#props.auth, projectId: this.#projectId }).waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/project/ready"],
       // Tight on purpose: the saga should complete in seconds (see
@@ -5220,7 +5219,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** @internal */
   get durableObjectStub() {
     return env.PROJECT.getByName(
-      DurableObjectNameCodec.stringify({ path: "/", projectId: this.#props.projectId }),
+      DurableObjectNameCodec.stringify({ path: "/", projectId: this.#projectId }),
     );
   }
 
@@ -5231,10 +5230,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * `itx.docs.get({ name })` per declaration away).
    */
   async __describe(): Promise<ProjectDescription> {
-    const scopePath = this.#props.capabilityHost.path;
+    const scopePath = this.#capabilityHost.path;
     const [project, hostDescription] = await Promise.all([
       this.durableObjectStub.describe(),
-      this.#props.capabilityHost.__describe(),
+      this.#capabilityHost.__describe(),
     ]);
     const mountedCapabilities = hostDescription.capabilities;
     return describeNode({
@@ -5272,10 +5271,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */
   async debug(): Promise<string> {
     const [project, config] = await Promise.all([
-      readProjectById(env.PROJECT_DIRECTORY, this.#props.projectId).catch(() => null),
+      readProjectById(env.PROJECT_DIRECTORY, this.#projectId).catch(() => null),
       Promise.resolve(parseConfig(env)),
     ]);
-    const streamPath = this.#props.capabilityHost.path;
+    const streamPath = this.#capabilityHost.path;
     const streamUrl =
       project?.slug == null
         ? (config.baseUrl ?? "https://os.iterate.com")
@@ -5288,7 +5287,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return [
       `*Debug:* <${streamUrl}|open stream>`,
       `Path: \`${streamPath}\``,
-      `Project: \`${project?.slug ?? this.#props.projectId}\``,
+      `Project: \`${project?.slug ?? this.#projectId}\``,
     ].join("\n");
   }
 
@@ -5334,7 +5333,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Small durable project key-value store: get/set/delete/list. */
   get kv(): KvRpcTarget {
-    return new KvRpcTarget(this.#props.projectId);
+    return new KvRpcTarget(this.#projectId);
   }
 
   /** Workers AI: run(model, body), models(). */
@@ -5346,7 +5345,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get auth(): ProjectAuthRpcTarget {
     return new ProjectAuthRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5363,7 +5362,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // On a project-root itx both are undefined.
   /** This scope's agent control handle, when its address is under `/agents/`. */
   get agent(): AgentRpcTarget | undefined {
-    const path = this.#props.capabilityHost.path;
+    const path = this.#capabilityHost.path;
     return path.startsWith("/agents/") ? this.agents.get(path) : undefined;
   }
 
@@ -5384,7 +5383,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.
    */
   get capabilityHost(): CapabilityHostRpcTarget {
-    return this.#props.capabilityHost;
+    return this.#capabilityHost;
   }
 
   /**
@@ -5396,25 +5395,25 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new CapabilityHostCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
   /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvisionRpcTarget> {
-    return this.#props.capabilityHost.provideCapability(input);
+    return this.#capabilityHost.provideCapability(input);
   }
 
   /** Shortcut for `capabilityHost.revokeCapability`. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void> {
-    return this.#props.capabilityHost.revokeCapability(input);
+    return this.#capabilityHost.revokeCapability(input);
   }
 
   /** Project stream catalog: get(path), list(). */
   get streams(): ProjectStreamCollectionRpcTarget {
     return new ProjectStreamCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5423,27 +5422,27 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new AgentCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
       // The "current actor": this itx's own scope path. Relative agent paths
       // resolve against it, and message() stamps it as the sender when the
       // scope is an agent — how delegated reports know who they are from.
-      sourceScopePath: this.#props.capabilityHost.path,
+      sourceScopePath: this.#capabilityHost.path,
     });
   }
 
   /** Project-attributed outbound fetch (+ intercept). */
   get egress(): ProjectEgressRpcTarget {
-    return new ProjectEgressRpcTarget({ projectId: this.#props.projectId });
+    return new ProjectEgressRpcTarget({ projectId: this.#projectId });
   }
 
   /** Project email: send(...) and the connection-scoped inbound address. */
   get email(): EmailCapabilityRpcTarget {
     return new EmailCapabilityRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
       // The scope path makes email.reply thread-aware inside email agent
       // scopes; everywhere else reply throws with a pointer to send.
-      scopePath: this.#props.capabilityHost.path,
+      scopePath: this.#capabilityHost.path,
     });
   }
 
@@ -5452,14 +5451,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * fetches one. Pass search MANY related words — matching is dumb word
    * overlap. */
   get docs(): ItxDocsRpcTarget {
-    return new ItxDocsRpcTarget({ capabilityHost: this.#props.capabilityHost });
+    return new ItxDocsRpcTarget({ capabilityHost: this.#capabilityHost });
   }
 
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   get files(): FilesRpcTarget {
     return new FilesRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5470,31 +5469,31 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
   /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */
   get mcp(): McpClientCollectionRpcTarget {
     return new McpClientCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
-      projectId: this.#props.projectId,
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      projectId: this.#projectId,
       // Makes beginOAuth links notify the calling agent when the flow completes.
-      scopePath: this.#props.capabilityHost.path,
+      scopePath: this.#capabilityHost.path,
     });
   }
 
   /** Ad-hoc OpenAPI clients: connect(spec). */
   get openapi(): OpenApiCollectionRpcTarget {
     return new OpenApiCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
     });
   }
 
   /** Parallel API, preconfigured with Iterate's platform API key. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#props.projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
       parent: "a project itx (itx.parallel)",
     });
   }
@@ -5503,7 +5502,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get repos(): ProjectRepoCollectionRpcTarget {
     return new ProjectRepoCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5511,16 +5510,16 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get devices(): DeviceCollectionRpcTarget {
     return new DeviceCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
   /** The project's sandboxes — explicitly created, sized Linux containers
-   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
+   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */
   get sandboxes(): SandboxCollectionRpcTarget {
     return new SandboxCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5533,7 +5532,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get schedulers(): SchedulerCollectionRpcTarget {
     return new SchedulerCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5541,10 +5540,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get secrets(): SecretCollectionRpcTarget {
     return new SecretCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
       // The scope path makes collectFromUser's links notify the calling
       // agent when the user submits; non-agent scopes mint plain links.
-      scopePath: this.#props.capabilityHost.path,
+      scopePath: this.#capabilityHost.path,
     });
   }
 
@@ -5553,7 +5552,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new RepoRpcTarget({
       auth: this.#props.auth,
       path: CONFIG_REPO_PATH,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5562,7 +5561,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5570,7 +5569,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get workspaces(): WorkspaceCollectionRpcTarget {
     return new WorkspaceCollectionRpcTarget({
       auth: this.#props.auth,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
     });
   }
 
@@ -5633,7 +5632,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new DynamicWorkerRpcTarget({
       ctx: this.#props.ctx,
       flattenNestedPaths: true,
-      projectId: this.#props.projectId,
+      projectId: this.#projectId,
       ref: defaultProjectWorkerRef(),
       traceRole: "project_config",
     }) as unknown as DynamicWorkerCapability<ProjectWorker>;
@@ -7290,6 +7289,9 @@ installPrototypeInvokeCapabilityFallback(McpClientRpcTarget);
 // `openapi.connect(specUrl)`: operationIds are runtime-discovered, same shape
 // as MCP tools.
 installPrototypeInvokeCapabilityFallback(OpenApiRpcTarget);
+// `sandboxes.get(path)`: the installed Cloudflare SDK surface is larger than
+// our stable declaration, so unknown SDK members replay onto the claimed DO.
+installPrototypeInvokeCapabilityFallback(SandboxRpcTarget);
 // `agents.get(path)`: an agent scope's mounted tools directly on the handle —
 // `itx.agents.get(path).someTool(args)` — dispatched via the agent's own
 // capability host (the explicit `agent.capabilityHost.someTool(...)` spelling

@@ -18,8 +18,8 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  * you need at runtime.
  *
  * Platform deltas over stock Cloudflare (everything else passes through):
- * - Sandboxes are created explicitly (`itx.sandboxes.create`), never minted
- *   by addressing.
+ * - Sandboxes are created explicitly
+ *   (`itx.sandboxes.get(path).create(input)`), never minted by addressing.
  * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the
  *   idle timer, restored on the next start — where stock Cloudflare loses all
  *   state. Everything outside `/workspace` is ephemeral, and a crash loses
@@ -83,13 +83,9 @@ export type CloudflareSandbox = object & {
   kill(): Promise<void>;
 };
 
-/** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
- * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
+/** What `itx.sandboxes.get(path).create` takes — Cloudflare's own vocabulary
+ * (instance types and `SandboxOptions.sleepAfter`/`keepAlive`). */
 export type SandboxCreateInput = {
-  /** The sandbox's name — a single path segment (no `/`); its path becomes
-   * `/sandboxes/<name>`. Names are unique per project (across instance
-   * types), and destroyed names are retired, not recycled — pick a new one. */
-  name: string;
   /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
   instanceType?: SandboxInstanceType;
   /** Idle time before the container is snapshotted and torn down: a positive
@@ -116,7 +112,7 @@ const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 // prefix does not itself declare or create a stream processor.
 const SANDBOX_PATH_PREFIX = "/sandboxes";
 
-/** The path a `create({ name })` mints: the prefix then the caller's name —
+/** Convert a short name into the path accepted by `sandboxes.get(path)` —
  * `/sandboxes/my-pet`. Names are ONE path segment: every extra segment would
  * materialize an intermediate "folder" stream (the streams system announces a
  * new stream to all its ancestors, minting each one), and a folder that is
@@ -128,7 +124,7 @@ export function sandboxPathFor(name: string): string {
 }
 
 /** The catalogue idempotency key that claims a sandbox name — one
- * `create-requested` per path, ever (`itx.sandboxes.create`,
+ * `create-requested` per path, ever (`itx.sandboxes.get(path).create`,
  * rpc-targets.ts). */
 export function sandboxCreateClaimKey(path: string): string {
   return `sandbox-create-requested:${path}`;
@@ -155,7 +151,7 @@ export function assertSandboxPath(path: string): string {
   if (name === undefined || name === "" || name.includes("/")) {
     throw new Error(
       `sandbox paths are exactly ${SANDBOX_PATH_PREFIX}/<name> with a single-segment name ` +
-        `(use the exact path itx.sandboxes.create returned), got "${path}"`,
+        `(address it with itx.sandboxes.get("/sandboxes/<name>")), got "${path}"`,
     );
   }
   const roundTripped = DurableObjectNameCodec.parse(

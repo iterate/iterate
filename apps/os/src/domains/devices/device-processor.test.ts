@@ -171,11 +171,10 @@ describe("DeviceProcessor enrollment", () => {
     ]);
   });
 
-  it("throws when a second birth certificate is reduced", async () => {
+  it("ignores a second birth certificate during reduction", async () => {
     const h = makeDeviceHarness();
-    await expect(h.play(["append", DEVICE_CREATED, DEVICE_CREATED])).rejects.toThrow(
-      "more than one created event",
-    );
+    await h.play(["append", DEVICE_CREATED, DEVICE_CREATED]);
+    expect(h.state().birthCertificate).toEqual(DEVICE_CREATED.payload);
   });
 
   it("push-token-updated replaces the credential, clears a revocation, and re-arms the subscription", async () => {

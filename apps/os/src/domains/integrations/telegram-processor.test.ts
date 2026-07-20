@@ -119,11 +119,11 @@ function makeRouterHarness(substrate?: HarnessSubstrate & { network: MemoryStrea
 }
 
 describe("TelegramProcessor (webhook router)", () => {
-  it("throws when a second Telegram-router birth certificate is reduced", async () => {
+  it("ignores a second Telegram-router birth certificate during reduction", async () => {
     const h = makeRouterHarness();
     await h.play(["append", ...NEW_ROUTER_EVENTS]);
-
-    await expect(h.append(ROUTER_CREATED)).rejects.toThrow("more than one telegram/created event");
+    await h.append(ROUTER_CREATED);
+    expect(h.state().birthCertificate).toEqual(ROUTER_CREATED.payload);
   });
 
   it("forwards a private-chat message to the chat's agent stream, verbatim", async () => {

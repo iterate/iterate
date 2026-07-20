@@ -1,17 +1,14 @@
 import { StreamProcessor } from "iterate/processors";
 import type { ProcessEventArgs, ReduceArgs, StreamEvent, StreamListItem } from "iterate/processors";
 import { timedStep } from "../../lib/step-timing.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { repoCreationEvents } from "../repos/repo-defaults.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
-import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
+import { schedulerCreationEvents } from "../scheduler/scheduler-defaults.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
-import { EmailProcessorContract } from "../email/email-processor-contract.ts";
-import { NotificationProcessorContract } from "../notifications/notification-processor-contract.ts";
+import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -45,14 +42,14 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 60_000;
  * carries a deterministic idempotency key, so a redelivered birth frame
  * dedupes instead of double-creating. The frame then WAITS (bounded by
  * SIBLING_BIRTH_BARRIER_TIMEOUT_MS) for each sibling to reduce its own birth
- * batch: `projects.create()` blocks on this Project frame, and the boundary
+ * batch: `projects.get(slug).create()` blocks on this Project frame, and the boundary
  * must not race the capabilities it promises.
  *
  * READY. The config repo's creation saga commits its terminal
  * `repos/created` certificate on its own stream; the cross-post rule copies
  * it here. The reaction probes the default project worker (each probe
  * attempt blocks on the worker's cold build) and then appends
- * `project/ready` — the fact `projects.create()` callers poll.
+ * `project/ready` — the fact `projects.get(slug).create()` callers await.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -71,12 +68,7 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 60_000;
  *
  * Side-effect lanes: the bootstrap, ready and custom-domain reactions are
  * per-event consequences (each triggering event is delivered once; a lost
- * append would lose the reaction forever) and use `blockProcessorWhile`. The
- * one state-derived effect — backfilling the notification facet onto
- * projects born before it existed — runs under `delivery.caughtUp` in
- * `runInBackground`: any later at-head delivery re-derives it from
- * `notificationReady === false`, and its appends are idempotency-keyed on
- * the project id.
+ * append would lose the reaction forever) and use `blockProcessorWhile`.
  */
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,
@@ -86,7 +78,7 @@ export class ProjectProcessor extends StreamProcessor<
 
   // ------------------------------------------------------------ processEvent
   protected override processEvent(args: ProcessEventArgs<ProjectProcessorContract>): undefined {
-    const { event, state, append, blockProcessorWhile, runInBackground, delivery } = args;
+    const { event, state, append, blockProcessorWhile } = args;
     // Project worker delivery is NOT here: every project stream (this one
     // included) pumps its own events into the worker's `processEventBatch`
     // with a durable checkpoint (see streams/project-worker-delivery.ts).
@@ -218,34 +210,6 @@ export class ProjectProcessor extends StreamProcessor<
       // facts, egress rules and approval events: no per-event effect — they
       // matter through reduce.
     }
-
-    // ---------------------------------------- state-derived side effects
-    // Backfill the notification facet onto projects born before it existed.
-    // Droppable background attempt: any later at-head delivery re-derives it
-    // from `notificationReady === false`, and both appends are
-    // idempotency-keyed on the project id. Skipped on the birth frame — the
-    // birth batch above appends the same events itself.
-    if (!delivery.caughtUp) return;
-    if (state.birthCertificate === null || state.notificationReady) return;
-    if (event?.type === "events.iterate.com/project/created") return;
-    runInBackground(() =>
-      append(
-        {
-          type: "events.iterate.com/notification/created",
-          idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
-          payload: { config: {} },
-        },
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: DurableObjectNameCodec.stringify({
-            projectId: this.deps.itx.projectId,
-            path: "/",
-          }),
-          idempotencyKey: `notification-subscription:${this.deps.itx.projectId}`,
-          processor: ["notificationProcessor"],
-          processorSlug: NotificationProcessorContract.slug,
-        }),
-      ),
-    );
   }
 
   /**
@@ -272,38 +236,14 @@ export class ProjectProcessor extends StreamProcessor<
           // capabilityHosts.get("/").create() would append, so the keys
           // collide by design.
           ...capabilityHostCreationEvents({ path: "/", projectId: this.deps.itx.projectId }),
-          {
-            type: "events.iterate.com/notification/created",
-            idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
-            payload: { config: {} },
-          },
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: this.deps.itx.projectId,
-              path: "/",
-            }),
-            idempotencyKey: `notification-subscription:${this.deps.itx.projectId}`,
-            processor: ["notificationProcessor"],
-            processorSlug: NotificationProcessorContract.slug,
-          }),
         ),
       ),
       timedStep("create-timing", timing, "primary-scheduler-append", () =>
         appendTo(
           SCHEDULER_PRIMARY_PATH,
-          {
-            type: "events.iterate.com/scheduler/created",
-            idempotencyKey: `scheduler-created:${this.deps.itx.projectId}:${SCHEDULER_PRIMARY_PATH}`,
-            payload: { config: {} },
-          },
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: this.deps.itx.projectId,
-              path: SCHEDULER_PRIMARY_PATH,
-            }),
-            idempotencyKey: `scheduler-subscription:${this.deps.itx.projectId}:${SCHEDULER_PRIMARY_PATH}`,
-            processor: ["schedulers", ["get", SCHEDULER_PRIMARY_PATH], "processor"],
-            processorSlug: SchedulerProcessorContract.slug,
+          ...schedulerCreationEvents({
+            path: SCHEDULER_PRIMARY_PATH,
+            projectId: this.deps.itx.projectId,
           }),
         ),
       ),
@@ -348,32 +288,10 @@ export class ProjectProcessor extends StreamProcessor<
       timedStep("create-timing", timing, "email-router-append", () =>
         appendTo(
           EMAIL_INTEGRATION_STREAM_PATH,
-          {
-            type: "events.iterate.com/email/created",
-            idempotencyKey: `email-created:${this.deps.itx.projectId}`,
-            payload: { config: {} },
-          },
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: this.deps.itx.projectId,
-              path: EMAIL_INTEGRATION_STREAM_PATH,
-            }),
-            idempotencyKey: `email-router-subscription:${this.deps.itx.projectId}`,
-            processor: ["email", "processor"],
-            processorSlug: EmailProcessorContract.slug,
+          ...emailRouterCreationEvents({
+            ...(config.creatorEmail === undefined ? {} : { initialSender: config.creatorEmail }),
+            projectId: this.deps.itx.projectId,
           }),
-          ...(config.creatorEmail === undefined
-            ? []
-            : [
-                {
-                  type: "events.iterate.com/email/sender-allowed" as const,
-                  idempotencyKey: `email-sender-allowed:${this.deps.itx.projectId}:${config.creatorEmail.toLowerCase()}`,
-                  payload: {
-                    pattern: config.creatorEmail,
-                    reason: "project-owner",
-                  },
-                },
-              ]),
         ),
       ),
     ]);
@@ -395,7 +313,7 @@ export class ProjectProcessor extends StreamProcessor<
       throw new Error("project birth saga committed an incomplete sibling birth batch");
     }
 
-    // `projects.create()` waits for this Project processor to finish the
+    // `projects.get(slug).create()` waits for this Project processor to finish the
     // birth reaction. Do not let that boundary race the sibling processors
     // it created: once the Project birth is processed, every universally
     // available project capability must have reduced its own complete birth
@@ -500,9 +418,7 @@ export class ProjectProcessor extends StreamProcessor<
   protected override reduce({ event, state }: ReduceArgs<ProjectProcessorContract>) {
     switch (event.type) {
       case "events.iterate.com/project/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("Project processor received more than one project/created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,

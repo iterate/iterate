@@ -68,7 +68,7 @@ test("the boundary, pinned: a socket-carrying Response dies crossing the worker 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `live-ws-pin-${marker}` });
+  using project = await itx.projects.get(`live-ws-pin-${marker}`).create({});
   await project.__describe();
 
   using _provision = await project.provideCapability({
@@ -114,7 +114,7 @@ test.fails(
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = itx.projects.create({ slug });
+    using project = await itx.projects.get(slug).create({});
     await project.__describe();
 
     using _provision = await project.provideCapability({

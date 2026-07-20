@@ -377,9 +377,7 @@ export class SlackAgentProcessor extends StreamProcessor<
   }: ReduceArgs<SlackAgentProcessorContract>): SlackAgentProcessorState {
     switch (event.type) {
       case "events.iterate.com/slack-agent/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("Slack agent processor received more than one slack-agent/created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return {
           ...state,
           birthCertificate: event.payload,
