@@ -1,7 +1,7 @@
 // GitHub Web API access for itx — a real Octokit, wrapped so its transport
 // rides one named connection's secret. The installation token never leaves its
 // Secret Durable Object: every request Octokit makes carries a
-// `getSecret(path, "accessToken")` placeholder Authorization header and is
+// `getSecret(path, { field: "accessToken" })` placeholder Authorization header and is
 // dispatched through the connection secret's own `fetch()`, whose
 // github-app-installation strategy mints the installation token on first use,
 // re-mints on 401, substitutes the placeholder, and pins the host — all in
