@@ -32,6 +32,14 @@ export const AppConfig = z.object({
   publicUrl: publicValue(z.url()).optional(),
   /** better-auth signing secret (sessions, JWTs, project-ingress tokens). */
   betterAuthSecret: redacted(z.string().trim().min(1)),
+  /**
+   * Dedicated signing secret for project-app-session tokens, shared with the
+   * os app so it verifies them locally (no validate RPC on hot paths).
+   * Deliberately not the better-auth master secret: it grants only this
+   * token kind and rotates alone. Unset: mint/validate fall back to
+   * betterAuthSecret (and os keeps calling validate here).
+   */
+  projectAppSessionSecret: redacted(z.string().trim().min(1)).optional(),
   /** Shared secret trusted by the `internal.*` oRPC procedures and the
    * bootstrap-admin sign-in. */
   serviceAuthToken: redacted(z.string().trim().min(1)),

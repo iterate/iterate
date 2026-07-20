@@ -235,7 +235,7 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
 
 function projectAppSessionDependencies() {
   return {
-    secret: config.betterAuthSecret.exposeSecret(),
+    secret: (config.projectAppSessionSecret ?? config.betterAuthSecret).exposeSecret(),
     userCanAccessProject: (input: { projectId: string; userId: string }) =>
       userCanAccessProject(input, db),
   };

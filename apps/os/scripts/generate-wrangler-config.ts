@@ -55,6 +55,10 @@ export const REQUIRED_SECRETS = [
  */
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
+  // Shared with the auth app: local verification of project-app-session
+  // tokens (the project-host gate + the /api credential lane). Optional —
+  // absent, both fall back to the auth worker's validate RPC.
+  "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
   // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
   // entries) — collectSecrets ships only names listed here, so a key absent
   // from this list never reaches a deployed worker even when Doppler has it.
