@@ -263,6 +263,71 @@ describe.sequential("live semaphore E2E", () => {
     expect(waitingLease.slug).toBe("only");
   }, 120_000);
 
+  test("a waiter does not block capacity allowed for a later waiter", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    const alphaLease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "alpha",
+      leaseMs: 60_000,
+    });
+    const betaLease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "beta",
+      leaseMs: 60_000,
+    });
+    expect(alphaLease).not.toBeNull();
+    expect(betaLease).not.toBeNull();
+    leasedResources.push(
+      { type, slug: "alpha", leaseId: alphaLease!.leaseId },
+      { type, slug: "beta", leaseId: betaLease!.leaseId },
+    );
+
+    const waitingForAlpha = semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      waitMs: 5_000,
+      allowedSlugs: ["alpha"],
+    });
+    const waitingForBeta = semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      waitMs: 5_000,
+      allowedSlugs: ["beta"],
+    });
+    await sleep(250);
+
+    await semaphore.resources.release({
+      type,
+      slug: "beta",
+      leaseId: betaLease!.leaseId,
+    });
+    leasedResources.splice(
+      leasedResources.findIndex((lease) => lease.leaseId === betaLease!.leaseId),
+      1,
+    );
+    const reassignedBeta = await waitingForBeta;
+    leasedResources.push({ type, slug: "beta", leaseId: reassignedBeta.leaseId });
+    expect(reassignedBeta.slug).toBe("beta");
+
+    await semaphore.resources.release({
+      type,
+      slug: "alpha",
+      leaseId: alphaLease!.leaseId,
+    });
+    leasedResources.splice(
+      leasedResources.findIndex((lease) => lease.leaseId === alphaLease!.leaseId),
+      1,
+    );
+    const reassignedAlpha = await waitingForAlpha;
+    leasedResources.push({ type, slug: "alpha", leaseId: reassignedAlpha.leaseId });
+    expect(reassignedAlpha.slug).toBe("alpha");
+  }, 120_000);
+
   test("records the lease holder and honors force acquire/release", async () => {
     const type = uniqueType();
     const created = await semaphore.resources.add({

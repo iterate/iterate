@@ -407,12 +407,10 @@ export class ResourceCoordinator extends DurableObject<Env> {
   }
 
   private async dispatchWaiters(): Promise<void> {
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      if (!waiter) {
-        return;
-      }
-
+    const queued = this.waiters;
+    const deferred: Waiter[] = [];
+    this.waiters = [];
+    for (const waiter of queued) {
       if (waiter.settled) {
         continue;
       }
@@ -425,9 +423,9 @@ export class ResourceCoordinator extends DurableObject<Env> {
       );
       if (!lease) {
         if (!waiter.settled) {
-          this.waiters.unshift(waiter);
+          deferred.push(waiter);
         }
-        return;
+        continue;
       }
 
       if (waiter.settled) {
@@ -447,6 +445,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       clearTimeout(waiter.timeoutHandle);
       waiter.resolve(lease);
     }
+    this.waiters = [...deferred.filter((waiter) => !waiter.settled), ...this.waiters];
   }
 
   private async releaseLease(
