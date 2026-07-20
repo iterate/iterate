@@ -95,7 +95,6 @@ the PR ready for review also starts previews. Lease model details:
 | `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
 | `docs/`             | Detailed documentation                                                             |
 | `tasks/`            | Work tracking (markdown + frontmatter)                                             |
-| `apps/iterate-com/` | iterate.com marketing site                                                         |
 
 Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/architecture.md`.
 
