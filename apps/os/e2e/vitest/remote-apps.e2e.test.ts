@@ -3,7 +3,10 @@ import type { AddressInfo } from "node:net";
 import { RpcTarget, newWebSocketRpcSession } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
-import { PROJECT_API_KEY_SECRET_PATH } from "../../src/domains/secrets/utils.ts";
+import {
+  generateProjectApiKeyMaterial,
+  PROJECT_API_KEY_SECRET_PATH,
+} from "../../src/domains/secrets/utils.ts";
 import { adminSecret, buildUrl, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
 // The two halves of "externally deployed userspace apps", MVP form:
@@ -33,15 +36,23 @@ test("an external client authenticates with the project-secret credential and ge
   });
   const otherProjectId = await other.projectId;
 
-  // The pairing ceremony: overwrite the born ingress secret with a value the
-  // "external app" (this test) holds. Write-only either way — create for a
-  // race with the birth seed, update when birth won.
-  const apiKey = `itxk_test_${crypto.randomUUID().replaceAll("-", "")}`;
+  // The pairing ceremony: the born ingress secret is READABLE (an immutable
+  // birth-certificate fact), so the operator just reveal()s it — as often as
+  // they like — and configures their external app with it. The ensure-create
+  // only covers the race with the birth seed (create() is idempotent: an
+  // already-created secret returns its birth event untouched).
   const secret = project.secrets.get(PROJECT_API_KEY_SECRET_PATH);
-  // create() is an idempotent ensure (an already-created secret returns its
-  // birth event untouched), so the known value must land via update().
-  await secret.create({ egress: { urls: [] }, material: apiKey }).catch(() => undefined);
-  await secret.update({ egress: { urls: [] }, material: apiKey });
+  await secret
+    .create({
+      egress: { urls: [] },
+      material: generateProjectApiKeyMaterial(),
+      readable: true,
+    })
+    .catch(() => undefined);
+  const apiKey = (await secret.reveal()) as string;
+  expect(apiKey).toMatch(/^itxk_/);
+  // Display-more-than-once is the point: a second reveal answers the same.
+  expect(await secret.reveal()).toBe(apiKey);
 
   // The external app's whole connection recipe: dial /api, present the
   // project-scoped credential, use the project.
@@ -63,6 +74,15 @@ test("an external client authenticates with the project-secret credential and ge
     using leaked = scoped.projects.get(otherProjectId);
     await leaked.projectId;
   }).rejects.toThrow(/no access|not found/i);
+
+  // Write-only secrets stay write-only: reveal() on an ordinary secret
+  // (born without the readable flag) refuses.
+  await project.secrets
+    .get("/secrets/write-only-probe")
+    .create({ egress: { urls: [] }, material: "sealed" });
+  await expect(async () => {
+    await project.secrets.get("/secrets/write-only-probe").reveal();
+  }).rejects.toThrow(/write-only/);
 
   // A wrong value is rejected at the door.
   using rejectedSession = withItxSession();

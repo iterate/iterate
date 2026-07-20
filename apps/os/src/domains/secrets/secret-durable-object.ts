@@ -194,6 +194,7 @@ export class SecretDurableObject extends DurableObject<Env> {
                 egress,
                 ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
                 refresh: input.refresh ?? null,
+                readable: input.readable === true,
               },
             },
           } as StreamEventInput,
@@ -356,6 +357,25 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
     }
+  }
+
+  /**
+   * Read the material back — ONLY for a secret whose birth certificate
+   * declared `readable: true`. The flag is immutable (create-time only,
+   * never updatable), so the write-only invariant survives per secret: a
+   * secret born write-only can never be retro-flipped readable. Readable
+   * secrets exist for credentials whose whole purpose is to be SHOWN to the
+   * outside, as often as needed — the born project ingress key is the
+   * canonical case.
+   */
+  async reveal(): Promise<unknown> {
+    const { state } = await this.#snapshotWithOffset();
+    assertSecretCreated(state, this.#name.path);
+    if (state.birthCertificate?.config.readable !== true) {
+      throw new Error(`secret is write-only (not born readable): ${this.#name.path}`);
+    }
+    if (state.encryptedMaterial === null) return null;
+    return await this.#decrypt(state.encryptedMaterial, state.egress);
   }
 
   /**
@@ -804,6 +824,7 @@ function describeSecretState(state: SecretState): SecretDescription {
     created: state.birthCertificate !== null,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
+    readable: state.birthCertificate?.config.readable === true,
     refresh: state.refresh?.kind ?? null,
   };
 }

@@ -1603,6 +1603,14 @@ export interface Secret {
   kill(): Promise<void>;
   /** Create this secret and wait until its processor has folded the birth certificate. */
   create(input: SecretCreateInput): Promise<StreamEvent>;
+  /**
+   * Read the material back — only for a secret born `readable: true` (an
+   * immutable birth-certificate fact; every other secret stays write-only
+   * and this throws). The born project ingress key at
+   * /secrets/project-api-key is the canonical readable secret: show it to an
+   * external app as often as needed.
+   */
+  reveal(): Promise<unknown>;
   /** Set secret material, its egress allowlist, and/or refresh strategy.
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
@@ -3841,6 +3849,8 @@ export type SecretDescription = {
   /** Whether the secret processor has folded its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
+  /** Whether reveal() may return the material (a birth-certificate fact). */
+  readable: boolean;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
 };
@@ -3859,6 +3869,14 @@ export type SecretCreateInput = {
   material?: unknown;
   /** Optional initial refresh strategy; omitted means no refresh. */
   refresh?: SecretRefresh | null;
+  /**
+   * Whether reveal() may return this secret's material (default false —
+   * write-only). IMMUTABLE: declared at birth, never updatable, so a
+   * write-only secret can never be retro-flipped readable. Reserve it for
+   * credentials whose whole purpose is to be shown to the outside — the born
+   * project ingress key at /secrets/project-api-key is the canonical case.
+   */
+  readable?: boolean;
 };
 
 /** Input for replacing secret material or changing its egress and refresh policy. */

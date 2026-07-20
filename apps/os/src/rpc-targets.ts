@@ -2155,6 +2155,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
         fetch:
           "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
+        reveal:
+          "Read the material back — only for a secret born readable (the project ingress key); write-only secrets throw.",
         update:
           "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
       },
@@ -2191,6 +2193,17 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Create this secret and wait until its processor has folded the birth certificate. */
   create(input: SecretCreateInput): Promise<StreamEvent> {
     return this.durableObjectStub.create(input);
+  }
+
+  /**
+   * Read the material back — only for a secret born `readable: true` (an
+   * immutable birth-certificate fact; every other secret stays write-only
+   * and this throws). The born project ingress key at
+   * /secrets/project-api-key is the canonical readable secret: show it to an
+   * external app as often as needed.
+   */
+  reveal(): Promise<unknown> {
+    return this.durableObjectStub.reveal();
   }
 
   /** Set secret material, its egress allowlist, and/or refresh strategy.
@@ -5202,14 +5215,15 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       "root-append",
       appendRootEvents,
     );
-    // Born credential: every project gets a write-only ingress secret at
+    // Born credential: every project gets an ingress secret at
     // /secrets/project-api-key — what the `project-secret` /api credential is
     // verified against, inside the Secret DO. Empty egress pin: unlike every
     // other secret it can never be substituted into ANY outbound request.
-    // Random birth material is deliberately unusable; the owner overwrites it
-    // with a value they hold (secrets.update) to pair an external app. Off
-    // the create critical path and idempotent (the DO's create dedupes), so a
-    // lost race costs nothing and re-creation is a no-op.
+    // Born `readable` (an immutable birth-certificate fact): pairing an
+    // external app is reveal()-and-copy, as often as needed; rotation is an
+    // ordinary material update. Off the create critical path and idempotent
+    // (the DO's create dedupes), so a lost race costs nothing and re-creation
+    // is a no-op.
     this.props.ctx.waitUntil(
       env.SECRET.getByName(
         DurableObjectNameCodec.stringify({
@@ -5217,7 +5231,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
         }),
       )
-        .create({ egress: { urls: [] }, material: generateProjectApiKeyMaterial() })
+        .create({ egress: { urls: [] }, material: generateProjectApiKeyMaterial(), readable: true })
         .catch(() => undefined),
     );
     const project = itxForScope({

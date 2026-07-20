@@ -49,11 +49,16 @@ const SecretBirthCertificate = z.strictObject({
     egress: Egress,
     encryptedMaterial: EncryptedMaterial.optional(),
     refresh: SecretRefresh.nullable(),
+    // Whether reveal() may return this secret's material. IMMUTABLE — a
+    // birth-certificate fact only, never updatable, so a write-only secret
+    // can never be retro-flipped readable to exfiltrate it. Defaulted so
+    // every pre-existing journal folds as write-only.
+    readable: z.boolean().default(false),
   }),
 });
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
-  version: "0.5.0",
+  version: "0.6.0",
   description: "Folds one path-addressed secret without exposing material.",
   stateSchema: z.object({
     birthCertificate: SecretBirthCertificate.nullable().default(null),

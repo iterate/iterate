@@ -13,6 +13,14 @@ export type SecretCreateInput = {
   material?: unknown;
   /** Optional initial refresh strategy; omitted means no refresh. */
   refresh?: SecretRefresh | null;
+  /**
+   * Whether reveal() may return this secret's material (default false —
+   * write-only). IMMUTABLE: declared at birth, never updatable, so a
+   * write-only secret can never be retro-flipped readable. Reserve it for
+   * credentials whose whole purpose is to be shown to the outside — the born
+   * project ingress key at /secrets/project-api-key is the canonical case.
+   */
+  readable?: boolean;
 };
 
 /** Input for replacing secret material or changing its egress and refresh policy. */
@@ -141,6 +149,8 @@ export type SecretDescription = {
   /** Whether the secret processor has folded its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
+  /** Whether reveal() may return the material (a birth-certificate fact). */
+  readable: boolean;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
 };
