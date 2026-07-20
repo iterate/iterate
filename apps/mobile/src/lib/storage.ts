@@ -1,4 +1,5 @@
 import * as SecureStore from "expo-secure-store";
+import { lastProjectStorageKey } from "./storage-keys.ts";
 
 // Keychain-backed storage. Only small, durable things live here: the server
 // URL (+ recents), the last-opened project, the OAuth client registration,
@@ -39,12 +40,10 @@ export async function addRecentServer(baseUrl: string): Promise<void> {
 /** Last project opened on a server — the fast boot path lands on its chat list. */
 export type LastProject = { id: string; slug: string };
 
-function lastProjectKey(baseUrl: string) {
-  return `iterate.lastProject.${baseUrl.replace(/[^a-zA-Z0-9]+/g, "_")}`;
-}
-
 export async function getLastProject(baseUrl: string): Promise<LastProject | null> {
-  const raw = await SecureStore.getItemAsync(lastProjectKey(baseUrl));
+  const auth = await getStoredAuth(baseUrl);
+  if (!auth) return null;
+  const raw = await SecureStore.getItemAsync(lastProjectStorageKey(baseUrl, auth));
   if (!raw) return null;
   try {
     return JSON.parse(raw) as LastProject;
@@ -54,11 +53,15 @@ export async function getLastProject(baseUrl: string): Promise<LastProject | nul
 }
 
 export async function setLastProject(baseUrl: string, project: LastProject): Promise<void> {
-  await SecureStore.setItemAsync(lastProjectKey(baseUrl), JSON.stringify(project));
+  const auth = await getStoredAuth(baseUrl);
+  if (!auth) throw new Error(`Cannot remember a project without auth for ${baseUrl}.`);
+  await SecureStore.setItemAsync(lastProjectStorageKey(baseUrl, auth), JSON.stringify(project));
 }
 
 export async function clearLastProject(baseUrl: string): Promise<void> {
-  await SecureStore.deleteItemAsync(lastProjectKey(baseUrl));
+  const auth = await getStoredAuth(baseUrl);
+  if (!auth) return;
+  await SecureStore.deleteItemAsync(lastProjectStorageKey(baseUrl, auth));
 }
 
 /** Persisted per OS server, so switching servers keeps each sign-in intact. */

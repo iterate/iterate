@@ -42,6 +42,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
@@ -95,6 +96,12 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<PickedImage[]>([]);
   const [viewMode, setViewMode] = useState<"chat" | "events">("chat");
+  const copyStreamUrl = useMutation({
+    mutationFn: async (url: string) => Clipboard.setString(url),
+    onSuccess: () => {
+      setTimeout(() => copyStreamUrl.reset(), 1_800);
+    },
+  });
   const send = useMutation({
     mutationFn: async (input: { message: string; files: PickedImage[] }) => {
       const itx = await getItxSession(baseUrl!);
@@ -139,8 +146,7 @@ export default function ChatScreen() {
     if (action === "Show raw events") setViewMode("events");
     if (action === "Show chat") setViewMode("chat");
     if (action === "Copy stream URL" && streamUrl) {
-      Clipboard.setString(streamUrl);
-      Alert.alert("Stream URL copied");
+      copyStreamUrl.mutate(streamUrl);
     }
     if (action === "Open stream in browser" && streamUrl) {
       void WebBrowser.openBrowserAsync(streamUrl);
@@ -261,6 +267,16 @@ export default function ChatScreen() {
           {send.error instanceof Error ? send.error.message : String(send.error)}
         </Text>
       ) : null}
+      {copyStreamUrl.isSuccess ? (
+        <View
+          accessibilityLiveRegion="polite"
+          accessibilityRole="alert"
+          pointerEvents="none"
+          style={[styles.toast, { bottom: Math.max(insets.bottom, spacing.sm) + 68 }]}
+        >
+          <Text style={styles.toastText}>Stream URL copied</Text>
+        </View>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
@@ -330,9 +346,13 @@ function MessageBubble({ message }: { message: AgentUiMessageItem }) {
   return (
     <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
       {message.text !== "" ? (
-        <Text style={isUser ? styles.bubbleUserText : styles.bubbleAssistantText} selectable>
-          {message.text}
-        </Text>
+        isUser ? (
+          <Text style={styles.bubbleUserText} selectable>
+            {message.text}
+          </Text>
+        ) : (
+          <Markdown markdown={message.text} />
+        )
       ) : null}
       {message.files?.map((file) => (
         <MessageAttachment key={file.path} file={file} />
@@ -381,7 +401,9 @@ function EventList({ events }: { events: StreamEvent[] }) {
           <Text style={styles.eventType}>
             {event.offset} · {event.type.replace("events.iterate.com/", "")}
           </Text>
-          {event.payload ? <CodeBlock text={previewPayload(event.payload)} muted /> : null}
+          {event.payload ? (
+            <CodeBlock language="json" text={previewPayload(event.payload)} muted />
+          ) : null}
         </View>
       )}
     />
@@ -539,4 +561,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.sm,
   },
+  toast: {
+    position: "absolute",
+    left: spacing.xl,
+    right: spacing.xl,
+    zIndex: 20,
+    alignItems: "center",
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  toastText: { color: colors.text, fontSize: 13, fontWeight: "600" },
 });

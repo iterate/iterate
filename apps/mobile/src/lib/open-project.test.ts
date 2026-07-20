@@ -1,7 +1,17 @@
 import { expect, test } from "vitest";
 import type { ProjectListEntry } from "../../../os/src/itx-api.generated.ts";
 import type { ItxSession } from "./itx-core.ts";
-import { backfillProjectIfMissing } from "./open-project.ts";
+import { backfillProjectIfMissing, rememberedProjectInScope } from "./open-project.ts";
+
+test("keeps a remembered project only while the current auth context can access it", () => {
+  const remembered = { id: "prj_a", slug: "stale-alpha" };
+
+  expect(rememberedProjectInScope(remembered, [project({ id: "prj_a", slug: "alpha" })])).toEqual({
+    id: "prj_a",
+    slug: "alpha",
+  });
+  expect(rememberedProjectInScope(remembered, [project({ id: "prj_b" })])).toBeNull();
+});
 
 test("backfills a project whose OS-side bootstrap never ran", async () => {
   const calls: unknown[] = [];
@@ -13,7 +23,7 @@ test("backfills a project whose OS-side bootstrap never ran", async () => {
     {
       projectId: "prj_a",
       slug: "alpha",
-      waitUntilReady: false,
+      waitUntilReady: true,
       organizationSlug: "acme",
     },
   ]);
@@ -28,7 +38,7 @@ test("omits organizationSlug when the project has none", async () => {
     project({ deploymentStatus: "missing", organizationSlug: null }),
   );
 
-  expect(calls).toEqual([{ projectId: "prj_a", slug: "alpha", waitUntilReady: false }]);
+  expect(calls).toEqual([{ projectId: "prj_a", slug: "alpha", waitUntilReady: true }]);
 });
 
 test.each(["ready", "unknown"] as const)(

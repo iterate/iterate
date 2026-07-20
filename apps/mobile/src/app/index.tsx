@@ -6,15 +6,16 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Redirect, Stack } from "expo-router";
+import { Redirect, router, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { hasSignIn, signIn } from "../lib/auth.ts";
-import { getItxSession } from "../lib/itx.ts";
-import { backfillProjectIfMissing } from "../lib/open-project.ts";
+import { getItxSession, resetItxSession } from "../lib/itx.ts";
+import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
 import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
 import {
   addRecentServer,
+  clearLastProject,
   getLastProject,
   getRecentServers,
   getServerBaseUrl,
@@ -30,22 +31,31 @@ export default function SignInScreen() {
     queryFn: async () => {
       const server = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const signedIn = await hasSignIn(server);
-      const lastProject = signedIn ? await getLastProject(server) : null;
+      let lastProject = signedIn ? await getLastProject(server) : null;
       // The boot redirect below skips the project picker entirely — the
       // ONLY other place a project gets opened is projects.tsx's own tap
       // handler, which is exactly where backfillProjectIfMissing lives. A
       // returning session with a remembered project never goes through
-      // that screen, so it needs its own backfill check here. Best-effort:
-      // a failure here shouldn't block boot — the chat list screen's own
-      // error state still catches it if this silently didn't help.
+      // that screen, so it needs its own backfill check here. A failed
+      // verification falls back to the project picker instead of routing to
+      // a project remembered under stale authorization.
       if (signedIn && lastProject) {
         try {
           const itx = await getItxSession(server);
           const entries = await itx.projects.list({ scope: "mine" });
-          const entry = entries.find((candidate) => candidate.id === lastProject.id);
-          if (entry) await backfillProjectIfMissing(itx, entry);
+          const remembered = rememberedProjectInScope(lastProject, entries);
+          if (!remembered) {
+            await clearLastProject(server);
+            lastProject = null;
+          } else {
+            const entry = entries.find((candidate) => candidate.id === remembered.id)!;
+            await backfillProjectIfMissing(itx, entry);
+            lastProject = remembered;
+          }
         } catch {
-          // Non-fatal — see comment above.
+          // The project picker owns the visible retry/error state. Never
+          // redirect to an unverified remembered project after a failed read.
+          lastProject = null;
         }
       }
       return {
@@ -70,7 +80,12 @@ export default function SignInScreen() {
       }
       await signIn(baseUrl);
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
+    onSuccess: () => {
+      setEditedServer(null);
+      resetItxSession();
+      queryClient.clear();
+      router.replace("/projects");
+    },
   });
 
   if (bootstrap.isPending) {
