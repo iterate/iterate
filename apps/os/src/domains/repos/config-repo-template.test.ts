@@ -25,6 +25,7 @@ test("template ships live-state todo and stream-processor guestbook", () => {
     "apps/todo/client.tsx",
     "apps/todo/host.ts",
     "apps/todo/server.tsx",
+    "apps/use-live-state-rpc.ts",
   ]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);

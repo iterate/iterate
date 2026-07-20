@@ -211,156 +211,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/client.tsx",
     content:
       "/**\n" +
-      " * Public guestbook UI. Live reduced state arrives over Cap'n Web via the same\n" +
-      " * `useLiveStateRpc` hook as `iterate/react` (inlined here so createApp can\n" +
-      " * resolve it without pulling the full itx session stack into the browser\n" +
-      " * bundle — createApp does not inject platform virtual modules the way\n" +
-      " * createWorker does). Cap'n Web + React stay esm.sh URL imports.\n" +
+      " * Public guestbook UI. Live reduced state over Cap'n Web + shared\n" +
+      " * useLiveStateRpc (see apps/use-live-state-rpc.ts / packages/iterate).\n" +
       " */\n" +
-      "import React, {\n" +
-      "  type FormEvent,\n" +
-      "  useEffect,\n" +
-      "  useRef,\n" +
-      "  useState,\n" +
-      "  useSyncExternalStore,\n" +
-      "} from \"https://esm.sh/react@19.2.4\";\n" +
+      "import React, { type FormEvent, useEffect, useState } from \"https://esm.sh/react@19.2.4\";\n" +
       "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
       "import { newWebSocketRpcSession } from \"https://esm.sh/@iterate-com/capnweb@0.10.0\";\n" +
-      "\n" +
-      "// --- createLiveStateStore + useLiveStateRpc (same protocol as packages/iterate) ---\n" +
-      "\n" +
-      "type LiveUpdate<State> =\n" +
-      "  | { type: \"snapshot\"; revision: number; state: State }\n" +
-      "  | { type: \"patch\"; from: number; to: number; patch: LiveStatePatch };\n" +
-      "\n" +
-      "type LiveStatePatch =\n" +
-      "  | { set: unknown }\n" +
-      "  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };\n" +
-      "\n" +
-      "function isPlainObject(value: unknown): value is Record<string, unknown> {\n" +
-      "  if (typeof value !== \"object\" || value === null) return false;\n" +
-      "  const proto = Object.getPrototypeOf(value);\n" +
-      "  return proto === Object.prototype || proto === null;\n" +
-      "}\n" +
-      "\n" +
-      "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
-      "  if (\"set\" in patch) return patch.set as State;\n" +
-      "  const base = isPlainObject(prev) ? prev : {};\n" +
-      "  const next: Record<string, unknown> = { ...base };\n" +
-      "  if (patch.fields) {\n" +
-      "    for (const [key, childPatch] of Object.entries(patch.fields)) {\n" +
-      "      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);\n" +
-      "    }\n" +
-      "  }\n" +
-      "  if (patch.drop) {\n" +
-      "    for (const key of patch.drop) delete next[key];\n" +
-      "  }\n" +
-      "  return next as State;\n" +
-      "}\n" +
-      "\n" +
-      "function createLiveStateStore<State>() {\n" +
-      "  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };\n" +
-      "  const listeners = new Set<() => void>();\n" +
-      "  const notify = () => listeners.forEach((listener) => listener());\n" +
-      "  return {\n" +
-      "    getState: () => held.state,\n" +
-      "    subscribe: (listener: () => void) => {\n" +
-      "      listeners.add(listener);\n" +
-      "      return () => void listeners.delete(listener);\n" +
-      "    },\n" +
-      "    reset: () => {\n" +
-      "      held = { revision: -1, state: undefined };\n" +
-      "      notify();\n" +
-      "    },\n" +
-      "    apply: (update: LiveUpdate<State>, resync: () => void) => {\n" +
-      "      if (update.type === \"snapshot\") {\n" +
-      "        held = { revision: update.revision, state: update.state };\n" +
-      "      } else if (update.from !== held.revision) {\n" +
-      "        resync();\n" +
-      "        return;\n" +
-      "      } else {\n" +
-      "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
-      "      }\n" +
-      "      notify();\n" +
-      "    },\n" +
-      "  };\n" +
-      "}\n" +
-      "\n" +
-      "type LiveStateRpc<State> = {\n" +
-      "  get(): Promise<State>;\n" +
-      "  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;\n" +
-      "};\n" +
-      "\n" +
-      "/** Same contract as `useLiveStateRpc` from `iterate/react`. */\n" +
-      "function useLiveStateRpc<Root extends object, State, Selected = State>(\n" +
-      "  root: Root | null | undefined,\n" +
-      "  live: (root: Root) => LiveStateRpc<State>,\n" +
-      "  selector: (state: State) => Selected,\n" +
-      "): { value: Selected | undefined; error: string | undefined } {\n" +
-      "  const [store] = useState(() => createLiveStateStore<State>());\n" +
-      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
-      "  const selectorRef = useRef(selector);\n" +
-      "  selectorRef.current = selector;\n" +
-      "  const liveRef = useRef(live);\n" +
-      "  liveRef.current = live;\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    store.reset();\n" +
-      "    setError(undefined);\n" +
-      "    if (root == null) return;\n" +
-      "\n" +
-      "    // Capture LiveStateRpc once per root — Cap'n Web getters return a new stub\n" +
-      "    // each access; depending on that identity would thrash the subscription.\n" +
-      "    const liveState = liveRef.current(root);\n" +
-      "\n" +
-      "    let disposed = false;\n" +
-      "    let subscription: { unsubscribe(): void } | undefined;\n" +
-      "\n" +
-      "    const subscribe = async () => {\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      subscription = await liveState.subscribe((update) => {\n" +
-      "        if (disposed) return;\n" +
-      "        store.apply(update, () => {\n" +
-      "          if (!disposed) void subscribe().catch(report);\n" +
-      "        });\n" +
-      "      });\n" +
-      "    };\n" +
-      "\n" +
-      "    const report = (thrown: unknown) => {\n" +
-      "      if (disposed) return;\n" +
-      "      setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
-      "    };\n" +
-      "\n" +
-      "    void subscribe().catch(report);\n" +
-      "\n" +
-      "    return () => {\n" +
-      "      disposed = true;\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      store.reset();\n" +
-      "    };\n" +
-      "  }, [root, store]);\n" +
-      "\n" +
-      "  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({\n" +
-      "    state: undefined,\n" +
-      "    value: undefined,\n" +
-      "  });\n" +
-      "  const getSelected = () => {\n" +
-      "    const state = store.getState();\n" +
-      "    if (state === undefined) {\n" +
-      "      cache.current = { state: undefined, value: undefined };\n" +
-      "      return undefined;\n" +
-      "    }\n" +
-      "    if (Object.is(cache.current.state, state)) return cache.current.value;\n" +
-      "    const value = selectorRef.current(state);\n" +
-      "    cache.current = { state, value };\n" +
-      "    return value;\n" +
-      "  };\n" +
-      "\n" +
-      "  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);\n" +
-      "  return { value, error };\n" +
-      "}\n" +
-      "\n" +
-      "// --- app ---\n" +
+      "import { useLiveStateRpc, type LiveStateRpc } from \"../use-live-state-rpc.ts\";\n" +
       "\n" +
       "type GuestbookState = {\n" +
       "  birthCertificate: { config: { title: string } } | null;\n" +
@@ -373,8 +230,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  sign(name: string, message: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
-      "function useGuestbookApi(): GuestbookApi | null {\n" +
-      "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
+      "function useGuestbookApi() {\n" +
+      "  const [api, setApi] = useState(null as GuestbookApi | null);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so\n" +
@@ -409,7 +266,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  const entries = state?.entries ?? [];\n" +
       "  // Only claim the configured title once reduced state has arrived — the\n" +
       "  // seeded-apps heading wait must not pass on the HTML shell alone.\n" +
-      "  const title = state === undefined ? \"Loading…\" : (state.birthCertificate?.config.title ?? \"Guestbook\");\n" +
+      "  const title =\n" +
+      "    state === undefined ? \"Loading…\" : (state.birthCertificate?.config.title ?? \"Guestbook\");\n" +
       "\n" +
       "  const sign = async (event: FormEvent) => {\n" +
       "    event.preventDefault();\n" +
@@ -458,8 +316,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        <p>No entries yet.</p>\n" +
       "      ) : (\n" +
       "        <section aria-label=\"Guestbook entries\">\n" +
-      "          {/* Newest first; key on payload identity (not reversed index — that\n" +
-      "              shifts on every append and remounts the list). */}\n" +
+      "          {/* Newest first; key on payload identity (not reversed index). */}\n" +
       "          {[...entries].reverse().map((entry) => (\n" +
       "            <article key={`${entry.signedAt}\\0${entry.name}\\0${entry.message}`}>\n" +
       "              <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>\n" +
@@ -954,151 +811,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/todo/client.tsx",
     content:
       "/**\n" +
-      " * Todo UI — Cap'n Web live state via the same useLiveStateRpc pattern as the\n" +
-      " * guestbook (and packages/iterate's iterate/react export). createApp keeps\n" +
-      " * React/Cap'n Web as esm.sh URL imports.\n" +
+      " * Todo UI — Cap'n Web live state via shared useLiveStateRpc\n" +
+      " * (apps/use-live-state-rpc.ts / packages/iterate).\n" +
       " */\n" +
-      "import React, {\n" +
-      "  type FormEvent,\n" +
-      "  useEffect,\n" +
-      "  useRef,\n" +
-      "  useState,\n" +
-      "  useSyncExternalStore,\n" +
-      "} from \"https://esm.sh/react@19.2.4\";\n" +
+      "import React, { type FormEvent, useEffect, useState } from \"https://esm.sh/react@19.2.4\";\n" +
       "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
       "import { newWebSocketRpcSession } from \"https://esm.sh/@iterate-com/capnweb@0.10.0\";\n" +
-      "\n" +
-      "// --- createLiveStateStore + useLiveStateRpc (same protocol as packages/iterate) ---\n" +
-      "\n" +
-      "type LiveUpdate<State> =\n" +
-      "  | { type: \"snapshot\"; revision: number; state: State }\n" +
-      "  | { type: \"patch\"; from: number; to: number; patch: LiveStatePatch };\n" +
-      "\n" +
-      "type LiveStatePatch =\n" +
-      "  | { set: unknown }\n" +
-      "  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };\n" +
-      "\n" +
-      "function isPlainObject(value: unknown): value is Record<string, unknown> {\n" +
-      "  if (typeof value !== \"object\" || value === null) return false;\n" +
-      "  const proto = Object.getPrototypeOf(value);\n" +
-      "  return proto === Object.prototype || proto === null;\n" +
-      "}\n" +
-      "\n" +
-      "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
-      "  if (\"set\" in patch) return patch.set as State;\n" +
-      "  const base = isPlainObject(prev) ? prev : {};\n" +
-      "  const next: Record<string, unknown> = { ...base };\n" +
-      "  if (patch.fields) {\n" +
-      "    for (const [key, childPatch] of Object.entries(patch.fields)) {\n" +
-      "      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);\n" +
-      "    }\n" +
-      "  }\n" +
-      "  if (patch.drop) {\n" +
-      "    for (const key of patch.drop) delete next[key];\n" +
-      "  }\n" +
-      "  return next as State;\n" +
-      "}\n" +
-      "\n" +
-      "function createLiveStateStore<State>() {\n" +
-      "  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };\n" +
-      "  const listeners = new Set<() => void>();\n" +
-      "  const notify = () => listeners.forEach((listener) => listener());\n" +
-      "  return {\n" +
-      "    getState: () => held.state,\n" +
-      "    subscribe: (listener: () => void) => {\n" +
-      "      listeners.add(listener);\n" +
-      "      return () => void listeners.delete(listener);\n" +
-      "    },\n" +
-      "    reset: () => {\n" +
-      "      held = { revision: -1, state: undefined };\n" +
-      "      notify();\n" +
-      "    },\n" +
-      "    apply: (update: LiveUpdate<State>, resync: () => void) => {\n" +
-      "      if (update.type === \"snapshot\") {\n" +
-      "        held = { revision: update.revision, state: update.state };\n" +
-      "      } else if (update.from !== held.revision) {\n" +
-      "        resync();\n" +
-      "        return;\n" +
-      "      } else {\n" +
-      "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
-      "      }\n" +
-      "      notify();\n" +
-      "    },\n" +
-      "  };\n" +
-      "}\n" +
-      "\n" +
-      "type LiveStateRpc<State> = {\n" +
-      "  get(): Promise<State>;\n" +
-      "  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;\n" +
-      "};\n" +
-      "\n" +
-      "function useLiveStateRpc<Root extends object, State, Selected = State>(\n" +
-      "  root: Root | null | undefined,\n" +
-      "  live: (root: Root) => LiveStateRpc<State>,\n" +
-      "  selector: (state: State) => Selected,\n" +
-      "): { value: Selected | undefined; error: string | undefined } {\n" +
-      "  const [store] = useState(() => createLiveStateStore<State>());\n" +
-      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
-      "  const selectorRef = useRef(selector);\n" +
-      "  selectorRef.current = selector;\n" +
-      "  const liveRef = useRef(live);\n" +
-      "  liveRef.current = live;\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    store.reset();\n" +
-      "    setError(undefined);\n" +
-      "    if (root == null) return;\n" +
-      "\n" +
-      "    const liveState = liveRef.current(root);\n" +
-      "\n" +
-      "    let disposed = false;\n" +
-      "    let subscription: { unsubscribe(): void } | undefined;\n" +
-      "\n" +
-      "    const subscribe = async () => {\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      subscription = await liveState.subscribe((update) => {\n" +
-      "        if (disposed) return;\n" +
-      "        store.apply(update, () => {\n" +
-      "          if (!disposed) void subscribe().catch(report);\n" +
-      "        });\n" +
-      "      });\n" +
-      "    };\n" +
-      "\n" +
-      "    const report = (thrown: unknown) => {\n" +
-      "      if (disposed) return;\n" +
-      "      setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
-      "    };\n" +
-      "\n" +
-      "    void subscribe().catch(report);\n" +
-      "\n" +
-      "    return () => {\n" +
-      "      disposed = true;\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      store.reset();\n" +
-      "    };\n" +
-      "  }, [root, store]);\n" +
-      "\n" +
-      "  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({\n" +
-      "    state: undefined,\n" +
-      "    value: undefined,\n" +
-      "  });\n" +
-      "  const getSelected = () => {\n" +
-      "    const state = store.getState();\n" +
-      "    if (state === undefined) {\n" +
-      "      cache.current = { state: undefined, value: undefined };\n" +
-      "      return undefined;\n" +
-      "    }\n" +
-      "    if (Object.is(cache.current.state, state)) return cache.current.value;\n" +
-      "    const value = selectorRef.current(state);\n" +
-      "    cache.current = { state, value };\n" +
-      "    return value;\n" +
-      "  };\n" +
-      "\n" +
-      "  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);\n" +
-      "  return { value, error };\n" +
-      "}\n" +
-      "\n" +
-      "// --- app ---\n" +
+      "import { useLiveStateRpc, type LiveStateRpc } from \"../use-live-state-rpc.ts\";\n" +
       "\n" +
       "type TodoApi = {\n" +
       "  liveState: LiveStateRpc<{\n" +
@@ -1109,8 +828,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  remove(id: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
-      "function useTodoApi(): TodoApi | null {\n" +
-      "  const [api, setApi] = useState<TodoApi | null>(null);\n" +
+      "function useTodoApi() {\n" +
+      "  const [api, setApi] = useState(null as TodoApi | null);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    setApi(() => null);\n" +
@@ -1380,6 +1099,159 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      },\n" +
       "    );\n" +
       "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/use-live-state-rpc.ts",
+    content:
+      "/**\n" +
+      " * Browser-side live-state hook for createApp clients.\n" +
+      " *\n" +
+      " * Same protocol as `useLiveStateRpc` from `packages/iterate` (`iterate/react`).\n" +
+      " * Inlined in the seeded template because createApp does not inject platform\n" +
+      " * virtual modules the way createWorker does — both guestbook and todo import\n" +
+      " * this one module so the patch/resync logic is not duplicated.\n" +
+      " *\n" +
+      " * React is an esm.sh URL import to match the clients.\n" +
+      " */\n" +
+      "import {\n" +
+      "  useEffect,\n" +
+      "  useRef,\n" +
+      "  useState,\n" +
+      "  useSyncExternalStore,\n" +
+      "} from \"https://esm.sh/react@19.2.4\";\n" +
+      "\n" +
+      "type LiveUpdate<State> =\n" +
+      "  | { type: \"snapshot\"; revision: number; state: State }\n" +
+      "  | { type: \"patch\"; from: number; to: number; patch: LiveStatePatch };\n" +
+      "\n" +
+      "type LiveStatePatch =\n" +
+      "  | { set: unknown }\n" +
+      "  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };\n" +
+      "\n" +
+      "function isPlainObject(value: unknown): value is Record<string, unknown> {\n" +
+      "  if (typeof value !== \"object\" || value === null) return false;\n" +
+      "  const proto = Object.getPrototypeOf(value);\n" +
+      "  return proto === Object.prototype || proto === null;\n" +
+      "}\n" +
+      "\n" +
+      "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
+      "  if (\"set\" in patch) return patch.set as State;\n" +
+      "  const base = isPlainObject(prev) ? prev : {};\n" +
+      "  const next: Record<string, unknown> = { ...base };\n" +
+      "  if (patch.fields) {\n" +
+      "    for (const [key, childPatch] of Object.entries(patch.fields)) {\n" +
+      "      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);\n" +
+      "    }\n" +
+      "  }\n" +
+      "  if (patch.drop) {\n" +
+      "    for (const key of patch.drop) delete next[key];\n" +
+      "  }\n" +
+      "  return next as State;\n" +
+      "}\n" +
+      "\n" +
+      "function createLiveStateStore<State>() {\n" +
+      "  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };\n" +
+      "  const listeners = new Set<() => void>();\n" +
+      "  const notify = () => listeners.forEach((listener) => listener());\n" +
+      "  return {\n" +
+      "    getState: () => held.state,\n" +
+      "    subscribe: (listener: () => void) => {\n" +
+      "      listeners.add(listener);\n" +
+      "      return () => void listeners.delete(listener);\n" +
+      "    },\n" +
+      "    reset: () => {\n" +
+      "      held = { revision: -1, state: undefined };\n" +
+      "      notify();\n" +
+      "    },\n" +
+      "    apply: (update: LiveUpdate<State>, resync: () => void) => {\n" +
+      "      if (update.type === \"snapshot\") {\n" +
+      "        held = { revision: update.revision, state: update.state };\n" +
+      "      } else if (update.from !== held.revision) {\n" +
+      "        resync();\n" +
+      "        return;\n" +
+      "      } else {\n" +
+      "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
+      "      }\n" +
+      "      notify();\n" +
+      "    },\n" +
+      "  };\n" +
+      "}\n" +
+      "\n" +
+      "export type LiveStateRpc<State> = {\n" +
+      "  get(): Promise<State>;\n" +
+      "  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;\n" +
+      "};\n" +
+      "\n" +
+      "/**\n" +
+      " * Subscribe a React tree to a Cap'n Web `LiveStateRpc` reached from a stable\n" +
+      " * root. The live accessor runs once per root so Cap'n Web property stubs\n" +
+      " * (fresh proxy each get) do not thrash the effect.\n" +
+      " */\n" +
+      "export function useLiveStateRpc<Root extends object, State, Selected = State>(\n" +
+      "  root: Root | null | undefined,\n" +
+      "  live: (root: Root) => LiveStateRpc<State>,\n" +
+      "  selector: (state: State) => Selected,\n" +
+      "): { value: Selected | undefined; error: string | undefined } {\n" +
+      "  const [store] = useState(() => createLiveStateStore<State>());\n" +
+      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
+      "  const selectorRef = useRef(selector);\n" +
+      "  selectorRef.current = selector;\n" +
+      "  const liveRef = useRef(live);\n" +
+      "  liveRef.current = live;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    store.reset();\n" +
+      "    setError(undefined);\n" +
+      "    if (root == null) return;\n" +
+      "\n" +
+      "    const liveState = liveRef.current(root);\n" +
+      "\n" +
+      "    let disposed = false;\n" +
+      "    let subscription: { unsubscribe(): void } | undefined;\n" +
+      "\n" +
+      "    const subscribe = async () => {\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      subscription = await liveState.subscribe((update) => {\n" +
+      "        if (disposed) return;\n" +
+      "        store.apply(update, () => {\n" +
+      "          if (!disposed) void subscribe().catch(report);\n" +
+      "        });\n" +
+      "      });\n" +
+      "    };\n" +
+      "\n" +
+      "    const report = (thrown: unknown) => {\n" +
+      "      if (disposed) return;\n" +
+      "      setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
+      "    };\n" +
+      "\n" +
+      "    void subscribe().catch(report);\n" +
+      "\n" +
+      "    return () => {\n" +
+      "      disposed = true;\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      store.reset();\n" +
+      "    };\n" +
+      "  }, [root, store]);\n" +
+      "\n" +
+      "  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({\n" +
+      "    state: undefined,\n" +
+      "    value: undefined,\n" +
+      "  });\n" +
+      "  const getSelected = () => {\n" +
+      "    const state = store.getState();\n" +
+      "    if (state === undefined) {\n" +
+      "      cache.current = { state: undefined, value: undefined };\n" +
+      "      return undefined;\n" +
+      "    }\n" +
+      "    if (Object.is(cache.current.state, state)) return cache.current.value;\n" +
+      "    const value = selectorRef.current(state);\n" +
+      "    cache.current = { state, value };\n" +
+      "    return value;\n" +
+      "  };\n" +
+      "\n" +
+      "  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);\n" +
+      "  return { value, error };\n" +
       "}\n",
   },
   {
