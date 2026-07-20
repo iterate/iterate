@@ -224,19 +224,47 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           for (const controller of this.#inFlightLlmCalls.values()) controller.abort();
           const partialText = this.#partialResponseTexts.get(open.requestedAtOffset);
           blockProcessorWhile(() =>
-            append({
-              type: AGENT_LLM_REQUEST_SETTLED,
-              payload: {
-                requestOffset: open.requestedAtOffset,
-                result: {
-                  status: "cancelled",
-                  reason: "interrupted-by-user-input",
-                  ...(partialText === undefined ? {} : { partialText }),
+            append(
+              // The streamed partial stays model-visible as history - the
+              // next turn must know what the user already watched stream, or
+              // the model repeats or contradicts it. No `llmRequestOffset`:
+              // this is a record of an interruption, not parseable output
+              // (script extraction must never run on a half response).
+              ...(partialText === undefined
+                ? []
+                : [
+                    {
+                      type: AGENT_CONTEXT_ADDED,
+                      payload: {
+                        role: "assistant" as const,
+                        content: `[Response interrupted by the user's next message; partial output follows]\n${partialText}`,
+                      },
+                      idempotencyKey: this.idempotencyKey(
+                        `render-interrupted-partial@${open.requestedAtOffset}`,
+                      ),
+                    },
+                  ]),
+              {
+                type: AGENT_LLM_REQUEST_SETTLED,
+                payload: {
+                  requestOffset: open.requestedAtOffset,
+                  result: {
+                    status: "cancelled",
+                    reason: "interrupted-by-user-input",
+                    ...(partialText === undefined ? {} : { partialText }),
+                  },
                 },
+                idempotencyKey: this.idempotencyKey(`settle/${open.requestedAtOffset}`),
               },
-              idempotencyKey: this.idempotencyKey(`settle/${open.requestedAtOffset}`),
-            }),
+            ),
           );
+          // STOP: nothing below may act this frame. The at-head code would
+          // otherwise re-run the very request the queued settlement is about
+          // to cancel (it reads the pre-cancel fold - the eviction-window
+          // interrupt case, where nothing here is executing the request). The
+          // settlement's own delivery re-runs everything over the settled
+          // fold, where the interrupting input's desire drives the next turn.
+          return;
         }
         // RESPONSE PARSING — an accepted assistant output may carry a script;
         // extraction rides the same delivery that folded the text.
@@ -553,12 +581,13 @@ export function isRateLimitErrorMessage(message: string): boolean {
   return /\b429\b|\b3021\b|rate.?limit/i.test(message);
 }
 
-/** Build the model-facing message array from the fold, pinned to the
- * request's offset so an adopting incarnation reproduces the same prompt the
- * intent covered. System items dedupe by key (latest wins); developer items
- * from anyone but the agent or its scripts are DEMOTED to user role (trust
- * boundary). The trailing timestamp message is last so the provider's
- * prompt-cache prefix stays stable across turns. */
+/** Build the model-facing message array from the fold. The CONTENT is pinned
+ * to the request's offset, so an adopting incarnation reproduces the covered
+ * context exactly; the trailing timestamp deliberately is NOT pinned - it
+ * reports the actual attempt time (a late adoption honestly says so), and it
+ * sits last so the provider's prompt-cache prefix is unaffected either way.
+ * System items dedupe by key (latest wins); developer items from anyone but
+ * the agent or its scripts are DEMOTED to user role (trust boundary). */
 export function buildLlmMessages(args: {
   context: AgentNextState["context"];
   requestedAtOffset: number;

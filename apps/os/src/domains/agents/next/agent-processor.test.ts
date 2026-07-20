@@ -371,12 +371,23 @@ describe("AgentNextProcessor turn lifecycle", () => {
     expect(state.openRequest).toBeNull();
     expect(state.context.history.some((item) => item.payload.content === "too late")).toBe(false);
 
+    // The streamed partial is preserved as model-visible history (without an
+    // llmRequestOffset, so script extraction can never run on a half
+    // response).
+    const partialItem = state.context.history.find((item) =>
+      item.payload.content.includes("partial output follows"),
+    );
+    expect(partialItem?.payload).toMatchObject({ role: "assistant" });
+    expect(partialItem?.payload.content).toContain("Hello");
+
     // The interrupting input is itself the next trigger; its debounce window
     // opened during delivery, so release it.
     expect(state.wantsTurnSince).not.toBeNull();
     await h.flushDebounce();
     expect(h.llm.calls).toHaveLength(2);
-    expect(h.llm.calls[1]!.messages.map((m) => m.content).join("\n")).toContain("actually stop");
+    const secondPrompt = h.llm.calls[1]!.messages.map((m) => m.content).join("\n");
+    expect(secondPrompt).toContain("actually stop");
+    expect(secondPrompt).toContain("Hello"); // the model sees what already streamed
     // The new request has a NEW offset; the cancelled one stays settled.
     expect(h.journal.ofType(AGENT_LLM_REQUEST_REQUESTED).at(-1)!.offset).toBeGreaterThan(
       requested.offset,
@@ -455,6 +466,29 @@ describe("AgentNextProcessor recovery", () => {
     );
     expect(assistantItems).toHaveLength(1);
     expect(assistantItems[0]!.payload.content).toBe("from-successor");
+  });
+
+  it("an interrupt during the eviction window cancels WITHOUT adopting the request it cancels", async () => {
+    let h = makeHarness();
+    await startTurn(h);
+    h = h.crash(); // the attempt is gone; the intent is open and nobody is executing it
+
+    // The user interrupts before any revival. The delivery must settle the
+    // request cancelled and must NOT start a doomed attempt for it in the
+    // same frame (the fold it reads is pre-cancel).
+    h.appendUser("wait, stop", "interrupt-current-request");
+    await h.catchUp();
+    expect(h.llm.calls).toHaveLength(0);
+    expect(settledResults(h.journal)).toEqual([
+      { status: "cancelled", reason: "interrupted-by-user-input" },
+    ]);
+    expect((await h.state()).openRequest).toBeNull();
+
+    // The interrupting message then gets its own turn, on a NEW request.
+    await h.flushDebounce();
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("wait, stop");
+    expect(h.journal.ofType(AGENT_LLM_REQUEST_REQUESTED)).toHaveLength(2);
   });
 
   it("expiry: a request past its horizon settles cancelled/expired instead of running", async () => {
