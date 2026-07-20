@@ -98,10 +98,13 @@ cover only the shared Cloudflare resource/deploy skeleton.
 
 1. Add the entry to envs.ts (preview slots: `previewSlot(N, {...UNPROVISIONED})`).
 2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
-   and prints the IDs to paste into envs.ts.
+   and prints the IDs to paste into envs.ts. A brand-new OS Worker defers its
+   inbound-email catch-all until deploy because Cloudflare does not accept a
+   route to a missing script.
 3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
 4. Deploy auth first (`pnpm --dir apps/auth run deploy --env <name>`), then
-   os (its deploy bakes auth's JWKS and fails fast if auth isn't serving).
+   os (its deploy bakes auth's JWKS, fails fast if auth isn't serving, and
+   requires the post-upload inbound-email catch-all to reconcile).
 
 ## Cloudflare accounts
 

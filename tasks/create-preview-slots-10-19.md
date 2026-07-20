@@ -15,9 +15,10 @@ on 2026-07-20. The repository map, all fifty Doppler configs, and all ten
 GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
 has started with preview-10 Auth, Semaphore, Dummy Petshop, and partial OS
 resources. A Cloudflare account-subscription cardinality defect discovered by
-the OS ensure is fixed and tested locally; the live preview-10 retry is next.
-Production deployment and Semaphore lease publication remain later, separate
-approval boundaries.
+the OS ensure is fixed and confirmed live. The retry then exposed and fixed a
+fresh-slot Email Routing ordering defect; preview-10 OS resource reconciliation
+is ready to resume. Production deployment and Semaphore lease publication
+remain later, separate approval boundaries.
 
 ## Goal
 
@@ -330,3 +331,15 @@ the recorded projection.
   pass. OS typecheck reaches an unrelated existing duplicate-React-types error
   in `packages/ui` (`message.tsx` and `spinner.tsx`) and reports no changed-file
   errors.
+- 2026-07-20: The preview-10 retry passed the former subscription failure and
+  created OS/events/MCP/project-host DNS plus enabled Email Routing. Cloudflare
+  then rejected the catch-all with code 2016 because `os-preview-10` is not yet
+  deployed. Fixed this second ordering defect test-first: pre-deploy setup now
+  records the one explicit deferral, while OS deploy requires the Worker and
+  installs the rule after upload. Missing zones and every non-404 API failure
+  remain fatal. All 39 focused tests and changed-file lint pass.
+- 2026-07-20: The repaired OS ensure completed its pre-deploy phase and returned
+  project-directory KV `975b82fbaaf94f2285c2a080b0893f9d` and build-cache KV
+  `225a2d03540343c8a80a80e8ee81a92e`; both are now recorded in `envs.ts`.
+  Preview-10's four-command second ensure remains before its ledger cell can be
+  checked.

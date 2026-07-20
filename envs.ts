@@ -200,8 +200,8 @@ export const envs = {
     authDbId: "ebf149cb-d3ed-48c5-a2d0-010166b25033",
   }),
   preview_10: previewSlot(10, {
-    projectDirectoryKvId: UNPROVISIONED,
-    workerBuildCacheKvId: UNPROVISIONED,
+    projectDirectoryKvId: "975b82fbaaf94f2285c2a080b0893f9d",
+    workerBuildCacheKvId: "225a2d03540343c8a80a80e8ee81a92e",
     authDbId: "7f7562b4-f76a-4c4d-a51e-003e6995f591",
   }),
   preview_11: previewSlot(11, {
