@@ -1543,9 +1543,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS and binds auth's RPC entrypoint, and its integration
-    // e2e uses dummy Petshop. Co-select both; each deploy performs its own
-    // readiness polling, so all three can start together.
+    // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
+    // Petshop. Co-select both; every deploy starts concurrently and OS derives
+    // Auth's public signing key directly from Doppler.
     previewDependencies: ["auth", "dummy-petshop"],
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
@@ -1633,7 +1633,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
-    // Co-select auth; the deploy's own readiness poll removes any ordering need.
+    // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -1653,8 +1653,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
   // credentials are constants in Doppler (`preview provision-auth-preview-configs`);
-  // the auth deploy reseeds them into its database on every run, so auth and
-  // OS tests can run after both apps have finished deploying.
+  // the auth deploy reseeds them into its database on every run. Auth and its
+  // relying parties share one Doppler signing key and can deploy concurrently.
   auth: {
     slug: "auth",
     displayName: "Auth",
@@ -2841,6 +2841,11 @@ function resolveAuthPreviewRootSecret(input: {
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
+  const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  if (!authSigningPrivateJwk) {
+    throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
+  }
+
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
@@ -2853,20 +2858,6 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   }
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
-
-  // Semaphore and the streams playground are relying parties of each slot's
-  // auth deployment: their deploys bake the forge public key into the JWKS,
-  // and their e2e mints admin bearer tokens with the private half. Seed the
-  // key once at each preview root so every preview_N branch config inherits
-  // it.
-  const forgePrivateJwk =
-    getDopplerSecret("semaphore", "preview", "AUTH_FORGE_PRIVATE_JWK") ||
-    getDopplerSecret("os", "preview", "AUTH_FORGE_PRIVATE_JWK");
-  if (!forgePrivateJwk) throw new Error("os/preview is missing AUTH_FORGE_PRIVATE_JWK");
-  setDopplerSecrets("semaphore", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
-  console.log("semaphore/preview root config ensured");
-  setDopplerSecrets("streams-example-app", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
-  console.log("streams-example-app/preview root config ensured");
 
   for (const slot of previewEnvironmentSlotNumbers) {
     const config = `preview_${slot}`;
@@ -2962,28 +2953,12 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: streamsExampleClientSecret,
     });
 
-    if (input.rotate) {
-      clearAuthPreviewJwks({ config, slot });
-    }
-
     console.log(
       `slot ${slot}: auth/${config} + os/${config} + semaphore/${config} + streams-example-app/${config} ensured (clients ${clientId}, ${semaphoreClientId}, ${streamsExampleClientId})`,
     );
   }
 
   console.log("done");
-}
-
-// Better Auth encrypts jwks rows with APP_CONFIG_BETTER_AUTH_SECRET; after a
-// rotation the old rows can no longer be decrypted, so they must be cleared.
-function clearAuthPreviewJwks(input: { config: string; slot: number }) {
-  runDoppler([
-    ...["run", "--project", "auth", "--config", input.config, "--"],
-    ...["pnpm", "--dir", "apps/auth", "exec", "wrangler", "d1", "execute"],
-    `auth-preview-${input.slot}-auth-db`,
-    ...["--remote", "--command", "delete from jwks;"],
-  ]);
-  console.log(`slot ${input.slot}: cleared auth JWKS rows after Better Auth secret rotation`);
 }
 
 function runDoppler(args: string[], input?: string) {

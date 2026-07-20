@@ -54,6 +54,7 @@ export const auth = betterAuth({
   baseURL: config.authAppOrigin,
   plugins: getAuthPlugins({
     authAppOrigin: config.authAppOrigin,
+    authSigningPrivateJwk: config.authSigningPrivateJwk.exposeSecret(),
     emailOtpEnabled: config.emailOtpEnabled,
     fixedTestOtpEnabled: config.fixedTestOtpEnabled,
     emailBinding: env.EMAIL,

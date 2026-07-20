@@ -17,6 +17,7 @@ it("does not emit the local forge JWKS into deployed builds", () => {
     kty: "OKP",
     kid: "test-forge",
     crv: "Ed25519",
+    alg: "EdDSA",
     x: "public-key",
     d: "private-key",
   });
@@ -24,7 +25,7 @@ it("does not emit the local forge JWKS into deployed builds", () => {
   expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "prd" })).toBeUndefined();
   expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })).toBe(
     JSON.stringify({
-      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", x: "public-key" }],
+      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", alg: "EdDSA", x: "public-key" }],
     }),
   );
 });

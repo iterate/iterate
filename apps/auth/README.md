@@ -151,14 +151,11 @@ resulting session/bearer tokens. Users with no organization are redirected to
 auth's `/project-access` page. The MCP server advertises auth as its
 authorization server.
 
-**(b) JWT verification — a JWKS baked at OS deploy time.** OS verifies
-auth-issued tokens against a JWKS. To avoid a runtime round-trip on every cold
-isolate, `apps/os/scripts/deploy.ts` fetches `${issuer}/jwks` at _deploy_ time and
-bakes it into OS's config; if the deploy-time fetch keeps failing, the OS
-deploy fails closed. The verifier can still fall back to the issuer's live
-JWKS when a token kid is missing from an already-baked set, which bridges
-auth-issued tokens across key drift until the next deploy. The forge public
-key (for `pnpm auth:mint`) is merged into the baked JWKS.
+**(b) JWT verification — one Doppler-owned signing key.** Auth's Better Auth
+JWT adapter signs with `AUTH_FORGE_PRIVATE_JWK`. OS, Semaphore, and Streams
+derive only its public half during deploy and verify locally; they neither wait
+for Auth's live JWKS nor fall back to it at runtime. `pnpm auth:mint` uses the
+same private key, so minted and Auth-issued tokens have one trust path.
 
 **(c) Runtime authority — Workers RPC behind a KV cache.** OS ingress resolves
 every project host (`<slug>.iterate.app`) to a project id. The
@@ -263,15 +260,14 @@ then the declarative OAuth client seed (`scripts/seed-oauth-clients.ts`, driven
 by `AUTH_SEED_OAUTH_CLIENTS`).
 
 Each preview slot has its own auth worker (`auth-preview-N`). The preview
-orchestrator expands OS and Semaphore changes to include auth, then deploys
-auth as the first dependency batch. OS and Semaphore deploy in parallel only
-after auth is healthy. A local manual deployment is still available with
+orchestrator expands relying-party changes to include auth, then deploys every
+selected app concurrently. A local manual deployment is still available with
 `pnpm run deploy --env preview_N`, but it is not the normal preview path.
 
-Deploy auth before OS for a new environment and when first rolling out an RPC
-method. Cloudflare rejects an OS deployment whose target auth service does not
-exist; during an interface change, deploying auth first ensures the bound
-default entrypoint understands the new method before OS can call it.
+For the first deployment of a brand-new environment, create Auth before OS so
+Cloudflare can resolve OS's service binding. Once both workers exist, the fixed
+signing key removes JWT deployment sequencing. Breaking RPC interface changes
+still need their own coordinated rollout; additive changes do not.
 
 Production uses `.depot/workflows/deploy-os.yml` as the single coordinated
 Auth + OS rollout. It checks out one revision, deploys `auth-prd`, and only

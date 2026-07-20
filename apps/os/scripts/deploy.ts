@@ -170,9 +170,9 @@ export default async function deploy(
         });
       }
 
-      // Baked at deploy time, so it's the one secret not in secrets.required.
-      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
-        authBaseUrl: ctx.env.authBaseUrl,
+      // Derive Auth's public key locally from the shared Doppler private key.
+      // The private half never ships to OS, and this deploy never waits on Auth.
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = bakeStaticAuthJwks({
         envName: ctx.name,
         dopplerConfig: ctx.env.dopplerConfig,
         secrets: ctx.secrets,

@@ -1,5 +1,6 @@
-import { parseAppConfigFromEnv, publicValue, redacted } from "@iterate-com/shared/config";
+import { parseAppConfigFromEnv, publicValue, redacted, Redacted } from "@iterate-com/shared/config";
 import { z } from "zod/v4";
+import { parseAuthSigningPrivateJwk } from "../../../scripts/lib/bake-auth-jwks.ts";
 
 /**
  * Default glob allowlist promoting matching emails to platform admin.
@@ -63,7 +64,10 @@ export const AppConfig = z.object({
   projectHostnameBase: publicValue(z.string().trim().min(1).default("iterate.app")),
 });
 
-export type AppConfig = z.output<typeof AppConfig>;
+export type AppConfig = z.output<typeof AppConfig> & {
+  /** Doppler-owned Ed25519 key used by Better Auth to sign JWTs. */
+  authSigningPrivateJwk: Redacted<string>;
+};
 
 /**
  * Parse auth config from a worker `env` (the `cloudflare:workers` import or a
@@ -71,9 +75,19 @@ export type AppConfig = z.output<typeof AppConfig>;
  * don't need a cast at every site.
  */
 export function parseConfig(env: unknown): AppConfig {
-  return parseAppConfigFromEnv({
-    configSchema: AppConfig,
-    prefix: "APP_CONFIG_",
-    env: env as Record<string, unknown>,
-  });
+  const rawEnv = env as Record<string, unknown>;
+  const privateJwk = rawEnv.AUTH_FORGE_PRIVATE_JWK;
+  if (typeof privateJwk !== "string" || privateJwk.trim() === "") {
+    throw new Error("AUTH_FORGE_PRIVATE_JWK is required");
+  }
+  parseAuthSigningPrivateJwk(privateJwk);
+
+  return {
+    ...parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: rawEnv,
+    }),
+    authSigningPrivateJwk: new Redacted(privateJwk),
+  };
 }
