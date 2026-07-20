@@ -4,11 +4,6 @@ export type BrowserStreamSubscriberUser = {
   name?: string;
 };
 
-export type BrowserStreamSubscriberUserUpdate = {
-  user: BrowserStreamSubscriberUser | undefined;
-  reconnect: boolean;
-};
-
 /**
  * Apply an auth-session identity update to a browser subscriber. A live
  * subscription must reconnect so its server-side presence descriptor cannot
@@ -18,7 +13,7 @@ export function browserStreamSubscriberUserUpdate(args: {
   current: BrowserStreamSubscriberUser | undefined;
   next: BrowserStreamSubscriberUser | undefined;
   started: boolean;
-}): BrowserStreamSubscriberUserUpdate {
+}): { user: BrowserStreamSubscriberUser | undefined; reconnect: boolean } {
   const unchanged =
     args.current?.email === args.next?.email && args.current?.name === args.next?.name;
   return {
