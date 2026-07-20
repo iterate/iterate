@@ -394,14 +394,35 @@ async function inspectSecretJsonTemplate(
   if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
     return { problem: new SecretSubstitutionError("secret_json_template_invalid_content_type") };
   }
-  const body = await request.clone().text();
-  if (new TextEncoder().encode(body).byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
-    return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
-  }
+  const inspectedBody = await readSecretJsonTemplateBody(request);
+  if (inspectedBody.problem !== undefined) return inspectedBody;
   try {
-    return { value: JSON.parse(body) as unknown };
+    return { value: JSON.parse(inspectedBody.body) as unknown };
   } catch {
     return { problem: new SecretSubstitutionError("secret_json_template_invalid_body") };
+  }
+}
+
+async function readSecretJsonTemplateBody(
+  request: Request,
+): Promise<
+  { body: string; problem?: undefined } | { body?: undefined; problem: SecretSubstitutionError }
+> {
+  const stream = request.clone().body;
+  if (stream === null) return { body: "" };
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let byteLength = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) return { body: body + decoder.decode() };
+    byteLength += chunk.value.byteLength;
+    if (byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
+      void reader.cancel();
+      return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
+    }
+    body += decoder.decode(chunk.value, { stream: true });
   }
 }
 
