@@ -552,7 +552,28 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
               : state.pendingLlmRequestTrigger,
         };
       case "events.iterate.com/agent/resumed":
-        return { ...state, paused: null, autonomousTurnCount: 0 };
+        return {
+          ...state,
+          paused: null,
+          autonomousTurnCount: 0,
+          // Re-anchor a surviving trigger to THIS event. A debounced intent
+          // that landed during the pause folded to nothing but still consumed
+          // the trigger-keyed `request/<offset>` idempotency key —
+          // re-scheduling under the old key would dedupe to that no-op event
+          // forever and strand the trigger. A fresh offset is a fresh key; it
+          // also restarts the debounce window and the expiry horizon from
+          // resume time instead of a possibly long-stale trigger time (a
+          // pause longer than llmRequestExpiryMs would otherwise open a
+          // request that instantly settles expired).
+          pendingLlmRequestTrigger:
+            state.pendingLlmRequestTrigger === null
+              ? null
+              : {
+                  offset: event.offset,
+                  atMs: Date.parse(event.createdAt),
+                  source: state.pendingLlmRequestTrigger.source,
+                },
+        };
       case "events.iterate.com/capability-host/script-run-requested":
         if (!event.payload.executionId.startsWith("agent-output:")) return state;
         return {

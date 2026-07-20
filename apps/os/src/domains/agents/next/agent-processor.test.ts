@@ -543,6 +543,38 @@ describe("AgentNextProcessor stream facts", () => {
     expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("am I still here?");
   });
 
+  it("an intent landing DURING a pause burns its key harmlessly: resume re-anchors the trigger and the turn still runs", async () => {
+    // The tight production race: the pause lands, the auto-resume append (a
+    // droppable background attempt) fails transiently, and the parked
+    // debounced intent fires while the pause still stands. The intent folds
+    // to nothing but consumes the trigger-keyed request/<offset> idempotency
+    // key — without re-anchoring, every post-resume re-schedule would dedupe
+    // against that no-op event forever and the user message would strand.
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("still with me?")], // intent parked, window open
+      () => {
+        h.stream.failAppendsOfType = "events.iterate.com/agent/resumed";
+      },
+      ["append", { type: "events.iterate.com/agent/paused", payload: { reason: "operator" } }],
+      ["advanceTime", 10_000], // the parked intent lands while paused → folds to nothing, key burned
+      () => {
+        h.stream.failAppendsOfType = undefined;
+      },
+      ["append", REVIVED], // any delivery at head: the resume attempt now succeeds
+      ["advanceTime", 10_000], // the re-anchored trigger's window closes → fresh intent
+    );
+
+    expect(h.events("events.iterate.com/agent/resumed")).toHaveLength(1);
+    expect(h.state().paused).toBeNull();
+    // The burned no-op intent is a journal fact; the re-anchored trigger got
+    // a FRESH key, so a second requested event committed and the turn ran.
+    expect(h.events(REQUESTED)).toHaveLength(2);
+    expect(h.state().openRequest).not.toBeNull();
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("still with me?");
+  });
+
   it("re-scheduling the same trigger produces an identical intent body that dedupes on the key", async () => {
     // Every at-head delivery while the debounce window is open schedules
     // another sleep-then-append for the SAME trigger. The body is
