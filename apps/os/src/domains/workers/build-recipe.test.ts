@@ -40,6 +40,35 @@ describe("prepareWorkerBuild", () => {
     });
   });
 
+  it("pre-seeds a workerd form-data shim so npm install leaves it alone", () => {
+    const prepared = prepareWorkerBuild({
+      files: { "worker.ts": "export default {};" },
+      options: { entryPoint: "worker.ts" },
+    });
+    expect(JSON.parse(prepared.files["node_modules/form-data/package.json"]!)).toMatchObject({
+      name: "form-data",
+      main: "./index.js",
+    });
+    expect(prepared.files["node_modules/form-data/index.js"]).toContain("globalThis.FormData");
+    expect(prepared.files["node_modules/form-data/index.js"]).toContain("module.exports");
+  });
+
+  it("does not overwrite a project-supplied form-data package", () => {
+    const prepared = prepareWorkerBuild({
+      files: {
+        "worker.ts": "export default {};",
+        "node_modules/form-data/package.json": JSON.stringify({
+          name: "form-data",
+          main: "./mine.js",
+        }),
+        "node_modules/form-data/mine.js": "module.exports = 'project';",
+      },
+      options: { entryPoint: "worker.ts" },
+    });
+    expect(prepared.files["node_modules/form-data/mine.js"]).toBe("module.exports = 'project';");
+    expect(prepared.files["node_modules/form-data/index.js"]).toBeUndefined();
+  });
+
   it("prepares a full-stack app when client is set", () => {
     const prepared = prepareWorkerBuild({
       files: {
@@ -74,7 +103,15 @@ describe("prepareWorkerBuild", () => {
     });
     expect(prepared.kind).toBe("app");
     if (prepared.kind !== "app") throw new Error("expected app");
-    expect(Object.keys(prepared.files).sort()).toEqual(["src/client.tsx", "src/server.tsx"]);
+    expect(prepared.files["src/client.tsx"]).toBeDefined();
+    expect(prepared.files["src/server.tsx"]).toBeDefined();
+    // Platform shims land under node_modules; only the re-rooted source
+    // entries from the fixture should be present alongside them.
+    expect(
+      Object.keys(prepared.files)
+        .filter((name) => !name.startsWith("node_modules/"))
+        .sort(),
+    ).toEqual(["src/client.tsx", "src/server.tsx"]);
 
     expect(() =>
       prepareWorkerBuild({

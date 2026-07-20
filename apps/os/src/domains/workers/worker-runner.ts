@@ -56,6 +56,15 @@ export class DynamicWorkerRunner {
   readonly #projectId: string;
   readonly #scopePath: string;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
+  /**
+   * Sources this runner has already materialised in THIS outer-DO incarnation.
+   * Loader-ready (`bundle: false`) keys never enter the KV artifact store; the
+   * stale-while-rebuild remount path still needs them when the facet is cold
+   * but the host is warm. A killed/evicted host starts a new runner with an
+   * empty map, so concurrent-cache-miss recovery still falls through to the
+   * blocking load of the current ref.
+   */
+  readonly #resolvedByCacheKey = new Map<string, ResolvedWorkerSource>();
 
   constructor(props: {
     /** The hosting context's `ctx.exports` — loopback entrypoints are minted
@@ -78,6 +87,11 @@ export class DynamicWorkerRunner {
     this.#projectId = props.projectId;
     this.#scopePath = props.scopePath;
     this.#waitUntil = props.waitUntil;
+  }
+
+  #rememberResolved(resolved: ResolvedWorkerSource): ResolvedWorkerSource {
+    this.#resolvedByCacheKey.set(resolved.cacheKey, resolved);
+    return resolved;
   }
 
   /**
@@ -104,6 +118,7 @@ export class DynamicWorkerRunner {
     buildBudgetMs?: number,
   ): Promise<{ klass: T; resolved: ServedWorkerSource }> {
     const { resolved, worker } = await this.#load(ref, buildBudgetMs);
+    this.#rememberResolved(resolved);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
 
@@ -135,8 +150,10 @@ export class DynamicWorkerRunner {
     ref: StatefulDynamicWorkerRef,
     cacheKey: string,
   ): Promise<{ klass: T; resolved: ResolvedWorkerSource } | null> {
-    const resolved = await resolveCachedArtifact(cacheKey);
+    const resolved =
+      this.#resolvedByCacheKey.get(cacheKey) ?? (await resolveCachedArtifact(cacheKey));
     if (resolved === null) return null;
+    this.#rememberResolved(resolved);
     const worker = this.#loadResolved(ref, resolved);
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }

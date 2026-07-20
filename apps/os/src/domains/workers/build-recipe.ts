@@ -115,7 +115,9 @@ export function prepareWorkerBuild(input: {
   // accepts them. Materialising platform modules into the virtual node_modules
   // tree keeps one preparation path for both lanes (and is what the bundler's
   // package resolver already understands).
-  const filesWithVirtuals = materializeVirtualModules(files, virtualModules);
+  const filesWithVirtuals = materializePlatformPackageShims(
+    materializeVirtualModules(files, virtualModules),
+  );
 
   if (client !== undefined) {
     if (!(client in files)) {
@@ -137,6 +139,81 @@ export function prepareWorkerBuild(input: {
     minify,
   };
 }
+
+/**
+ * Workerd-friendly replacements for npm packages that worker-bundler's
+ * in-worker installer/esbuild path often leaves as bare externals (so the
+ * Worker Loader then dies with `No such module "…"` at runtime).
+ *
+ * Pre-seeding `node_modules/<name>/package.json` also makes the installer
+ * treat the package as already present and skip the registry tarball — the
+ * shim is what gets bundled.
+ *
+ * Source content wins when the project already ships its own copy under the
+ * same path (we never overwrite).
+ */
+function materializePlatformPackageShims(files: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = { ...files };
+  for (const shim of PLATFORM_PACKAGE_SHIMS) {
+    // Whole package is caller-owned once any of its paths is present — do not
+    // partial-overlay a platform shim on top of project-supplied files.
+    const alreadyPresent = Object.keys(shim.files).some(
+      (relativePath) => `node_modules/${shim.name}/${relativePath}` in out,
+    );
+    if (alreadyPresent) continue;
+    for (const [relativePath, content] of Object.entries(shim.files)) {
+      out[`node_modules/${shim.name}/${relativePath}`] = content;
+    }
+  }
+  return out;
+}
+
+/**
+ * Minimal CommonJS form-data that rides workerd's native FormData. Enough for
+ * SDKs that only `require("form-data")` and construct multipart bodies
+ * (@slack/web-api, axios). Node stream helpers are intentionally absent.
+ */
+const FORM_DATA_SHIM_JS = `"use strict";
+const Native = globalThis.FormData;
+function FormData(options) {
+  const form = new Native();
+  if (options && typeof options === "object") {
+    for (const [key, value] of Object.entries(options)) {
+      if (typeof form[key] === "undefined") form[key] = value;
+    }
+  }
+  if (typeof form.getHeaders !== "function") {
+    form.getHeaders = function getHeaders() {
+      return {};
+    };
+  }
+  return form;
+}
+FormData.default = FormData;
+module.exports = FormData;
+`;
+
+const PLATFORM_PACKAGE_SHIMS: ReadonlyArray<{
+  name: string;
+  files: Record<string, string>;
+}> = [
+  {
+    name: "form-data",
+    files: {
+      "package.json": JSON.stringify(
+        {
+          name: "form-data",
+          version: "0.0.0-iterate-workerd",
+          main: "./index.js",
+          browser: "./index.js",
+        },
+        null,
+        2,
+      ),
+      "index.js": FORM_DATA_SHIM_JS,
+    },
+  },
+];
 
 /**
  * Write platform virtual modules into a virtual `node_modules` layout so both

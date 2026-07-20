@@ -33,10 +33,12 @@ class StaleFacetUnavailableError extends Error {
         : typeof error === "object" && error !== null && "message" in error
           ? Reflect.get(error, "message")
           : undefined;
-    if (typeof message !== "string" || !message.startsWith(StaleFacetUnavailableError.code)) {
-      return null;
-    }
-    const encoded = message.slice(StaleFacetUnavailableError.code.length).split(" ", 1)[0];
+    if (typeof message !== "string") return null;
+    // Cap'n Web / workerd sometimes wrap the message (`Error: iterate:…`);
+    // find the stable code anywhere rather than requiring a prefix match.
+    const codeAt = message.indexOf(StaleFacetUnavailableError.code);
+    if (codeAt < 0) return null;
+    const encoded = message.slice(codeAt + StaleFacetUnavailableError.code.length).split(" ", 1)[0];
     if (encoded === undefined || encoded.length === 0) return null;
     try {
       return decodeURIComponent(encoded);
@@ -153,10 +155,27 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     // ownership boundary boring: the outer DO receives a call, resolves the
     // current recipe, restarts the facet if the source changed, and performs the
     // method replay without leaking the inner facet reference.
-    const target = await this.#facet(ref, buildBudgetMs);
-    return flattenNestedPath
-      ? await invokePreferringFlattenedPath({ args, path, target })
-      : await replayPath({ args, path, target });
+    //
+    // Retry once on StaleFacetUnavailable: identity bootstrap is supposed to
+    // settle the lazy facet initializer, but plain DurableObject classes (no
+    // invokeCapability) can mark identity as "cannot accept" without observing
+    // an initializer rejection. The real method call then surfaces the
+    // sentinel — recover here so it never leaks to the caller.
+    let recoveredUnavailableFacet = false;
+    for (;;) {
+      try {
+        const target = await this.#facet(ref, buildBudgetMs);
+        return flattenNestedPath
+          ? await invokePreferringFlattenedPath({ args, path, target })
+          : await replayPath({ args, path, target });
+      } catch (error) {
+        const unavailableVersion = StaleFacetUnavailableError.version(error);
+        if (unavailableVersion === null || recoveredUnavailableFacet) throw error;
+        await this.#recoverUnavailableFacet(ref, buildBudgetMs, unavailableVersion);
+        this.#identityDelivered = undefined;
+        recoveredUnavailableFacet = true;
+      }
+    }
   }
 
   /**
