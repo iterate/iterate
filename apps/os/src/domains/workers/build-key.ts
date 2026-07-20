@@ -51,12 +51,13 @@ export type WorkerBuildInput = {
  * version. Same input, same key — concurrent callers converge on one artifact
  * and a repeated request is a cache hit.
  *
- * This content-only key is the TRUSTED tier: artifacts under it may be served
- * to ANY project, so only trusted builders (the deploy-time template seeder —
- * real CI toolchain, no project influence) may ever write it. Runtime builds
- * run in the project's own builder sandbox, whose output a project-trusted
- * principal can influence, so they read and write the project-scoped
- * {@link projectWorkerBuildKey} instead.
+ * This content-only key is the shared tier: the same source + options always
+ * produce the same key, so every project with identical template content can
+ * share one artifact. Builds only parse and bundle source (worker-bundler);
+ * they never execute project build scripts, so there is no per-project
+ * builder environment that could poison a shared result. The project-scoped
+ * {@link projectWorkerBuildKey} remains as a write target for runtime builds
+ * that also want an isolation boundary, and as the last-good pointer scope.
  */
 export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
   return await stableSha256({
@@ -70,9 +71,9 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
   });
 }
 
-/** The runtime tier's key: the content-only {@link workerBuildKey} plus the
- * project identity, so artifacts built in one project's builder sandbox are
- * never served to another project. */
+/** Optional project-scoped key: the content-only {@link workerBuildKey} plus
+ * the project identity. Runtime still writes here so last-good pointers and
+ * in-flight markers stay project-local even though the build itself is pure. */
 export async function projectWorkerBuildKey(projectId: string, sharedKey: string): Promise<string> {
   return await stableSha256({
     projectId,

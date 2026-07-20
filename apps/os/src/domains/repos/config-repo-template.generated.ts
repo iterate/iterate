@@ -195,31 +195,221 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"name\": \"project-guestbook\",\n" +
       "  \"private\": true,\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"The project's guestbook: a TanStack Start app (built by the platform's vite worker-build pipeline) whose state is a stream-processor fold of durable events at /guestbook — the hosting Durable Object mirrors the fold into Cap'n Web live state, so every open tab repaints the moment anyone signs.\",\n" +
-      "  \"scripts\": {\n" +
-      "    \"build\": \"vite build\"\n" +
-      "  },\n" +
+      "  \"description\": \"The project's guestbook: a React app (bundled by @cloudflare/worker-bundler) whose state is a stream-processor fold of durable events at /guestbook — the hosting Durable Object mirrors the fold into Cap'n Web live state, so every open tab repaints the moment anyone signs.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"@tanstack/react-router\": \"1.170.15\",\n" +
-      "    \"@tanstack/react-start\": \"1.168.18\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.1.1\",\n" +
       "    \"react-dom\": \"19.1.1\",\n" +
       "    \"zod\": \"4.3.6\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
-      "    \"@cloudflare/vite-plugin\": \"1.43.0\",\n" +
-      "    \"@tailwindcss/vite\": \"4.3.2\",\n" +
+      "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
       "    \"@types/react\": \"19.2.17\",\n" +
       "    \"@types/react-dom\": \"19.2.3\",\n" +
-      "    \"@vitejs/plugin-react\": \"6.0.2\",\n" +
-      "    \"tailwindcss\": \"4.3.2\",\n" +
-      "    \"typescript\": \"5.9.3\",\n" +
-      "    \"vite\": \"8.0.16\",\n" +
-      "    \"wrangler\": \"4.107.0\"\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
+      "    \"typescript\": \"5.9.3\"\n" +
       "  }\n" +
       "}\n",
+  },
+  {
+    path: "apps/guestbook/src/app.tsx",
+    content:
+      "import { useState } from \"react\";\n" +
+      "import { useGuestbook } from \"./lib/use-guestbook.ts\";\n" +
+      "\n" +
+      "// The project's public guestbook. Its state is a stream-processor fold on the\n" +
+      "// project stream at /guestbook (src/guestbook-app.ts hosts the processor);\n" +
+      "// this page hydrates, opens /api, and stays live — every open tab repaints the\n" +
+      "// moment anyone signs, and every fifth signature earns a milestone from the\n" +
+      "// processor's at-head reconcile.\n" +
+      "export function Guestbook() {\n" +
+      "  const { guestbook, api, error } = useGuestbook();\n" +
+      "  const [name, setName] = useState(\"\");\n" +
+      "  const [message, setMessage] = useState(\"\");\n" +
+      "  const ready = api !== null && guestbook !== undefined;\n" +
+      "\n" +
+      "  return (\n" +
+      "    <main style={styles.main}>\n" +
+      "      <header style={styles.header}>\n" +
+      "        <h1 style={styles.h1}>{guestbook?.birthCertificate?.config.title ?? \"Guestbook\"}</h1>\n" +
+      "        {guestbook !== undefined ? (\n" +
+      "          <p style={styles.meta}>\n" +
+      "            {guestbook.entries.length === 0\n" +
+      "              ? \"no signatures yet\"\n" +
+      "              : `${guestbook.entries.length} signature${guestbook.entries.length === 1 ? \"\" : \"s\"}`}\n" +
+      "            {guestbook.lastMilestone > 0 ? (\n" +
+      "              <span style={styles.milestone}> · milestone {guestbook.lastMilestone}</span>\n" +
+      "            ) : null}\n" +
+      "          </p>\n" +
+      "        ) : null}\n" +
+      "      </header>\n" +
+      "\n" +
+      "      {error !== null ? <p style={styles.error}>{error}</p> : null}\n" +
+      "\n" +
+      "      <form\n" +
+      "        style={styles.form}\n" +
+      "        onSubmit={(event) => {\n" +
+      "          event.preventDefault();\n" +
+      "          if (api && name.trim() && message.trim()) {\n" +
+      "            void api.sign(name, message);\n" +
+      "            setMessage(\"\");\n" +
+      "          }\n" +
+      "        }}\n" +
+      "      >\n" +
+      "        <div style={styles.row}>\n" +
+      "          <input\n" +
+      "            style={styles.input}\n" +
+      "            value={name}\n" +
+      "            onChange={(event) => setName(event.target.value)}\n" +
+      "            placeholder=\"name\"\n" +
+      "            aria-label=\"your name\"\n" +
+      "            disabled={!ready}\n" +
+      "          />\n" +
+      "          <input\n" +
+      "            style={{ ...styles.input, flex: 1 }}\n" +
+      "            value={message}\n" +
+      "            onChange={(event) => setMessage(event.target.value)}\n" +
+      "            placeholder=\"leave a message\"\n" +
+      "            aria-label=\"your message\"\n" +
+      "            disabled={!ready}\n" +
+      "          />\n" +
+      "        </div>\n" +
+      "        <div style={styles.rowBetween}>\n" +
+      "          <p style={styles.hint} aria-live=\"polite\">\n" +
+      "            {ready ? \"signatures appear live in every open tab\" : \"connecting…\"}\n" +
+      "          </p>\n" +
+      "          <button\n" +
+      "            type=\"submit\"\n" +
+      "            style={styles.button}\n" +
+      "            disabled={!ready || name.trim() === \"\" || message.trim() === \"\"}\n" +
+      "          >\n" +
+      "            Sign\n" +
+      "          </button>\n" +
+      "        </div>\n" +
+      "      </form>\n" +
+      "\n" +
+      "      <section style={styles.section} aria-label=\"signatures\">\n" +
+      "        {guestbook === undefined ? (\n" +
+      "          <p style={styles.hint}>loading signatures…</p>\n" +
+      "        ) : guestbook.entries.length === 0 ? (\n" +
+      "          <p style={styles.empty}>Nobody has signed yet — be the first.</p>\n" +
+      "        ) : (\n" +
+      "          guestbook.entries\n" +
+      "            .map((entry, index) => ({ entry, index }))\n" +
+      "            .reverse()\n" +
+      "            .map(({ entry, index }) => (\n" +
+      "              <article key={index} style={styles.card}>\n" +
+      "                <span aria-hidden style={styles.avatar}>\n" +
+      "                  {entry.name.slice(0, 1).toUpperCase()}\n" +
+      "                </span>\n" +
+      "                <div>\n" +
+      "                  <p style={styles.cardTitle}>\n" +
+      "                    <span>{entry.name}</span>\n" +
+      "                    <time dateTime={entry.signedAt} title={entry.signedAt} style={styles.time}>\n" +
+      "                      {new Date(entry.signedAt).toLocaleString(undefined, {\n" +
+      "                        month: \"short\",\n" +
+      "                        day: \"numeric\",\n" +
+      "                        hour: \"numeric\",\n" +
+      "                        minute: \"2-digit\",\n" +
+      "                      })}\n" +
+      "                    </time>\n" +
+      "                  </p>\n" +
+      "                  <p style={styles.message}>{entry.message}</p>\n" +
+      "                </div>\n" +
+      "              </article>\n" +
+      "            ))\n" +
+      "        )}\n" +
+      "      </section>\n" +
+      "    </main>\n" +
+      "  );\n" +
+      "}\n" +
+      "\n" +
+      "const styles = {\n" +
+      "  main: { fontFamily: \"system-ui, sans-serif\", maxWidth: 560, margin: \"0 auto\", padding: \"48px 16px\" },\n" +
+      "  header: { display: \"flex\", alignItems: \"baseline\", justifyContent: \"space-between\", gap: 16 },\n" +
+      "  h1: { fontSize: 28, margin: 0 },\n" +
+      "  meta: { fontSize: 14, color: \"#78716c\", margin: 0 },\n" +
+      "  milestone: { color: \"#b45309\" },\n" +
+      "  error: {\n" +
+      "    marginTop: 24,\n" +
+      "    padding: \"12px 16px\",\n" +
+      "    border: \"1px solid #fecaca\",\n" +
+      "    background: \"#fef2f2\",\n" +
+      "    color: \"#b91c1c\",\n" +
+      "    borderRadius: 8,\n" +
+      "    fontSize: 14,\n" +
+      "  },\n" +
+      "  form: {\n" +
+      "    marginTop: 32,\n" +
+      "    padding: 16,\n" +
+      "    border: \"1px solid #e7e5e4\",\n" +
+      "    borderRadius: 16,\n" +
+      "    background: \"#fff\",\n" +
+      "  },\n" +
+      "  row: { display: \"flex\", gap: 12 },\n" +
+      "  rowBetween: { display: \"flex\", alignItems: \"center\", justifyContent: \"space-between\", marginTop: 12 },\n" +
+      "  input: {\n" +
+      "    width: 160,\n" +
+      "    border: \"1px solid #e7e5e4\",\n" +
+      "    borderRadius: 8,\n" +
+      "    padding: \"8px 12px\",\n" +
+      "    fontSize: 14,\n" +
+      "  },\n" +
+      "  button: {\n" +
+      "    border: 0,\n" +
+      "    borderRadius: 8,\n" +
+      "    padding: \"8px 16px\",\n" +
+      "    background: \"#1c1917\",\n" +
+      "    color: \"#fff\",\n" +
+      "    fontSize: 14,\n" +
+      "    fontWeight: 500,\n" +
+      "    cursor: \"pointer\",\n" +
+      "  },\n" +
+      "  hint: { fontSize: 12, color: \"#a8a29e\", margin: 0 },\n" +
+      "  section: { marginTop: 32, display: \"flex\", flexDirection: \"column\" as const, gap: 12 },\n" +
+      "  empty: {\n" +
+      "    border: \"1px dashed #d6d3d1\",\n" +
+      "    borderRadius: 16,\n" +
+      "    padding: \"32px 16px\",\n" +
+      "    textAlign: \"center\" as const,\n" +
+      "    color: \"#a8a29e\",\n" +
+      "    fontSize: 14,\n" +
+      "  },\n" +
+      "  card: {\n" +
+      "    display: \"flex\",\n" +
+      "    gap: 12,\n" +
+      "    border: \"1px solid #e7e5e4\",\n" +
+      "    borderRadius: 16,\n" +
+      "    padding: 16,\n" +
+      "    background: \"#fff\",\n" +
+      "  },\n" +
+      "  avatar: {\n" +
+      "    display: \"flex\",\n" +
+      "    alignItems: \"center\",\n" +
+      "    justifyContent: \"center\",\n" +
+      "    width: 36,\n" +
+      "    height: 36,\n" +
+      "    borderRadius: \"999px\",\n" +
+      "    background: \"#fef3c7\",\n" +
+      "    color: \"#92400e\",\n" +
+      "    fontWeight: 600,\n" +
+      "    fontSize: 14,\n" +
+      "    flexShrink: 0,\n" +
+      "  },\n" +
+      "  cardTitle: { display: \"flex\", alignItems: \"baseline\", gap: 8, margin: 0, fontWeight: 500 },\n" +
+      "  time: { fontSize: 12, color: \"#a8a29e\", fontWeight: 400 },\n" +
+      "  message: { margin: \"4px 0 0\", fontSize: 14, color: \"#57534e\" },\n" +
+      "} as const;\n",
+  },
+  {
+    path: "apps/guestbook/src/client.tsx",
+    content:
+      "import { hydrateRoot } from \"react-dom/client\";\n" +
+      "import { Guestbook } from \"./app.tsx\";\n" +
+      "\n" +
+      "const root = document.getElementById(\"root\");\n" +
+      "if (root === null) throw new Error(\"missing #root\");\n" +
+      "hydrateRoot(root, <Guestbook />);\n",
   },
   {
     path: "apps/guestbook/src/guestbook-app.ts",
@@ -245,9 +435,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
       "\n" +
-      "// The small, stateful half of the guestbook. It has its own Wrangler entry so\n" +
+      "// The small, stateful half of the guestbook. It has its own worker entry so\n" +
       "// a cold /api WebSocket loads only the processor host and Cap'n Web runtime,\n" +
-      "// never the unrelated TanStack SSR bundle in worker.ts.\n" +
+      "// never the unrelated React page bundle.\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
       "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
       "  #configurationInFlight: Promise<void> | undefined;\n" +
@@ -428,24 +618,28 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
-      "/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */\n" +
+      "/** React pages + client bundle, built by worker-bundler's createApp lane. */\n" +
       "export const guestbookPageSource = {\n" +
       "  files: repoFiles,\n" +
-      "  options: { pipeline: \"vite\", rootDir: \"apps/guestbook\" },\n" +
+      "  options: {\n" +
+      "    client: \"src/client.tsx\",\n" +
+      "    entryPoint: \"src/server.tsx\",\n" +
+      "    rootDir: \"apps/guestbook\",\n" +
+      "  },\n" +
       "} satisfies DynamicWorkerSource;\n" +
       "\n" +
       "// One declarative ref for the guestbook host, shared by the HTTP routes and\n" +
       "// the wake subscription below — the same Durable Object either way, addressed\n" +
-      "// by its durableWorkerKey. Its small Wrangler entry excludes the independent\n" +
-      "// TanStack SSR build. The stale policy lets a still-running facet answer while\n" +
-      "// the host checks for a newer repo version in the background; a cold facet\n" +
-      "// mounts this exact cached artifact.\n" +
+      "// by its durableWorkerKey. Its small createWorker entry excludes the page\n" +
+      "// bundle. The stale policy lets a still-running facet answer while the host\n" +
+      "// checks for a newer repo version in the background; a cold facet mounts this\n" +
+      "// exact cached artifact.\n" +
       "export const guestbookAppRef = {\n" +
       "  type: \"stateful\",\n" +
       "  path: \"/\",\n" +
       "  className: \"GuestbookApp\",\n" +
       "  // The split app cannot share the legacy host: that host's persisted wake\n" +
-      "  // recipe can resolve today's page-only Vite build, which no longer exports\n" +
+      "  // recipe can resolve today's page-only build, which no longer exports\n" +
       "  // GuestbookApp, and poison its live facet before the new ref arrives. The\n" +
       "  // fold's truth is the stream, so this new host safely rebuilds by replay.\n" +
       "  durableWorkerKey: \"app-guestbook-v2\",\n" +
@@ -730,372 +924,298 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/guestbook/src/routeTree.gen.ts",
+    path: "apps/guestbook/src/server.tsx",
     content:
-      "/* eslint-disable */\n" +
-      "\n" +
-      "// @ts-nocheck\n" +
-      "\n" +
-      "// noinspection JSUnusedGlobalSymbols\n" +
-      "\n" +
-      "// This file was automatically generated by TanStack Router.\n" +
-      "// You should NOT make any changes in this file as it will be overwritten.\n" +
-      "// Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.\n" +
-      "\n" +
-      "import { Route as rootRouteImport } from './routes/__root'\n" +
-      "import { Route as IndexRouteImport } from './routes/index'\n" +
-      "\n" +
-      "const IndexRoute = IndexRouteImport.update({\n" +
-      "  id: '/',\n" +
-      "  path: '/',\n" +
-      "  getParentRoute: () => rootRouteImport,\n" +
-      "} as any)\n" +
-      "\n" +
-      "export interface FileRoutesByFullPath {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesByTo {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesById {\n" +
-      "  __root__: typeof rootRouteImport\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRouteTypes {\n" +
-      "  fileRoutesByFullPath: FileRoutesByFullPath\n" +
-      "  fullPaths: '/'\n" +
-      "  fileRoutesByTo: FileRoutesByTo\n" +
-      "  to: '/'\n" +
-      "  id: '__root__' | '/'\n" +
-      "  fileRoutesById: FileRoutesById\n" +
-      "}\n" +
-      "export interface RootRouteChildren {\n" +
-      "  IndexRoute: typeof IndexRoute\n" +
-      "}\n" +
-      "\n" +
-      "declare module '@tanstack/react-router' {\n" +
-      "  interface FileRoutesByPath {\n" +
-      "    '/': {\n" +
-      "      id: '/'\n" +
-      "      path: '/'\n" +
-      "      fullPath: '/'\n" +
-      "      preLoaderRoute: typeof IndexRouteImport\n" +
-      "      parentRoute: typeof rootRouteImport\n" +
-      "    }\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "const rootRouteChildren: RootRouteChildren = {\n" +
-      "  IndexRoute: IndexRoute,\n" +
-      "}\n" +
-      "export const routeTree = rootRouteImport\n" +
-      "  ._addFileChildren(rootRouteChildren)\n" +
-      "  ._addFileTypes<FileRouteTypes>()\n" +
-      "\n" +
-      "import type { getRouter } from './router.tsx'\n" +
-      "import type { createStart } from '@tanstack/react-start'\n" +
-      "declare module '@tanstack/react-start' {\n" +
-      "  interface Register {\n" +
-      "    ssr: true\n" +
-      "    router: Awaited<ReturnType<typeof getRouter>>\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/router.tsx",
-    content:
-      "import { createRouter } from \"@tanstack/react-router\";\n" +
-      "import { routeTree } from \"./routeTree.gen.ts\";\n" +
-      "\n" +
-      "export function getRouter() {\n" +
-      "  return createRouter({ routeTree });\n" +
-      "}\n" +
-      "\n" +
-      "declare module \"@tanstack/react-router\" {\n" +
-      "  interface Register {\n" +
-      "    router: ReturnType<typeof getRouter>;\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/routes/__root.tsx",
-    content:
-      "import type { ReactNode } from \"react\";\n" +
-      "import { createRootRoute, HeadContent, Outlet, Scripts } from \"@tanstack/react-router\";\n" +
-      "import appCss from \"../styles.css?url\";\n" +
-      "\n" +
-      "export const Route = createRootRoute({\n" +
-      "  head: () => ({\n" +
-      "    meta: [\n" +
-      "      { charSet: \"utf-8\" },\n" +
-      "      { name: \"viewport\", content: \"width=device-width, initial-scale=1\" },\n" +
-      "      { title: \"Guestbook\" },\n" +
-      "    ],\n" +
-      "    links: [{ rel: \"stylesheet\", href: appCss }],\n" +
-      "  }),\n" +
-      "  component: RootComponent,\n" +
-      "});\n" +
-      "\n" +
-      "function RootComponent() {\n" +
-      "  return (\n" +
-      "    <RootDocument>\n" +
-      "      <Outlet />\n" +
-      "    </RootDocument>\n" +
-      "  );\n" +
-      "}\n" +
-      "\n" +
-      "function RootDocument({ children }: Readonly<{ children: ReactNode }>) {\n" +
-      "  return (\n" +
-      "    <html lang=\"en\">\n" +
-      "      <head>\n" +
-      "        <HeadContent />\n" +
-      "      </head>\n" +
-      "      <body className=\"min-h-screen bg-stone-100 text-stone-900 antialiased\">\n" +
-      "        {children}\n" +
-      "        <Scripts />\n" +
-      "      </body>\n" +
-      "    </html>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/routes/index.tsx",
-    content:
-      "import { createFileRoute } from \"@tanstack/react-router\";\n" +
-      "import { useState } from \"react\";\n" +
-      "import { useGuestbook } from \"../lib/use-guestbook.ts\";\n" +
-      "\n" +
-      "export const Route = createFileRoute(\"/\")({ component: Guestbook });\n" +
-      "\n" +
-      "// The project's public guestbook. Its state is a stream-processor fold on the\n" +
-      "// project stream at /guestbook (src/guestbook-app.ts hosts the processor);\n" +
-      "// this page hydrates, opens /api, and stays live — every open tab repaints the\n" +
-      "// moment anyone signs, and every fifth signature earns a milestone from the\n" +
-      "// processor's at-head reconcile.\n" +
-      "function Guestbook() {\n" +
-      "  const { guestbook, api, error } = useGuestbook();\n" +
-      "  const [name, setName] = useState(\"\");\n" +
-      "  const [message, setMessage] = useState(\"\");\n" +
-      "  const ready = api !== null && guestbook !== undefined;\n" +
-      "\n" +
-      "  return (\n" +
-      "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
-      "      <header className=\"flex items-baseline justify-between gap-4\">\n" +
-      "        <h1 className=\"text-3xl font-semibold tracking-tight\">\n" +
-      "          {guestbook?.birthCertificate?.config.title ?? \"Guestbook\"}\n" +
-      "        </h1>\n" +
-      "        {guestbook !== undefined ? (\n" +
-      "          <p className=\"text-sm text-stone-500\">\n" +
-      "            {guestbook.entries.length === 0\n" +
-      "              ? \"no signatures yet\"\n" +
-      "              : `${guestbook.entries.length} signature${guestbook.entries.length === 1 ? \"\" : \"s\"}`}\n" +
-      "            {guestbook.lastMilestone > 0 ? (\n" +
-      "              <span className=\"ml-2 inline-flex items-baseline gap-1.5\">\n" +
-      "                <span className=\"inline-block size-1.5 translate-y-px rounded-full bg-amber-400\" />\n" +
-      "                milestone {guestbook.lastMilestone}\n" +
-      "              </span>\n" +
-      "            ) : null}\n" +
-      "          </p>\n" +
-      "        ) : null}\n" +
-      "      </header>\n" +
-      "\n" +
-      "      {error !== null ? (\n" +
-      "        <p className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\">\n" +
-      "          {error}\n" +
-      "        </p>\n" +
-      "      ) : null}\n" +
-      "\n" +
-      "      <form\n" +
-      "        className=\"mt-8 space-y-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm\"\n" +
-      "        onSubmit={(event) => {\n" +
-      "          event.preventDefault();\n" +
-      "          if (api && name.trim() && message.trim()) {\n" +
-      "            void api.sign(name, message);\n" +
-      "            setMessage(\"\");\n" +
-      "          }\n" +
-      "        }}\n" +
-      "      >\n" +
-      "        <div className=\"flex gap-3\">\n" +
-      "          <input\n" +
-      "            className=\"w-40 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none transition focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-100\"\n" +
-      "            value={name}\n" +
-      "            onChange={(event) => setName(event.target.value)}\n" +
-      "            placeholder=\"name\"\n" +
-      "            aria-label=\"your name\"\n" +
-      "            disabled={!ready}\n" +
-      "          />\n" +
-      "          <input\n" +
-      "            className=\"flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none transition focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-100\"\n" +
-      "            value={message}\n" +
-      "            onChange={(event) => setMessage(event.target.value)}\n" +
-      "            placeholder=\"leave a message\"\n" +
-      "            aria-label=\"your message\"\n" +
-      "            disabled={!ready}\n" +
-      "          />\n" +
-      "        </div>\n" +
-      "        <div className=\"flex items-center justify-between\">\n" +
-      "          <p className=\"text-xs text-stone-400\" aria-live=\"polite\">\n" +
-      "            {ready ? \"signatures appear live in every open tab\" : \"connecting…\"}\n" +
-      "          </p>\n" +
-      "          <button\n" +
-      "            type=\"submit\"\n" +
-      "            className=\"rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "            disabled={!ready || name.trim() === \"\" || message.trim() === \"\"}\n" +
-      "          >\n" +
-      "            Sign\n" +
-      "          </button>\n" +
-      "        </div>\n" +
-      "      </form>\n" +
-      "\n" +
-      "      <section className=\"mt-8 space-y-3\" aria-label=\"signatures\">\n" +
-      "        {guestbook === undefined ? (\n" +
-      "          <p className=\"text-sm text-stone-400\">loading signatures…</p>\n" +
-      "        ) : guestbook.entries.length === 0 ? (\n" +
-      "          <p className=\"rounded-2xl border border-dashed border-stone-300 px-4 py-8 text-center text-sm text-stone-400\">\n" +
-      "            Nobody has signed yet — be the first.\n" +
-      "          </p>\n" +
-      "        ) : (\n" +
-      "          guestbook.entries\n" +
-      "            .map((entry, index) => ({ entry, index }))\n" +
-      "            .reverse()\n" +
-      "            // The pre-reverse index: entries are append-only in the fold, so\n" +
-      "            // it identifies a row for its whole lifetime — a new signature\n" +
-      "            // inserts one element instead of remounting the list.\n" +
-      "            .map(({ entry, index }) => (\n" +
-      "              <article\n" +
-      "                key={index}\n" +
-      "                className=\"flex gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm\"\n" +
-      "              >\n" +
-      "                <span\n" +
-      "                  aria-hidden\n" +
-      "                  className=\"flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-800\"\n" +
-      "                >\n" +
-      "                  {entry.name.slice(0, 1).toUpperCase()}\n" +
-      "                </span>\n" +
-      "                <div className=\"min-w-0\">\n" +
-      "                  <p className=\"flex items-baseline gap-2\">\n" +
-      "                    <span className=\"truncate font-medium\">{entry.name}</span>\n" +
-      "                    <time\n" +
-      "                      className=\"shrink-0 text-xs text-stone-400\"\n" +
-      "                      dateTime={entry.signedAt}\n" +
-      "                      title={entry.signedAt}\n" +
-      "                    >\n" +
-      "                      {new Date(entry.signedAt).toLocaleString(undefined, {\n" +
-      "                        month: \"short\",\n" +
-      "                        day: \"numeric\",\n" +
-      "                        hour: \"numeric\",\n" +
-      "                        minute: \"2-digit\",\n" +
-      "                      })}\n" +
-      "                    </time>\n" +
-      "                  </p>\n" +
-      "                  <p className=\"mt-0.5 break-words text-sm text-stone-600\">{entry.message}</p>\n" +
-      "                </div>\n" +
-      "              </article>\n" +
-      "            ))\n" +
-      "        )}\n" +
-      "      </section>\n" +
-      "    </main>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/styles.css",
-    content:
-      "@import \"tailwindcss\";\n",
-  },
-  {
-    path: "apps/guestbook/src/worker.ts",
-    content:
-      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
+      "import { renderToReadableStream } from \"react-dom/server.edge\";\n" +
+      "import { Guestbook } from \"./app.tsx\";\n" +
       "\n" +
       "// Page worker only. The stateful /api entry lives in guestbook-app.ts so\n" +
-      "// waking the guestbook never has to load the TanStack server-rendering bundle.\n" +
-      "export default createServerEntry({\n" +
-      "  fetch(request) {\n" +
-      "    return handler.fetch(request);\n" +
+      "// waking the guestbook never has to load the React page bundle.\n" +
+      "export default {\n" +
+      "  async fetch(): Promise<Response> {\n" +
+      "    const stream = await renderToReadableStream(\n" +
+      "      <html lang=\"en\">\n" +
+      "        <head>\n" +
+      "          <meta charSet=\"utf-8\" />\n" +
+      "          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
+      "          <title>Guestbook</title>\n" +
+      "          <style>{`body{margin:0;background:#f5f5f4;color:#1c1917}`}</style>\n" +
+      "        </head>\n" +
+      "        <body>\n" +
+      "          <div id=\"root\">\n" +
+      "            <Guestbook />\n" +
+      "          </div>\n" +
+      "          <script type=\"module\" src=\"/client.js\" />\n" +
+      "        </body>\n" +
+      "      </html>,\n" +
+      "    );\n" +
+      "    return new Response(stream, {\n" +
+      "      headers: { \"content-type\": \"text/html; charset=utf-8\" },\n" +
+      "    });\n" +
       "  },\n" +
-      "});\n",
-  },
-  {
-    path: "apps/guestbook/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"strict\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"jsx\": \"react-jsx\",\n" +
-      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\"]\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\", \"src/**/*.tsx\", \"vite.config.ts\"]\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/vite.config.ts",
-    content:
-      "import { tanstackStart } from \"@tanstack/react-start/plugin/vite\";\n" +
-      "import viteReact from \"@vitejs/plugin-react\";\n" +
-      "import { cloudflare } from \"@cloudflare/vite-plugin\";\n" +
-      "import tailwindcss from \"@tailwindcss/vite\";\n" +
-      "import { defineConfig } from \"vite\";\n" +
-      "\n" +
-      "export default defineConfig({\n" +
-      "  plugins: [\n" +
-      "    cloudflare({ viteEnvironment: { name: \"ssr\" } }),\n" +
-      "    tailwindcss(),\n" +
-      "    tanstackStart(),\n" +
-      "    viteReact(),\n" +
-      "  ],\n" +
-      "});\n",
-  },
-  {
-    path: "apps/guestbook/wrangler.jsonc",
-    content:
-      "// Read only by the Vite build (@cloudflare/vite-plugin): the platform hosts\n" +
-      "// the built worker itself, so no deployment config lives here.\n" +
-      "{\n" +
-      "  \"name\": \"project-guestbook\",\n" +
-      "  \"main\": \"./src/worker.ts\",\n" +
-      "  \"compatibility_date\": \"2026-05-01\",\n" +
-      "  \"compatibility_flags\": [\"nodejs_compat\"],\n" +
-      "}\n",
+      "} satisfies ExportedHandler;\n",
   },
   {
     path: "apps/tanstack/package.json",
     content:
       "{\n" +
-      "  \"name\": \"project-tanstack\",\n" +
+      "  \"name\": \"project-todos\",\n" +
       "  \"private\": true,\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"The project's TanStack Start todo app: pages built by Vite (the platform's vite worker-build pipeline runs `npm run build`), todos stored in this app's own Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.\",\n" +
-      "  \"scripts\": {\n" +
-      "    \"build\": \"vite build\"\n" +
-      "  },\n" +
+      "  \"description\": \"The project's todo app: React pages bundled by worker-bundler, todos stored in this app's Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"@tanstack/react-router\": \"1.170.15\",\n" +
-      "    \"@tanstack/react-start\": \"1.168.18\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.1.1\",\n" +
       "    \"react-dom\": \"19.1.1\",\n" +
       "    \"sqlfu\": \"0.1.1\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
-      "    \"@cloudflare/vite-plugin\": \"1.43.0\",\n" +
-      "    \"@tailwindcss/vite\": \"4.3.2\",\n" +
+      "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
       "    \"@types/react\": \"19.2.17\",\n" +
       "    \"@types/react-dom\": \"19.2.3\",\n" +
-      "    \"@vitejs/plugin-react\": \"6.0.2\",\n" +
-      "    \"tailwindcss\": \"4.3.2\",\n" +
-      "    \"typescript\": \"5.9.3\",\n" +
-      "    \"vite\": \"8.0.16\",\n" +
-      "    \"wrangler\": \"4.107.0\"\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
+      "    \"typescript\": \"5.9.3\"\n" +
       "  }\n" +
       "}\n",
+  },
+  {
+    path: "apps/tanstack/src/app.tsx",
+    content:
+      "import { useEffect, useState } from \"react\";\n" +
+      "import { useTodos } from \"./lib/use-todos.ts\";\n" +
+      "\n" +
+      "// The project's shared todo list. Rows live in the app's Durable Object\n" +
+      "// SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the\n" +
+      "// app cookie, and stays live — every project member's tab converges.\n" +
+      "export function Todos() {\n" +
+      "  const { todos, api, error } = useTodos();\n" +
+      "  const [draft, setDraft] = useState(\"\");\n" +
+      "  const [pendingAdd, setPendingAdd] = useState<{\n" +
+      "    acceptNewMatchingTodo: boolean;\n" +
+      "    existingTodoIds: readonly string[];\n" +
+      "    id: string | null;\n" +
+      "    title: string;\n" +
+      "  } | null>(null);\n" +
+      "  const [mutationError, setMutationError] = useState<string | null>(null);\n" +
+      "  const remaining = todos?.filter((todo) => !todo.done).length ?? 0;\n" +
+      "  const visibleError = error ?? mutationError;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    if (pendingAdd === null || todos === undefined) return;\n" +
+      "    const observed =\n" +
+      "      (pendingAdd.id !== null && todos.some((todo) => todo.id === pendingAdd.id)) ||\n" +
+      "      (pendingAdd.acceptNewMatchingTodo &&\n" +
+      "        todos.some(\n" +
+      "          (todo) =>\n" +
+      "            todo.title === pendingAdd.title && !pendingAdd.existingTodoIds.includes(todo.id),\n" +
+      "        ));\n" +
+      "    if (observed) {\n" +
+      "      setPendingAdd(null);\n" +
+      "      setMutationError(null);\n" +
+      "    }\n" +
+      "  }, [pendingAdd, todos]);\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    if (pendingAdd === null) return;\n" +
+      "    const timeout = window.setTimeout(() => {\n" +
+      "      setMutationError(\"Adding this todo is taking too long. Reload before retrying.\");\n" +
+      "    }, 15_000);\n" +
+      "    return () => window.clearTimeout(timeout);\n" +
+      "  }, [pendingAdd]);\n" +
+      "\n" +
+      "  return (\n" +
+      "    <main style={styles.main}>\n" +
+      "      <header style={styles.header}>\n" +
+      "        <h1 style={styles.h1}>Todos</h1>\n" +
+      "        <form action=\"/_iterate/auth/logout\" method=\"post\">\n" +
+      "          <button style={styles.linkButton}>Sign out</button>\n" +
+      "        </form>\n" +
+      "      </header>\n" +
+      "      <p style={styles.meta} aria-live=\"polite\">\n" +
+      "        {todos === undefined\n" +
+      "          ? \"connecting…\"\n" +
+      "          : todos.length === 0\n" +
+      "            ? \"the project's shared list — every member sees the same todos, live\"\n" +
+      "            : remaining === 0\n" +
+      "              ? \"all done\"\n" +
+      "              : `${remaining} of ${todos.length} left`}\n" +
+      "      </p>\n" +
+      "\n" +
+      "      {visibleError !== null ? (\n" +
+      "        <p style={styles.error} data-type=\"error\">\n" +
+      "          {visibleError}\n" +
+      "        </p>\n" +
+      "      ) : null}\n" +
+      "\n" +
+      "      <form\n" +
+      "        style={styles.form}\n" +
+      "        onSubmit={(event) => {\n" +
+      "          event.preventDefault();\n" +
+      "          const title = draft.trim().slice(0, 500);\n" +
+      "          if (api === null || todos === undefined || title === \"\" || pendingAdd !== null) return;\n" +
+      "          setMutationError(null);\n" +
+      "          setPendingAdd({\n" +
+      "            acceptNewMatchingTodo: false,\n" +
+      "            existingTodoIds: todos.map((todo) => todo.id),\n" +
+      "            id: null,\n" +
+      "            title,\n" +
+      "          });\n" +
+      "          setDraft(\"\");\n" +
+      "          void api\n" +
+      "            .add(title)\n" +
+      "            .then((id) => {\n" +
+      "              setPendingAdd((current) =>\n" +
+      "                current === null\n" +
+      "                  ? null\n" +
+      "                  : id === undefined\n" +
+      "                    ? { ...current, acceptNewMatchingTodo: true }\n" +
+      "                    : { ...current, id },\n" +
+      "              );\n" +
+      "            })\n" +
+      "            .catch((thrown: unknown) => {\n" +
+      "              const message = thrown instanceof Error ? thrown.message : String(thrown);\n" +
+      "              setMutationError(`${message} Reload before retrying.`);\n" +
+      "            });\n" +
+      "        }}\n" +
+      "      >\n" +
+      "        <input\n" +
+      "          style={styles.input}\n" +
+      "          value={draft}\n" +
+      "          onChange={(event) => setDraft(event.target.value)}\n" +
+      "          placeholder=\"add a todo\"\n" +
+      "          aria-label=\"add a todo\"\n" +
+      "          disabled={api === null || todos === undefined || pendingAdd !== null}\n" +
+      "        />\n" +
+      "        <button\n" +
+      "          type=\"submit\"\n" +
+      "          style={styles.button}\n" +
+      "          disabled={\n" +
+      "            api === null || todos === undefined || draft.trim() === \"\" || pendingAdd !== null\n" +
+      "          }\n" +
+      "        >\n" +
+      "          add\n" +
+      "        </button>\n" +
+      "      </form>\n" +
+      "\n" +
+      "      {pendingAdd !== null && mutationError === null ? (\n" +
+      "        <p style={styles.hint} data-spinner=\"true\" aria-live=\"polite\">\n" +
+      "          adding “{pendingAdd.title}”…\n" +
+      "        </p>\n" +
+      "      ) : null}\n" +
+      "\n" +
+      "      {todos !== undefined && todos.length > 0 ? (\n" +
+      "        <ul style={styles.list}>\n" +
+      "          {todos.map((todo) => (\n" +
+      "            <li key={todo.id} style={styles.item}>\n" +
+      "              <input\n" +
+      "                type=\"checkbox\"\n" +
+      "                checked={todo.done}\n" +
+      "                onChange={(event) => void api?.setDone(todo.id, event.target.checked)}\n" +
+      "                aria-label={`done: ${todo.title}`}\n" +
+      "              />\n" +
+      "              <span\n" +
+      "                style={{\n" +
+      "                  ...styles.title,\n" +
+      "                  ...(todo.done ? { color: \"#94a3b8\", textDecoration: \"line-through\" } : {}),\n" +
+      "                }}\n" +
+      "                title=\"double-click to rename\"\n" +
+      "                onDoubleClick={() => {\n" +
+      "                  const title = window.prompt(\"rename todo\", todo.title);\n" +
+      "                  if (title) void api?.rename(todo.id, title);\n" +
+      "                }}\n" +
+      "              >\n" +
+      "                {todo.title}\n" +
+      "              </span>\n" +
+      "              <button\n" +
+      "                type=\"button\"\n" +
+      "                style={styles.delete}\n" +
+      "                onClick={() => void api?.remove(todo.id)}\n" +
+      "                aria-label={`delete: ${todo.title}`}\n" +
+      "              >\n" +
+      "                ✕\n" +
+      "              </button>\n" +
+      "            </li>\n" +
+      "          ))}\n" +
+      "        </ul>\n" +
+      "      ) : null}\n" +
+      "    </main>\n" +
+      "  );\n" +
+      "}\n" +
+      "\n" +
+      "const styles = {\n" +
+      "  main: { fontFamily: \"system-ui, sans-serif\", maxWidth: 560, margin: \"0 auto\", padding: \"48px 16px\" },\n" +
+      "  header: { display: \"flex\", alignItems: \"baseline\", justifyContent: \"space-between\", gap: 16 },\n" +
+      "  h1: { fontSize: 28, margin: 0 },\n" +
+      "  linkButton: {\n" +
+      "    border: 0,\n" +
+      "    background: \"transparent\",\n" +
+      "    color: \"#94a3b8\",\n" +
+      "    fontSize: 14,\n" +
+      "    cursor: \"pointer\",\n" +
+      "  },\n" +
+      "  meta: { marginTop: 4, fontSize: 14, color: \"#64748b\" },\n" +
+      "  error: {\n" +
+      "    marginTop: 24,\n" +
+      "    padding: \"12px 16px\",\n" +
+      "    border: \"1px solid #fecaca\",\n" +
+      "    background: \"#fef2f2\",\n" +
+      "    color: \"#b91c1c\",\n" +
+      "    borderRadius: 8,\n" +
+      "    fontSize: 14,\n" +
+      "  },\n" +
+      "  form: { marginTop: 32, display: \"flex\", gap: 12 },\n" +
+      "  input: {\n" +
+      "    flex: 1,\n" +
+      "    border: \"1px solid #e2e8f0\",\n" +
+      "    borderRadius: 8,\n" +
+      "    padding: \"8px 12px\",\n" +
+      "    fontSize: 14,\n" +
+      "  },\n" +
+      "  button: {\n" +
+      "    border: 0,\n" +
+      "    borderRadius: 8,\n" +
+      "    padding: \"8px 16px\",\n" +
+      "    background: \"#4f46e5\",\n" +
+      "    color: \"#fff\",\n" +
+      "    fontSize: 14,\n" +
+      "    fontWeight: 500,\n" +
+      "    cursor: \"pointer\",\n" +
+      "  },\n" +
+      "  hint: { marginTop: 8, fontSize: 14, color: \"#64748b\" },\n" +
+      "  list: {\n" +
+      "    marginTop: 16,\n" +
+      "    padding: 0,\n" +
+      "    listStyle: \"none\",\n" +
+      "    border: \"1px solid #e2e8f0\",\n" +
+      "    borderRadius: 16,\n" +
+      "    background: \"#fff\",\n" +
+      "    overflow: \"hidden\",\n" +
+      "  },\n" +
+      "  item: {\n" +
+      "    display: \"flex\",\n" +
+      "    alignItems: \"center\",\n" +
+      "    gap: 12,\n" +
+      "    padding: \"12px 16px\",\n" +
+      "    borderTop: \"1px solid #f1f5f9\",\n" +
+      "  },\n" +
+      "  title: { flex: 1, minWidth: 0, fontSize: 14, overflow: \"hidden\", textOverflow: \"ellipsis\" },\n" +
+      "  delete: {\n" +
+      "    border: 0,\n" +
+      "    background: \"transparent\",\n" +
+      "    color: \"#cbd5e1\",\n" +
+      "    cursor: \"pointer\",\n" +
+      "  },\n" +
+      "} as const;\n",
+  },
+  {
+    path: "apps/tanstack/src/client.tsx",
+    content:
+      "import { hydrateRoot } from \"react-dom/client\";\n" +
+      "import { Todos } from \"./app.tsx\";\n" +
+      "\n" +
+      "const root = document.getElementById(\"root\");\n" +
+      "if (root === null) throw new Error(\"missing #root\");\n" +
+      "hydrateRoot(root, <Todos />);\n",
   },
   {
     path: "apps/tanstack/src/lib/state.ts",
@@ -1185,319 +1305,36 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/tanstack/src/routeTree.gen.ts",
+    path: "apps/tanstack/src/server.tsx",
     content:
-      "/* eslint-disable */\n" +
+      "import { renderToReadableStream } from \"react-dom/server.edge\";\n" +
+      "import { Todos } from \"./app.tsx\";\n" +
       "\n" +
-      "// @ts-nocheck\n" +
-      "\n" +
-      "// noinspection JSUnusedGlobalSymbols\n" +
-      "\n" +
-      "// This file was automatically generated by TanStack Router.\n" +
-      "// You should NOT make any changes in this file as it will be overwritten.\n" +
-      "// Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.\n" +
-      "\n" +
-      "import { Route as rootRouteImport } from './routes/__root'\n" +
-      "import { Route as IndexRouteImport } from './routes/index'\n" +
-      "\n" +
-      "const IndexRoute = IndexRouteImport.update({\n" +
-      "  id: '/',\n" +
-      "  path: '/',\n" +
-      "  getParentRoute: () => rootRouteImport,\n" +
-      "} as any)\n" +
-      "\n" +
-      "export interface FileRoutesByFullPath {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesByTo {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesById {\n" +
-      "  __root__: typeof rootRouteImport\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRouteTypes {\n" +
-      "  fileRoutesByFullPath: FileRoutesByFullPath\n" +
-      "  fullPaths: '/'\n" +
-      "  fileRoutesByTo: FileRoutesByTo\n" +
-      "  to: '/'\n" +
-      "  id: '__root__' | '/'\n" +
-      "  fileRoutesById: FileRoutesById\n" +
-      "}\n" +
-      "export interface RootRouteChildren {\n" +
-      "  IndexRoute: typeof IndexRoute\n" +
-      "}\n" +
-      "\n" +
-      "declare module '@tanstack/react-router' {\n" +
-      "  interface FileRoutesByPath {\n" +
-      "    '/': {\n" +
-      "      id: '/'\n" +
-      "      path: '/'\n" +
-      "      fullPath: '/'\n" +
-      "      preLoaderRoute: typeof IndexRouteImport\n" +
-      "      parentRoute: typeof rootRouteImport\n" +
-      "    }\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "const rootRouteChildren: RootRouteChildren = {\n" +
-      "  IndexRoute: IndexRoute,\n" +
-      "}\n" +
-      "export const routeTree = rootRouteImport\n" +
-      "  ._addFileChildren(rootRouteChildren)\n" +
-      "  ._addFileTypes<FileRouteTypes>()\n" +
-      "\n" +
-      "import type { getRouter } from './router.tsx'\n" +
-      "import type { createStart } from '@tanstack/react-start'\n" +
-      "declare module '@tanstack/react-start' {\n" +
-      "  interface Register {\n" +
-      "    ssr: true\n" +
-      "    router: Awaited<ReturnType<typeof getRouter>>\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/router.tsx",
-    content:
-      "import { createRouter } from \"@tanstack/react-router\";\n" +
-      "import { routeTree } from \"./routeTree.gen.ts\";\n" +
-      "\n" +
-      "export function getRouter() {\n" +
-      "  return createRouter({ routeTree });\n" +
-      "}\n" +
-      "\n" +
-      "declare module \"@tanstack/react-router\" {\n" +
-      "  interface Register {\n" +
-      "    router: ReturnType<typeof getRouter>;\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/routes/__root.tsx",
-    content:
-      "import type { ReactNode } from \"react\";\n" +
-      "import { createRootRoute, HeadContent, Outlet, Scripts } from \"@tanstack/react-router\";\n" +
-      "import appCss from \"../styles.css?url\";\n" +
-      "\n" +
-      "export const Route = createRootRoute({\n" +
-      "  head: () => ({\n" +
-      "    meta: [\n" +
-      "      { charSet: \"utf-8\" },\n" +
-      "      { name: \"viewport\", content: \"width=device-width, initial-scale=1\" },\n" +
-      "      { title: \"TanStack todos\" },\n" +
-      "    ],\n" +
-      "    links: [{ rel: \"stylesheet\", href: appCss }],\n" +
-      "  }),\n" +
-      "  component: RootComponent,\n" +
-      "});\n" +
-      "\n" +
-      "function RootComponent() {\n" +
-      "  return (\n" +
-      "    <RootDocument>\n" +
-      "      <Outlet />\n" +
-      "    </RootDocument>\n" +
-      "  );\n" +
-      "}\n" +
-      "\n" +
-      "function RootDocument({ children }: Readonly<{ children: ReactNode }>) {\n" +
-      "  return (\n" +
-      "    <html lang=\"en\">\n" +
-      "      <head>\n" +
-      "        <HeadContent />\n" +
-      "      </head>\n" +
-      "      <body className=\"min-h-screen bg-slate-100 text-slate-900 antialiased\">\n" +
-      "        {children}\n" +
-      "        <Scripts />\n" +
-      "      </body>\n" +
-      "    </html>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/routes/index.tsx",
-    content:
-      "import { createFileRoute } from \"@tanstack/react-router\";\n" +
-      "import { useEffect, useState } from \"react\";\n" +
-      "import { useTodos } from \"../lib/use-todos.ts\";\n" +
-      "\n" +
-      "export const Route = createFileRoute(\"/\")({ component: Todos });\n" +
-      "\n" +
-      "// The project's shared todo list. Rows live in the app's Durable Object\n" +
-      "// SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the\n" +
-      "// app cookie, and stays live — every project member's tab converges.\n" +
-      "export function Todos() {\n" +
-      "  const { todos, api, error } = useTodos();\n" +
-      "  const [draft, setDraft] = useState(\"\");\n" +
-      "  const [pendingAdd, setPendingAdd] = useState<{\n" +
-      "    acceptNewMatchingTodo: boolean;\n" +
-      "    existingTodoIds: readonly string[];\n" +
-      "    id: string | null;\n" +
-      "    title: string;\n" +
-      "  } | null>(null);\n" +
-      "  const [mutationError, setMutationError] = useState<string | null>(null);\n" +
-      "  const remaining = todos?.filter((todo) => !todo.done).length ?? 0;\n" +
-      "  const visibleError = error ?? mutationError;\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    if (pendingAdd === null || todos === undefined) return;\n" +
-      "    const observed =\n" +
-      "      (pendingAdd.id !== null && todos.some((todo) => todo.id === pendingAdd.id)) ||\n" +
-      "      (pendingAdd.acceptNewMatchingTodo &&\n" +
-      "        todos.some(\n" +
-      "          (todo) =>\n" +
-      "            todo.title === pendingAdd.title && !pendingAdd.existingTodoIds.includes(todo.id),\n" +
-      "        ));\n" +
-      "    if (observed) {\n" +
-      "      setPendingAdd(null);\n" +
-      "      setMutationError(null);\n" +
-      "    }\n" +
-      "  }, [pendingAdd, todos]);\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    if (pendingAdd === null) return;\n" +
-      "    const timeout = window.setTimeout(() => {\n" +
-      "      // The RPC cannot be cancelled. Keep the composer locked so a late\n" +
-      "      // success cannot leave a stale error or allow a duplicate submission.\n" +
-      "      setMutationError(\"Adding this todo is taking too long. Reload before retrying.\");\n" +
-      "    }, 15_000);\n" +
-      "    return () => window.clearTimeout(timeout);\n" +
-      "  }, [pendingAdd]);\n" +
-      "\n" +
-      "  return (\n" +
-      "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
-      "      <header className=\"flex items-baseline justify-between gap-4\">\n" +
-      "        <h1 className=\"text-3xl font-semibold tracking-tight\">TanStack todos</h1>\n" +
-      "        <form action=\"/_iterate/auth/logout\" method=\"post\">\n" +
-      "          <button className=\"text-sm text-slate-400 transition hover:text-slate-600\">\n" +
-      "            Sign out\n" +
-      "          </button>\n" +
-      "        </form>\n" +
-      "      </header>\n" +
-      "      <p className=\"mt-1 text-sm text-slate-500\" aria-live=\"polite\">\n" +
-      "        {todos === undefined\n" +
-      "          ? \"connecting…\"\n" +
-      "          : todos.length === 0\n" +
-      "            ? \"the project's shared list — every member sees the same todos, live\"\n" +
-      "            : remaining === 0\n" +
-      "              ? \"all done\"\n" +
-      "              : `${remaining} of ${todos.length} left`}\n" +
-      "      </p>\n" +
-      "\n" +
-      "      {visibleError !== null ? (\n" +
-      "        <p\n" +
-      "          className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\"\n" +
-      "          data-type=\"error\"\n" +
-      "        >\n" +
-      "          {visibleError}\n" +
-      "        </p>\n" +
-      "      ) : null}\n" +
-      "\n" +
-      "      <form\n" +
-      "        className=\"mt-8 flex gap-3\"\n" +
-      "        onSubmit={(event) => {\n" +
-      "          event.preventDefault();\n" +
-      "          const title = draft.trim().slice(0, 500);\n" +
-      "          if (api === null || todos === undefined || title === \"\" || pendingAdd !== null) return;\n" +
-      "          setMutationError(null);\n" +
-      "          setPendingAdd({\n" +
-      "            acceptNewMatchingTodo: false,\n" +
-      "            existingTodoIds: todos.map((todo) => todo.id),\n" +
-      "            id: null,\n" +
-      "            title,\n" +
-      "          });\n" +
-      "          setDraft(\"\");\n" +
-      "          void api\n" +
-      "            .add(title)\n" +
-      "            .then((id) => {\n" +
-      "              // The pre-return-id API can answer briefly while its\n" +
-      "              // stale-while-rebuild facet swaps. Its void response still\n" +
-      "              // confirms success; identify that call by the first new\n" +
-      "              // equal-title live-state row instead of inviting a duplicate.\n" +
-      "              setPendingAdd((current) =>\n" +
-      "                current === null\n" +
-      "                  ? null\n" +
-      "                  : id === undefined\n" +
-      "                    ? { ...current, acceptNewMatchingTodo: true }\n" +
-      "                    : { ...current, id },\n" +
-      "              );\n" +
-      "            })\n" +
-      "            .catch((thrown: unknown) => {\n" +
-      "              // A transport rejection can lose a successful call's ack. Keep\n" +
-      "              // the composer locked until live state confirms the row (or a\n" +
-      "              // reload proves otherwise), so retry cannot duplicate it.\n" +
-      "              const message = thrown instanceof Error ? thrown.message : String(thrown);\n" +
-      "              setMutationError(`${message} Reload before retrying.`);\n" +
-      "            });\n" +
-      "        }}\n" +
-      "      >\n" +
-      "        <input\n" +
-      "          className=\"flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100\"\n" +
-      "          value={draft}\n" +
-      "          onChange={(event) => setDraft(event.target.value)}\n" +
-      "          placeholder=\"add a todo\"\n" +
-      "          aria-label=\"add a todo\"\n" +
-      "          disabled={api === null || todos === undefined || pendingAdd !== null}\n" +
-      "        />\n" +
-      "        <button\n" +
-      "          type=\"submit\"\n" +
-      "          className=\"rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "          disabled={\n" +
-      "            api === null || todos === undefined || draft.trim() === \"\" || pendingAdd !== null\n" +
-      "          }\n" +
-      "        >\n" +
-      "          add\n" +
-      "        </button>\n" +
-      "      </form>\n" +
-      "\n" +
-      "      {pendingAdd !== null && mutationError === null ? (\n" +
-      "        <p className=\"mt-2 text-sm text-slate-500\" data-spinner=\"true\" aria-live=\"polite\">\n" +
-      "          adding “{pendingAdd.title}”…\n" +
-      "        </p>\n" +
-      "      ) : null}\n" +
-      "\n" +
-      "      {todos !== undefined && todos.length > 0 ? (\n" +
-      "        <ul className=\"mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-sm\">\n" +
-      "          {todos.map((todo) => (\n" +
-      "            <li key={todo.id} className=\"group flex items-center gap-3 px-4 py-3\">\n" +
-      "              <input\n" +
-      "                type=\"checkbox\"\n" +
-      "                className=\"size-4 shrink-0 accent-indigo-600\"\n" +
-      "                checked={todo.done}\n" +
-      "                onChange={(event) => void api?.setDone(todo.id, event.target.checked)}\n" +
-      "                aria-label={`done: ${todo.title}`}\n" +
-      "              />\n" +
-      "              <span\n" +
-      "                className={`min-w-0 flex-1 truncate text-sm transition ${\n" +
-      "                  todo.done ? \"text-slate-400 line-through\" : \"\"\n" +
-      "                }`}\n" +
-      "                title=\"double-click to rename\"\n" +
-      "                onDoubleClick={() => {\n" +
-      "                  const title = window.prompt(\"rename todo\", todo.title);\n" +
-      "                  if (title) void api?.rename(todo.id, title);\n" +
-      "                }}\n" +
-      "              >\n" +
-      "                {todo.title}\n" +
-      "              </span>\n" +
-      "              <button\n" +
-      "                type=\"button\"\n" +
-      "                className=\"shrink-0 text-slate-300 transition hover:text-red-500\"\n" +
-      "                onClick={() => void api?.remove(todo.id)}\n" +
-      "                aria-label={`delete: ${todo.title}`}\n" +
-      "              >\n" +
-      "                ✕\n" +
-      "              </button>\n" +
-      "            </li>\n" +
-      "          ))}\n" +
-      "        </ul>\n" +
-      "      ) : null}\n" +
-      "    </main>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/styles.css",
-    content:
-      "@import \"tailwindcss\";\n",
+      "// Page worker only. The stateful /api entry lives in todos-app.ts so waking\n" +
+      "// the list never has to load the React page bundle.\n" +
+      "export default {\n" +
+      "  async fetch(): Promise<Response> {\n" +
+      "    const stream = await renderToReadableStream(\n" +
+      "      <html lang=\"en\">\n" +
+      "        <head>\n" +
+      "          <meta charSet=\"utf-8\" />\n" +
+      "          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
+      "          <title>Todos</title>\n" +
+      "          <style>{`body{margin:0;background:#f8fafc;color:#0f172a}`}</style>\n" +
+      "        </head>\n" +
+      "        <body>\n" +
+      "          <div id=\"root\">\n" +
+      "            <Todos />\n" +
+      "          </div>\n" +
+      "          <script type=\"module\" src=\"/client.js\" />\n" +
+      "        </body>\n" +
+      "      </html>,\n" +
+      "    );\n" +
+      "    return new Response(stream, {\n" +
+      "      headers: { \"content-type\": \"text/html; charset=utf-8\" },\n" +
+      "    });\n" +
+      "  },\n" +
+      "} satisfies ExportedHandler;\n",
   },
   {
     path: "apps/tanstack/src/todos-app.ts",
@@ -1508,9 +1345,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { createDurableObjectClient, defineConfig, sql } from \"sqlfu\";\n" +
       "import type { Todo, TodoListState } from \"./lib/state.ts\";\n" +
       "\n" +
-      "// The small, stateful half of the todo app. It has its own Wrangler entry so\n" +
+      "// The small, stateful half of the todo app. It has its own worker entry so\n" +
       "// a cold /api WebSocket loads only the Durable Object and its data/runtime\n" +
-      "// dependencies, never the unrelated TanStack SSR bundle in worker.ts.\n" +
+      "// dependencies, never the unrelated React page bundle.\n" +
       "export class TanstackTodos extends IterateDurableObject {\n" +
       "  static db = defineConfig({\n" +
       "    // The desired schema now (`sqlfu draft` diffs new migrations against it).\n" +
@@ -1673,10 +1510,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
-      "/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */\n" +
+      "/** React pages + client bundle, built by worker-bundler's createApp lane. */\n" +
       "export const tanstackPageSource = {\n" +
       "  files: repoFiles,\n" +
-      "  options: { pipeline: \"vite\", rootDir: \"apps/tanstack\" },\n" +
+      "  options: {\n" +
+      "    client: \"src/client.tsx\",\n" +
+      "    entryPoint: \"src/server.tsx\",\n" +
+      "    rootDir: \"apps/tanstack\",\n" +
+      "  },\n" +
       "} satisfies DynamicWorkerSource;\n" +
       "\n" +
       "/** The todo API's durable identity and deliberately small build. The stale\n" +
@@ -1698,68 +1539,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    },\n" +
       "  },\n" +
       "} satisfies StatefulDynamicWorkerRef;\n",
-  },
-  {
-    path: "apps/tanstack/src/worker.ts",
-    content:
-      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
-      "\n" +
-      "// Page worker only. The stateful /api entry lives in todos-app.ts so waking a\n" +
-      "// todo Durable Object never has to load the TanStack server-rendering bundle.\n" +
-      "\n" +
-      "export default createServerEntry({\n" +
-      "  fetch(request) {\n" +
-      "    return handler.fetch(request);\n" +
-      "  },\n" +
-      "});\n",
-  },
-  {
-    path: "apps/tanstack/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"strict\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"jsx\": \"react-jsx\",\n" +
-      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\"]\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\", \"src/**/*.tsx\", \"vite.config.ts\"]\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/vite.config.ts",
-    content:
-      "import { tanstackStart } from \"@tanstack/react-start/plugin/vite\";\n" +
-      "import viteReact from \"@vitejs/plugin-react\";\n" +
-      "import { cloudflare } from \"@cloudflare/vite-plugin\";\n" +
-      "import tailwindcss from \"@tailwindcss/vite\";\n" +
-      "import { defineConfig } from \"vite\";\n" +
-      "\n" +
-      "export default defineConfig({\n" +
-      "  plugins: [\n" +
-      "    cloudflare({ viteEnvironment: { name: \"ssr\" } }),\n" +
-      "    tailwindcss(),\n" +
-      "    tanstackStart(),\n" +
-      "    viteReact(),\n" +
-      "  ],\n" +
-      "});\n",
-  },
-  {
-    path: "apps/tanstack/wrangler.jsonc",
-    content:
-      "// Read only by the Vite build (@cloudflare/vite-plugin): the platform hosts\n" +
-      "// the built worker itself, so no deployment config lives here.\n" +
-      "{\n" +
-      "  \"name\": \"project-tanstack\",\n" +
-      "  \"main\": \"./src/worker.ts\",\n" +
-      "  \"compatibility_date\": \"2026-05-01\",\n" +
-      "  \"compatibility_flags\": [\"nodejs_compat\"],\n" +
-      "}\n",
   },
   {
     path: "package.json",
@@ -1906,13 +1685,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "    if (app === \"tanstack\") {\n" +
-      "      // A real TanStack Start app living at apps/tanstack in this repo: the\n" +
-      "      // platform's \"vite\" pipeline runs ITS OWN `npm run build` and serves\n" +
-      "      // the built pages + client assets; its /api rides into the app's\n" +
-      "      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state\n" +
-      "      // over Cap'n Web). Pages are gated to project members HERE; /api is\n" +
-      "      // the unauthenticated Cap'n Web root that authenticates in-band from\n" +
-      "      // the app cookie, exactly like the internal app.\n" +
+      "      // A React todo app living at apps/tanstack in this repo: worker-bundler\n" +
+      "      // builds its server + client entries; /api rides into the app's Durable\n" +
+      "      // Object (TanstackTodos — SQLite todos via sqlfu, live state over Cap'n\n" +
+      "      // Web). Pages are gated to project members HERE; /api is the\n" +
+      "      // unauthenticated Cap'n Web root that authenticates in-band from the\n" +
+      "      // app cookie, exactly like the internal app.\n" +
       "      const url = new URL(req.url);\n" +
       "      if (url.pathname === \"/api\") {\n" +
       "        return this.fetchDynamicWorker(req, tanstackTodosRef);\n" +
@@ -1939,14 +1717,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
-      "      // A second TanStack Start app at apps/guestbook, and a second SHAPE of\n" +
-      "      // state: where the tanstack todo app keeps rows in its Durable Object's\n" +
-      "      // SQLite, the guestbook's state is a stream-processor FOLD of durable\n" +
-      "      // events at /guestbook. The imported ref is the ONE identity the wake\n" +
-      "      // subscription persists too (guestbook-ref.ts), so ingress and the\n" +
-      "      // stream spine always dial the same Durable Object and the same build.\n" +
-      "      // The guestbook is deliberately public: anyone can read and sign, so\n" +
-      "      // no auth partial gates the pages and /api needs no authenticate step.\n" +
+      "      // A second React app at apps/guestbook, and a second SHAPE of state:\n" +
+      "      // where the tanstack todo app keeps rows in its Durable Object's SQLite,\n" +
+      "      // the guestbook's state is a stream-processor FOLD of durable events at\n" +
+      "      // /guestbook. The imported ref is the ONE identity the wake subscription\n" +
+      "      // persists too (guestbook-ref.ts), so ingress and the stream spine always\n" +
+      "      // dial the same Durable Object and the same build. The guestbook is\n" +
+      "      // deliberately public: anyone can read and sign, so no auth partial\n" +
+      "      // gates the pages and /api needs no authenticate step.\n" +
       "      const url = new URL(req.url);\n" +
       "      if (url.pathname === \"/api\") {\n" +
       "        return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
@@ -1972,9 +1750,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"tanstack\")}\">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"tanstack\")}\">tanstack</a> (React todos: SQLite Durable Object, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
-      "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor + TanStack Start, public)</li>\n" +
+      "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor + React, public)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +
       "            </main>\n" +

@@ -26,6 +26,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
+      // Standalone research harnesses are not reachable from the deployed OS
+      // entry or Knip's package-script plugin.
+      "spikes/**/*.ts",
       // Operational smoke for the create-project -> onboarding-greeting path.
       "e2e/vitest/onboarding-smoke.ts",
       // Seeded as a standalone worker entry outside apps/os/src. Tests import

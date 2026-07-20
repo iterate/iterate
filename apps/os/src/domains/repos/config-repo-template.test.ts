@@ -29,10 +29,9 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   // workflow is userspace code in worker.ts.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  // The seeded apps: the TanStack Start todo app at apps/tanstack and the
-  // guestbook at apps/guestbook (each its own package.json/vite build — the
-  // platform's "vite" worker pipeline). Everything else under apps/ is still
-  // the project's to grow.
+  // The seeded apps: the React todo app at apps/tanstack and the guestbook
+  // at apps/guestbook (each its own package.json; worker-bundler builds them
+  // in-workerd). Everything else under apps/ is still the project's to grow.
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
   expect(appPaths.length).toBeGreaterThan(0);
   expect(
@@ -50,20 +49,24 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   // The platform-injected modules deliberately leave their real shared
   // runtimes external: iterate/live-state and the user's RpcTargets share
   // one Cap'n Web runtime, so the root worker build installs it. Everything
-  // the seeded apps need (react, tanstack, zod for the guestbook's processor
-  // contract) lives in THEIR manifests — each app's vite build installs its
-  // own tree.
+  // the seeded apps need (react, zod for the guestbook's processor contract)
+  // lives in THEIR manifests — each app's worker-bundler install uses its
+  // own production dependency tree.
   expect(templatePackageJson.dependencies).toEqual({
     "@iterate-com/capnweb": expect.any(String),
   });
 });
 
-test("TanStack pages and stateful APIs have independent worker entries", () => {
+test("React pages and stateful APIs have independent worker entries", () => {
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).toEqual(
     expect.arrayContaining([
       "apps/guestbook/src/guestbook-app.ts",
+      "apps/guestbook/src/server.tsx",
+      "apps/guestbook/src/client.tsx",
       "apps/tanstack/src/todos-app.ts",
+      "apps/tanstack/src/server.tsx",
+      "apps/tanstack/src/client.tsx",
     ]),
   );
 
@@ -71,15 +74,17 @@ test("TanStack pages and stateful APIs have independent worker entries", () => {
     [guestbookPageSource, guestbookAppRef],
     [tanstackPageSource, tanstackTodosRef],
   ] as const) {
-    expect(pageSource.options.pipeline).toBe("vite");
-    expect(statefulRef.source.options).not.toHaveProperty("pipeline");
+    expect(pageSource.options.client).toBe("src/client.tsx");
+    expect(pageSource.options.entryPoint).toBe("src/server.tsx");
+    expect(pageSource.options).not.toHaveProperty("pipeline");
+    expect(statefulRef.source.options).not.toHaveProperty("client");
     expect(statefulRef.source.options.entryPoint).not.toBe("worker.ts");
     expect(statefulRef.source.options.minify).toBe(true);
     expect(statefulRef.updatePolicy).toBe("stale-while-rebuild");
   }
 });
 
-test("guestbook wake delivery replaces the legacy Vite-backed subscription", () => {
+test("guestbook wake delivery replaces the legacy subscription", () => {
   const subscription = guestbookCreationEvents()[1];
 
   // The legacy wake recipe can be retried after the repository has already

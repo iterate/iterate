@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { projectWorkerBuildKey, workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
-import { WRANGLER_VERSION } from "./build-recipe.ts";
+import { WORKER_BUNDLER_VERSION } from "./build-recipe.ts";
 
 const baseInput: WorkerBuildInput = {
   compatibilityDate: "2026-05-01",
@@ -85,23 +85,17 @@ describe("workerBuildKey", () => {
     const projectKey = await projectWorkerBuildKey("prj_one", sharedKey);
     expect(projectKey).toMatch(/^[a-f0-9]{64}$/);
     expect(await projectWorkerBuildKey("prj_one", sharedKey)).toBe(projectKey);
-    // A project-trusted principal can influence its own builder sandbox's
-    // output — runtime artifacts must never be shared across projects.
     expect(await projectWorkerBuildKey("prj_two", sharedKey)).not.toBe(projectKey);
     expect(projectKey).not.toBe(sharedKey);
   });
 
-  it("pins the wrangler toolchain constant to the repo's own wrangler pin", () => {
+  it("pins the worker-bundler toolchain constant to apps/os's dependency", () => {
     // The toolchain version participates in every build key; the constant and
-    // the workspace override backing apps/os's wrangler devDependency (what
-    // the host/dev runner and the deploy seeder execute) must agree or two
-    // runners build different bytes under one key. The container lane needs
-    // no third pin: build-backend.ts installs wrangler@WRANGLER_VERSION from
-    // this same constant.
-    const workspaceYaml = readFileSync(
-      new URL("../../../../../pnpm-workspace.yaml", import.meta.url),
-      "utf8",
-    );
-    expect(workspaceYaml).toMatch(new RegExp(`^  wrangler: ${WRANGLER_VERSION}$`, "m"));
+    // apps/os's @cloudflare/worker-bundler dependency must agree or two
+    // deployments could hash differently under one mental model of the pin.
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(packageJson.dependencies?.["@cloudflare/worker-bundler"]).toBe(WORKER_BUNDLER_VERSION);
   });
 });

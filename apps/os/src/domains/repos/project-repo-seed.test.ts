@@ -12,11 +12,12 @@ test("an override re-points the iterate dependency in every manifest that carrie
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
   expect(packageJson).toMatchObject({ devDependencies: { iterate: spec } });
-  // The seeded apps depend on iterate at RUNTIME (their vite builds bundle
-  // the sdk), so preview projects must get the PR's build there too.
+  // Seeded apps keep `iterate` as a devDependency for typechecking/editor
+  // support only — the platform injects the runtime virtual modules. Preview
+  // still re-points every manifest so editors and typecheck see the PR build.
   for (const appManifest of ["apps/tanstack/package.json", "apps/guestbook/package.json"]) {
     const appPackageJson = JSON.parse(files.find((file) => file.path === appManifest)!.content);
-    expect(appPackageJson).toMatchObject({ dependencies: { iterate: spec } });
+    expect(appPackageJson).toMatchObject({ devDependencies: { iterate: spec } });
   }
 
   // Every non-manifest file is untouched, and nothing still carries @main.

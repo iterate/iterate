@@ -8,10 +8,11 @@
  * key), and `expirationTtl` gives cache expiry without a cleanup worker.
  */
 
-// v2: the sandbox/host wrangler pipeline replaced the esbuild-wasm builder —
-// every v1 artifact is from the old toolchain and must be unreachable (the
-// version prefix below does that; KV TTLs clean the orphans up).
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 2;
+// v3: in-workerd @cloudflare/worker-bundler replaced the sandbox/host
+// wrangler+Vite recipe. Every v1/v2 artifact is from the old toolchain and
+// must be unreachable (the version prefix below does that; KV TTLs clean the
+// orphans up).
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 3;
 
 /** Cache lifetime for build artifacts. Expiry only costs a rebuild on next
  * use. ("Reproducible" is approximate: npm ranges re-resolve at build time,
@@ -50,12 +51,11 @@ function moduleKey(buildKey: string, moduleName: string) {
 }
 
 /** How long an in-flight marker suppresses duplicate budgeted builds. Must
- * cover the recipe's whole per-build ceiling (install + bundle timeouts plus
- * container-boot slack — see build-recipe.ts), or duplicate builds pile on
+ * cover a cold npm install + esbuild-wasm bundle, or duplicate builds pile on
  * exactly when a build is slowest; short enough that a crashed builder only
  * delays budgeted callers, never blocks them forever (the artifact write
  * always wins over the marker). */
-const BUILD_IN_FLIGHT_TTL_SECONDS = 360;
+const BUILD_IN_FLIGHT_TTL_SECONDS = 180;
 
 function inFlightKey(buildKey: string) {
   return `${KV_PREFIX}/${buildKey}/building`;
@@ -68,12 +68,9 @@ function inFlightKey(buildKey: string) {
  * commits a NEW key — the TTL exists only so a transient failure mislabelled
  * as genuine (npm weather during install) heals on its own. It must be LONG:
  * abandoned projects with broken heads retry delivery forever, and each TTL
- * expiry costs a real builder-container rebuild whose exec resets the
- * container's idle timer. At 120s that loop kept one warm container per
- * broken-head project indefinitely — an e2e run leaves several, which pinned
- * the basic instance fleet at its cap and starved every other placement
- * (observed live on preview, 2026-07-18). At 15 minutes the same loop is a
- * ~3% duty cycle and the fleet drains.
+ * expiry costs a full in-workerd rebuild. Fifteen minutes keeps broken-head
+ * delivery retries from hammering the bundler while still healing transient
+ * registry weather without operator intervention.
  */
 const BUILD_FAILURE_TTL_SECONDS = 15 * 60;
 

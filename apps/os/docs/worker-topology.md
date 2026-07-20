@@ -31,14 +31,11 @@ service binding; deploy.ts deploys it first (a name binding to a missing
 script fails the deploy). Local dev runs it as a vite `auxiliaryWorkers`
 entry in the same workerd.
 
-Dynamic worker BUILDS carry no sidecar at all: on artifact-cache misses the
-os worker drives the project's builder sandbox — real `npm install` plus
-pinned wrangler inside an ordinary project container
-(`src/domains/workers/build-backend.ts`); local dev runs the identical
-recipe on the host toolchain via the dev server's `/__dev/worker-build`
-endpoint. The retired `os-<env>-builder` workers (the old esbuild-wasm
-bundler) still exist on Cloudflare — workers are never deleted — but nothing
-binds them.
+Dynamic worker BUILDS carry no sidecar and no container pool: on
+artifact-cache misses the os worker calls `@cloudflare/worker-bundler`
+in-process (`src/domains/workers/build-backend.ts` → `createWorker` /
+`createApp`). Local dev uses the same path. The retired builder-pool
+container app and host `/__dev/worker-build` endpoint are gone.
 
 ## Why one worker
 

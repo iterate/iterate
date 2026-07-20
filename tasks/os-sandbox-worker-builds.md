@@ -1,11 +1,16 @@
 ---
-state: in-progress
+state: cancelled
 priority: high
 size: large
 tags: [os, workers, dynamic-workers, sandboxes, build-pipeline]
 ---
 
 # Build dynamic workers in a sandbox container (kill esbuild-wasm)
+
+> **Cancelled / reversed:** the sandbox builder pool is deleted in favour of
+> in-workerd `@cloudflare/worker-bundler` and simplified first-party React
+> apps (no Vite/TanStack Start build lane). See branch
+> `rip-out-sandbox-builds`.
 
 > **Progress:** steps 2 + 3 of the sequencing below landed as one clean-break
 > PR (#2083) — the sandbox build backend (recipe: `npm install

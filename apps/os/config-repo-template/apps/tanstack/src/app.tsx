@@ -1,8 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { useTodos } from "../lib/use-todos.ts";
-
-export const Route = createFileRoute("/")({ component: Todos });
+import { useTodos } from "./lib/use-todos.ts";
 
 // The project's shared todo list. Rows live in the app's Durable Object
 // SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the
@@ -38,24 +35,20 @@ export function Todos() {
   useEffect(() => {
     if (pendingAdd === null) return;
     const timeout = window.setTimeout(() => {
-      // The RPC cannot be cancelled. Keep the composer locked so a late
-      // success cannot leave a stale error or allow a duplicate submission.
       setMutationError("Adding this todo is taking too long. Reload before retrying.");
     }, 15_000);
     return () => window.clearTimeout(timeout);
   }, [pendingAdd]);
 
   return (
-    <main className="mx-auto max-w-xl px-4 py-12">
-      <header className="flex items-baseline justify-between gap-4">
-        <h1 className="text-3xl font-semibold tracking-tight">TanStack todos</h1>
+    <main style={styles.main}>
+      <header style={styles.header}>
+        <h1 style={styles.h1}>Todos</h1>
         <form action="/_iterate/auth/logout" method="post">
-          <button className="text-sm text-slate-400 transition hover:text-slate-600">
-            Sign out
-          </button>
+          <button style={styles.linkButton}>Sign out</button>
         </form>
       </header>
-      <p className="mt-1 text-sm text-slate-500" aria-live="polite">
+      <p style={styles.meta} aria-live="polite">
         {todos === undefined
           ? "connecting…"
           : todos.length === 0
@@ -66,16 +59,13 @@ export function Todos() {
       </p>
 
       {visibleError !== null ? (
-        <p
-          className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
-          data-type="error"
-        >
+        <p style={styles.error} data-type="error">
           {visibleError}
         </p>
       ) : null}
 
       <form
-        className="mt-8 flex gap-3"
+        style={styles.form}
         onSubmit={(event) => {
           event.preventDefault();
           const title = draft.trim().slice(0, 500);
@@ -91,10 +81,6 @@ export function Todos() {
           void api
             .add(title)
             .then((id) => {
-              // The pre-return-id API can answer briefly while its
-              // stale-while-rebuild facet swaps. Its void response still
-              // confirms success; identify that call by the first new
-              // equal-title live-state row instead of inviting a duplicate.
               setPendingAdd((current) =>
                 current === null
                   ? null
@@ -104,16 +90,13 @@ export function Todos() {
               );
             })
             .catch((thrown: unknown) => {
-              // A transport rejection can lose a successful call's ack. Keep
-              // the composer locked until live state confirms the row (or a
-              // reload proves otherwise), so retry cannot duplicate it.
               const message = thrown instanceof Error ? thrown.message : String(thrown);
               setMutationError(`${message} Reload before retrying.`);
             });
         }}
       >
         <input
-          className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+          style={styles.input}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="add a todo"
@@ -122,7 +105,7 @@ export function Todos() {
         />
         <button
           type="submit"
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+          style={styles.button}
           disabled={
             api === null || todos === undefined || draft.trim() === "" || pendingAdd !== null
           }
@@ -132,26 +115,26 @@ export function Todos() {
       </form>
 
       {pendingAdd !== null && mutationError === null ? (
-        <p className="mt-2 text-sm text-slate-500" data-spinner="true" aria-live="polite">
+        <p style={styles.hint} data-spinner="true" aria-live="polite">
           adding “{pendingAdd.title}”…
         </p>
       ) : null}
 
       {todos !== undefined && todos.length > 0 ? (
-        <ul className="mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <ul style={styles.list}>
           {todos.map((todo) => (
-            <li key={todo.id} className="group flex items-center gap-3 px-4 py-3">
+            <li key={todo.id} style={styles.item}>
               <input
                 type="checkbox"
-                className="size-4 shrink-0 accent-indigo-600"
                 checked={todo.done}
                 onChange={(event) => void api?.setDone(todo.id, event.target.checked)}
                 aria-label={`done: ${todo.title}`}
               />
               <span
-                className={`min-w-0 flex-1 truncate text-sm transition ${
-                  todo.done ? "text-slate-400 line-through" : ""
-                }`}
+                style={{
+                  ...styles.title,
+                  ...(todo.done ? { color: "#94a3b8", textDecoration: "line-through" } : {}),
+                }}
                 title="double-click to rename"
                 onDoubleClick={() => {
                   const title = window.prompt("rename todo", todo.title);
@@ -162,7 +145,7 @@ export function Todos() {
               </span>
               <button
                 type="button"
-                className="shrink-0 text-slate-300 transition hover:text-red-500"
+                style={styles.delete}
                 onClick={() => void api?.remove(todo.id)}
                 aria-label={`delete: ${todo.title}`}
               >
@@ -175,3 +158,73 @@ export function Todos() {
     </main>
   );
 }
+
+const styles = {
+  main: {
+    fontFamily: "system-ui, sans-serif",
+    maxWidth: 560,
+    margin: "0 auto",
+    padding: "48px 16px",
+  },
+  header: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16 },
+  h1: { fontSize: 28, margin: 0 },
+  linkButton: {
+    border: 0,
+    background: "transparent",
+    color: "#94a3b8",
+    fontSize: 14,
+    cursor: "pointer",
+  },
+  meta: { marginTop: 4, fontSize: 14, color: "#64748b" },
+  error: {
+    marginTop: 24,
+    padding: "12px 16px",
+    border: "1px solid #fecaca",
+    background: "#fef2f2",
+    color: "#b91c1c",
+    borderRadius: 8,
+    fontSize: 14,
+  },
+  form: { marginTop: 32, display: "flex", gap: 12 },
+  input: {
+    flex: 1,
+    border: "1px solid #e2e8f0",
+    borderRadius: 8,
+    padding: "8px 12px",
+    fontSize: 14,
+  },
+  button: {
+    border: 0,
+    borderRadius: 8,
+    padding: "8px 16px",
+    background: "#4f46e5",
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: "pointer",
+  },
+  hint: { marginTop: 8, fontSize: 14, color: "#64748b" },
+  list: {
+    marginTop: 16,
+    padding: 0,
+    listStyle: "none",
+    border: "1px solid #e2e8f0",
+    borderRadius: 16,
+    background: "#fff",
+    overflow: "hidden",
+  },
+  item: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "12px 16px",
+    borderTop: "1px solid #f1f5f9",
+  },
+  title: { flex: 1, minWidth: 0, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis" },
+  delete: {
+    border: 0,
+    background: "transparent",
+    color: "#cbd5e1",
+    cursor: "pointer",
+  },
+} as const;

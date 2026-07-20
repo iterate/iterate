@@ -14,10 +14,9 @@ import { test } from "./test-support/test.ts";
 // created: the hello app (stateless WorkerEntrypoint) answers JSON on its own
 // host, the counter app (stateful Durable Object) renders its mini
 // client-side page, increments over fetch, and repaints from the WebSocket
-// broadcast — and the guestbook (a TanStack Start app whose state is a
-// stream-processor fold mirrored into Cap'n Web live state) takes a
-// signature and pushes it live into a second tab — all through real project
-// ingress, in a real browser.
+// broadcast — and the guestbook (a React app whose state is a stream-processor
+// fold mirrored into Cap'n Web live state) takes a signature and pushes it
+// live into a second tab — all through real project ingress, in a real browser.
 test("the seeded hello, counter, and guestbook apps work after creating a project", async ({
   baseURL,
   helpers,
@@ -26,11 +25,11 @@ test("the seeded hello, counter, and guestbook apps work after creating a projec
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   await using fixture = await helpers.createFixture("seeded-apps");
 
-  // Kick the guestbook's cold vite build NOW so it overlaps the hello and
-  // counter walks below: the guestbook is public (no auth partial anywhere
-  // on it), so this plain GET reaches the router and its resolve starts the
-  // app's npm install + vite build in the builder pool. The response itself
-  // (a self-refreshing building page) is irrelevant.
+  // Kick the guestbook's cold worker-bundler build NOW so it overlaps the
+  // hello and counter walks below: the guestbook is public (no auth partial
+  // anywhere on it), so this plain GET reaches the router and its resolve
+  // starts the app build. The response itself (a self-refreshing building
+  // page) is irrelevant.
   await page.request.get(appUrl("guestbook", fixture.project.slug, baseURL!)).catch(() => {});
 
   // Hello: an app's first use is a cold worker build; the router serves a
@@ -54,11 +53,11 @@ test("the seeded hello, counter, and guestbook apps work after creating a projec
   await page.getByRole("button", { name: "increment" }).click();
   await page.locator("#n").filter({ hasText: /^1$/ }).waitFor();
 
-  // Guestbook: the seeded repo's second TanStack Start app (vite pipeline,
-  // apps/guestbook) — its state is a stream-processor fold on the project
-  // stream, hosted in the app's own Durable Object and mirrored into Cap'n
-  // Web live state. Its cold build was kicked before the hello walk and has
-  // been running throughout, so this wait only absorbs the tail of it.
+  // Guestbook: the seeded repo's second React app (apps/guestbook) — its
+  // state is a stream-processor fold on the project stream, hosted in the
+  // app's own Durable Object and mirrored into Cap'n Web live state. Its cold
+  // build was kicked before the hello walk and has been running throughout,
+  // so this wait only absorbs the tail of it.
   await page.goto(appUrl("guestbook", fixture.project.slug, baseURL!));
   await page.getByRole("heading", { name: "Guestbook" }).waitFor({ timeout: 120_000 });
 
@@ -130,7 +129,7 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   // Kick the tanstack app's cold vite build NOW so it overlaps the whole
   // internal-app walk below: /api has no auth gate (it authenticates
   // in-band), so this plain GET reaches the stateful facet, whose resolve
-  // starts the app's npm install + vite build in the builder pool. The
+  // starts the app's in-workerd worker-bundler build. The
   // response itself (an upgrade rejection) is irrelevant.
   await page.request.get(`${appUrl("tanstack", slug, baseURL!)}api`).catch(() => {});
 

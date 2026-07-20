@@ -4,9 +4,9 @@ import { IterateDurableObject, type ProjectAuthCredentials } from "iterate/sdk";
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { Todo, TodoListState } from "./lib/state.ts";
 
-// The small, stateful half of the todo app. It has its own Wrangler entry so
+// The small, stateful half of the todo app. It has its own worker entry so
 // a cold /api WebSocket loads only the Durable Object and its data/runtime
-// dependencies, never the unrelated TanStack SSR bundle in worker.ts.
+// dependencies, never the unrelated React page bundle.
 export class TanstackTodos extends IterateDurableObject {
   static db = defineConfig({
     // The desired schema now (`sqlfu draft` diffs new migrations against it).

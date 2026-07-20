@@ -19,9 +19,9 @@ import { GuestbookProcessor, type GuestbookFoldState } from "./guestbook.ts";
 
 const SUBSCRIPTION_VERSION_STORAGE_KEY = "guestbook:subscription-config-version";
 
-// The small, stateful half of the guestbook. It has its own Wrangler entry so
+// The small, stateful half of the guestbook. It has its own worker entry so
 // a cold /api WebSocket loads only the processor host and Cap'n Web runtime,
-// never the unrelated TanStack SSR bundle in worker.ts.
+// never the unrelated React page bundle.
 export class GuestbookApp extends IterateDurableObject {
   #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;
   #configurationInFlight: Promise<void> | undefined;

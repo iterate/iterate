@@ -12,24 +12,28 @@ export const guestbookSubscriptionConfigVersion = 3;
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
-/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */
+/** React pages + client bundle, built by worker-bundler's createApp lane. */
 export const guestbookPageSource = {
   files: repoFiles,
-  options: { pipeline: "vite", rootDir: "apps/guestbook" },
+  options: {
+    client: "src/client.tsx",
+    entryPoint: "src/server.tsx",
+    rootDir: "apps/guestbook",
+  },
 } satisfies DynamicWorkerSource;
 
 // One declarative ref for the guestbook host, shared by the HTTP routes and
 // the wake subscription below — the same Durable Object either way, addressed
-// by its durableWorkerKey. Its small Wrangler entry excludes the independent
-// TanStack SSR build. The stale policy lets a still-running facet answer while
-// the host checks for a newer repo version in the background; a cold facet
-// mounts this exact cached artifact.
+// by its durableWorkerKey. Its small createWorker entry excludes the page
+// bundle. The stale policy lets a still-running facet answer while the host
+// checks for a newer repo version in the background; a cold facet mounts this
+// exact cached artifact.
 export const guestbookAppRef = {
   type: "stateful",
   path: "/",
   className: "GuestbookApp",
   // The split app cannot share the legacy host: that host's persisted wake
-  // recipe can resolve today's page-only Vite build, which no longer exports
+  // recipe can resolve today's page-only build, which no longer exports
   // GuestbookApp, and poison its live facet before the new ref arrives. The
   // fold's truth is the stream, so this new host safely rebuilds by replay.
   durableWorkerKey: "app-guestbook-v2",

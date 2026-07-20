@@ -10,7 +10,6 @@ import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
 import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
-import { workerBuildDevEndpoint } from "./scripts/worker-build-dev-endpoint.ts";
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
 // the cloudflare plugin reads it, so dev and build can never see stale config.
@@ -109,7 +108,6 @@ export default defineConfig({
     ...posthogSourceMaps(),
     canonicalizeOutputWranglerConfig(),
     devServerDiscoveryFile(),
-    workerBuildDevEndpoint(),
     ...(captunName
       ? [
           captunVite({

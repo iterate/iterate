@@ -173,10 +173,9 @@ async function resolveThroughBuilder(input: {
     options,
     source: resolved,
   });
-  // Runtime builds live under the project-scoped key (a project can influence
-  // its own builder sandbox's output, so runtime artifacts are never shared);
-  // the content-only key is the TRUSTED read-first tier, written exclusively
-  // by the deploy-time template seeder — see build-key.ts.
+  // Content-only key is the shared tier (identical source → identical
+  // artifact). Runtime also addresses a project-scoped key so last-good
+  // pointers and in-flight markers stay local — see build-key.ts.
   const buildKey = await projectWorkerBuildKey(input.projectId, sharedKey);
   const context: ResolveContext = { options, projectId: input.projectId, resolved };
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
@@ -216,21 +215,18 @@ async function resolveThroughBuilder(input: {
   } else {
     // Blocking callers REPLAY a recorded failure within its TTL instead of
     // re-running the build. Same-key retries — the at-least-once event
-    // delivery loop above all — would otherwise boot a builder container per
-    // attempt for a deterministically broken source, and enough broken-head
-    // projects churning that way starves the deployment's whole container
-    // capacity (observed live on preview e2e). A fix always commits a NEW
-    // head → new key, so healing is never gated on the TTL.
+    // delivery loop above all — would otherwise pay a full bundler run per
+    // attempt for a deterministically broken source. A fix always commits a
+    // NEW head → new key, so healing is never gated on the TTL.
     const recorded = await store.getBuildFailure(buildKey);
     if (recorded !== null) throw new WorkerBuildFailedError(recorded.message);
 
     // Stampede guard: a project worker is loaded independently by every
     // stream delivering to it, so one commit can fan out into DOZENS of
-    // concurrent cold resolves of ONE key (observed live: 100 pool builds
-    // for 27 distinct keys in one e2e run, top key built 24×, drowning the
-    // builder pool). When THIS ISOLATE is already building the key, wait for
-    // its artifact instead of piling on. Never worse than building: the wait
-    // is bounded and falls back to a duplicate build.
+    // concurrent cold resolves of ONE key. When THIS ISOLATE is already
+    // building the key, wait for its artifact instead of piling on. Never
+    // worse than building: the wait is bounded and falls back to a duplicate
+    // build.
     const built = await waitForBuildElsewhere(store, buildKey);
     if (built !== null) {
       input.waitUntil(noteLastGoodBuild(store, context, buildKey));
@@ -242,16 +238,15 @@ async function resolveThroughBuilder(input: {
 }
 
 /**
- * One build-run through the build backend (the project's builder sandbox, or
- * local dev's host-toolchain endpoint — build-backend.ts). The file snapshot
- * is resolved HERE and passed by value (this worker owns the REPO binding),
- * sized by the ref's source masks; the artifact is written to the cache by
- * THIS side (the container never holds KV credentials) and returned by value,
- * so nothing waits on KV write propagation. A GENUINE build failure (the
- * backend's named error) is recorded so the fetch lane can fall back without
- * re-running it — and clears the in-flight marker, so budgeted callers are
- * never held in "building" by a build that already died; transport and
- * cancellation errors pass through unrecorded and stay retryable.
+ * One build-run through the in-workerd worker-bundler backend
+ * (build-backend.ts). The file snapshot is resolved HERE and passed by value
+ * (this worker owns the REPO binding), sized by the ref's source masks; the
+ * artifact is written to the cache by THIS side and returned by value. A
+ * GENUINE build failure (the backend's named error) is recorded so the fetch
+ * lane can fall back without re-running it — and clears the in-flight marker,
+ * so budgeted callers are never held in "building" by a build that already
+ * died; transport and cancellation errors pass through unrecorded and stay
+ * retryable.
  *
  * Concurrent cold builds of one key are NOT deduped across isolates: they
  * converge on one content-addressed, idempotent artifact write — redundant
@@ -287,8 +282,8 @@ const BUILD_WAIT_POLL_MS = 1_000;
  * resolve stalled toward the cap (observed live: an entire e2e lane ran
  * ~90-160s per spec with first-attempt failures across the board, while the
  * pool sat nearly idle at 30 builds). Cross-isolate duplicates are the
- * cheaper poison: bounded by isolate count, idempotent, and the builder pool
- * absorbs them.
+ * cheaper poison: bounded by isolate count and idempotent on the artifact
+ * write.
  */
 async function waitForBuildElsewhere(
   store: KvWorkerBuildArtifactStore,

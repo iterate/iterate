@@ -23,7 +23,6 @@ import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
 } from "../../../scripts/lib/wrangler-config.ts";
-import { WORKER_BUILDER_POOL_SIZE } from "../src/domains/workers/builder-pool.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
@@ -174,10 +173,6 @@ const DO_CLASSES = {
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
   WORKER: "StatefulWorkerDurableObject",
-  // The deployment's worker-builder pool: stock-SDK sandbox containers that
-  // run dynamic-worker builds, deliberately outside the project sandbox
-  // catalogue (src/domains/workers/builder-pool.ts).
-  WORKER_BUILDER: "WorkerBuilderDurableObject",
   // Deliberately NOT "WorkspaceDurableObject": declarative exports key
   // namespaces by class name, and the retired single-parent-overlay workspace
   // occupied that name — reusing it would inherit the old namespace's storage.
@@ -220,6 +215,10 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
+  // The retired worker-builder pool: dynamic workers now build in-workerd via
+  // @cloudflare/worker-bundler. Remove once every deployed env reports "Safe
+  // to remove from `exports`".
+  WorkerBuilderDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -235,11 +234,8 @@ const DO_EXPORTS = {
 const SANDBOX_MAX_INSTANCES: Record<SandboxInstanceType, { preview: number; production: number }> =
   {
     lite: { preview: 20, production: 50 },
-    // Worker builds no longer draw on this fleet (the builder pool below is
-    // its own app with its own cap) — this budget is pet sandboxes only. The
-    // per-project-builder era saturated 15/15 live; without builders, an e2e
-    // run's own pets use a handful, so preview trades the old headroom to the
-    // builder pool's memory reservation.
+    // Worker builds no longer draw on this fleet (they run in-workerd via
+    // worker-bundler) — this budget is pet sandboxes only.
     basic: { preview: 10, production: 30 },
     "standard-1": { preview: 3, production: 20 },
     "standard-2": { preview: 2, production: 10 },
@@ -385,25 +381,6 @@ function workerBindings(input: {
         ssh: { enabled: true },
         authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
       })),
-      {
-        // The worker-builder pool: its own app so builder demand can NEVER
-        // compete with pet sandboxes for placement. max_instances equals the
-        // pool size — there are exactly that many member names.
-        //
-        // standard-3 (2 vCPU, 8 GiB), NOT basic: the pool concentrates every
-        // project's builds onto these few containers, and npm install +
-        // wrangler's esbuild bundle are CPU/IO-bound — on basic (1/4 vCPU) an
-        // e2e-style burst ran installs at 73–165s each (observed live), which
-        // blows delivery deadlines fleet-wide. With a 300s sleepAfter the
-        // fleet only exists during build bursts, so the bigger type costs
-        // active-minutes, not idle capacity.
-        class_name: "WorkerBuilderDurableObject",
-        image: "./sandbox/Dockerfile",
-        instance_type: "standard-3",
-        max_instances: WORKER_BUILDER_POOL_SIZE,
-        ssh: { enabled: true },
-        authorized_keys: SANDBOX_SSH_AUTHORIZED_KEYS,
-      },
     ],
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
@@ -534,15 +511,6 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
-      // Local dev's dynamic-worker build backend: the vite dev server's
-      // host-toolchain endpoint (scripts/worker-build-dev-endpoint.ts).
-      // Deployed envs never set this — they build in the project's builder
-      // sandbox (domains/workers/build-backend.ts).
-      ...(process.env.PORT
-        ? {
-            WORKER_BUILD_DEV_ENDPOINT: `http://localhost:${process.env.PORT}/__dev/worker-build`,
-          }
-        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.

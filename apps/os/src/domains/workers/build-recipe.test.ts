@@ -1,218 +1,129 @@
 import { describe, expect, it } from "vitest";
 import {
-  collectRecipeOutputs,
-  collectViteRecipeOutputs,
-  WORKER_COMPATIBILITY_DATE,
-  WORKER_COMPATIBILITY_FLAGS,
-  workerBuildRecipe,
+  applyRootDir,
+  assertSafeSourcePath,
+  BUILD_TOOLCHAIN_VERSION,
+  canonicalWorkerBuildOptions,
+  prepareWorkerBuild,
+  WORKER_BUNDLER_VERSION,
 } from "./build-recipe.ts";
 
-const templateFiles = {
-  "worker.ts": "export default {};",
-  "lib/helper.ts": "export const x = 1;",
-  "package.json": JSON.stringify({ dependencies: {} }),
-};
-
-describe("workerBuildRecipe", () => {
-  it("generates the wrangler config with OS-owned compatibility and the entry", () => {
-    const recipe = workerBuildRecipe({
-      files: templateFiles,
-      options: { entryPoint: "worker.ts" },
-    });
-    const config = JSON.parse(recipe.files[".iterate-build.wrangler.jsonc"]!) as Record<
-      string,
-      unknown
-    >;
-    expect(config.main).toBe(".iterate-build.entry.ts");
-    // OS owns dynamic-worker compatibility — never read from the source's own
-    // wrangler config (a second compat channel would bypass the build key).
-    expect(config.compatibility_date).toBe(WORKER_COMPATIBILITY_DATE);
-    expect(config.compatibility_flags).toEqual(WORKER_COMPATIBILITY_FLAGS);
-    expect(recipe.mainModule).toBe(".iterate-build.entry.js");
-    expect(recipe.outputDir).toBe(".iterate-build.out");
-  });
-
-  it("installs only when the source has a package.json, always bundles via wrangler dry-run", () => {
-    const withPackage = workerBuildRecipe({
-      files: templateFiles,
-      options: { entryPoint: "worker.ts" },
-    });
-    expect(withPackage.commands).toHaveLength(2);
-    expect(withPackage.commands[1]!.command).toContain("WRANGLER_SEND_METRICS=false wrangler");
-    // The install step is nub-first with an npm fallback; BOTH lanes must
-    // keep the no-lifecycle-scripts security property and skip dev deps.
-    const install = withPackage.commands[0]!.command;
-    expect(install).toContain("nub install --ignore-scripts --prod");
-    expect(install).toContain("|| npm install --ignore-scripts");
-    expect(install).toContain("--omit=dev");
-
-    const withoutPackage = workerBuildRecipe({
-      files: { "worker.ts": "export default {};" },
-      options: { entryPoint: "worker.ts" },
-    });
-    expect(withoutPackage.commands).toHaveLength(1);
-    expect(withoutPackage.commands[0]!.command).toContain("wrangler deploy --dry-run");
-  });
-
-  it("vite pipeline: the app's own install+build, collected as wrapped dist modules", () => {
-    const recipe = workerBuildRecipe({
+describe("prepareWorkerBuild", () => {
+  it("prepares a plain worker entry", () => {
+    const prepared = prepareWorkerBuild({
       files: {
-        "apps/tanstack/package.json": JSON.stringify({ scripts: { build: "vite build" } }),
-        "apps/tanstack/vite.config.ts": "export default {};",
-        "elsewhere.ts": "export {};",
+        "worker.ts": "export default {};",
+        "lib/helper.ts": "export const x = 1;",
       },
-      options: { pipeline: "vite", rootDir: "apps/tanstack" },
+      options: { entryPoint: "worker.ts" },
     });
-    expect(recipe.pipeline).toBe("vite");
-    // rootDir re-roots the map and drops everything outside it.
-    expect(Object.keys(recipe.files).sort()).toEqual(["package.json", "vite.config.ts"]);
-    expect(recipe.commands).toHaveLength(2);
-    // devDependencies install (no --prod/--omit=dev — vite lives there), and
-    // BOTH install lanes keep the no-lifecycle-scripts property; the build
-    // step is where project code deliberately runs.
-    expect(recipe.commands[0]!.command).toContain("nub install --ignore-scripts --prefer-offline");
-    expect(recipe.commands[0]!.command).not.toContain("--prod");
-    expect(recipe.commands[0]!.command).toContain("|| npm install --ignore-scripts");
-    expect(recipe.commands[0]!.command).not.toContain("--omit=dev");
-    expect(recipe.commands[1]!.command).toBe("npm run build");
-
-    const collected = collectViteRecipeOutputs({
-      "dist/server/index.js": "export default { fetch() {} }; export class TanstackTodos {}",
-      "dist/server/assets/chunk-abc.js": "export {};",
-      "dist/server/assets/styles-server.css": "body { color: red; }",
-      // Vite may emit server-only support files that this text-module loader
-      // neither imports nor serves. They must retain the old skip behavior;
-      // trying to decode one as a browser text asset breaks otherwise-valid
-      // SSR builds.
-      "dist/server/assets/renderer.wasm": "\0asm-binary-placeholder",
-      "dist/server/wrangler.json": "{}",
-      "dist/client/assets/index-abc.js": "console.log(1)",
-      "dist/client/.assetsignore": "",
-    });
-    expect(collected.mainModule).toBe(".iterate-build.entry.js");
-    expect(Object.keys(collected.modules).sort()).toEqual([
-      ".iterate-build.assets.js",
-      ".iterate-build.entry.js",
-      "dist/server/assets/chunk-abc.js",
-      "dist/server/index.js",
-    ]);
-    // The wrapper serves the client asset and re-exports the server entry's
-    // names (Durable Object classes ride through for stateful hosting).
-    expect(collected.modules[".iterate-build.entry.js"]).toContain(
-      'export * from "./dist/server/index.js"',
-    );
-    expect(collected.modules[".iterate-build.assets.js"]).toContain("/assets/index-abc.js");
-    // TanStack's SSR manifest can reference CSS emitted only under
-    // dist/server. It is still a browser asset and must be served at the
-    // URL embedded in the rendered document.
-    expect(collected.modules[".iterate-build.assets.js"]).toContain('"/assets/styles-server.css"');
-    expect(collected.modules[".iterate-build.assets.js"]).not.toContain("renderer.wasm");
-
-    expect(() => collectViteRecipeOutputs({ "dist/server/other.js": "" })).toThrow(
-      /did not produce "dist\/server\/index.js"/,
-    );
-    expect(() =>
-      collectViteRecipeOutputs({
-        "dist/server/index.js": "",
-        "dist/client/logo.png": "binary",
-      }),
-    ).toThrow(/not a text type/);
+    expect(prepared.kind).toBe("worker");
+    if (prepared.kind !== "worker") throw new Error("expected worker");
+    expect(prepared.entryPoint).toBe("worker.ts");
+    expect(prepared.files["worker.ts"]).toBe("export default {};");
+    expect(prepared.files["lib/helper.ts"]).toBe("export const x = 1;");
+    expect(prepared.minify).toBe(false);
   });
 
-  it("materializes virtual modules as files aliased in the wrangler config", () => {
-    const recipe = workerBuildRecipe({
-      files: { "worker.ts": 'import "iterate/sdk";' },
+  it("materialises platform virtual modules into node_modules", () => {
+    const prepared = prepareWorkerBuild({
+      files: { "worker.ts": 'import "iterate/sdk"; export default {};' },
       options: {
         entryPoint: "worker.ts",
-        virtualModules: { "iterate/sdk": "export const s = 1;" },
+        virtualModules: { "iterate/sdk": "export const ready = true;" },
       },
     });
-    const config = JSON.parse(recipe.files[".iterate-build.wrangler.jsonc"]!) as {
-      alias: Record<string, string>;
-    };
-    const aliasTarget = config.alias["iterate/sdk"]!;
-    expect(aliasTarget).toMatch(/^\.\/\.iterate-build\.virtual\//);
-    expect(recipe.files[aliasTarget.slice(2)]).toBe("export const s = 1;");
+    expect(prepared.files["node_modules/iterate/sdk.js"]).toBe("export const ready = true;");
+    expect(JSON.parse(prepared.files["node_modules/iterate/package.json"]!)).toMatchObject({
+      name: "iterate",
+      exports: { "./sdk": "./sdk.js" },
+    });
   });
 
-  it("routes every build through the entry shim so wrangler always sees module format", () => {
-    // Named-exports-only entries (a WorkerEntrypoint or Durable Object class
-    // exported by name) would otherwise be inferred as service-worker format,
-    // which rejects cloudflare:workers imports. Unconditional — syntactic
-    // "has a default export" detection misclassifies strings and comments,
-    // and the shim is correct either way.
-    const recipe = workerBuildRecipe({
+  it("prepares a full-stack app when client is set", () => {
+    const prepared = prepareWorkerBuild({
       files: {
-        "swr/probe.ts":
-          'import { WorkerEntrypoint } from "cloudflare:workers";\nexport class Api extends WorkerEntrypoint {}',
+        "src/server.tsx": "export default {};",
+        "src/client.tsx": "console.log('hi');",
       },
-      options: { entryPoint: "swr/probe.ts" },
+      options: {
+        client: "src/client.tsx",
+        entryPoint: "src/server.tsx",
+        minify: true,
+      },
     });
-    expect(recipe.files[".iterate-build.entry.ts"]).toContain('export * from "./swr/probe.ts"');
-    expect(recipe.files[".iterate-build.entry.ts"]).toContain(".default ?? {}");
-    expect(recipe.mainModule).toBe(".iterate-build.entry.js");
+    expect(prepared.kind).toBe("app");
+    if (prepared.kind !== "app") throw new Error("expected app");
+    expect(prepared.server).toBe("src/server.tsx");
+    expect(prepared.client).toBe("src/client.tsx");
+    expect(prepared.minify).toBe(true);
   });
 
-  it("defaults the entry to worker.ts and rejects a missing entry", () => {
-    const recipe = workerBuildRecipe({ files: templateFiles, options: {} });
-    expect(recipe.files[".iterate-build.entry.ts"]).toContain('export * from "./worker.ts"');
+  it("re-roots under rootDir and rejects missing entries", () => {
+    const prepared = prepareWorkerBuild({
+      files: {
+        "apps/todos/src/server.tsx": "export default {};",
+        "apps/todos/src/client.tsx": "export {};",
+        "elsewhere.ts": "export {};",
+      },
+      options: {
+        client: "src/client.tsx",
+        entryPoint: "src/server.tsx",
+        rootDir: "apps/todos",
+      },
+    });
+    expect(prepared.kind).toBe("app");
+    if (prepared.kind !== "app") throw new Error("expected app");
+    expect(Object.keys(prepared.files).sort()).toEqual(["src/client.tsx", "src/server.tsx"]);
+
     expect(() =>
-      workerBuildRecipe({ files: templateFiles, options: { entryPoint: "missing.ts" } }),
-    ).toThrow(/not in the worker source files/);
-  });
-
-  it("rejects unsafe and reserved source paths — they are written to disk by the runners", () => {
-    for (const name of [
-      "../escape.ts",
-      "/absolute.ts",
-      "a/../../b.ts",
-      "a\\b.ts",
-      "",
-      ".iterate-build.wrangler.jsonc",
-      ".iterate-build.out/worker.js",
-    ]) {
-      expect(
-        () =>
-          workerBuildRecipe({
-            files: { "worker.ts": "", [name]: "" },
-            options: { entryPoint: "worker.ts" },
-          }),
-        name,
-      ).toThrow();
-    }
-  });
-
-  it("rejects bundle: false — loader-ready sources never reach the pipeline", () => {
-    expect(() => workerBuildRecipe({ files: templateFiles, options: { bundle: false } })).toThrow(
-      /loader-ready/,
-    );
+      prepareWorkerBuild({
+        files: { "worker.ts": "export default {};" },
+        options: { entryPoint: "missing.ts" },
+      }),
+    ).toThrow(/Entry point "missing.ts"/);
   });
 });
 
-describe("collectRecipeOutputs", () => {
-  const recipe = workerBuildRecipe({ files: templateFiles, options: { entryPoint: "worker.ts" } });
-
-  it("keeps JS modules, drops sourcemaps and wrangler's README", () => {
-    const collected = collectRecipeOutputs(recipe, {
-      ".iterate-build.entry.js": "bundled",
-      ".iterate-build.entry.js.map": "{}",
-      "README.md": "wrangler notes",
-    });
-    expect(collected).toEqual({
-      mainModule: ".iterate-build.entry.js",
-      modules: { ".iterate-build.entry.js": "bundled" },
-    });
+describe("canonicalWorkerBuildOptions", () => {
+  it("defaults the entry and injects platform virtual modules", () => {
+    const options = canonicalWorkerBuildOptions({});
+    expect(options.entryPoint).toBe("worker.ts");
+    expect(options.virtualModules?.["iterate/sdk"]).toContain("export");
+    expect(options.virtualModules?.["iterate/processors"]).toContain("export");
+    expect(options.virtualModules?.["iterate/live-state"]).toContain("export");
   });
 
-  it("refuses non-text output rather than storing it corrupted", () => {
-    expect(() =>
-      collectRecipeOutputs(recipe, { ".iterate-build.entry.js": "bundled", "data.wasm": "\0\0" }),
-    ).toThrow(/unsupported format/);
+  it("lets the source override a platform virtual module", () => {
+    const options = canonicalWorkerBuildOptions({
+      virtualModules: { "iterate/sdk": "export const custom = 1;" },
+    });
+    expect(options.virtualModules?.["iterate/sdk"]).toBe("export const custom = 1;");
+  });
+});
+
+describe("path helpers", () => {
+  it("applyRootDir drops files outside the root", () => {
+    expect(
+      applyRootDir(
+        {
+          "apps/a/worker.ts": "a",
+          "apps/b/worker.ts": "b",
+        },
+        "apps/a",
+      ),
+    ).toEqual({ "worker.ts": "a" });
   });
 
-  it("refuses output missing the entry module", () => {
-    expect(() => collectRecipeOutputs(recipe, { "other.js": "x" })).toThrow(
-      /did not produce the entry module/,
-    );
+  it("assertSafeSourcePath rejects traversal", () => {
+    expect(() => assertSafeSourcePath("../secret.ts")).toThrow(/must not traverse/);
+    expect(() => assertSafeSourcePath("/abs.ts")).toThrow(/must be relative/);
+  });
+});
+
+describe("toolchain pin", () => {
+  it("names the worker-bundler package version", () => {
+    expect(BUILD_TOOLCHAIN_VERSION).toBe(`@cloudflare/worker-bundler@${WORKER_BUNDLER_VERSION}`);
+    expect(WORKER_BUNDLER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
 });

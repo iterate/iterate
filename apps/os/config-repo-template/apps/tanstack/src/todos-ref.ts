@@ -2,10 +2,14 @@ import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from "iterate/sdk"
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
-/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */
+/** React pages + client bundle, built by worker-bundler's createApp lane. */
 export const tanstackPageSource = {
   files: repoFiles,
-  options: { pipeline: "vite", rootDir: "apps/tanstack" },
+  options: {
+    client: "src/client.tsx",
+    entryPoint: "src/server.tsx",
+    rootDir: "apps/tanstack",
+  },
 } satisfies DynamicWorkerSource;
 
 /** The todo API's durable identity and deliberately small build. The stale
