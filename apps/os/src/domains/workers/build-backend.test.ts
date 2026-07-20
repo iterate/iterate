@@ -11,10 +11,12 @@ beforeEach(() => {
   createApp.mockReset();
   createWorker.mockReset();
   createWorker.mockResolvedValue({
-    mainModule: "bundle.js",
-    modules: { "bundle.js": "built" },
-    warnings: [],
-    wranglerConfig: { compatibilityDate: "2026-07-01" },
+    result: {
+      mainModule: "bundle.js",
+      modules: { "bundle.js": "built" },
+      warnings: [],
+      wranglerConfig: { compatibilityDate: "2026-07-01" },
+    },
   });
 });
 
@@ -72,13 +74,15 @@ describe("executeWorkerBuild", () => {
 
   it("calls createApp with an arbitrary repo tree and package.json unchanged", async () => {
     createApp.mockResolvedValue({
-      assetManifest: {
-        "/client.js": { contentType: "application/javascript", etag: "abc" },
+      result: {
+        assetManifest: {
+          "/client.js": { contentType: "application/javascript", etag: "abc" },
+        },
+        assets: { "/client.js": "client" },
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "server", "shared.js": "shared" },
+        warnings: ["upstream warning"],
       },
-      assets: { "/client.js": "client" },
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "server", "shared.js": "shared" },
-      warnings: ["upstream warning"],
     });
     const source: DynamicWorkerSource = {
       createApp: {
@@ -114,10 +118,8 @@ describe("executeWorkerBuild", () => {
     expect(createWorker).toHaveBeenCalledOnce();
   });
 
-  it("classifies only named sidecar build errors as cacheable failures", async () => {
-    const buildFailure = new Error("Could not resolve package");
-    buildFailure.name = "WorkerBundlerBuildError";
-    createWorker.mockRejectedValueOnce(buildFailure);
+  it("classifies returned build errors while transport failures remain retryable", async () => {
+    createWorker.mockResolvedValueOnce({ error: "Could not resolve package" });
     await expect(execute({ "worker.ts": "export default {};" })).rejects.toMatchObject({
       message: "Could not resolve package",
       name: "WorkerBuildFailedError",

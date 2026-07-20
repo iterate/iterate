@@ -50,12 +50,14 @@ describe("worker-bundler RPC boundary", () => {
         virtualModules: { "iterate/sdk": "export {};" },
       }),
     ).resolves.toEqual({
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "built" },
-      warnings: [],
-      wranglerConfig: {
-        compatibilityDate: "2026-07-01",
-        compatibilityFlags: ["nodejs_compat_v2"],
+      result: {
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "built" },
+        warnings: [],
+        wranglerConfig: {
+          compatibilityDate: "2026-07-01",
+          compatibilityFlags: ["nodejs_compat_v2"],
+        },
       },
     });
     expect(createWorker).toHaveBeenCalledOnce();
@@ -105,15 +107,17 @@ describe("worker-bundler RPC boundary", () => {
         server: "server/index.ts",
       }),
     ).resolves.toEqual({
-      assetConfig,
-      assetManifest: {
-        "/admin.js": { contentType: "application/javascript", etag: "admin-etag" },
-        "/client.js": { contentType: "application/javascript", etag: "client-etag" },
+      result: {
+        assetConfig,
+        assetManifest: {
+          "/admin.js": { contentType: "application/javascript", etag: "admin-etag" },
+          "/client.js": { contentType: "application/javascript", etag: "client-etag" },
+        },
+        assets: { "/admin.js": "admin", "/client.js": "client" },
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "server", "data.json": { json: { ok: true } } },
+        warnings: ["worker-bundler chose a fallback package export"],
       },
-      assets: { "/admin.js": "admin", "/client.js": "client" },
-      mainModule: "bundle.js",
-      modules: { "bundle.js": "server", "data.json": { json: { ok: true } } },
-      warnings: ["worker-bundler chose a fallback package export"],
     });
     expect(createApp).toHaveBeenCalledOnce();
     expect(createApp).toHaveBeenCalledWith({
@@ -146,15 +150,17 @@ describe("worker-bundler RPC boundary", () => {
         virtualModules: {},
       }),
     ).resolves.toMatchObject({
-      modules: {
-        "copy.txt": { text: "hello" },
-        "data.json": { json: { answer: 42 } },
+      result: {
+        modules: {
+          "copy.txt": { text: "hello" },
+          "data.json": { json: { answer: 42 } },
+        },
+        warnings: ["File not found: optional.js"],
       },
-      warnings: ["File not found: optional.js"],
     });
   });
 
-  it("rejects binary outputs that cannot survive the JSON artifact cache", async () => {
+  it("returns binary-output limits as expected build failures", async () => {
     createWorker.mockResolvedValueOnce({
       mainModule: "data.bin",
       modules: { "data.bin": { data: new ArrayBuffer(4) } },
@@ -165,7 +171,9 @@ describe("worker-bundler RPC boundary", () => {
         files: { "data.bin": "data" },
         virtualModules: {},
       }),
-    ).rejects.toThrow(/build cache does not yet encode ArrayBuffers/);
+    ).resolves.toMatchObject({
+      error: expect.stringMatching(/build cache does not yet encode ArrayBuffers/),
+    });
 
     createApp.mockResolvedValueOnce({
       assetManifest: new Map(),
@@ -178,7 +186,9 @@ describe("worker-bundler RPC boundary", () => {
         files: { "server.ts": "export default {};" },
         server: "server.ts",
       }),
-    ).rejects.toThrow(/build cache currently supports text assets only/);
+    ).resolves.toMatchObject({
+      error: expect.stringMatching(/build cache currently supports text assets only/),
+    });
   });
 });
 

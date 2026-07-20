@@ -37,11 +37,7 @@ type WorkerBundlerCreateAppResult = WorkerBundlerCreateWorkerResult & {
   assets: Record<string, string>;
 };
 
-/** Name preserved across Workers RPC so OS caches errors from the bundler call,
- * while raw service-binding failures remain retryable. */
-class WorkerBundlerBuildError extends Error {
-  override readonly name = "WorkerBundlerBuildError";
-}
+type WorkerBundlerBuildResult<T> = { error: string } | { result: T };
 
 /** RPC-only entrypoint: inert source values in, loader-ready text out. */
 export default class WorkerBundlerEntrypoint extends WorkerEntrypoint {
@@ -53,8 +49,8 @@ export default class WorkerBundlerEntrypoint extends WorkerEntrypoint {
     options: Omit<WorkerBundlerCreateWorkerOptions, "files"> & {
       files: Record<string, string>;
     },
-  ): Promise<WorkerBundlerCreateWorkerResult> {
-    return await classifyBuildError(async () =>
+  ): Promise<WorkerBundlerBuildResult<WorkerBundlerCreateWorkerResult>> {
+    return await captureBuildResult(async () =>
       normalizeBuildResult(await workerBundlerCreateWorker(options)),
     );
   }
@@ -63,8 +59,8 @@ export default class WorkerBundlerEntrypoint extends WorkerEntrypoint {
     options: Omit<WorkerBundlerCreateAppOptions, "files"> & {
       files: Record<string, string>;
     },
-  ): Promise<WorkerBundlerCreateAppResult> {
-    return await classifyBuildError(async () =>
+  ): Promise<WorkerBundlerBuildResult<WorkerBundlerCreateAppResult>> {
+    return await captureBuildResult(async () =>
       normalizeAppBuildResult(await workerBundlerCreateApp(options)),
     );
   }
@@ -89,12 +85,15 @@ export default class WorkerBundlerEntrypoint extends WorkerEntrypoint {
   }
 }
 
-async function classifyBuildError<T>(build: () => Promise<T>): Promise<T> {
+/** Bad source is an expected build result. Only RPC/transport failures throw. */
+async function captureBuildResult<T>(
+  build: () => Promise<T>,
+): Promise<WorkerBundlerBuildResult<T>> {
   try {
-    return await build();
+    return { result: await build() };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new WorkerBundlerBuildError(message.slice(0, 2_000));
+    return { error: message.slice(0, 2_000) };
   }
 }
 
