@@ -19,6 +19,13 @@ const network = await vi.hoisted(async () => {
   const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
   const repoCalls: Array<{ args: unknown[]; method: string; name: string }> = [];
   const state = {
+    birthConfig: {} as {
+      github?: {
+        artifactImport?: { branch: string; depth: number };
+        owner: string;
+        repo: string;
+      };
+    },
     githubLink: null as Record<string, unknown> | null,
     /** What the fake GitHub API answers: repo exists / missing / create fails. */
     githubRepoExists: true,
@@ -48,6 +55,7 @@ const network = await vi.hoisted(async () => {
       itx.reset();
       repoCalls.length = 0;
       state.githubLink = null;
+      state.birthConfig = {};
       state.githubRepoExists = true;
       state.githubRepoPrivate = false;
       state.githubRepoPushedAt = "2026-07-20T00:00:00Z";
@@ -120,6 +128,15 @@ const network = await vi.hoisted(async () => {
     REPO: {
       getByName(name: string) {
         return {
+          processor: {
+            async snapshot() {
+              return {
+                state: {
+                  birthCertificate: { config: state.birthConfig },
+                },
+              };
+            },
+          },
           // Read-only probe, deliberately not recorded in repoCalls: the
           // ordering assertions track the mutating verbs.
           async getGithubLink() {
@@ -245,11 +262,37 @@ describe("linkRepoToGithub", () => {
 
   test("does not clone and push an Artifact that was imported from this GitHub repo", async () => {
     seedConnectedFact();
+    network.state.birthConfig = {
+      github: {
+        artifactImport: { branch: "main", depth: 1 },
+        owner: "ACME",
+        repo: "Widgets",
+      },
+    };
 
-    const result = await linkRepoToGithub({ ...linkInput(), skipInitialPush: true });
+    const result = await linkRepoToGithub(linkInput());
 
     expect(result.initialPush).toEqual({ ok: true, skipped: true });
     expect(network.repoCalls.map((call) => call.method)).toEqual(["configureGithubLink"]);
+  });
+
+  test("pushes when an imported Artifact is linked to a different GitHub repo", async () => {
+    seedConnectedFact();
+    network.state.birthConfig = {
+      github: {
+        artifactImport: { branch: "main", depth: 1 },
+        owner: "acme",
+        repo: "different",
+      },
+    };
+
+    const result = await linkRepoToGithub(linkInput());
+
+    expect(result.initialPush).toEqual({ commitOid: "abc123", ok: true });
+    expect(network.repoCalls.map((call) => call.method)).toEqual([
+      "configureGithubLink",
+      "pushToGithub",
+    ]);
   });
 
   test("creates the GitHub repo (private, in-org) when it does not exist", async () => {

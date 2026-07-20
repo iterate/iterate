@@ -86,9 +86,6 @@ export async function linkRepoToGithub(input: {
   projectId: string;
   repo: string;
   repoPath: string;
-  /** The Artifact was imported from this exact existing GitHub repository,
-   * so pushing it back would only clone the imported tree inside the Repo DO. */
-  skipInitialPush?: boolean;
 }): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
   // Trim at the boundary: a padded owner/repo would store a link (and a
@@ -156,6 +153,11 @@ export async function linkRepoToGithub(input: {
     repositoryId,
   };
   const repoStub = repoDurableObjectStub(input.projectId, repoPath);
+  const birthConfig = (await repoStub.processor.snapshot()).state.birthCertificate?.config;
+  const importedFromTarget =
+    birthConfig?.github?.artifactImport !== undefined &&
+    birthConfig.github.owner.toLowerCase() === owner.toLowerCase() &&
+    birthConfig.github.repo.toLowerCase() === repo.toLowerCase();
   const previous = await repoStub.getGithubLink();
   const subscriptionKey = githubCrossPostSubscriptionKey(repoPath);
 
@@ -251,7 +253,7 @@ export async function linkRepoToGithub(input: {
   // pre-existing GitHub repo with unrelated history is the expected case —
   // the caller then picks syncFromGithub() or pushToGithub({ force: true })).
   let initialPush: LinkGithubResult["initialPush"];
-  if (input.skipInitialPush === true) {
+  if (importedFromTarget) {
     initialPush = { ok: true, skipped: true };
   } else {
     try {

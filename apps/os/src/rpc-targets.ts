@@ -1478,7 +1478,6 @@ class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRep
       ...github,
       projectId: this.projectProps.projectId,
       repoPath: path,
-      skipInitialPush: imported,
     });
     if (imported) return { imported, link, path, sync: null, syncError: null };
 
