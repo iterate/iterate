@@ -109,7 +109,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   // Their consequential side effects all run under `blockProcessorWhile`,
   // which holds the frame — a death mid-work leaves the cursor behind and the
   // subscription spine redelivers. Their `runInBackground` work (the Slack 👀
-  // ack, the create saga's search-index warm) is best-effort telemetry-grade
+  // ack) is best-effort telemetry-grade
   // today and stays that way (see the registry module doc's recovery rule).
   readonly #projectProcessor = this.#registry.register(
     new ProjectProcessor({

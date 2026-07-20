@@ -157,26 +157,6 @@ export interface Env {
    */
   FILES_BUCKET: R2Bucket;
   /**
-   * SPIKE: the search-index corpus behind `itx.search`
-   * (domains/search/search-index.ts). Stream event segments, itx.files
-   * mirrors, and repo file snapshots are written here under
-   * `{projectId}/{streams|files|repos}/…` keys; a Cloudflare AI Search
-   * instance (`${WORKER_SELF}-search`, created by ensure-resources.ts)
-   * indexes the bucket and `itx.search` queries it with per-project folder
-   * filters. One bucket per env (`${WORKER_SELF}-search-index`). The whole
-   * bucket is derived data — safe to wipe and rebuild.
-   */
-  SEARCH_BUCKET: R2Bucket;
-  /**
-   * The deployment's AI Search namespace (`ai_search_namespaces` binding,
-   * namespace = `${WORKER_SELF}`). itx.search creates ONE INSTANCE PER
-   * PROJECT in it on first use (domains/search/search-index.ts,
-   * ensureProjectSearchInstance) — each instance indexes only that project's
-   * `{projectId}/**` slice of {@link Env.SEARCH_BUCKET}, so search tenancy is
-   * structural. The namespace itself is created by ensure-resources.ts.
-   */
-  SEARCH_INSTANCES: AiSearchNamespace;
-  /**
    * Deploy identity (wrangler `version_metadata` binding). The stream
    * processor hosts' crash-loop breaker keys its backoff budget on the version
    * id so a fresh deploy — the usual antidote to a deterministic crash loop —
