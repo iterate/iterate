@@ -75,7 +75,6 @@ export type PreparedWorkerBuild =
       entryPoint: string;
       files: Record<string, string>;
       minify: boolean;
-      virtualModules: Record<string, string>;
     }
   | {
       kind: "app";
@@ -83,7 +82,6 @@ export type PreparedWorkerBuild =
       files: Record<string, string>;
       minify: boolean;
       server: string;
-      virtualModules: Record<string, string>;
     };
 
 /**
@@ -129,7 +127,6 @@ export function prepareWorkerBuild(input: {
       files: filesWithVirtuals,
       minify,
       server: entryPoint,
-      virtualModules: {},
     };
   }
 
@@ -137,10 +134,7 @@ export function prepareWorkerBuild(input: {
     kind: "worker",
     entryPoint,
     files: filesWithVirtuals,
-    // createWorker still accepts virtualModules; keep both so a source-owned
-    // entry for a specifier continues to win over the materialised package.
     minify,
-    virtualModules,
   };
 }
 

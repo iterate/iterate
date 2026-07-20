@@ -10,11 +10,7 @@ import {
   type WorkerBuildFailure,
   type WorkerLastGoodBuild,
 } from "./artifact-store.ts";
-import {
-  projectWorkerBuildKey,
-  workerBuildKey,
-  type ResolvedWorkerFileSource,
-} from "./build-key.ts";
+import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import { executeWorkerBuild } from "./build-backend.ts";
 import {
   WORKER_COMPATIBILITY_DATE,
@@ -167,24 +163,19 @@ async function resolveThroughBuilder(input: {
 }): Promise<ServedWorkerSource> {
   const options = canonicalWorkerBuildOptions(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
-  const sharedKey = await workerBuildKey({
+  // Content-only key: builds only parse/bundle source (never execute project
+  // build scripts), so identical template content shares one fleet-wide
+  // artifact. Last-good pointers stay project-scoped via workerLastGoodKey.
+  const buildKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     options,
     source: resolved,
   });
-  // Content-only key is the shared tier (identical source → identical
-  // artifact). Runtime also addresses a project-scoped key so last-good
-  // pointers and in-flight markers stay local — see build-key.ts.
-  const buildKey = await projectWorkerBuildKey(input.projectId, sharedKey);
   const context: ResolveContext = { options, projectId: input.projectId, resolved };
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
 
-  const [trustedHit, projectHit] = await Promise.all([
-    resolveCachedArtifact(sharedKey),
-    resolveCachedArtifact(buildKey),
-  ]);
-  const hit = trustedHit ?? projectHit;
+  const hit = await resolveCachedArtifact(buildKey);
   if (hit !== null) {
     input.waitUntil(noteLastGoodBuild(store, context, hit.cacheKey));
     return freshServe(hit, resolved);
@@ -320,7 +311,6 @@ async function runBuild(
       () => {},
     );
     const built = await executeWorkerBuild({
-      buildKey,
       files,
       options: context.options,
     });

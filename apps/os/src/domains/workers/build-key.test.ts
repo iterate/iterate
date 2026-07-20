@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { projectWorkerBuildKey, workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
+import { workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
 import { WORKER_BUNDLER_VERSION } from "./build-recipe.ts";
 
 const baseInput: WorkerBuildInput = {
@@ -59,12 +59,9 @@ describe("workerBuildKey", () => {
       ...baseInput,
       source: { commitOid, contentHash, repoPath: "/", type: "repo" },
     });
-    // Same content under different commits (e.g. two freshly seeded project
-    // repos) must converge on one artifact...
     expect(await workerBuildKey(withContent("a".repeat(40), "content-1"))).toBe(
       await workerBuildKey(withContent("b".repeat(40), "content-1")),
     );
-    // ...while different content never shares a key.
     expect(await workerBuildKey(withContent("a".repeat(40), "content-1"))).not.toBe(
       await workerBuildKey(withContent("a".repeat(40), "content-2")),
     );
@@ -80,19 +77,14 @@ describe("workerBuildKey", () => {
     );
   });
 
-  it("scopes the project tier by project without losing determinism", async () => {
-    const sharedKey = await workerBuildKey(baseInput);
-    const projectKey = await projectWorkerBuildKey("prj_one", sharedKey);
-    expect(projectKey).toMatch(/^[a-f0-9]{64}$/);
-    expect(await projectWorkerBuildKey("prj_one", sharedKey)).toBe(projectKey);
-    expect(await projectWorkerBuildKey("prj_two", sharedKey)).not.toBe(projectKey);
-    expect(projectKey).not.toBe(sharedKey);
+  it("is content-only — same source shares a key across projects at the loader", async () => {
+    // projectWorkerBuildKey is gone: shared keys are intentional now that
+    // builds only parse/bundle and never execute project build scripts.
+    const key = await workerBuildKey(baseInput);
+    expect(key).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("pins the worker-bundler toolchain constant to apps/os's dependency", () => {
-    // The toolchain version participates in every build key; the constant and
-    // apps/os's @cloudflare/worker-bundler dependency must agree or two
-    // deployments could hash differently under one mental model of the pin.
     const packageJson = JSON.parse(
       readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
     ) as { dependencies?: Record<string, string> };

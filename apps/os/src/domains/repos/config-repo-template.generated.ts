@@ -195,11 +195,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"name\": \"project-guestbook\",\n" +
       "  \"private\": true,\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"The project's guestbook: a React app (bundled by @cloudflare/worker-bundler) whose state is a stream-processor fold of durable events at /guestbook — the hosting Durable Object mirrors the fold into Cap'n Web live state, so every open tab repaints the moment anyone signs.\",\n" +
+      "  \"description\": \"Public guestbook SPA: React + wouter in the browser, Cap'n Web live state over /api, stream-processor fold hosted in a Durable Object.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
       "    \"react\": \"19.1.1\",\n" +
       "    \"react-dom\": \"19.1.1\",\n" +
+      "    \"wouter\": \"3.10.0\",\n" +
       "    \"zod\": \"4.3.6\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
@@ -325,7 +326,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n" +
       "\n" +
       "const styles = {\n" +
-      "  main: { fontFamily: \"system-ui, sans-serif\", maxWidth: 560, margin: \"0 auto\", padding: \"48px 16px\" },\n" +
+      "  main: {\n" +
+      "    fontFamily: \"system-ui, sans-serif\",\n" +
+      "    maxWidth: 560,\n" +
+      "    margin: \"0 auto\",\n" +
+      "    padding: \"48px 16px\",\n" +
+      "  },\n" +
       "  header: { display: \"flex\", alignItems: \"baseline\", justifyContent: \"space-between\", gap: 16 },\n" +
       "  h1: { fontSize: 28, margin: 0 },\n" +
       "  meta: { fontSize: 14, color: \"#78716c\", margin: 0 },\n" +
@@ -347,7 +353,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    background: \"#fff\",\n" +
       "  },\n" +
       "  row: { display: \"flex\", gap: 12 },\n" +
-      "  rowBetween: { display: \"flex\", alignItems: \"center\", justifyContent: \"space-between\", marginTop: 12 },\n" +
+      "  rowBetween: {\n" +
+      "    display: \"flex\",\n" +
+      "    alignItems: \"center\",\n" +
+      "    justifyContent: \"space-between\",\n" +
+      "    marginTop: 12,\n" +
+      "  },\n" +
       "  input: {\n" +
       "    width: 160,\n" +
       "    border: \"1px solid #e7e5e4\",\n" +
@@ -404,12 +415,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/guestbook/src/client.tsx",
     content:
-      "import { hydrateRoot } from \"react-dom/client\";\n" +
+      "import { createRoot } from \"react-dom/client\";\n" +
+      "import { Route, Switch } from \"wouter\";\n" +
       "import { Guestbook } from \"./app.tsx\";\n" +
       "\n" +
       "const root = document.getElementById(\"root\");\n" +
       "if (root === null) throw new Error(\"missing #root\");\n" +
-      "hydrateRoot(root, <Guestbook />);\n",
+      "\n" +
+      "createRoot(root).render(\n" +
+      "  <Switch>\n" +
+      "    <Route path=\"/\" component={Guestbook} />\n" +
+      "    <Route>\n" +
+      "      <main style={{ padding: 48, fontFamily: \"system-ui, sans-serif\" }}>\n" +
+      "        <p>Not found.</p>\n" +
+      "      </main>\n" +
+      "    </Route>\n" +
+      "  </Switch>,\n" +
+      ");\n",
   },
   {
     path: "apps/guestbook/src/guestbook-app.ts",
@@ -618,12 +640,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
-      "/** React pages + client bundle, built by worker-bundler's createApp lane. */\n" +
+      "/** SPA shell + client bundle (createApp). No SSR — server.ts is HTML only. */\n" +
       "export const guestbookPageSource = {\n" +
       "  files: repoFiles,\n" +
       "  options: {\n" +
       "    client: \"src/client.tsx\",\n" +
-      "    entryPoint: \"src/server.tsx\",\n" +
+      "    entryPoint: \"src/server.ts\",\n" +
+      "    minify: true,\n" +
       "    rootDir: \"apps/guestbook\",\n" +
       "  },\n" +
       "} satisfies DynamicWorkerSource;\n" +
@@ -924,36 +947,40 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/guestbook/src/server.tsx",
+    path: "apps/guestbook/src/server.ts",
     content:
-      "import { renderToReadableStream } from \"react-dom/server.edge\";\n" +
-      "import { Guestbook } from \"./app.tsx\";\n" +
+      "/**\n" +
+      " * Page worker: HTML shell only. No React, no SSR.\n" +
+      " * /client.js is served by the platform asset wrapper (named after src/client.tsx).\n" +
+      " * Deep links fall through here and get the same shell; wouter takes over in the browser.\n" +
+      " * /api is routed to GuestbookApp by the root project worker before this entry runs.\n" +
+      " */\n" +
+      "const SHELL = `<!doctype html>\n" +
+      "<html lang=\"en\">\n" +
+      "  <head>\n" +
+      "    <meta charset=\"utf-8\" />\n" +
+      "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
+      "    <title>Guestbook</title>\n" +
+      "    <style>body{margin:0;background:#f5f5f4;color:#1c1917;font-family:system-ui,sans-serif}</style>\n" +
+      "  </head>\n" +
+      "  <body>\n" +
+      "    <div id=\"root\"></div>\n" +
+      "    <script type=\"module\" src=\"/client.js\"></script>\n" +
+      "  </body>\n" +
+      "</html>`;\n" +
       "\n" +
-      "// Page worker only. The stateful /api entry lives in guestbook-app.ts so\n" +
-      "// waking the guestbook never has to load the React page bundle.\n" +
-      "export default {\n" +
-      "  async fetch(): Promise<Response> {\n" +
-      "    const stream = await renderToReadableStream(\n" +
-      "      <html lang=\"en\">\n" +
-      "        <head>\n" +
-      "          <meta charSet=\"utf-8\" />\n" +
-      "          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
-      "          <title>Guestbook</title>\n" +
-      "          <style>{`body{margin:0;background:#f5f5f4;color:#1c1917}`}</style>\n" +
-      "        </head>\n" +
-      "        <body>\n" +
-      "          <div id=\"root\">\n" +
-      "            <Guestbook />\n" +
-      "          </div>\n" +
-      "          <script type=\"module\" src=\"/client.js\" />\n" +
-      "        </body>\n" +
-      "      </html>,\n" +
-      "    );\n" +
-      "    return new Response(stream, {\n" +
-      "      headers: { \"content-type\": \"text/html; charset=utf-8\" },\n" +
+      "const guestbookPage = {\n" +
+      "  fetch(): Response {\n" +
+      "    return new Response(SHELL, {\n" +
+      "      headers: {\n" +
+      "        \"cache-control\": \"no-store\",\n" +
+      "        \"content-type\": \"text/html; charset=utf-8\",\n" +
+      "      },\n" +
       "    });\n" +
       "  },\n" +
-      "} satisfies ExportedHandler;\n",
+      "} satisfies ExportedHandler;\n" +
+      "\n" +
+      "export default guestbookPage;\n",
   },
   {
     path: "apps/tanstack/package.json",
@@ -962,12 +989,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"name\": \"project-todos\",\n" +
       "  \"private\": true,\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"The project's todo app: React pages bundled by worker-bundler, todos stored in this app's Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.\",\n" +
+      "  \"description\": \"Project todos SPA: React + wouter in the browser, Cap'n Web live state over /api, rows in a Durable Object SQLite via sqlfu.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
       "    \"react\": \"19.1.1\",\n" +
       "    \"react-dom\": \"19.1.1\",\n" +
-      "    \"sqlfu\": \"0.1.1\"\n" +
+      "    \"sqlfu\": \"0.1.1\",\n" +
+      "    \"wouter\": \"3.10.0\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
@@ -1143,7 +1171,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n" +
       "\n" +
       "const styles = {\n" +
-      "  main: { fontFamily: \"system-ui, sans-serif\", maxWidth: 560, margin: \"0 auto\", padding: \"48px 16px\" },\n" +
+      "  main: {\n" +
+      "    fontFamily: \"system-ui, sans-serif\",\n" +
+      "    maxWidth: 560,\n" +
+      "    margin: \"0 auto\",\n" +
+      "    padding: \"48px 16px\",\n" +
+      "  },\n" +
       "  header: { display: \"flex\", alignItems: \"baseline\", justifyContent: \"space-between\", gap: 16 },\n" +
       "  h1: { fontSize: 28, margin: 0 },\n" +
       "  linkButton: {\n" +
@@ -1210,12 +1243,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/tanstack/src/client.tsx",
     content:
-      "import { hydrateRoot } from \"react-dom/client\";\n" +
+      "import { createRoot } from \"react-dom/client\";\n" +
+      "import { Route, Switch } from \"wouter\";\n" +
       "import { Todos } from \"./app.tsx\";\n" +
       "\n" +
       "const root = document.getElementById(\"root\");\n" +
       "if (root === null) throw new Error(\"missing #root\");\n" +
-      "hydrateRoot(root, <Todos />);\n",
+      "\n" +
+      "createRoot(root).render(\n" +
+      "  <Switch>\n" +
+      "    <Route path=\"/\" component={Todos} />\n" +
+      "    <Route>\n" +
+      "      <main style={{ padding: 48, fontFamily: \"system-ui, sans-serif\" }}>\n" +
+      "        <p>Not found.</p>\n" +
+      "      </main>\n" +
+      "    </Route>\n" +
+      "  </Switch>,\n" +
+      ");\n",
   },
   {
     path: "apps/tanstack/src/lib/state.ts",
@@ -1305,36 +1349,40 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/tanstack/src/server.tsx",
+    path: "apps/tanstack/src/server.ts",
     content:
-      "import { renderToReadableStream } from \"react-dom/server.edge\";\n" +
-      "import { Todos } from \"./app.tsx\";\n" +
+      "/**\n" +
+      " * Page worker: HTML shell only. No React, no SSR.\n" +
+      " * /client.js is served by the platform asset wrapper (named after src/client.tsx).\n" +
+      " * Deep links fall through here and get the same shell; wouter takes over in the browser.\n" +
+      " * /api is routed to TanstackTodos by the root project worker before this entry runs.\n" +
+      " */\n" +
+      "const SHELL = `<!doctype html>\n" +
+      "<html lang=\"en\">\n" +
+      "  <head>\n" +
+      "    <meta charset=\"utf-8\" />\n" +
+      "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
+      "    <title>Todos</title>\n" +
+      "    <style>body{margin:0;background:#f8fafc;color:#0f172a;font-family:system-ui,sans-serif}</style>\n" +
+      "  </head>\n" +
+      "  <body>\n" +
+      "    <div id=\"root\"></div>\n" +
+      "    <script type=\"module\" src=\"/client.js\"></script>\n" +
+      "  </body>\n" +
+      "</html>`;\n" +
       "\n" +
-      "// Page worker only. The stateful /api entry lives in todos-app.ts so waking\n" +
-      "// the list never has to load the React page bundle.\n" +
-      "export default {\n" +
-      "  async fetch(): Promise<Response> {\n" +
-      "    const stream = await renderToReadableStream(\n" +
-      "      <html lang=\"en\">\n" +
-      "        <head>\n" +
-      "          <meta charSet=\"utf-8\" />\n" +
-      "          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
-      "          <title>Todos</title>\n" +
-      "          <style>{`body{margin:0;background:#f8fafc;color:#0f172a}`}</style>\n" +
-      "        </head>\n" +
-      "        <body>\n" +
-      "          <div id=\"root\">\n" +
-      "            <Todos />\n" +
-      "          </div>\n" +
-      "          <script type=\"module\" src=\"/client.js\" />\n" +
-      "        </body>\n" +
-      "      </html>,\n" +
-      "    );\n" +
-      "    return new Response(stream, {\n" +
-      "      headers: { \"content-type\": \"text/html; charset=utf-8\" },\n" +
+      "const todosPage = {\n" +
+      "  fetch(): Response {\n" +
+      "    return new Response(SHELL, {\n" +
+      "      headers: {\n" +
+      "        \"cache-control\": \"no-store\",\n" +
+      "        \"content-type\": \"text/html; charset=utf-8\",\n" +
+      "      },\n" +
       "    });\n" +
       "  },\n" +
-      "} satisfies ExportedHandler;\n",
+      "} satisfies ExportedHandler;\n" +
+      "\n" +
+      "export default todosPage;\n",
   },
   {
     path: "apps/tanstack/src/todos-app.ts",
@@ -1510,12 +1558,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
-      "/** React pages + client bundle, built by worker-bundler's createApp lane. */\n" +
+      "/** SPA shell + client bundle (createApp). No SSR — server.ts is HTML only. */\n" +
       "export const tanstackPageSource = {\n" +
       "  files: repoFiles,\n" +
       "  options: {\n" +
       "    client: \"src/client.tsx\",\n" +
-      "    entryPoint: \"src/server.tsx\",\n" +
+      "    entryPoint: \"src/server.ts\",\n" +
+      "    minify: true,\n" +
       "    rootDir: \"apps/tanstack\",\n" +
       "  },\n" +
       "} satisfies DynamicWorkerSource;\n" +

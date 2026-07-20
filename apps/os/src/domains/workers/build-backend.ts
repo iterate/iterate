@@ -30,11 +30,9 @@ import type { WorkerBuildOptions } from "./schemas.ts";
  * ordinary error and therefore retryable, never recorded as a failure.
  */
 export async function executeWorkerBuild(input: {
-  buildKey: string;
   files: Record<string, string>;
   options: WorkerBuildOptions;
 }): Promise<{ mainModule: string; modules: Record<string, string> }> {
-  void input.buildKey;
   let prepared: PreparedWorkerBuild;
   try {
     prepared = prepareWorkerBuild({ files: input.files, options: input.options });
@@ -61,9 +59,6 @@ export async function executeWorkerBuild(input: {
             jsx: "automatic",
             jsxImportSource: "react",
             minify: prepared.minify,
-            ...(Object.keys(prepared.virtualModules).length > 0
-              ? { virtualModules: prepared.virtualModules }
-              : {}),
           });
     const warnings = result.warnings ?? [];
     if (warnings.length > 0) {
@@ -128,6 +123,9 @@ function collectAppOutputs(result: CreateAppResult): {
     };
   }
 
+  // Unhashed paths like /client.js (basename of the client entry) must not be
+  // year-immutable: a rebuild keeps the same URL and browsers would keep the
+  // old bundle forever. no-cache lets the browser revalidate every load.
   const assetsModule = ".iterate-build.assets.js";
   const entryModule = ".iterate-build.entry.js";
   modules[assetsModule] = `export const ASSETS = ${JSON.stringify(assets)};`;
@@ -143,7 +141,7 @@ function collectAppOutputs(result: CreateAppResult): {
     `    if (asset !== undefined && (request.method === "GET" || request.method === "HEAD")) {`,
     `      return new Response(request.method === "HEAD" ? null : asset.body, {`,
     `        headers: {`,
-    `          "cache-control": "public, max-age=31536000, immutable",`,
+    `          "cache-control": "no-cache",`,
     `          "content-type": asset.contentType,`,
     `        },`,
     `      });`,

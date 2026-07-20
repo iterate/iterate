@@ -2,11 +2,12 @@
   "name": "project-guestbook",
   "private": true,
   "type": "module",
-  "description": "The project's guestbook: a React app (bundled by @cloudflare/worker-bundler) whose state is a stream-processor fold of durable events at /guestbook — the hosting Durable Object mirrors the fold into Cap'n Web live state, so every open tab repaints the moment anyone signs.",
+  "description": "Public guestbook SPA: React + wouter in the browser, Cap'n Web live state over /api, stream-processor fold hosted in a Durable Object.",
   "dependencies": {
     "@iterate-com/capnweb": "0.10.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
+    "wouter": "3.10.0",
     "zod": "4.3.6"
   },
   "devDependencies": {

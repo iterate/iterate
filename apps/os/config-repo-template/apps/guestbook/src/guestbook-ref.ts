@@ -12,12 +12,13 @@ export const guestbookSubscriptionConfigVersion = 3;
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
-/** React pages + client bundle, built by worker-bundler's createApp lane. */
+/** SPA shell + client bundle (createApp). No SSR — server.ts is HTML only. */
 export const guestbookPageSource = {
   files: repoFiles,
   options: {
     client: "src/client.tsx",
-    entryPoint: "src/server.tsx",
+    entryPoint: "src/server.ts",
+    minify: true,
     rootDir: "apps/guestbook",
   },
 } satisfies DynamicWorkerSource;

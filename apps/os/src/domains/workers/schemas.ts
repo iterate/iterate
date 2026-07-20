@@ -244,7 +244,10 @@ const WorkerFileSource = z.discriminatedUnion("type", [
   }),
 ]) satisfies z.ZodType<WorkerFileSource, unknown>;
 
-export const WorkerBuildOptions = z.strictObject({
+// Not strictObject: old template refs still carry retired keys (e.g.
+// `pipeline: "vite"`). z.object strips unknown keys so persisted wake
+// recipes and forked project repos keep parsing after the vite lane died.
+export const WorkerBuildOptions = z.object({
   bundle: z.boolean().optional(),
   client: z.string().optional(),
   entryPoint: z.string().optional(),

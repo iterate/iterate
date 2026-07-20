@@ -47,7 +47,8 @@ Platform virtual modules (`iterate/sdk`, `iterate/processors`,
 - Tailwind or CSS import pipelines (apps use plain CSS in HTML)
 - Full npm lockfile / lifecycle-script package-manager semantics
 - Deploy-time host seeding of template artifacts (worker-bundler only runs
-  in workerd; cold first-use builds share content-addressed KV)
+  in workerd). Runtime writes content-addressed keys, so the first successful
+  build of identical template content is shared fleet-wide.
 
 ## History
 

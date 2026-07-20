@@ -2,12 +2,13 @@
   "name": "project-todos",
   "private": true,
   "type": "module",
-  "description": "The project's todo app: React pages bundled by worker-bundler, todos stored in this app's Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.",
+  "description": "Project todos SPA: React + wouter in the browser, Cap'n Web live state over /api, rows in a Durable Object SQLite via sqlfu.",
   "dependencies": {
     "@iterate-com/capnweb": "0.10.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
-    "sqlfu": "0.1.1"
+    "sqlfu": "0.1.1",
+    "wouter": "3.10.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",

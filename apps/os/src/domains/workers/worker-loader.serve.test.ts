@@ -31,8 +31,9 @@ const h = vi.hoisted(() => {
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
   };
-  const executeWorkerBuild = async (input: { buildKey: string; files: Record<string, string> }) => {
-    state.buildCalls.push(input.buildKey);
+  const executeWorkerBuild = async (input: { files: Record<string, string> }) => {
+    // Content-addressed key is computed by the loader; the mock only counts calls.
+    state.buildCalls.push(JSON.stringify(Object.keys(input.files).sort()));
     if (state.buildGate !== undefined) await state.buildGate;
     if (state.failBuilds) {
       // Mirror the real backend's classification contract: genuine build
@@ -289,21 +290,20 @@ describe("resolveWorkerSource serve matrix", () => {
     expect(h.state.buildCalls.length).toBe(callsAfterCanonical);
   });
 
-  test("runtime artifacts are project-scoped — one project's build never serves another", async () => {
+  test("runtime artifacts are content-shared — one project's build serves another", async () => {
     setCommit("c1", "repo-g-v1", "G1");
     await resolveWorkerSource({ projectId: "prj_g1", source: repoSource("/repos/g"), waitUntil });
     const callsAfterFirst = h.state.buildCalls.length;
 
-    // Identical source + options, different project: a project-trusted
-    // principal can influence its own builder sandbox's output, so the cache
-    // must NOT answer across projects — prj_g2 pays its own build.
+    // Identical source + options, different project: builds only parse/bundle,
+    // so the content-addressed key is shared fleet-wide.
     const other = await resolveWorkerSource({
       projectId: "prj_g2",
       source: repoSource("/repos/g"),
       waitUntil,
     });
     expect(other.serveInfo).toMatchObject({ commitOid: "c1", status: "fresh" });
-    expect(h.state.buildCalls.length).toBe(callsAfterFirst + 1);
+    expect(h.state.buildCalls.length).toBe(callsAfterFirst);
   });
 
   test("inline loader-ready sources bypass the pipeline and carry no serve info", async () => {

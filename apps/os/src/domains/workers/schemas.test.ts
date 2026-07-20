@@ -78,17 +78,22 @@ describe("DynamicWorkerSource schema", () => {
     ).toThrow();
   });
 
-  it("rejects malformed commit oids and unknown build options", () => {
+  it("rejects malformed commit oids; strips retired and unknown build options", () => {
     expect(() =>
       DynamicWorkerSource.parse({
         files: { ref: { commitOid: "not-a-sha" }, repoPath: "/", type: "repo" },
       }),
     ).toThrow();
-    expect(() =>
-      DynamicWorkerSource.parse({
-        files: { files: {}, type: "inline" },
-        options: { files: {} },
-      }),
-    ).toThrow();
+    // Unknown keys (including retired `pipeline: "vite"`) strip so forked
+    // template refs and persisted wake recipes keep parsing.
+    const stripped = DynamicWorkerSource.parse({
+      files: { files: { "worker.ts": "export default {};" }, type: "inline" },
+      options: {
+        entryPoint: "worker.ts",
+        files: {},
+        pipeline: "vite",
+      } as never,
+    });
+    expect(stripped.options).toEqual({ entryPoint: "worker.ts" });
   });
 });

@@ -62,10 +62,10 @@ test("React pages and stateful APIs have independent worker entries", () => {
   expect(paths).toEqual(
     expect.arrayContaining([
       "apps/guestbook/src/guestbook-app.ts",
-      "apps/guestbook/src/server.tsx",
+      "apps/guestbook/src/server.ts",
       "apps/guestbook/src/client.tsx",
       "apps/tanstack/src/todos-app.ts",
-      "apps/tanstack/src/server.tsx",
+      "apps/tanstack/src/server.ts",
       "apps/tanstack/src/client.tsx",
     ]),
   );
@@ -75,7 +75,8 @@ test("React pages and stateful APIs have independent worker entries", () => {
     [tanstackPageSource, tanstackTodosRef],
   ] as const) {
     expect(pageSource.options.client).toBe("src/client.tsx");
-    expect(pageSource.options.entryPoint).toBe("src/server.tsx");
+    expect(pageSource.options.entryPoint).toBe("src/server.ts");
+    expect(pageSource.options.minify).toBe(true);
     expect(pageSource.options).not.toHaveProperty("pipeline");
     expect(statefulRef.source.options).not.toHaveProperty("client");
     expect(statefulRef.source.options.entryPoint).not.toBe("worker.ts");

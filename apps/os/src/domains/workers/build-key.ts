@@ -51,13 +51,12 @@ export type WorkerBuildInput = {
  * version. Same input, same key — concurrent callers converge on one artifact
  * and a repeated request is a cache hit.
  *
- * This content-only key is the shared tier: the same source + options always
- * produce the same key, so every project with identical template content can
- * share one artifact. Builds only parse and bundle source (worker-bundler);
- * they never execute project build scripts, so there is no per-project
- * builder environment that could poison a shared result. The project-scoped
- * {@link projectWorkerBuildKey} remains as a write target for runtime builds
- * that also want an isolation boundary, and as the last-good pointer scope.
+ * Content-only key: the same source + options always produce the same key, so
+ * every project with identical template content shares one artifact. Builds
+ * only parse and bundle source (worker-bundler); they never execute project
+ * build scripts, so there is no per-project builder environment that could
+ * poison a shared result. Last-good pointers stay project-scoped separately
+ * (worker-loader workerLastGoodKey).
  */
 export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
   return await stableSha256({
@@ -68,17 +67,6 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
     source: normalizeResolvedSource(input.source),
     toolchainVersion: BUILD_TOOLCHAIN_VERSION,
     type: "worker-build-key",
-  });
-}
-
-/** Optional project-scoped key: the content-only {@link workerBuildKey} plus
- * the project identity. Runtime still writes here so last-good pointers and
- * in-flight markers stay project-local even though the build itself is pure. */
-export async function projectWorkerBuildKey(projectId: string, sharedKey: string): Promise<string> {
-  return await stableSha256({
-    projectId,
-    sharedKey,
-    type: "project-worker-build-key",
   });
 }
 
