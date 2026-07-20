@@ -234,8 +234,12 @@ export default class AuthWorker extends AuthWorkerContract<CloudflareEnv> {
 }
 
 function projectAppSessionDependencies() {
+  const dedicated = config.projectAppSessionSecret?.exposeSecret();
   return {
-    secret: config.betterAuthSecret.exposeSecret(),
+    secret: dedicated ?? config.betterAuthSecret.exposeSecret(),
+    // While the dedicated secret cuts over, tokens minted under the old one
+    // stay valid until their 15-minute TTL ages them out.
+    legacySecret: dedicated ? config.betterAuthSecret.exposeSecret() : undefined,
     userCanAccessProject: (input: { projectId: string; userId: string }) =>
       userCanAccessProject(input, db),
   };

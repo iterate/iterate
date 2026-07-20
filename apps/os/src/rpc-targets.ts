@@ -53,6 +53,10 @@ import {
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
 } from "iterate/live-state";
+import type {
+  ValidateProjectAppSessionInput,
+  ValidatedProjectAppSession,
+} from "@iterate-com/auth-contract/worker";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -287,6 +291,10 @@ import {
   type ProjectAuthPolicy,
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
+import {
+  localProjectAppSessionValidator,
+  verifyProjectAppSessionToken,
+} from "./auth/project-app-session-token.ts";
 import type {
   McpBeginOAuthInput,
   McpBeginOAuthResult,
@@ -4974,7 +4982,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
       credentials,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
-      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+      validateSession: projectAppSessionValidator(),
     });
   }
 
@@ -4989,9 +4997,24 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
-      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+      validateSession: projectAppSessionValidator(),
     });
   }
+}
+
+/**
+ * Session validation for project app hosts: local HS256 verification when the
+ * shared secret is configured (the hot per-request path — no auth-worker
+ * hop; the token's TTL bounds membership staleness), else the auth worker's
+ * validate RPC, which also re-checks membership live. The mint side always
+ * stays with the auth worker — it runs once per login, not per request.
+ */
+function projectAppSessionValidator(): (
+  input: ValidateProjectAppSessionInput,
+) => Promise<ValidatedProjectAppSession | null> {
+  const secret = parseConfig(env).projectAppSessionSecret;
+  if (secret === undefined) return (input) => env.AUTH.validateProjectAppSession(input);
+  return localProjectAppSessionValidator(secret.exposeSecret());
 }
 /**
  * THE one table of project built-ins: member name -> one-line blip. The
@@ -5732,6 +5755,15 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
             path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
           }),
         ).verifyMaterialField({ value: secret }),
+      // The project-app-session lane's verifier: local HS256 against the
+      // shared session secret — no auth-worker hop; membership was checked
+      // at mint time and the token's 15-minute TTL bounds revocation lag.
+      verifyProjectAppSession: async (token) => {
+        const secret = this.props.config.projectAppSessionSecret;
+        if (secret === undefined) return null;
+        const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
+        return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
+      },
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }

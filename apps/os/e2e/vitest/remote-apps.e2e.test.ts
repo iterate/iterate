@@ -1,16 +1,20 @@
 import { expect, test } from "vitest";
+import { SignJWT } from "jose";
 import {
   generateProjectApiKeyMaterial,
   PROJECT_API_KEY_SECRET_PATH,
 } from "../../src/domains/secrets/utils.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// Ingress half of "externally deployed userspace apps": an app anywhere on
-// the internet authenticates to /api AS its project with the `project-secret`
-// credential, verified against the write-only secret every project is born
-// with at /secrets/project-api-key. The comparison happens inside the Secret
-// Durable Object; the pairing ceremony is the owner WRITING a value they
-// hold (material is write-only, so nothing ever reads it back).
+// Ingress lanes for "externally deployed userspace apps" (docs/remote-apps.md):
+//
+// - `project-secret` — the machine credential: a headless app authenticates
+//   AS its project against the readable secret every project is born with at
+//   /secrets/project-api-key (compared inside the Secret Durable Object; the
+//   operator reveal()s the value and configures their app with it).
+// - `project-app-session` — the user credential: a config-worker reverse
+//   proxy forwards the browser's short-lived project-host token and the app
+//   presents it to act as that user on that project.
 //
 // Outbound remote apps ride the config-worker reverse proxy instead of a
 // platform-side Cap'n Web mount — see docs/remote-apps.md.
@@ -94,3 +98,78 @@ test("an external client authenticates with the project-secret credential and ge
     await deniedProject.projectId;
   }).rejects.toThrow(/missing or invalid auth/i);
 });
+
+// The user lane: sign a project-app-session token exactly as the auth worker
+// does (HS256 under the shared secret this deployment verifies locally) and
+// present it at /api the way a proxied remote app would.
+test.skipIf(!process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET?.trim())(
+  "a forwarded project-app-session token acts as its user on exactly its project",
+  async () => {
+    const sessionSecret = process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET!.trim();
+    using session = withItxSession();
+    using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+    using project = admin.projects.create({
+      slug: `remote-session-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const projectId = await project.projectId;
+    using other = admin.projects.create({
+      slug: `remote-session-other-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const otherProjectId = await other.projectId;
+
+    const sign = (claims: Record<string, unknown>, expiresInSeconds = 900) =>
+      new SignJWT(claims)
+        .setProtectedHeader({ alg: "HS256" })
+        .setIssuedAt()
+        .setExpirationTime(Math.floor(Date.now() / 1000) + expiresInSeconds)
+        .sign(new TextEncoder().encode(sessionSecret));
+    const token = await sign({
+      audience: "https://tasks--proxied.example",
+      projectId,
+      type: "project-app-session",
+      userId: "usr_remote_e2e",
+    });
+
+    // The whole recipe a proxied app follows: present the forwarded token,
+    // get exactly the user's project.
+    using appSession = withItxSession();
+    using asUser = appSession.authenticate({ type: "project-app-session", token });
+    using userProject = asUser.projects.get(projectId);
+    expect(await userProject.projectId).toBe(projectId);
+
+    // Confinement: the token IS the scope — no other projects.
+    using confinedSession = withItxSession();
+    using confined = confinedSession.authenticate({ type: "project-app-session", token });
+    await expect(async () => {
+      using leaked = confined.projects.get(otherProjectId);
+      await leaked.projectId;
+    }).rejects.toThrow(/no access|not found/i);
+
+    // An expired token and a garbage token are ordinary refusals.
+    const expired = await sign(
+      {
+        audience: "https://tasks--proxied.example",
+        projectId,
+        type: "project-app-session",
+        userId: "usr_remote_e2e",
+      },
+      -5,
+    );
+    using expiredSession = withItxSession();
+    await expect(async () => {
+      using denied = expiredSession.authenticate({ type: "project-app-session", token: expired });
+      using deniedProject = denied.projects.get(projectId);
+      await deniedProject.projectId;
+    }).rejects.toThrow(/missing or invalid auth/i);
+
+    using garbageSession = withItxSession();
+    await expect(async () => {
+      using denied = garbageSession.authenticate({
+        type: "project-app-session",
+        token: "not.a.jwt",
+      });
+      using deniedProject = denied.projects.get(projectId);
+      await deniedProject.projectId;
+    }).rejects.toThrow(/missing or invalid auth/i);
+  },
+);

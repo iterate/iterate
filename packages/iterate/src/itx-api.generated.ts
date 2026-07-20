@@ -1620,7 +1620,17 @@ export type ItxAuthCredentials =
    * `admin-secret` is deployment-global. Grants exactly one project, no
    * admin, no user identity.
    */
-  | { type: "project-secret"; projectId: string; secret: string };
+  | { type: "project-secret"; projectId: string; secret: string }
+  /**
+   * The short-lived user-on-project token auth mints for project app hosts
+   * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
+   * externally deployed app forwards the browser's request as-is, and the app
+   * presents the token here to act AS THAT USER on exactly that project
+   * (docs/remote-apps.md). Verified locally — an HS256 check against the
+   * shared project-app-session secret, no auth-worker hop; membership was
+   * checked at mint time and the 15-minute expiry bounds revocation lag.
+   */
+  | { type: "project-app-session"; token: string };
 
 /** Principal shape for `impersonate` credentials. */
 export type ItxAuthToken =

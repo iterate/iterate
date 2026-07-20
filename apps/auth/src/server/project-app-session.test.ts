@@ -76,4 +76,30 @@ describe("project app sessions", () => {
       null,
     );
   });
+
+  it("accepts tokens minted under the legacy secret during a cutover", async () => {
+    const userCanAccessProject = async () => true;
+    const issued = await mintProjectAppSession(
+      { audience, projectId, userId: "usr_legacy" },
+      { secret: "old-secret", userCanAccessProject },
+    );
+    assert.ok(issued);
+
+    // New deployments verify with the dedicated secret first, then fall back
+    // to the previous one until in-flight tokens age out (15-minute TTL).
+    const valid = await validateProjectAppSession(
+      { audience, projectId, token: issued.token },
+      { secret: "new-dedicated-secret", legacySecret: "old-secret", userCanAccessProject },
+    );
+    assert.ok(valid);
+    assert.equal(valid.userId, "usr_legacy");
+
+    assert.equal(
+      await validateProjectAppSession(
+        { audience, projectId, token: issued.token },
+        { secret: "new-dedicated-secret", userCanAccessProject },
+      ),
+      null,
+    );
+  });
 });
