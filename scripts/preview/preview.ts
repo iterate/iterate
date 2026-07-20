@@ -1554,7 +1554,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // Petshop. Co-select both; every deploy starts concurrently and OS derives
     // Auth's public signing key directly from Doppler.
     previewDependencies: ["auth", "dummy-petshop"],
-    previewDeployBudgetMs: 90_000,
+    // Two full-fleet deployments after the worker-bundler rollback measured
+    // 95.1s and 100.0s, including the required 40s rollout hold.
+    previewDeployBudgetMs: 105_000,
     previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {

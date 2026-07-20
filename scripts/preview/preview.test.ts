@@ -511,7 +511,7 @@ describe("preview test commands", () => {
 
   test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
-      previewDeployBudgetMs: 90_000,
+      previewDeployBudgetMs: 105_000,
       previewTestBudgetMs: 100_000,
     });
 

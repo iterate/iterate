@@ -23,7 +23,7 @@ pickup + setup + slowest deploy + slowest test lane + reporting
 ```
 
 It must not approach the sum of app deployments, app test suites, or OS
-sub-lanes. Soft warnings currently fire above 90 seconds for OS deploy or 100
+sub-lanes. Soft warnings currently fire above 105 seconds for OS deploy or 100
 seconds for OS tests; crossing one is evidence to investigate, not a reason to
 raise the budget automatically.
 

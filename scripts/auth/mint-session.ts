@@ -32,13 +32,11 @@ import { forgedSubjectForEmail, mintForgedAccessToken, mintForgedIdToken } from 
 //      it once; it sets the normal session cookie and redirects
 //   3. as a cookie session via /api/iterate-auth/session-from-token directly
 //
-// LIMITATION — claims are FROZEN at mint time. Minted sessions carry no
-// refresh token, and the auth worker rejects forge-signed tokens at its
-// userinfo/token endpoints (the forge key is not in its JWKS), so the session
-// can never re-mint claims. Anything created after mint (organizations,
-// projects) stays invisible to the session — e.g. a project created through
-// the UI never appears in the minted session's project list — until a real
-// sign-in. `/session?refresh=force` flags this with the
+// LIMITATION — claims are FROZEN at mint time. Minted sessions carry no OAuth
+// refresh token, so the session can never re-mint claims. Anything created
+// after mint (organizations, projects) stays invisible to the session — e.g. a
+// project created through the UI never appears in the minted session's project
+// list — until a real sign-in. `/session?refresh=force` flags this with the
 // `x-iterate-auth-stale-refresh` header and a browser-console warning.
 
 const { values: args } = parseArgs({
