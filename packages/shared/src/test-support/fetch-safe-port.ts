@@ -1,5 +1,4 @@
-import type { Server } from "node:net";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Server } from "node:net";
 
 /**
  * Ports the WHATWG fetch spec blocks outright
@@ -7,9 +6,7 @@ import type { AddressInfo } from "node:net";
  * connect to any of them — `TypeError: fetch failed` caused by `Error: bad
  * port` — before a single packet is sent. `listen(0)` can be handed one of
  * these where the OS ephemeral port range is widened past its defaults (CI
- * containers), and because the port never changes, every delivery retry fails
- * the same way — the "bad port" github-app.test.ts flake seen in CI
- * 2026-07-14.
+ * containers).
  */
 const WHATWG_FETCH_BLOCKED_PORTS = new Set([
   1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,

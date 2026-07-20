@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",
+    "@iterate-com/shared": "workspace:*",
     "@orpc/client": "1.13.14",
     "trpc-cli": "0.15.1",
     "tsx": "^4.20.6",
