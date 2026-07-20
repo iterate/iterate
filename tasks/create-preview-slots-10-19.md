@@ -16,9 +16,9 @@ GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
 is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
-verification is green. Draft PR #2161 is open without a preview label; CI and
-review monitoring is in progress. Production deployment and Semaphore lease
-publication remain later, separate approval boundaries.
+verification is green. Draft PR #2161 is open without a preview label; its
+required checks are green and no review threads are open. Production deployment
+and Semaphore lease publication remain later, separate approval boundaries.
 
 ## Goal
 
@@ -374,3 +374,7 @@ the recorded projection.
 - 2026-07-20: The first CI lint/typecheck run found one dead export left by the
   Artifacts subscription refactor. Removed `queueIdForWorkerEventQueue`; its 14
   focused tests, full knip, and full typecheck pass locally before the retry.
+- 2026-07-20: PR head `6b42dc148` passed every check, including full tests and
+  lint/typecheck. GitHub reports clean merge state with zero reviews and zero
+  unresolved threads. The repo has no active dispatchable review-monitor
+  workflow, so no passive process is being represented as a persistent monitor.
