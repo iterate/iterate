@@ -361,6 +361,86 @@ describe("eviction recovery, end to end", () => {
       content: expect.stringContaining("recovered!"),
     });
   });
+
+  it("an interrupt racing a lost-timer re-fire in ONE frame: the cancel registers first and wins (FIFO order)", async () => {
+    await h.stream.append({
+      type: T.context,
+      payload: {
+        role: "user",
+        actor: { type: "user", origin: "web" },
+        content: "are you there?",
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    });
+    const scheduled = await h.stream.waitForEvent({ eventTypes: [T.scheduled], timeoutMs: 5_000 });
+    await h.stream.waitForEvent({
+      eventTypes: [T.scheduled],
+      predicate: () => h.alarm.at !== null,
+      timeoutMs: 5_000,
+    });
+    // Pin the DURABLE cursor past the scheduled event before evicting, so the
+    // successor provably does not redeliver it (which would arm a fresh timer
+    // and dissolve the race under test): the successor must meet `scheduled`
+    // only through the fold, timerless.
+    await vi.waitFor(async () => {
+      const woken = await h.registry.wakeStreamSubscriber({
+        stream: { projectId: null, path: h.stream.path, streamMaxOffset: scheduled.offset },
+        subscriptionKey: "wake:agent",
+        processorSlug: SLUG,
+      });
+      expect(woken.checkpointOffset).toBeGreaterThanOrEqual(scheduled.offset);
+    });
+    h.crash(); // the armed debounce timer dies; `scheduled` stays in the fold
+
+    // The user retracts BEFORE any revival. The successor's first delivery
+    // carries this interrupt at head, so ONE `processEvent` call registers
+    // both the scheduled-phase cancel (per-event) and the at-head pass whose
+    // lost-debounce re-fire reads the pre-cancel fold. FIFO registration
+    // order arbitrates: the cancel must fold first, or the re-fired request
+    // becomes current, the scheduled-phase cancel no-ops against it, and the
+    // agent answers a message the user retracted.
+    await h.stream.append({
+      type: T.context,
+      payload: {
+        role: "user",
+        actor: { type: "user", origin: "web" },
+        content: "never mind, stop",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      },
+    });
+    const cancelled = await h.stream.waitForEvent({ eventTypes: [T.cancelled], timeoutMs: 5_000 });
+    expect(cancelled.payload).toMatchObject({
+      phase: "scheduled",
+      requestId: (scheduled.payload as { requestId: string }).requestId,
+    });
+
+    // The interrupting message is itself a trigger: wait for ITS schedule to
+    // exist so the at-head passes that could start the stale re-fire have run.
+    await h.stream.waitForEvent({
+      eventTypes: [T.scheduled],
+      predicate: (event) =>
+        (event.payload as { requestId: string }).requestId !==
+        (scheduled.payload as { requestId: string }).requestId,
+      timeoutMs: 5_000,
+    });
+
+    // The stale re-fire still lands (the at-head pass read the pre-cancel
+    // fold) — but AFTER the cancel, where the reduce guard keeps it from
+    // ever becoming current: the interrupted turn must never start.
+    const refire = h.stream.events.find(
+      (event) =>
+        event.type === T.requested &&
+        event.idempotencyKey === `agent/llm-request-requested@${scheduled.offset}`,
+    );
+    expect(refire).toBeDefined();
+    expect(refire!.offset).toBeGreaterThan(cancelled.offset);
+    const startedForRefire = h.stream.events.find(
+      (event) =>
+        event.type === T.started &&
+        (event.payload as { llmRequestOffset?: number }).llmRequestOffset === refire!.offset,
+    );
+    expect(startedForRefire).toBeUndefined();
+  });
 });
 
 /** REAL runner drive for the non-eviction obligation scenarios: `onCaughtUp`
