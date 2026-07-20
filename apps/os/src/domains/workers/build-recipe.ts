@@ -118,6 +118,12 @@ export function prepareWorkerBuild(input: {
   const filesWithVirtuals = materializePlatformPackageShims(
     materializeVirtualModules(files, virtualModules),
   );
+  // worker-bundler only turns on esbuild `platform: "node"` when it sees
+  // nodejs_compat in a wrangler config. Without that, Node-shaped CJS deps
+  // (@slack/web-api, axios, …) emit `Dynamic require of "node:os"` helpers
+  // that workerd rejects. Mirror the loader's own compat flags (worker-loader
+  // mounts the isolate with the same set). Project-supplied wrangler.* wins.
+  const filesReady = materializeWorkerBundlerWranglerConfig(filesWithVirtuals);
 
   if (client !== undefined) {
     if (!(client in files)) {
@@ -126,7 +132,7 @@ export function prepareWorkerBuild(input: {
     return {
       kind: "app",
       client,
-      files: filesWithVirtuals,
+      files: filesReady,
       minify,
       server: entryPoint,
     };
@@ -135,8 +141,32 @@ export function prepareWorkerBuild(input: {
   return {
     kind: "worker",
     entryPoint,
-    files: filesWithVirtuals,
+    files: filesReady,
     minify,
+  };
+}
+
+/**
+ * Ensure createWorker/createApp see nodejs_compat so esbuild uses the node
+ * platform and leaves `node:*` as real external imports (resolved by workerd
+ * under the same flag on the Worker Loader isolate).
+ */
+function materializeWorkerBundlerWranglerConfig(
+  files: Record<string, string>,
+): Record<string, string> {
+  if ("wrangler.toml" in files || "wrangler.json" in files || "wrangler.jsonc" in files) {
+    return files;
+  }
+  return {
+    ...files,
+    "wrangler.json": JSON.stringify(
+      {
+        compatibility_date: WORKER_COMPATIBILITY_DATE,
+        compatibility_flags: [...WORKER_COMPATIBILITY_FLAGS],
+      },
+      null,
+      2,
+    ),
   };
 }
 

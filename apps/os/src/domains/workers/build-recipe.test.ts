@@ -53,6 +53,28 @@ describe("prepareWorkerBuild", () => {
     expect(prepared.files["node_modules/form-data/index.js"]).toContain("module.exports");
   });
 
+  it("injects wrangler.json with nodejs_compat so esbuild uses platform node", () => {
+    const prepared = prepareWorkerBuild({
+      files: { "worker.ts": "export default {};" },
+      options: { entryPoint: "worker.ts" },
+    });
+    expect(JSON.parse(prepared.files["wrangler.json"]!)).toMatchObject({
+      compatibility_flags: expect.arrayContaining(["nodejs_compat"]),
+    });
+  });
+
+  it("does not overwrite a project-supplied wrangler config", () => {
+    const prepared = prepareWorkerBuild({
+      files: {
+        "worker.ts": "export default {};",
+        "wrangler.toml": 'name = "mine"\n',
+      },
+      options: { entryPoint: "worker.ts" },
+    });
+    expect(prepared.files["wrangler.toml"]).toBe('name = "mine"\n');
+    expect(prepared.files["wrangler.json"]).toBeUndefined();
+  });
+
   it("does not overwrite a project-supplied form-data package", () => {
     const prepared = prepareWorkerBuild({
       files: {
@@ -105,11 +127,12 @@ describe("prepareWorkerBuild", () => {
     if (prepared.kind !== "app") throw new Error("expected app");
     expect(prepared.files["src/client.tsx"]).toBeDefined();
     expect(prepared.files["src/server.tsx"]).toBeDefined();
-    // Platform shims land under node_modules; only the re-rooted source
-    // entries from the fixture should be present alongside them.
+    // Platform shims land under node_modules; wrangler.json is injected for
+    // nodejs_compat. Only the re-rooted source entries from the fixture
+    // should be present alongside those platform files.
     expect(
       Object.keys(prepared.files)
-        .filter((name) => !name.startsWith("node_modules/"))
+        .filter((name) => !name.startsWith("node_modules/") && name !== "wrangler.json")
         .sort(),
     ).toEqual(["src/client.tsx", "src/server.tsx"]);
 
