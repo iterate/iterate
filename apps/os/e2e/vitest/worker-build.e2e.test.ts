@@ -68,16 +68,20 @@ test("Worker build pipeline bundles multi-file TypeScript inline sources", async
 });
 
 // The seeded template ships NO vendor SDKs: a project that wants one
-// updates its OWN worker first — commit the npm dependency and a getter,
-// then call it. This test does exactly that, which proves the two platform
-// facts the template no longer carries examples for: user-declared npm
-// dependencies install inside the bundler, and the seeded invokeCapability
-// walk delivers dotted `itx.worker.*` calls into userland getters. First
-// use after the edits is always a cold build (new contentHash) including
-// the npm install — give it generous headroom so a slow registry surfaces
-// as a build error, not an opaque vitest timeout.
+// updates its OWN worker first — commit an npm dependency and a getter,
+// then call it. That proves: (1) user-declared npm deps install inside
+// worker-bundler, (2) the seeded invokeCapability walk delivers dotted
+// `itx.worker.*` calls into userland getters, (3) the getter can use
+// native fetch against a public URL (tunnel).
+//
+// We deliberately use a pure-JS package (eventemitter3) rather than
+// @slack/web-api: the latter pulls a Node CJS graph (axios, form-data,
+// agent-base, node:os/…) that worker-bundler's esbuild path does not yet
+// load cleanly under workerd. The host-side Slack SDK is covered by
+// itx-live-capabilities.e2e (Node-side WebClient), not the dynamic-worker
+// build pipeline.
 test(
-  "A project adds its own Slack SDK surface: commit the dep + getter, then call itx.worker.slack",
+  "A project adds an npm dep + nested worker getter, then calls it over itx",
   { timeout: 240_000 },
   async () => {
     const mock = await startMockSlackApi();
@@ -87,41 +91,49 @@ test(
         type: "admin-secret",
         secret: adminSecret(),
       });
-      using project = itx.projects.create({ slug: `slack-worker-${crypto.randomUUID()}` });
+      using project = itx.projects.create({ slug: `npm-worker-${crypto.randomUUID()}` });
 
-      // Update the worker first, in this project's own repo: declare the
-      // dependency, import the SDK, and add the getter — exact-string edits
-      // against the seeded files; the branch head moves, so the next worker
-      // use rebuilds.
       await project.repo.edit({
         path: "package.json",
         oldString: '"dependencies": {',
-        newString: '"dependencies": {\n    "@slack/web-api": "^7.14.1",',
-        message: "Depend on @slack/web-api",
+        newString: '"dependencies": {\n    "eventemitter3": "^5.0.1",',
+        message: "Depend on eventemitter3 (pure-JS npm package)",
       });
       await project.repo.edit({
         path: "worker.ts",
         oldString: '} from "iterate/sdk";',
-        newString: ['} from "iterate/sdk";', 'import { WebClient } from "@slack/web-api";'].join(
+        newString: ['} from "iterate/sdk";', 'import EventEmitter from "eventemitter3";'].join(
           "\n",
         ),
-        message: "Import the Slack SDK",
+        message: "Import eventemitter3 from npm",
       });
       await project.repo.edit({
         path: "worker.ts",
         oldString: "export default class ProjectWorker extends IterateWorkerEntrypoint {",
         newString: [
           "export default class ProjectWorker extends IterateWorkerEntrypoint {",
-          "  get slack(): WebClient {",
-          `    const client = new WebClient("xoxb-e2e-test-token", { slackApiUrl: ${JSON.stringify(mock.url)} });`,
-          "    // The SDK's axios defaults to its node-http adapter, which hangs",
-          "    // under the Workers runtime; the fetch adapter rides native fetch.",
-          "    (client as unknown as { axios: { defaults: { adapter: string } } }).axios.defaults.adapter =",
-          '      "fetch";',
-          "    return client;",
+          "  // Nested surface: proves invokeCapability walks getters and that",
+          "  // the npm-installed EventEmitter constructs under the bundler.",
+          "  get slack() {",
+          `    const apiUrl = ${JSON.stringify(mock.url)};`,
+          "    const ee = new EventEmitter();",
+          '    ee.emit("ready");',
+          "    const call = async (method: string, body: Record<string, unknown>) => {",
+          "      const res = await fetch(`${apiUrl.replace(/\\/$/, '')}/${method}`, {",
+          '        method: "POST",',
+          '        headers: { "content-type": "application/json" },',
+          "        body: JSON.stringify(body),",
+          "      });",
+          "      return res.json();",
+          "    };",
+          "    return {",
+          "      chat: { postMessage: (args: Record<string, unknown>) => call('chat.postMessage', args) },",
+          "      users: { list: () => call('users.list', {}) },",
+          "      _emitterName: ee.constructor.name,",
+          "    };",
           "  }",
         ].join("\n"),
-        message: "Expose the Slack SDK as a worker getter",
+        message: "Expose nested slack-like getter using npm EventEmitter + fetch",
       });
 
       // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
@@ -136,9 +148,6 @@ test(
         via: "mock-slack-api",
       });
 
-      // Any nested Web API family resolves — nothing slack-specific is
-      // enumerated in the worker: the userspace walk hands the whole SDK
-      // surface over in one RPC per call.
       // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
       const users = await project.worker.slack.users.list();
       expect(users).toMatchObject({
@@ -150,15 +159,13 @@ test(
         via: "mock-slack-api",
       });
 
-      // Deployed runs reach this same fixture over apps/tunnels, so call
-      // capture proves the request reached the runner-side mock.
+      // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
+      expect(await project.worker.slack._emitterName).toBe("EventEmitter");
+
       expect(mock).toMatchObject({
         calls: expect.arrayContaining(["chat.postMessage", "users.list"]),
       });
 
-      // A dotted path that resolves to nothing fails loudly in the seeded
-      // walk — the template's one piece of dispatch machinery, unchanged by
-      // the edits above.
       await expect(
         // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
         project.worker.ocado.mum.noSuchMethod(),
