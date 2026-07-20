@@ -156,7 +156,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` for one small file; your private workspace (`itx.workspace` — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) to read and change several files, shipped as ONE commit with `await itx.workspace.git.commit({ message })`. ALWAYS read a file before editing it.',
   '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route a named-export class; HelloApp and CounterApp show both shapes. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so an npm SDK can become a plugin.',
   "",
-  'TWO SEARCHES, ONE RULE. `itx.docs.search` finds HOW: working example scripts (most PROVEN — run unattended by the test suite), type declarations, mounted capabilities; word-overlap matching, so pass MANY related words. `itx.search.query` finds WHAT: every conversation, webhook, stream event, file, and repo file is indexed (semantic — ask plainly); hits carry a ref that fetches the exact source. "Who said / when did / what did we decide" = search first, never page streams.',
+  "`itx.docs.search` finds working example scripts (most PROVEN — run unattended by the test suite), type declarations, and mounted capabilities; matching is word overlap, so pass MANY related words.",
   "",
   "A docs hit's `fetchCall` is the exact call that fetches its full doc; copy it verbatim. Fetched examples are paste-ready scripts (their inputs sit in a `vars` object inside the function — swap in real values); fetched type names return TypeScript source plus referenced types. `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.",
   "",
@@ -166,9 +166,6 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "async (itx) => {",
   "  // FIND HOW — search before writing calls against anything unfamiliar:",
   '  const hits = await itx.docs.search({ q: "email gmail inbox unread send" });',
-  "",
-  "  // SEARCH THE PROJECT'S PAST (conversations/webhooks/files indexed):",
-  '  const memory = await itx.search.query({ q: "what did we decide about deploys" });',
   "",
   "  // TALK:",
   "  const [, page] = await Promise.all([",
@@ -270,7 +267,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "GOTCHAS:",
   "- Some handles must be awaited before you call through them: if `itx.x.get(...).method(...)` fails oddly, split it — `const h = await itx.x.get(...); await h.method(...)`.",
   "- Never tell the user you lack access before checking: `await itx.integrations.list()` shows connections (Gmail, GitHub, Slack, ...); mounted capabilities appear in `itx.docs.search` and `itx.__describe()`.",
-  '- Project-specific tools and data live in MOUNTED CAPABILITIES and integrations, not in the repo\'s files — when hunting for "something this project can do", search docs and __describe before reading worker.ts. When hunting for "something that happened", itx.search.query — not getEvents paging.',
+  '- Project-specific tools and data live in MOUNTED CAPABILITIES and integrations, not in the repo\'s files — when hunting for "something this project can do", search docs and __describe before reading worker.ts.',
   "- The platform you run on is open source: https://github.com/iterate/iterate — `apps/os/src/itx/examples.ts` is the whole example catalogue, `apps/os/src/rpc-targets.ts` every capability's real behavior; AI-written architecture summaries at https://deepwiki.com/iterate/iterate.",
 ].join("\n");
 

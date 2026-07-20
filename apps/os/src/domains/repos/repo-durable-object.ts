@@ -19,10 +19,6 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
-import {
-  indexRepoSnapshotToSearchIndex,
-  triggerProjectSearchSyncDebounced,
-} from "../search/search-index.ts";
 import type {
   CommitRepoFilesInput,
   CommitRepoFilesResult,
@@ -543,7 +539,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     });
     if (!result.noChanges) {
       this.#scheduleGithubMirrorPush(result.branch);
-      this.#scheduleSearchIndex(result.branch);
     }
 
     return {
@@ -584,7 +579,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     });
     if (!result.noChanges) {
       this.#scheduleGithubMirrorPush(result.branch);
-      this.#scheduleSearchIndex(result.branch);
     }
 
     return {
@@ -1167,7 +1161,6 @@ export class RepoDurableObject extends DurableObject<Env> {
         repo: link.repo,
       },
     });
-    this.#scheduleSearchIndex(branch);
     return {
       branch,
       changed: true,
@@ -1245,7 +1238,6 @@ export class RepoDurableObject extends DurableObject<Env> {
         reset: true,
       },
     });
-    this.#scheduleSearchIndex(branch);
     return { artifactReplaced: true, branch, commitOid: headOid, previousCommitOid };
   }
 
@@ -1438,55 +1430,6 @@ export class RepoDurableObject extends DurableObject<Env> {
       push.catch((error: unknown) => {
         console.warn("github mirror push failed (recorded on the repo stream)", error);
       }),
-    );
-  }
-
-  /**
-   * SPIKE: re-index this repo's HEAD into the itx.search corpus NOW, and
-   * return the sweep/write counts. The public entry point behind
-   * `itx.search.indexRepo` — a manual backfill/repair.
-   *
-   * Serialized on `#serializeWrite`: a snapshot reads HEAD and runs a
-   * stale-key sweep, so a manual reindex that overlapped a post-commit index
-   * (or another manual one) and finished out of order could let an older
-   * sweep delete objects a newer snapshot wrote. Running on the same write
-   * chain as commits and `#scheduleSearchIndex` makes the last-committed
-   * snapshot the last to run, so the corpus converges on current HEAD.
-   */
-  reindexSearch(): Promise<{ deleted: number; indexed: number; skipped: number; failed: number }> {
-    const projectId = this.#name.projectId;
-    if (projectId === null) {
-      throw new Error("search indexing requires a project-scoped repo");
-    }
-    return this.#serializeWrite(async () => {
-      const snapshot = await this.getFilesSnapshot({ branch: REPO_DEFAULT_BRANCH });
-      return indexRepoSnapshotToSearchIndex({
-        files: snapshot.files,
-        projectId,
-        repoPath: this.#name.path,
-      });
-    });
-  }
-
-  /**
-   * SPIKE: best-effort re-index of this repo's default-branch HEAD into the
-   * itx.search corpus after a write lands. Same never-fail-the-write posture
-   * as the GitHub mirror push; a failure just leaves the index one commit
-   * stale until the next write (or an explicit `itx.search.indexRepo`).
-   * Shares the serialized `reindexSearch` path so post-commit and manual
-   * reindexes can never race each other's stale-key sweeps.
-   */
-  #scheduleSearchIndex(branch: string): void {
-    const projectId = this.#name.projectId;
-    if (branch !== REPO_DEFAULT_BRANCH || projectId === null) return;
-    this.ctx.waitUntil(
-      this.reindexSearch()
-        // Freshness: nudge the project's instance (if one exists) so the new
-        // snapshot is searchable in minutes, not on the hourly schedule.
-        .then(() => triggerProjectSearchSyncDebounced(projectId))
-        .catch((error: unknown) => {
-          console.warn("search index repo snapshot failed", error);
-        }),
     );
   }
 

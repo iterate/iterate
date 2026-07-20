@@ -47,7 +47,6 @@ import {
   ensureR2ObjectExpiryLifecycle,
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
-  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
   removeWorkerSecrets,
   SANDBOX_BACKUP_EXPIRY_RULE,
   wipeD1Tables,
@@ -127,14 +126,9 @@ export default async function eraseData(options: {
     console.log(`KV: deleted ${deleted} keys`);
   }
 
-  // Delete a batch of items with bounded concurrency and a deadline: this
-  // script runs inside the preview-slot cleanup job's 15-MINUTE ceiling, and
-  // an e2e-churned search-index bucket holds thousands of objects —
-  // one-at-a-time REST deletes blew the ceiling on the first live run
-  // (preview_6, 2026-07-14). The API's global rate limit (~1200 req/5min)
-  // caps total call volume anyway, so a huge backlog cannot finish in one
-  // run by construction: each pass deletes what fits its budget and the next
-  // release continues — convergent, never job-killing.
+  // Delete a batch of items with bounded concurrency and a deadline. The API's
+  // global rate limit caps total call volume, so each pass deletes what fits
+  // its budget and the next release continues.
   const deleteAll = async (input: {
     items: readonly string[];
     deadline: number;
@@ -165,70 +159,19 @@ export default async function eraseData(options: {
     return { deleted, failed };
   };
 
-  // ---- AI Search: delete every per-project instance ---------------------------
-  // Instances are born with their project (create saga) and are pure derived
-  // state over the corpus bucket — without this step an e2e-heavy slot
-  // accumulates hundreds of orphaned instances per lease (observed: 162 from
-  // one e2e run). Best-effort: the namespace may not exist on old envs.
-  const instanceDeadline = Date.now() + 90_000;
-  try {
-    let instancesDeleted = 0;
-    for (;;) {
-      // Explicit page=1 on purpose: cf() fails loudly on implicitly truncated
-      // listings, but this delete-then-relist loop consumes one page at a
-      // time until the namespace is empty — truncation is the design.
-      const instances = await cf<{ id: string }[]>(
-        `/ai-search/namespaces/${env.osWorkerName}/instances?per_page=100&page=1`,
-      );
-      if (instances.length === 0) break;
-      const { deleted, failed } = await deleteAll({
-        items: instances.map((instance) => instance.id),
-        deadline: instanceDeadline,
-        deleteOne: async (id) => {
-          await cf(`/ai-search/namespaces/${env.osWorkerName}/instances/${id}`, {
-            method: "DELETE",
-          });
-        },
-      });
-      instancesDeleted += deleted;
-      if (failed > 0 && deleted === 0) break; // every delete failing = stop churning
-      // Only the DEADLINE ends the pass early: per-item failures with
-      // progress keep relisting, so failed items retry THIS run instead of
-      // waiting for the next release.
-      if (Date.now() > instanceDeadline) {
-        console.warn(`AI Search: deadline hit with instances remaining — next release continues`);
-        break;
-      }
-    }
-    console.log(`AI Search: deleted ${instancesDeleted} instances`);
-  } catch (error) {
-    console.warn(`AI Search instance cleanup skipped: ${String(error).slice(0, 200)}`);
-  }
-
-  // ---- R2: wipe the user-content buckets ---------------------------------------
-  // The search-index corpus and itx.files store project content; both are
-  // user data under this script's contract. (The sandboxes bucket is left
+  // ---- R2: wipe the user-content bucket ----------------------------------------
+  // itx.files stores project content. (The sandboxes bucket is left
   // alone deliberately — container teardown is broken upstream, see the DO
   // section, and its backups expire on a lifecycle rule.)
   //
-  // Preview slots take BOTH disposable buckets off this hot path. The
-  // search-index especially is pure derived state that churns to thousands of
-  // objects, and walking it with one DELETE per object is the biggest source
-  // of the cleanup 429 storm that leaked leases (2026-07-15: 1521 objects).
-  // Instead we guarantee each bucket's 3h server-side expiry rule and let
-  // Cloudflare GC the objects — releasing the slot immediately. AI Search above
-  // has no equivalent (namespace-delete needs an empty namespace), so its
-  // per-instance sweep stays — but with R2 off the path it no longer competes
-  // for the ~1200 req/5min budget. Any bucket whose rule can't be ensured falls
+  // Preview slots take the disposable bucket off this hot path. We guarantee
+  // its 3h server-side expiry rule and let Cloudflare GC the objects. Any
+  // bucket whose rule can't be ensured falls
   // back to being walked as before. Prd always walks (its data has no expiry).
-  const searchIndexBucket = `${env.osWorkerName}-search-index`;
   const filesBucket = `${env.osWorkerName}-files`;
   const reapedByLifecycle = new Set<string>();
   if (ctx.name.startsWith("preview")) {
-    for (const [bucket, expiry] of [
-      [searchIndexBucket, PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY],
-      [filesBucket, PREVIEW_FILES_OBJECT_EXPIRY],
-    ] as const) {
+    for (const [bucket, expiry] of [[filesBucket, PREVIEW_FILES_OBJECT_EXPIRY]] as const) {
       try {
         await ensureR2ObjectExpiryLifecycle(ctx, bucket, expiry);
         reapedByLifecycle.add(bucket);
@@ -256,13 +199,9 @@ export default async function eraseData(options: {
       console.warn(`R2 sandboxes lifecycle ensure failed: ${String(error).slice(0, 200)}`);
     }
   }
-  const bucketsToWalk = [searchIndexBucket, filesBucket].filter(
-    (bucket) => !reapedByLifecycle.has(bucket),
-  );
+  const bucketsToWalk = [filesBucket].filter((bucket) => !reapedByLifecycle.has(bucket));
   for (const bucket of bucketsToWalk) {
-    // Per-bucket budget: a churn-refilled search-index must not starve the
-    // files pass (Bugbot). 90s each + 90s instances stays well inside the
-    // cleanup job's 15-minute ceiling alongside the DO/D1/KV work.
+    // Keep the pass inside the cleanup job's 15-minute ceiling.
     const bucketDeadline = Date.now() + 90_000;
     try {
       let objectsDeleted = 0;

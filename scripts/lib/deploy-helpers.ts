@@ -360,21 +360,7 @@ export const SANDBOX_BACKUP_EXPIRY_RULE = {
   prefix: "backups/",
 } as const;
 
-/**
- * The disposable per-slot R2 corpus (the itx.search `-search-index` bucket):
- * pure derived state the worker re-mirrors, which on a churned preview slot
- * grows to thousands of objects. Erasing it object-by-object is the single
- * biggest source of the cleanup 429 storm that used to leak preview leases
- * (2026-07-15: 1521 objects, rate-limited mid-delete). Preview slots let R2
- * lifecycle expire it server-side — zero control-plane calls — and skip the
- * object walk in erase-data. NOT applied to prd, whose corpus must persist.
- */
-export const PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY = {
-  ruleId: "expire-preview-search-index",
-  ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
-} as const;
-
-/** Preview project-file storage (itx.files): same disposable 3h expiry as the corpus. */
+/** Preview project-file storage (itx.files) expires after 3h. */
 export const PREVIEW_FILES_OBJECT_EXPIRY = {
   ruleId: "expire-preview-files",
   ttlSeconds: PREVIEW_DISPOSABLE_TTL_SECONDS,
