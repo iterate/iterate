@@ -11,11 +11,27 @@ import {
 } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import { guestbookHostRef } from "./apps/guestbook/ref.ts";
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
-const todoAppRef = {
+
+// Todo: LiveState host (createWorker) + createApp page shell. /api is Cap'n
+// Web; the browser uses useLiveStateRpc against liveState.
+const todoHostRef = {
   className: "TodoApp",
-  durableWorkerKey: "app-todo",
+  durableWorkerKey: "app-todo-live",
+  path: "/",
+  source: {
+    createWorker: {
+      entryPoint: "apps/todo/host.ts",
+      files: repoFiles,
+    },
+  },
+  type: "stateful",
+} satisfies StatefulDynamicWorkerRef;
+const todoPageRef = {
+  className: "TodoPage",
+  durableWorkerKey: "app-todo-page",
   path: "/",
   source: {
     createApp: {
@@ -27,9 +43,13 @@ const todoAppRef = {
   },
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
-const guestbookAppRef = {
-  className: "GuestbookApp",
-  durableWorkerKey: "app-guestbook",
+
+// Guestbook: stream-processor host (createWorker) + createApp page. Shared
+// host ref lives in apps/guestbook/ref.ts so the wake subscription expression
+// cannot drift from the HTTP route.
+const guestbookPageRef = {
+  className: "GuestbookPage",
+  durableWorkerKey: "app-guestbook-page",
   path: "/",
   source: {
     createApp: {
@@ -134,7 +154,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      return this.fetchDynamicWorker(req, todoAppRef);
+      const todoUrl = new URL(req.url);
+      if (todoUrl.pathname.startsWith("/api")) {
+        return this.fetchDynamicWorker(req, todoHostRef);
+      }
+      return this.fetchDynamicWorker(req, todoPageRef);
     }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
@@ -151,7 +175,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
-      return this.fetchDynamicWorker(req, guestbookAppRef);
+      // API hits the stream-processor host (createWorker); pages hit the
+      // createApp shell. First /api contact creates the /guestbook stream.
+      const guestbookUrl = new URL(req.url);
+      if (guestbookUrl.pathname.startsWith("/api")) {
+        return this.fetchDynamicWorker(req, guestbookHostRef);
+      }
+      return this.fetchDynamicWorker(req, guestbookPageRef);
     }
     if (app === "tasks") {
       // A collaborative Kanban board over this repo's tasks/ markdown
@@ -166,12 +196,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (denied) return denied;
-      const url = new URL(req.url);
-      url.protocol = "https:";
+      const tasksUrl = new URL(req.url);
+      tasksUrl.protocol = "https:";
       const origin = await itx.kv.get("tasks-app-origin");
-      url.host = typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
+      tasksUrl.host =
+        typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
       return fetch(
-        new Request(url, {
+        new Request(tasksUrl, {
           method: req.method,
           headers: req.headers,
           body: req.body,
@@ -194,9 +225,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
-                <li><a href="${appUrl("todo")}">todo</a> (basic React + SQLite Durable Object, project members only)</li>
+                <li><a href="${appUrl("todo")}">todo</a> (LiveState + Cap'n Web, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
-                <li><a href="${appUrl("guestbook")}">guestbook</a> (basic React + SQLite Durable Object, public)</li>
+                <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor reduce on /guestbook, public)</li>
                 <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>

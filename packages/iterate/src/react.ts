@@ -3,4 +3,8 @@
 // the same hooks run under react-dom, @opentui/react, and React Native (see
 // ./itx/itx-react.ts). This entry is one-stop — it re-exports the imperative
 // keeper surface too, so a component file imports from exactly one place.
+//
+// Userspace apps (project workers, Cap'n Web public APIs) that hold a raw
+// `LiveStateRpc` rather than a project itx use {@link useLiveStateRpc}.
 export * from "./itx/itx-react.ts";
+export { useLiveStateRpc } from "./live-state-react.ts";

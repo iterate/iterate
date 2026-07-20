@@ -1,66 +1,207 @@
+/**
+ * Todo UI — Cap'n Web live state via the same useLiveStateRpc pattern as the
+ * guestbook (and packages/iterate's iterate/react export). createApp keeps
+ * React/Cap'n Web as esm.sh URL imports.
+ */
 import React, {
   type FormEvent,
-  useCallback,
   useEffect,
+  useRef,
   useState,
+  useSyncExternalStore,
 } from "https://esm.sh/react@19.2.4";
 import { createRoot } from "https://esm.sh/react-dom@19.2.4/client";
+import { newWebSocketRpcSession } from "https://esm.sh/@iterate-com/capnweb@0.10.0";
 
-type Todo = {
-  createdAt: string;
-  done: boolean;
-  id: string;
-  title: string;
+// --- createLiveStateStore + useLiveStateRpc (same protocol as packages/iterate) ---
+
+type LiveUpdate<State> =
+  | { type: "snapshot"; revision: number; state: State }
+  | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
+
+type LiveStatePatch =
+  | { set: unknown }
+  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
+  if ("set" in patch) return patch.set as State;
+  const base = isPlainObject(prev) ? prev : {};
+  const next: Record<string, unknown> = { ...base };
+  if (patch.fields) {
+    for (const [key, childPatch] of Object.entries(patch.fields)) {
+      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);
+    }
+  }
+  if (patch.drop) {
+    for (const key of patch.drop) delete next[key];
+  }
+  return next as State;
+}
+
+function createLiveStateStore<State>() {
+  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  return {
+    getState: () => held.state,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    reset: () => {
+      held = { revision: -1, state: undefined };
+      notify();
+    },
+    apply: (update: LiveUpdate<State>, resync: () => void) => {
+      if (update.type === "snapshot") {
+        held = { revision: update.revision, state: update.state };
+      } else if (update.from !== held.revision) {
+        resync();
+        return;
+      } else {
+        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };
+      }
+      notify();
+    },
+  };
+}
+
+type LiveStateRpc<State> = {
+  get(): Promise<State>;
+  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;
 };
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  if (!response.ok)
-    throw new Error((await response.text()) || `request failed (${response.status})`);
-  return (response.status === 204 ? undefined : await response.json()) as T;
+function useLiveStateRpc<Root extends object, State, Selected = State>(
+  root: Root | null | undefined,
+  live: (root: Root) => LiveStateRpc<State>,
+  selector: (state: State) => Selected,
+): { value: Selected | undefined; error: string | undefined } {
+  const [store] = useState(() => createLiveStateStore<State>());
+  const [error, setError] = useState<string | undefined>(undefined);
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const liveRef = useRef(live);
+  liveRef.current = live;
+
+  useEffect(() => {
+    store.reset();
+    setError(undefined);
+    if (root == null) return;
+
+    const liveState = liveRef.current(root);
+
+    let disposed = false;
+    let subscription: { unsubscribe(): void } | undefined;
+
+    const subscribe = async () => {
+      subscription?.unsubscribe();
+      subscription = await liveState.subscribe((update) => {
+        if (disposed) return;
+        store.apply(update, () => {
+          if (!disposed) void subscribe().catch(report);
+        });
+      });
+    };
+
+    const report = (thrown: unknown) => {
+      if (disposed) return;
+      setError(thrown instanceof Error ? thrown.message : String(thrown));
+    };
+
+    void subscribe().catch(report);
+
+    return () => {
+      disposed = true;
+      subscription?.unsubscribe();
+      store.reset();
+    };
+  }, [root, store]);
+
+  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({
+    state: undefined,
+    value: undefined,
+  });
+  const getSelected = () => {
+    const state = store.getState();
+    if (state === undefined) {
+      cache.current = { state: undefined, value: undefined };
+      return undefined;
+    }
+    if (Object.is(cache.current.state, state)) return cache.current.value;
+    const value = selectorRef.current(state);
+    cache.current = { state, value };
+    return value;
+  };
+
+  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);
+  return { value, error };
+}
+
+// --- app ---
+
+type TodoApi = {
+  liveState: LiveStateRpc<{
+    todos: Array<{ createdAt: string; done: boolean; id: string; title: string }>;
+  }>;
+  add(title: string): Promise<void>;
+  setDone(id: string, done: boolean): Promise<void>;
+  remove(id: string): Promise<void>;
+};
+
+function useTodoApi(): { api: TodoApi | null; error: string | undefined } {
+  const [api, setApi] = useState<TodoApi | null>(null);
+  const [error, setError] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    setApi(() => null);
+    setError(undefined);
+    const endpoint = new URL("/api", window.location.href);
+    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+    const publicApi = newWebSocketRpcSession<TodoApi>(endpoint.toString());
+    setApi(() => publicApi);
+    return () => {
+      publicApi[Symbol.dispose]();
+      setApi(() => null);
+    };
+  }, []);
+
+  return { api, error };
 }
 
 export function TodoClient() {
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const { api, error: dialError } = useTodoApi();
+  const { value: state, error: liveError } = useLiveStateRpc(
+    api,
+    (session) => session.liveState,
+    (s) => s,
+  );
   const [title, setTitle] = useState("");
-  const [todos, setTodos] = useState<Todo[]>([]);
+  const [actionError, setActionError] = useState("");
 
-  const load = useCallback(async () => {
+  const error = dialError ?? liveError ?? (actionError.length > 0 ? actionError : undefined);
+  const todos = state?.todos ?? [];
+
+  const run = async (action: () => Promise<void>) => {
+    setActionError("");
     try {
-      setTodos(await api<Todo[]>("/api/todos"));
-      setError("");
+      await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const mutate = async (mutation: () => Promise<unknown>) => {
-    try {
-      await mutation();
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setActionError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
-    if (title.trim().length === 0) return;
-    await mutate(async () => {
-      await api<Todo>("/api/todos", {
-        body: JSON.stringify({ title }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      });
-      setTitle("");
-    });
+    if (api == null || title.trim().length === 0) return;
+    const next = title;
+    setTitle("");
+    await run(() => api.add(next));
   };
 
   return (
@@ -77,10 +218,12 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button type="submit">Add</button>
+        <button disabled={api == null} type="submit">
+          Add
+        </button>
       </form>
-      {error.length > 0 && <p role="alert">{error}</p>}
-      {loading ? (
+      {error !== undefined && <p role="alert">{error}</p>}
+      {state === undefined ? (
         <p>Loading…</p>
       ) : todos.length === 0 ? (
         <p>No todos yet.</p>
@@ -93,24 +236,16 @@ export function TodoClient() {
                 checked={todo.done}
                 onChange={(event) => {
                   const done = event.currentTarget.checked;
-                  void mutate(async () => {
-                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {
-                      body: JSON.stringify({ done }),
-                      headers: { "content-type": "application/json" },
-                      method: "PATCH",
-                    });
-                  });
+                  if (api == null) return;
+                  void run(() => api.setDone(todo.id, done));
                 }}
                 type="checkbox"
               />
               <span className={todo.done ? "done" : ""}>{todo.title}</span>
               <button
                 onClick={() => {
-                  void mutate(async () => {
-                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {
-                      method: "DELETE",
-                    });
-                  });
+                  if (api == null) return;
+                  void run(() => api.remove(todo.id));
                 }}
                 type="button"
               >

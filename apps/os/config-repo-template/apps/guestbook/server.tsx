@@ -1,60 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 
-export class GuestbookApp extends DurableObject {
-  constructor(ctx: DurableObjectState, env: unknown) {
-    super(ctx, env);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS entries (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        message TEXT NOT NULL,
-        signed_at TEXT NOT NULL
-      )
-    `);
-  }
-
+/**
+ * Page-only half of the guestbook. The stream-processor host lives in
+ * host.ts (createWorker); /api/* is routed there by worker.ts. This class
+ * only serves the HTML shell so createApp can still compile client.tsx.
+ */
+export class GuestbookPage extends DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api/entries") {
-      if (request.method === "GET") {
-        const entries = this.ctx.storage.sql
-          .exec<{ id: string; message: string; name: string; signed_at: string }>(
-            "SELECT id, name, message, signed_at FROM entries ORDER BY signed_at DESC, id DESC LIMIT 100",
-          )
-          .toArray()
-          .map((entry) => ({
-            id: entry.id,
-            message: entry.message,
-            name: entry.name,
-            signedAt: entry.signed_at,
-          }));
-        return Response.json(entries);
-      }
-      if (request.method === "POST") {
-        const body = await request.json<{ message?: unknown; name?: unknown }>();
-        const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
-        const message = typeof body.message === "string" ? body.message.trim().slice(0, 500) : "";
-        if (name.length === 0 || message.length === 0) {
-          return new Response("name and message are required", { status: 400 });
-        }
-        const entry = {
-          id: crypto.randomUUID(),
-          message,
-          name,
-          signedAt: new Date().toISOString(),
-        };
-        this.ctx.storage.sql.exec(
-          "INSERT INTO entries (id, name, message, signed_at) VALUES (?, ?, ?, ?)",
-          entry.id,
-          entry.name,
-          entry.message,
-          entry.signedAt,
-        );
-        return Response.json(entry, { status: 201 });
-      }
-      return new Response("method not allowed", { status: 405 });
-    }
-
     if (request.method !== "GET" || url.pathname !== "/") {
       return new Response("not found", { status: 404 });
     }

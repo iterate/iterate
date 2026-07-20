@@ -12,18 +12,18 @@ function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template ships only the two deliberately basic app pairs", () => {
-  // Vendor SDK surfaces are NOT seeded (built-ins live at
-  // itx.integrations.<slug>), projects grow their own apps/ and
-  // integrations/ by editing their repo, and the complete GitHub review
-  // workflow is userspace code in worker.ts.
+test("template ships live-state todo and stream-processor guestbook", () => {
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  const appPaths = paths.filter((path) => path.startsWith("apps/"));
+  const appPaths = paths.filter((path) => path.startsWith("apps/")).toSorted();
   expect(appPaths).toEqual([
     "apps/guestbook/client.tsx",
+    "apps/guestbook/host.ts",
+    "apps/guestbook/processor.ts",
+    "apps/guestbook/ref.ts",
     "apps/guestbook/server.tsx",
     "apps/todo/client.tsx",
+    "apps/todo/host.ts",
     "apps/todo/server.tsx",
   ]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
@@ -34,42 +34,46 @@ test("template ships only the two deliberately basic app pairs", () => {
     dependencies?: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  // The seed needs no runtime packages because its root Worker uses platform
-  // virtual modules. This is a template choice, not a build restriction.
-  expect(templatePackageJson.dependencies).toBeUndefined();
+  // Guestbook processor contract needs zod at createWorker install time;
+  // everything else is platform virtual modules.
+  expect(templatePackageJson.dependencies).toMatchObject({
+    zod: expect.any(String),
+  });
   expect(templatePackageJson.devDependencies).toMatchObject({
     "@iterate-com/capnweb": expect.any(String),
   });
 });
 
-test("basic apps use one server entry, one client entry, and external browser imports", () => {
+test("todo and guestbook use Cap'n Web live state clients and createWorker hosts", () => {
+  // Page shells stay createApp + external React for the browser.
   for (const app of ["guestbook", "todo"]) {
+    expect(templateFile(`apps/${app}/client.tsx`)).toContain('from "https://esm.sh/react@19.2.4"');
+    expect(templateFile(`apps/${app}/client.tsx`)).toContain("useLiveStateRpc");
+    expect(templateFile(`apps/${app}/client.tsx`)).toContain("newWebSocketRpcSession");
     expect(templateFile(`apps/${app}/server.tsx`)).toContain('from "cloudflare:workers"');
-    const client = templateFile(`apps/${app}/client.tsx`);
-    expect(client).toContain('from "https://esm.sh/react@19.2.4"');
-    expect(client).toContain('from "https://esm.sh/react-dom@19.2.4/client"');
-    expect(client).toContain(`export function ${app === "todo" ? "Todo" : "Guestbook"}Client()`);
-    expect(client).not.toContain("react/jsx-runtime");
-    // Platform overlay injection owns the final response and skips CSP pages.
-    expect(templateFile(`apps/${app}/server.tsx`)).not.toContain("content-security-policy");
   }
 
+  expect(templateFile("apps/todo/host.ts")).toContain("extends IterateDurableObject");
+  expect(templateFile("apps/todo/host.ts")).toContain("LiveState");
+  expect(templateFile("apps/todo/server.tsx")).toContain("TodoPage");
+
+  expect(templateFile("apps/guestbook/host.ts")).toContain("extends IterateDurableObject");
+  expect(templateFile("apps/guestbook/processor.ts")).toContain('slug: "guestbook"');
+  expect(templateFile("apps/guestbook/processor.ts")).toContain("extends StreamProcessor");
+  expect(templateFile("apps/guestbook/ref.ts")).toContain('guestbookStreamPath = "/guestbook"');
+  expect(templateFile("apps/guestbook/ref.ts")).toContain("createWorker:");
+
   const worker = templateFile("worker.ts");
-  expect(worker.match(/createApp:/g)).toHaveLength(2);
-  expect(worker.match(/client: "apps\/(?:todo|guestbook)\/client\.tsx"/g)).toHaveLength(2);
-  expect(worker.match(/server: "apps\/(?:todo|guestbook)\/server\.tsx"/g)).toHaveLength(2);
+  expect(worker).toContain("todoHostRef");
+  expect(worker).toContain("guestbookHostRef");
+  expect(worker).toContain('pathname.startsWith("/api")');
+  expect(worker).toContain("stream processor reduce on /guestbook");
   expect(worker).not.toContain("rootDir");
-  expect(worker).not.toContain("clientEntryPoint");
   expect(worker).not.toContain("pipeline:");
   expect(worker).not.toContain("tanstack");
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
-  // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now
-  // worker.ts imports straight from `iterate/sdk`: types resolve through the
-  // published package (pkg.pr.new's @main URL tracks the latest build from
-  // main), and the RUNTIME imports are satisfied at build time by the
-  // platform-injected virtual module (worker-loader.ts), never by npm.
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {

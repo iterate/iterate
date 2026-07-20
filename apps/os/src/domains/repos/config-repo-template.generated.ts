@@ -210,68 +210,228 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/guestbook/client.tsx",
     content:
+      "/**\n" +
+      " * Public guestbook UI. Live reduced state arrives over Cap'n Web via the same\n" +
+      " * `useLiveStateRpc` hook as `iterate/react` (inlined here so createApp can\n" +
+      " * resolve it without pulling the full itx session stack into the browser\n" +
+      " * bundle — createApp does not inject platform virtual modules the way\n" +
+      " * createWorker does). Cap'n Web + React stay esm.sh URL imports.\n" +
+      " */\n" +
       "import React, {\n" +
       "  type FormEvent,\n" +
-      "  useCallback,\n" +
       "  useEffect,\n" +
+      "  useRef,\n" +
       "  useState,\n" +
+      "  useSyncExternalStore,\n" +
       "} from \"https://esm.sh/react@19.2.4\";\n" +
       "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
+      "import { newWebSocketRpcSession } from \"https://esm.sh/@iterate-com/capnweb@0.10.0\";\n" +
       "\n" +
-      "type Entry = {\n" +
-      "  id: string;\n" +
-      "  message: string;\n" +
-      "  name: string;\n" +
-      "  signedAt: string;\n" +
+      "// --- createLiveStateStore + useLiveStateRpc (same protocol as packages/iterate) ---\n" +
+      "\n" +
+      "type LiveUpdate<State> =\n" +
+      "  | { type: \"snapshot\"; revision: number; state: State }\n" +
+      "  | { type: \"patch\"; from: number; to: number; patch: LiveStatePatch };\n" +
+      "\n" +
+      "type LiveStatePatch =\n" +
+      "  | { set: unknown }\n" +
+      "  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };\n" +
+      "\n" +
+      "function isPlainObject(value: unknown): value is Record<string, unknown> {\n" +
+      "  if (typeof value !== \"object\" || value === null) return false;\n" +
+      "  const proto = Object.getPrototypeOf(value);\n" +
+      "  return proto === Object.prototype || proto === null;\n" +
+      "}\n" +
+      "\n" +
+      "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
+      "  if (\"set\" in patch) return patch.set as State;\n" +
+      "  const base = isPlainObject(prev) ? prev : {};\n" +
+      "  const next: Record<string, unknown> = { ...base };\n" +
+      "  if (patch.fields) {\n" +
+      "    for (const [key, childPatch] of Object.entries(patch.fields)) {\n" +
+      "      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);\n" +
+      "    }\n" +
+      "  }\n" +
+      "  if (patch.drop) {\n" +
+      "    for (const key of patch.drop) delete next[key];\n" +
+      "  }\n" +
+      "  return next as State;\n" +
+      "}\n" +
+      "\n" +
+      "function createLiveStateStore<State>() {\n" +
+      "  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };\n" +
+      "  const listeners = new Set<() => void>();\n" +
+      "  const notify = () => listeners.forEach((listener) => listener());\n" +
+      "  return {\n" +
+      "    getState: () => held.state,\n" +
+      "    subscribe: (listener: () => void) => {\n" +
+      "      listeners.add(listener);\n" +
+      "      return () => void listeners.delete(listener);\n" +
+      "    },\n" +
+      "    reset: () => {\n" +
+      "      held = { revision: -1, state: undefined };\n" +
+      "      notify();\n" +
+      "    },\n" +
+      "    apply: (update: LiveUpdate<State>, resync: () => void) => {\n" +
+      "      if (update.type === \"snapshot\") {\n" +
+      "        held = { revision: update.revision, state: update.state };\n" +
+      "      } else if (update.from !== held.revision) {\n" +
+      "        resync();\n" +
+      "        return;\n" +
+      "      } else {\n" +
+      "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
+      "      }\n" +
+      "      notify();\n" +
+      "    },\n" +
+      "  };\n" +
+      "}\n" +
+      "\n" +
+      "type LiveStateRpc<State> = {\n" +
+      "  get(): Promise<State>;\n" +
+      "  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;\n" +
       "};\n" +
       "\n" +
-      "async function api<T>(init?: RequestInit): Promise<T> {\n" +
-      "  const response = await fetch(\"/api/entries\", init);\n" +
-      "  if (!response.ok)\n" +
-      "    throw new Error((await response.text()) || `request failed (${response.status})`);\n" +
-      "  return (await response.json()) as T;\n" +
+      "/** Same contract as `useLiveStateRpc` from `iterate/react`. */\n" +
+      "function useLiveStateRpc<Root extends object, State, Selected = State>(\n" +
+      "  root: Root | null | undefined,\n" +
+      "  live: (root: Root) => LiveStateRpc<State>,\n" +
+      "  selector: (state: State) => Selected,\n" +
+      "): { value: Selected | undefined; error: string | undefined } {\n" +
+      "  const [store] = useState(() => createLiveStateStore<State>());\n" +
+      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
+      "  const selectorRef = useRef(selector);\n" +
+      "  selectorRef.current = selector;\n" +
+      "  const liveRef = useRef(live);\n" +
+      "  liveRef.current = live;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    store.reset();\n" +
+      "    setError(undefined);\n" +
+      "    if (root == null) return;\n" +
+      "\n" +
+      "    // Capture LiveStateRpc once per root — Cap'n Web getters return a new stub\n" +
+      "    // each access; depending on that identity would thrash the subscription.\n" +
+      "    const liveState = liveRef.current(root);\n" +
+      "\n" +
+      "    let disposed = false;\n" +
+      "    let subscription: { unsubscribe(): void } | undefined;\n" +
+      "\n" +
+      "    const subscribe = async () => {\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      subscription = await liveState.subscribe((update) => {\n" +
+      "        if (disposed) return;\n" +
+      "        store.apply(update, () => {\n" +
+      "          if (!disposed) void subscribe().catch(report);\n" +
+      "        });\n" +
+      "      });\n" +
+      "    };\n" +
+      "\n" +
+      "    const report = (thrown: unknown) => {\n" +
+      "      if (disposed) return;\n" +
+      "      setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
+      "    };\n" +
+      "\n" +
+      "    void subscribe().catch(report);\n" +
+      "\n" +
+      "    return () => {\n" +
+      "      disposed = true;\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      store.reset();\n" +
+      "    };\n" +
+      "  }, [root, store]);\n" +
+      "\n" +
+      "  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({\n" +
+      "    state: undefined,\n" +
+      "    value: undefined,\n" +
+      "  });\n" +
+      "  const getSelected = () => {\n" +
+      "    const state = store.getState();\n" +
+      "    if (state === undefined) {\n" +
+      "      cache.current = { state: undefined, value: undefined };\n" +
+      "      return undefined;\n" +
+      "    }\n" +
+      "    if (Object.is(cache.current.state, state)) return cache.current.value;\n" +
+      "    const value = selectorRef.current(state);\n" +
+      "    cache.current = { state, value };\n" +
+      "    return value;\n" +
+      "  };\n" +
+      "\n" +
+      "  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);\n" +
+      "  return { value, error };\n" +
+      "}\n" +
+      "\n" +
+      "// --- app ---\n" +
+      "\n" +
+      "type GuestbookState = {\n" +
+      "  birthCertificate: { config: { title: string } } | null;\n" +
+      "  entries: Array<{ name: string; message: string; signedAt: string }>;\n" +
+      "  lastMilestone: number;\n" +
+      "};\n" +
+      "\n" +
+      "type GuestbookApi = {\n" +
+      "  liveState: LiveStateRpc<GuestbookState>;\n" +
+      "  sign(name: string, message: string): Promise<void>;\n" +
+      "};\n" +
+      "\n" +
+      "function useGuestbookApi(): {\n" +
+      "  api: GuestbookApi | null;\n" +
+      "  error: string | undefined;\n" +
+      "} {\n" +
+      "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
+      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so\n" +
+      "    // setApi(stub) would make React CALL the stub as an updater.\n" +
+      "    setApi(() => null);\n" +
+      "    setError(undefined);\n" +
+      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
+      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
+      "    const publicApi = newWebSocketRpcSession<GuestbookApi>(endpoint.toString());\n" +
+      "    setApi(() => publicApi);\n" +
+      "    return () => {\n" +
+      "      publicApi[Symbol.dispose]();\n" +
+      "      setApi(() => null);\n" +
+      "    };\n" +
+      "  }, []);\n" +
+      "\n" +
+      "  return { api, error };\n" +
       "}\n" +
       "\n" +
       "export function GuestbookClient() {\n" +
-      "  const [entries, setEntries] = useState<Entry[]>([]);\n" +
-      "  const [error, setError] = useState(\"\");\n" +
-      "  const [loading, setLoading] = useState(true);\n" +
-      "  const [message, setMessage] = useState(\"\");\n" +
+      "  const { api, error: dialError } = useGuestbookApi();\n" +
+      "  const { value: state, error: liveError } = useLiveStateRpc(\n" +
+      "    api,\n" +
+      "    (session) => session.liveState,\n" +
+      "    (s) => s,\n" +
+      "  );\n" +
       "  const [name, setName] = useState(\"\");\n" +
+      "  const [message, setMessage] = useState(\"\");\n" +
+      "  const [signing, setSigning] = useState(false);\n" +
+      "  const [signError, setSignError] = useState(\"\");\n" +
       "\n" +
-      "  const load = useCallback(async () => {\n" +
-      "    try {\n" +
-      "      setEntries(await api<Entry[]>());\n" +
-      "      setError(\"\");\n" +
-      "    } catch (cause) {\n" +
-      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
-      "    } finally {\n" +
-      "      setLoading(false);\n" +
-      "    }\n" +
-      "  }, []);\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    void load();\n" +
-      "  }, [load]);\n" +
+      "  const error = dialError ?? liveError ?? (signError.length > 0 ? signError : undefined);\n" +
+      "  const entries = state?.entries ?? [];\n" +
+      "  const title = state?.birthCertificate?.config.title ?? \"Guestbook\";\n" +
       "\n" +
       "  const sign = async (event: FormEvent) => {\n" +
       "    event.preventDefault();\n" +
+      "    if (api == null) return;\n" +
+      "    setSigning(true);\n" +
+      "    setSignError(\"\");\n" +
       "    try {\n" +
-      "      await api<Entry>({\n" +
-      "        body: JSON.stringify({ message, name }),\n" +
-      "        headers: { \"content-type\": \"application/json\" },\n" +
-      "        method: \"POST\",\n" +
-      "      });\n" +
+      "      await api.sign(name, message);\n" +
       "      setMessage(\"\");\n" +
-      "      await load();\n" +
       "    } catch (cause) {\n" +
-      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "      setSignError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "    } finally {\n" +
+      "      setSigning(false);\n" +
       "    }\n" +
       "  };\n" +
       "\n" +
       "  return (\n" +
       "    <>\n" +
-      "      <h1>Guestbook</h1>\n" +
+      "      <h1>{title}</h1>\n" +
       "      <form onSubmit={sign}>\n" +
       "        <label htmlFor=\"name\">Name</label>\n" +
       "        <input\n" +
@@ -290,17 +450,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          rows={4}\n" +
       "          value={message}\n" +
       "        />\n" +
-      "        <button type=\"submit\">Sign guestbook</button>\n" +
+      "        <button disabled={api == null || signing} type=\"submit\">\n" +
+      "          Sign guestbook\n" +
+      "        </button>\n" +
       "      </form>\n" +
-      "      {error.length > 0 && <p role=\"alert\">{error}</p>}\n" +
-      "      {loading ? (\n" +
+      "      {error !== undefined && <p role=\"alert\">{error}</p>}\n" +
+      "      {state === undefined ? (\n" +
       "        <p>Loading…</p>\n" +
       "      ) : entries.length === 0 ? (\n" +
       "        <p>No entries yet.</p>\n" +
       "      ) : (\n" +
       "        <section aria-label=\"Guestbook entries\">\n" +
-      "          {entries.map((entry) => (\n" +
-      "            <article key={entry.id}>\n" +
+      "          {/* Newest first; key on payload identity (not reversed index — that\n" +
+      "              shifts on every append and remounts the list). */}\n" +
+      "          {[...entries].reverse().map((entry) => (\n" +
+      "            <article key={`${entry.signedAt}\\0${entry.name}\\0${entry.message}`}>\n" +
       "              <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>\n" +
       "              <p>{entry.message}</p>\n" +
       "            </article>\n" +
@@ -316,65 +480,434 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "createRoot(root).render(<GuestbookClient />);\n",
   },
   {
+    path: "apps/guestbook/host.ts",
+    content:
+      "// Stream-processor host for the guestbook. createWorker gets platform virtual\n" +
+      "// modules (iterate/processors, iterate/sdk, iterate/live-state, capnweb).\n" +
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import {\n" +
+      "  type StreamEventInput,\n" +
+      "  type StreamSubscriberWakeRequest,\n" +
+      "  type StreamSubscriberWakeResponse,\n" +
+      "} from \"iterate/processors\";\n" +
+      "import {\n" +
+      "  createStreamProcessorRegistry,\n" +
+      "  type StreamProcessorRegistry,\n" +
+      "} from \"iterate/processors/cloudflare\";\n" +
+      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
+      "import {\n" +
+      "  guestbookCreationEvents,\n" +
+      "  guestbookStreamPath,\n" +
+      "  guestbookSubscriptionConfigVersion,\n" +
+      "} from \"./ref.ts\";\n" +
+      "import { GuestbookProcessor, type GuestbookState } from \"./processor.ts\";\n" +
+      "\n" +
+      "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
+      "\n" +
+      "/** Public Cap'n Web root: live reduced state + sign. */\n" +
+      "export type GuestbookApi = {\n" +
+      "  liveState: LiveStateRpc<GuestbookState>;\n" +
+      "  sign(name: string, message: string): Promise<void>;\n" +
+      "};\n" +
+      "\n" +
+      "export class GuestbookApp extends IterateDurableObject {\n" +
+      "  #host:\n" +
+      "    | {\n" +
+      "        registry: StreamProcessorRegistry<GuestbookState>;\n" +
+      "        reads: { currentState: GuestbookState };\n" +
+      "      }\n" +
+      "    | undefined;\n" +
+      "  #configurationInFlight: Promise<void> | undefined;\n" +
+      "\n" +
+      "  #ensureHost(projectId: string): {\n" +
+      "    registry: StreamProcessorRegistry<GuestbookState>;\n" +
+      "    reads: { currentState: GuestbookState };\n" +
+      "  } {\n" +
+      "    if (this.#host === undefined) {\n" +
+      "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
+      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
+      "      // getLiveState is called only after register assigns `reads` (registry\n" +
+      "      // refreshes run after construction). The `!` is the same lazy-init race\n" +
+      "      // the platform secret DO uses — typed as optional only for the first\n" +
+      "      // line of construction, never observed null at call time.\n" +
+      "      let reads: { currentState: GuestbookState } | undefined;\n" +
+      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
+      "        path: guestbookStreamPath,\n" +
+      "        projectId,\n" +
+      "        stream,\n" +
+      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
+      "        getLiveState: () => reads!.currentState,\n" +
+      "      });\n" +
+      "      const guestbook = registry.register(\n" +
+      "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
+      "        { recovery: true },\n" +
+      "      );\n" +
+      "      reads = registry.reads(guestbook);\n" +
+      "      this.#host = { registry, reads };\n" +
+      "    }\n" +
+      "    return this.#host;\n" +
+      "  }\n" +
+      "\n" +
+      "  async #freshHost(): Promise<{\n" +
+      "    registry: StreamProcessorRegistry<GuestbookState>;\n" +
+      "    reads: { currentState: GuestbookState };\n" +
+      "  }> {\n" +
+      "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
+      "    if (projectId === undefined) {\n" +
+      "      using project = await this.env.ITX.get();\n" +
+      "      projectId = await project.projectId;\n" +
+      "    }\n" +
+      "    return this.#ensureHost(projectId);\n" +
+      "  }\n" +
+      "\n" +
+      "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
+      "    const { registry } = await this.#freshHost();\n" +
+      "    await registry.handleAlarm(alarmInfo);\n" +
+      "  }\n" +
+      "\n" +
+      "  async #appendWithCurrentSubscription(...events: StreamEventInput[]): Promise<void> {\n" +
+      "    using project = await this.env.ITX.get();\n" +
+      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
+      "    this.ctx.storage.kv.put(SUBSCRIPTION_VERSION_STORAGE_KEY, guestbookSubscriptionConfigVersion);\n" +
+      "  }\n" +
+      "\n" +
+      "  async #ensureCurrentSubscription(): Promise<void> {\n" +
+      "    if (\n" +
+      "      this.ctx.storage.kv.get<number>(SUBSCRIPTION_VERSION_STORAGE_KEY) ===\n" +
+      "      guestbookSubscriptionConfigVersion\n" +
+      "    ) {\n" +
+      "      return;\n" +
+      "    }\n" +
+      "    if (this.#configurationInFlight === undefined) {\n" +
+      "      this.#configurationInFlight = this.#appendWithCurrentSubscription();\n" +
+      "    }\n" +
+      "    const pending = this.#configurationInFlight;\n" +
+      "    try {\n" +
+      "      await pending;\n" +
+      "    } finally {\n" +
+      "      if (this.#configurationInFlight === pending) this.#configurationInFlight = undefined;\n" +
+      "    }\n" +
+      "  }\n" +
+      "\n" +
+      "  get processor() {\n" +
+      "    return {\n" +
+      "      wakeStreamSubscriber: async (\n" +
+      "        request: StreamSubscriberWakeRequest,\n" +
+      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
+      "        if (request.stream.projectId === null) {\n" +
+      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
+      "        }\n" +
+      "        const { registry } = this.#ensureHost(request.stream.projectId);\n" +
+      "        return await registry.wakeStreamSubscriber(request);\n" +
+      "      },\n" +
+      "    };\n" +
+      "  }\n" +
+      "\n" +
+      "  async sign(name: string, message: string): Promise<void> {\n" +
+      "    const trimmedName = name.trim().slice(0, 80);\n" +
+      "    const trimmedMessage = message.trim().slice(0, 500);\n" +
+      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
+      "    await this.#appendWithCurrentSubscription({\n" +
+      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
+      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
+      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
+      "  /** Cap'n Web door: public live state + sign. Creates /guestbook on first contact. */\n" +
+      "  async fetch(request: Request): Promise<Response> {\n" +
+      "    await this.#ensureCurrentSubscription();\n" +
+      "    const { registry } = await this.#freshHost();\n" +
+      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "class PublicGuestbookApi extends RpcTarget implements GuestbookApi {\n" +
+      "  // One LiveStateRpcTarget per session: Cap'n Web property gets that mint a\n" +
+      "  // fresh target every access thrash client subscriptions keyed on identity.\n" +
+      "  readonly #liveState: LiveStateRpcTarget<GuestbookState>;\n" +
+      "\n" +
+      "  constructor(\n" +
+      "    private readonly app: GuestbookApp,\n" +
+      "    registry: StreamProcessorRegistry<GuestbookState>,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "    this.#liveState = new LiveStateRpcTarget<GuestbookState>(registry);\n" +
+      "  }\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpc<GuestbookState> {\n" +
+      "    return this.#liveState;\n" +
+      "  }\n" +
+      "\n" +
+      "  async sign(name: string, message: string): Promise<void> {\n" +
+      "    await this.app.sign(name, message);\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/guestbook/processor.ts",
+    content:
+      "// Userspace stream processor: reduces guestbook signatures on the project stream\n" +
+      "// at /guestbook. Style matches the agent processor — inline contract schemas,\n" +
+      "// long switch reduce/processEvent, no event-type constants.\n" +
+      "import { z } from \"zod\";\n" +
+      "import {\n" +
+      "  defineProcessorContract,\n" +
+      "  PLATFORM_STREAM_EVENTS,\n" +
+      "  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
+      "  StreamProcessor,\n" +
+      "  type ProcessEventArgs,\n" +
+      "  type ProcessorState,\n" +
+      "} from \"iterate/processors\";\n" +
+      "\n" +
+      "export const GuestbookProcessorContract = defineProcessorContract({\n" +
+      "  slug: \"guestbook\",\n" +
+      "  version: \"0.1.0\",\n" +
+      "  description:\n" +
+      "    \"Reduces guestbook signatures on /guestbook and emits a milestone fact every five entries.\",\n" +
+      "  stateSchema: z.object({\n" +
+      "    birthCertificate: z\n" +
+      "      .object({\n" +
+      "        config: z.object({\n" +
+      "          title: z.string().meta({ description: \"Display title shown on the public page.\" }),\n" +
+      "        }),\n" +
+      "      })\n" +
+      "      .nullable()\n" +
+      "      .default(null)\n" +
+      "      .meta({\n" +
+      "        description: \"Existence marker: null until guestbook/created reduces. Signing requires it.\",\n" +
+      "      }),\n" +
+      "    entries: z\n" +
+      "      .array(\n" +
+      "        z.object({\n" +
+      "          name: z.string().meta({ description: \"Signer display name.\" }),\n" +
+      "          message: z.string().meta({ description: \"Note left by the signer.\" }),\n" +
+      "          signedAt: z\n" +
+      "            .string()\n" +
+      "            .meta({ description: \"ISO-8601 time from the stream event createdAt.\" }),\n" +
+      "        }),\n" +
+      "      )\n" +
+      "      .default([])\n" +
+      "      .meta({ description: \"Signatures in stream order (oldest first).\" }),\n" +
+      "    lastMilestone: z.number().int().nonnegative().default(0).meta({\n" +
+      "      description: \"Highest multiple-of-five entry count already journaled as milestone-reached.\",\n" +
+      "    }),\n" +
+      "  }),\n" +
+      "  events: {\n" +
+      "    \"events.iterate.com/guestbook/created\": {\n" +
+      "      description:\n" +
+      "        \"The guestbook exists: its birth certificate, the first event in its domain history. \" +\n" +
+      "        \"Appended (idempotency-keyed) by whoever signs first or opens the API.\",\n" +
+      "      payloadSchema: z.object({\n" +
+      "        config: z\n" +
+      "          .object({\n" +
+      "            title: z.string().meta({ description: \"Display title for the guestbook.\" }),\n" +
+      "          })\n" +
+      "          .meta({ description: \"Initial configuration.\" }),\n" +
+      "      }),\n" +
+      "      examples: [\n" +
+      "        {\n" +
+      "          description: \"A guestbook born with its display title.\",\n" +
+      "          payload: { config: { title: \"Guestbook\" } },\n" +
+      "        },\n" +
+      "      ],\n" +
+      "    },\n" +
+      "    \"events.iterate.com/guestbook/entry-signed\": {\n" +
+      "      description: \"Someone signed the guestbook: their name and message.\",\n" +
+      "      payloadSchema: z.object({\n" +
+      "        name: z.string().trim().min(1).meta({ description: \"Signer display name.\" }),\n" +
+      "        message: z.string().trim().min(1).meta({ description: \"Note left by the signer.\" }),\n" +
+      "      }),\n" +
+      "      examples: [\n" +
+      "        {\n" +
+      "          description: \"A visitor left a note.\",\n" +
+      "          payload: { name: \"Ada\", message: \"Lovely worker you have here.\" },\n" +
+      "        },\n" +
+      "        {\n" +
+      "          description: \"A short thank-you.\",\n" +
+      "          payload: { name: \"Grace\", message: \"Thanks for the demo.\" },\n" +
+      "        },\n" +
+      "      ],\n" +
+      "    },\n" +
+      "    \"events.iterate.com/guestbook/milestone-reached\": {\n" +
+      "      description:\n" +
+      "        \"The entry count crossed a multiple of five. Emitted at-head from reduced state, \" +\n" +
+      "        \"idempotency-keyed by count so redeliveries and refolds collapse to one fact.\",\n" +
+      "      payloadSchema: z.object({\n" +
+      "        count: z\n" +
+      "          .number()\n" +
+      "          .int()\n" +
+      "          .positive()\n" +
+      "          .meta({ description: \"Entry count at the milestone (5, 10, 15, …).\" }),\n" +
+      "      }),\n" +
+      "      examples: [\n" +
+      "        {\n" +
+      "          description: \"The fifth signature landed.\",\n" +
+      "          payload: { count: 5 },\n" +
+      "        },\n" +
+      "        {\n" +
+      "          description: \"Catch-up past ten signatures emits the tenth milestone.\",\n" +
+      "          payload: { count: 10 },\n" +
+      "        },\n" +
+      "      ],\n" +
+      "    },\n" +
+      "  },\n" +
+      "  // Required by `{ recovery: true }` on the host.\n" +
+      "  processorDeps: [PLATFORM_STREAM_EVENTS],\n" +
+      "  consumes: [\n" +
+      "    \"events.iterate.com/guestbook/created\",\n" +
+      "    \"events.iterate.com/guestbook/entry-signed\",\n" +
+      "    \"events.iterate.com/guestbook/milestone-reached\",\n" +
+      "    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
+      "  ],\n" +
+      "  emits: [\"events.iterate.com/guestbook/milestone-reached\"],\n" +
+      "});\n" +
+      "\n" +
+      "export type GuestbookState = ProcessorState<typeof GuestbookProcessorContract>;\n" +
+      "\n" +
+      "export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {\n" +
+      "  readonly contract = GuestbookProcessorContract;\n" +
+      "\n" +
+      "  protected override reduce({\n" +
+      "    event,\n" +
+      "    state,\n" +
+      "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"reduce\"]>[0]): GuestbookState {\n" +
+      "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/guestbook/created\": {\n" +
+      "        if (state.birthCertificate !== null) {\n" +
+      "          throw new Error(\"guestbook received more than one created event\");\n" +
+      "        }\n" +
+      "        return { ...state, birthCertificate: event.payload };\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/guestbook/entry-signed\": {\n" +
+      "        return {\n" +
+      "          ...state,\n" +
+      "          entries: [...state.entries, { ...event.payload, signedAt: event.createdAt }],\n" +
+      "        };\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/guestbook/milestone-reached\": {\n" +
+      "        return {\n" +
+      "          ...state,\n" +
+      "          lastMilestone: Math.max(state.lastMilestone, event.payload.count),\n" +
+      "        };\n" +
+      "      }\n" +
+      "      default:\n" +
+      "        return state;\n" +
+      "    }\n" +
+      "  }\n" +
+      "\n" +
+      "  protected override processEvent(\n" +
+      "    args: ProcessEventArgs<typeof GuestbookProcessorContract>,\n" +
+      "  ): undefined {\n" +
+      "    const { blockProcessorWhile, delivery, state } = args;\n" +
+      "\n" +
+      "    // State-derived side effects only: milestones are computed from the full\n" +
+      "    // reduced entry list at head, never from a single event. Per-event work is\n" +
+      "    // none — signing is an external append, not a processor consequence.\n" +
+      "    if (!delivery.caughtUp) return;\n" +
+      "    if (state.birthCertificate === null) return;\n" +
+      "\n" +
+      "    const reached = Math.floor(state.entries.length / 5) * 5;\n" +
+      "    if (reached <= state.lastMilestone) return;\n" +
+      "\n" +
+      "    const missed: number[] = [];\n" +
+      "    for (let count = state.lastMilestone + 5; count <= reached; count += 5) {\n" +
+      "      missed.push(count);\n" +
+      "    }\n" +
+      "\n" +
+      "    // At-least-once milestone facts: cursor must not advance past the triggering\n" +
+      "    // delivery until the idempotent appends land (or redelivery will re-emit).\n" +
+      "    // Named function = the reason argument (see agent style notes).\n" +
+      "    const { append } = args;\n" +
+      "    const processor = this;\n" +
+      "    blockProcessorWhile(async function appendMilestoneFactsFromReducedEntryCount() {\n" +
+      "      // `as const` on `type` keeps the mapped array a ConsumedInput union member\n" +
+      "      // rather than `{ type: string }` — without it append() rejects the event\n" +
+      "      // as untyped stream input. buildEvent cannot be used here without a\n" +
+      "      // circular contract import at each map step.\n" +
+      "      await append(\n" +
+      "        ...missed.map((count) => ({\n" +
+      "          type: \"events.iterate.com/guestbook/milestone-reached\" as const,\n" +
+      "          payload: { count },\n" +
+      "          idempotencyKey: processor.idempotencyKey(`milestone:${count}`),\n" +
+      "        })),\n" +
+      "      );\n" +
+      "    });\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/guestbook/ref.ts",
+    content:
+      "// Shared identity for the guestbook stream-processor host. worker.ts routes\n" +
+      "// HTTP here; the creation batch persists the same ref as the wake target so\n" +
+      "// ingress and the stream spine always dial the same Durable Object.\n" +
+      "import type { StreamEventInput } from \"iterate/processors\";\n" +
+      "import type { StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
+      "\n" +
+      "export const guestbookStreamPath = \"/guestbook\";\n" +
+      "export const guestbookSubscriptionConfigVersion = 1;\n" +
+      "\n" +
+      "// `as const` freezes the discriminant so StatefulDynamicWorkerRef's source\n" +
+      "// files union picks the repo branch (not a widened `{ type: string }`).\n" +
+      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
+      "\n" +
+      "/**\n" +
+      " * Stream-processor host. Uses createWorker (not createApp) so the platform\n" +
+      " * injects iterate/processors + iterate/sdk virtual modules. A new\n" +
+      " * durableWorkerKey keeps the SQLite-era app-guestbook facet from answering\n" +
+      " * wake/API traffic with the wrong class.\n" +
+      " */\n" +
+      "export const guestbookHostRef = {\n" +
+      "  type: \"stateful\",\n" +
+      "  path: \"/\",\n" +
+      "  className: \"GuestbookApp\",\n" +
+      "  durableWorkerKey: \"app-guestbook-stream\",\n" +
+      "  source: {\n" +
+      "    createWorker: {\n" +
+      "      entryPoint: \"apps/guestbook/host.ts\",\n" +
+      "      files: repoFiles,\n" +
+      "    },\n" +
+      "  },\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
+      "\n" +
+      "/** Birth certificate + durable wake subscription onto the host above. */\n" +
+      "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
+      "  return [\n" +
+      "    {\n" +
+      "      type: \"events.iterate.com/guestbook/created\",\n" +
+      "      payload: { config: { title: \"Guestbook\" } },\n" +
+      "      idempotencyKey: \"guestbook/created\",\n" +
+      "    },\n" +
+      "    {\n" +
+      "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
+      "      payload: {\n" +
+      "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
+      "        delivery: {\n" +
+      "          mode: \"wake\",\n" +
+      "          expression: [\"workers\", [\"get\", guestbookHostRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
+      "          processorSlug: \"guestbook\",\n" +
+      "        },\n" +
+      "      },\n" +
+      "      idempotencyKey: `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,\n" +
+      "    },\n" +
+      "  ];\n" +
+      "}\n",
+  },
+  {
     path: "apps/guestbook/server.tsx",
     content:
       "import { DurableObject } from \"cloudflare:workers\";\n" +
       "\n" +
-      "export class GuestbookApp extends DurableObject {\n" +
-      "  constructor(ctx: DurableObjectState, env: unknown) {\n" +
-      "    super(ctx, env);\n" +
-      "    this.ctx.storage.sql.exec(`\n" +
-      "      CREATE TABLE IF NOT EXISTS entries (\n" +
-      "        id TEXT PRIMARY KEY,\n" +
-      "        name TEXT NOT NULL,\n" +
-      "        message TEXT NOT NULL,\n" +
-      "        signed_at TEXT NOT NULL\n" +
-      "      )\n" +
-      "    `);\n" +
-      "  }\n" +
-      "\n" +
+      "/**\n" +
+      " * Page-only half of the guestbook. The stream-processor host lives in\n" +
+      " * host.ts (createWorker); /api/* is routed there by worker.ts. This class\n" +
+      " * only serves the HTML shell so createApp can still compile client.tsx.\n" +
+      " */\n" +
+      "export class GuestbookPage extends DurableObject {\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
-      "    if (url.pathname === \"/api/entries\") {\n" +
-      "      if (request.method === \"GET\") {\n" +
-      "        const entries = this.ctx.storage.sql\n" +
-      "          .exec<{ id: string; message: string; name: string; signed_at: string }>(\n" +
-      "            \"SELECT id, name, message, signed_at FROM entries ORDER BY signed_at DESC, id DESC LIMIT 100\",\n" +
-      "          )\n" +
-      "          .toArray()\n" +
-      "          .map((entry) => ({\n" +
-      "            id: entry.id,\n" +
-      "            message: entry.message,\n" +
-      "            name: entry.name,\n" +
-      "            signedAt: entry.signed_at,\n" +
-      "          }));\n" +
-      "        return Response.json(entries);\n" +
-      "      }\n" +
-      "      if (request.method === \"POST\") {\n" +
-      "        const body = await request.json<{ message?: unknown; name?: unknown }>();\n" +
-      "        const name = typeof body.name === \"string\" ? body.name.trim().slice(0, 80) : \"\";\n" +
-      "        const message = typeof body.message === \"string\" ? body.message.trim().slice(0, 500) : \"\";\n" +
-      "        if (name.length === 0 || message.length === 0) {\n" +
-      "          return new Response(\"name and message are required\", { status: 400 });\n" +
-      "        }\n" +
-      "        const entry = {\n" +
-      "          id: crypto.randomUUID(),\n" +
-      "          message,\n" +
-      "          name,\n" +
-      "          signedAt: new Date().toISOString(),\n" +
-      "        };\n" +
-      "        this.ctx.storage.sql.exec(\n" +
-      "          \"INSERT INTO entries (id, name, message, signed_at) VALUES (?, ?, ?, ?)\",\n" +
-      "          entry.id,\n" +
-      "          entry.name,\n" +
-      "          entry.message,\n" +
-      "          entry.signedAt,\n" +
-      "        );\n" +
-      "        return Response.json(entry, { status: 201 });\n" +
-      "      }\n" +
-      "      return new Response(\"method not allowed\", { status: 405 });\n" +
-      "    }\n" +
-      "\n" +
       "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
       "      return new Response(\"not found\", { status: 404 });\n" +
       "    }\n" +
@@ -414,69 +947,210 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/todo/client.tsx",
     content:
+      "/**\n" +
+      " * Todo UI — Cap'n Web live state via the same useLiveStateRpc pattern as the\n" +
+      " * guestbook (and packages/iterate's iterate/react export). createApp keeps\n" +
+      " * React/Cap'n Web as esm.sh URL imports.\n" +
+      " */\n" +
       "import React, {\n" +
       "  type FormEvent,\n" +
-      "  useCallback,\n" +
       "  useEffect,\n" +
+      "  useRef,\n" +
       "  useState,\n" +
+      "  useSyncExternalStore,\n" +
       "} from \"https://esm.sh/react@19.2.4\";\n" +
       "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
+      "import { newWebSocketRpcSession } from \"https://esm.sh/@iterate-com/capnweb@0.10.0\";\n" +
       "\n" +
-      "type Todo = {\n" +
-      "  createdAt: string;\n" +
-      "  done: boolean;\n" +
-      "  id: string;\n" +
-      "  title: string;\n" +
+      "// --- createLiveStateStore + useLiveStateRpc (same protocol as packages/iterate) ---\n" +
+      "\n" +
+      "type LiveUpdate<State> =\n" +
+      "  | { type: \"snapshot\"; revision: number; state: State }\n" +
+      "  | { type: \"patch\"; from: number; to: number; patch: LiveStatePatch };\n" +
+      "\n" +
+      "type LiveStatePatch =\n" +
+      "  | { set: unknown }\n" +
+      "  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };\n" +
+      "\n" +
+      "function isPlainObject(value: unknown): value is Record<string, unknown> {\n" +
+      "  if (typeof value !== \"object\" || value === null) return false;\n" +
+      "  const proto = Object.getPrototypeOf(value);\n" +
+      "  return proto === Object.prototype || proto === null;\n" +
+      "}\n" +
+      "\n" +
+      "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
+      "  if (\"set\" in patch) return patch.set as State;\n" +
+      "  const base = isPlainObject(prev) ? prev : {};\n" +
+      "  const next: Record<string, unknown> = { ...base };\n" +
+      "  if (patch.fields) {\n" +
+      "    for (const [key, childPatch] of Object.entries(patch.fields)) {\n" +
+      "      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);\n" +
+      "    }\n" +
+      "  }\n" +
+      "  if (patch.drop) {\n" +
+      "    for (const key of patch.drop) delete next[key];\n" +
+      "  }\n" +
+      "  return next as State;\n" +
+      "}\n" +
+      "\n" +
+      "function createLiveStateStore<State>() {\n" +
+      "  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };\n" +
+      "  const listeners = new Set<() => void>();\n" +
+      "  const notify = () => listeners.forEach((listener) => listener());\n" +
+      "  return {\n" +
+      "    getState: () => held.state,\n" +
+      "    subscribe: (listener: () => void) => {\n" +
+      "      listeners.add(listener);\n" +
+      "      return () => void listeners.delete(listener);\n" +
+      "    },\n" +
+      "    reset: () => {\n" +
+      "      held = { revision: -1, state: undefined };\n" +
+      "      notify();\n" +
+      "    },\n" +
+      "    apply: (update: LiveUpdate<State>, resync: () => void) => {\n" +
+      "      if (update.type === \"snapshot\") {\n" +
+      "        held = { revision: update.revision, state: update.state };\n" +
+      "      } else if (update.from !== held.revision) {\n" +
+      "        resync();\n" +
+      "        return;\n" +
+      "      } else {\n" +
+      "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
+      "      }\n" +
+      "      notify();\n" +
+      "    },\n" +
+      "  };\n" +
+      "}\n" +
+      "\n" +
+      "type LiveStateRpc<State> = {\n" +
+      "  get(): Promise<State>;\n" +
+      "  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;\n" +
       "};\n" +
       "\n" +
-      "async function api<T>(path: string, init?: RequestInit): Promise<T> {\n" +
-      "  const response = await fetch(path, init);\n" +
-      "  if (!response.ok)\n" +
-      "    throw new Error((await response.text()) || `request failed (${response.status})`);\n" +
-      "  return (response.status === 204 ? undefined : await response.json()) as T;\n" +
+      "function useLiveStateRpc<Root extends object, State, Selected = State>(\n" +
+      "  root: Root | null | undefined,\n" +
+      "  live: (root: Root) => LiveStateRpc<State>,\n" +
+      "  selector: (state: State) => Selected,\n" +
+      "): { value: Selected | undefined; error: string | undefined } {\n" +
+      "  const [store] = useState(() => createLiveStateStore<State>());\n" +
+      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
+      "  const selectorRef = useRef(selector);\n" +
+      "  selectorRef.current = selector;\n" +
+      "  const liveRef = useRef(live);\n" +
+      "  liveRef.current = live;\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    store.reset();\n" +
+      "    setError(undefined);\n" +
+      "    if (root == null) return;\n" +
+      "\n" +
+      "    const liveState = liveRef.current(root);\n" +
+      "\n" +
+      "    let disposed = false;\n" +
+      "    let subscription: { unsubscribe(): void } | undefined;\n" +
+      "\n" +
+      "    const subscribe = async () => {\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      subscription = await liveState.subscribe((update) => {\n" +
+      "        if (disposed) return;\n" +
+      "        store.apply(update, () => {\n" +
+      "          if (!disposed) void subscribe().catch(report);\n" +
+      "        });\n" +
+      "      });\n" +
+      "    };\n" +
+      "\n" +
+      "    const report = (thrown: unknown) => {\n" +
+      "      if (disposed) return;\n" +
+      "      setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
+      "    };\n" +
+      "\n" +
+      "    void subscribe().catch(report);\n" +
+      "\n" +
+      "    return () => {\n" +
+      "      disposed = true;\n" +
+      "      subscription?.unsubscribe();\n" +
+      "      store.reset();\n" +
+      "    };\n" +
+      "  }, [root, store]);\n" +
+      "\n" +
+      "  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({\n" +
+      "    state: undefined,\n" +
+      "    value: undefined,\n" +
+      "  });\n" +
+      "  const getSelected = () => {\n" +
+      "    const state = store.getState();\n" +
+      "    if (state === undefined) {\n" +
+      "      cache.current = { state: undefined, value: undefined };\n" +
+      "      return undefined;\n" +
+      "    }\n" +
+      "    if (Object.is(cache.current.state, state)) return cache.current.value;\n" +
+      "    const value = selectorRef.current(state);\n" +
+      "    cache.current = { state, value };\n" +
+      "    return value;\n" +
+      "  };\n" +
+      "\n" +
+      "  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);\n" +
+      "  return { value, error };\n" +
+      "}\n" +
+      "\n" +
+      "// --- app ---\n" +
+      "\n" +
+      "type TodoApi = {\n" +
+      "  liveState: LiveStateRpc<{\n" +
+      "    todos: Array<{ createdAt: string; done: boolean; id: string; title: string }>;\n" +
+      "  }>;\n" +
+      "  add(title: string): Promise<void>;\n" +
+      "  setDone(id: string, done: boolean): Promise<void>;\n" +
+      "  remove(id: string): Promise<void>;\n" +
+      "};\n" +
+      "\n" +
+      "function useTodoApi(): { api: TodoApi | null; error: string | undefined } {\n" +
+      "  const [api, setApi] = useState<TodoApi | null>(null);\n" +
+      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    setApi(() => null);\n" +
+      "    setError(undefined);\n" +
+      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
+      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
+      "    const publicApi = newWebSocketRpcSession<TodoApi>(endpoint.toString());\n" +
+      "    setApi(() => publicApi);\n" +
+      "    return () => {\n" +
+      "      publicApi[Symbol.dispose]();\n" +
+      "      setApi(() => null);\n" +
+      "    };\n" +
+      "  }, []);\n" +
+      "\n" +
+      "  return { api, error };\n" +
       "}\n" +
       "\n" +
       "export function TodoClient() {\n" +
-      "  const [error, setError] = useState(\"\");\n" +
-      "  const [loading, setLoading] = useState(true);\n" +
+      "  const { api, error: dialError } = useTodoApi();\n" +
+      "  const { value: state, error: liveError } = useLiveStateRpc(\n" +
+      "    api,\n" +
+      "    (session) => session.liveState,\n" +
+      "    (s) => s,\n" +
+      "  );\n" +
       "  const [title, setTitle] = useState(\"\");\n" +
-      "  const [todos, setTodos] = useState<Todo[]>([]);\n" +
+      "  const [actionError, setActionError] = useState(\"\");\n" +
       "\n" +
-      "  const load = useCallback(async () => {\n" +
+      "  const error = dialError ?? liveError ?? (actionError.length > 0 ? actionError : undefined);\n" +
+      "  const todos = state?.todos ?? [];\n" +
+      "\n" +
+      "  const run = async (action: () => Promise<void>) => {\n" +
+      "    setActionError(\"\");\n" +
       "    try {\n" +
-      "      setTodos(await api<Todo[]>(\"/api/todos\"));\n" +
-      "      setError(\"\");\n" +
+      "      await action();\n" +
       "    } catch (cause) {\n" +
-      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
-      "    } finally {\n" +
-      "      setLoading(false);\n" +
-      "    }\n" +
-      "  }, []);\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    void load();\n" +
-      "  }, [load]);\n" +
-      "\n" +
-      "  const mutate = async (mutation: () => Promise<unknown>) => {\n" +
-      "    try {\n" +
-      "      await mutation();\n" +
-      "      await load();\n" +
-      "    } catch (cause) {\n" +
-      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "      setActionError(cause instanceof Error ? cause.message : String(cause));\n" +
       "    }\n" +
       "  };\n" +
       "\n" +
       "  const add = async (event: FormEvent) => {\n" +
       "    event.preventDefault();\n" +
-      "    if (title.trim().length === 0) return;\n" +
-      "    await mutate(async () => {\n" +
-      "      await api<Todo>(\"/api/todos\", {\n" +
-      "        body: JSON.stringify({ title }),\n" +
-      "        headers: { \"content-type\": \"application/json\" },\n" +
-      "        method: \"POST\",\n" +
-      "      });\n" +
-      "      setTitle(\"\");\n" +
-      "    });\n" +
+      "    if (api == null || title.trim().length === 0) return;\n" +
+      "    const next = title;\n" +
+      "    setTitle(\"\");\n" +
+      "    await run(() => api.add(next));\n" +
       "  };\n" +
       "\n" +
       "  return (\n" +
@@ -493,10 +1167,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          type=\"text\"\n" +
       "          value={title}\n" +
       "        />\n" +
-      "        <button type=\"submit\">Add</button>\n" +
+      "        <button disabled={api == null} type=\"submit\">\n" +
+      "          Add\n" +
+      "        </button>\n" +
       "      </form>\n" +
-      "      {error.length > 0 && <p role=\"alert\">{error}</p>}\n" +
-      "      {loading ? (\n" +
+      "      {error !== undefined && <p role=\"alert\">{error}</p>}\n" +
+      "      {state === undefined ? (\n" +
       "        <p>Loading…</p>\n" +
       "      ) : todos.length === 0 ? (\n" +
       "        <p>No todos yet.</p>\n" +
@@ -509,24 +1185,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                checked={todo.done}\n" +
       "                onChange={(event) => {\n" +
       "                  const done = event.currentTarget.checked;\n" +
-      "                  void mutate(async () => {\n" +
-      "                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {\n" +
-      "                      body: JSON.stringify({ done }),\n" +
-      "                      headers: { \"content-type\": \"application/json\" },\n" +
-      "                      method: \"PATCH\",\n" +
-      "                    });\n" +
-      "                  });\n" +
+      "                  if (api == null) return;\n" +
+      "                  void run(() => api.setDone(todo.id, done));\n" +
       "                }}\n" +
       "                type=\"checkbox\"\n" +
       "              />\n" +
       "              <span className={todo.done ? \"done\" : \"\"}>{todo.title}</span>\n" +
       "              <button\n" +
       "                onClick={() => {\n" +
-      "                  void mutate(async () => {\n" +
-      "                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {\n" +
-      "                      method: \"DELETE\",\n" +
-      "                    });\n" +
-      "                  });\n" +
+      "                  if (api == null) return;\n" +
+      "                  void run(() => api.remove(todo.id));\n" +
       "                }}\n" +
       "                type=\"button\"\n" +
       "              >\n" +
@@ -545,13 +1213,37 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "createRoot(root).render(<TodoClient />);\n",
   },
   {
-    path: "apps/todo/server.tsx",
+    path: "apps/todo/host.ts",
     content:
-      "import { DurableObject } from \"cloudflare:workers\";\n" +
+      "// Stateful todo host: SQLite rows projected into LiveState, Cap'n Web to the\n" +
+      "// browser. createWorker so platform virtual modules inject iterate/live-state\n" +
+      "// and capnweb. Mutations refresh live state; every open tab repaints via\n" +
+      "// useLiveStateRpc (same hook shape as the guestbook).\n" +
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import { IterateDurableObject } from \"iterate/sdk\";\n" +
       "\n" +
-      "export class TodoApp extends DurableObject {\n" +
-      "  constructor(ctx: DurableObjectState, env: unknown) {\n" +
-      "    super(ctx, env);\n" +
+      "export type Todo = {\n" +
+      "  createdAt: string;\n" +
+      "  done: boolean;\n" +
+      "  id: string;\n" +
+      "  title: string;\n" +
+      "};\n" +
+      "\n" +
+      "export type TodoListState = { todos: Todo[] };\n" +
+      "\n" +
+      "export type TodoApi = {\n" +
+      "  liveState: LiveStateRpc<TodoListState>;\n" +
+      "  add(title: string): Promise<void>;\n" +
+      "  setDone(id: string, done: boolean): Promise<void>;\n" +
+      "  remove(id: string): Promise<void>;\n" +
+      "};\n" +
+      "\n" +
+      "export class TodoApp extends IterateDurableObject {\n" +
+      "  readonly #live: LiveState<TodoListState>;\n" +
+      "\n" +
+      "  constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {\n" +
+      "    super(...args);\n" +
       "    this.ctx.storage.sql.exec(`\n" +
       "      CREATE TABLE IF NOT EXISTS todos (\n" +
       "        id TEXT PRIMARY KEY,\n" +
@@ -560,64 +1252,96 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        created_at TEXT NOT NULL\n" +
       "      )\n" +
       "    `);\n" +
+      "    this.#live = new LiveState<TodoListState>({ todos: this.#load() });\n" +
+      "  }\n" +
+      "\n" +
+      "  #load(): Todo[] {\n" +
+      "    return this.ctx.storage.sql\n" +
+      "      .exec<{ created_at: string; done: number; id: string; title: string }>(\n" +
+      "        \"SELECT id, title, done, created_at FROM todos ORDER BY created_at, id\",\n" +
+      "      )\n" +
+      "      .toArray()\n" +
+      "      .map((row) => ({\n" +
+      "        createdAt: row.created_at,\n" +
+      "        done: row.done !== 0,\n" +
+      "        id: row.id,\n" +
+      "        title: row.title,\n" +
+      "      }));\n" +
+      "  }\n" +
+      "\n" +
+      "  #refresh(): void {\n" +
+      "    this.#live.setState({ todos: this.#load() });\n" +
+      "  }\n" +
+      "\n" +
+      "  add(title: string): void {\n" +
+      "    const trimmed = title.trim().slice(0, 200);\n" +
+      "    if (trimmed.length === 0) return;\n" +
+      "    this.ctx.storage.sql.exec(\n" +
+      "      \"INSERT INTO todos (id, title, done, created_at) VALUES (?, ?, 0, ?)\",\n" +
+      "      crypto.randomUUID(),\n" +
+      "      trimmed,\n" +
+      "      new Date().toISOString(),\n" +
+      "    );\n" +
+      "    this.#refresh();\n" +
+      "  }\n" +
+      "\n" +
+      "  setDone(id: string, done: boolean): void {\n" +
+      "    this.ctx.storage.sql.exec(\"UPDATE todos SET done = ? WHERE id = ?\", done ? 1 : 0, id);\n" +
+      "    this.#refresh();\n" +
+      "  }\n" +
+      "\n" +
+      "  remove(id: string): void {\n" +
+      "    this.ctx.storage.sql.exec(\"DELETE FROM todos WHERE id = ?\", id);\n" +
+      "    this.#refresh();\n" +
       "  }\n" +
       "\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
+      "    return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, this.#live));\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
+      "class PublicTodoApi extends RpcTarget implements TodoApi {\n" +
+      "  // Cached for the session — see guestbook host: fresh stubs thrash clients.\n" +
+      "  readonly #liveState: LiveStateRpcTarget<TodoListState>;\n" +
+      "\n" +
+      "  constructor(\n" +
+      "    private readonly app: TodoApp,\n" +
+      "    live: LiveState<TodoListState>,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "    this.#liveState = new LiveStateRpcTarget(live);\n" +
+      "  }\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpc<TodoListState> {\n" +
+      "    return this.#liveState;\n" +
+      "  }\n" +
+      "\n" +
+      "  async add(title: string): Promise<void> {\n" +
+      "    this.app.add(title);\n" +
+      "  }\n" +
+      "\n" +
+      "  async setDone(id: string, done: boolean): Promise<void> {\n" +
+      "    this.app.setDone(id, done);\n" +
+      "  }\n" +
+      "\n" +
+      "  async remove(id: string): Promise<void> {\n" +
+      "    this.app.remove(id);\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/todo/server.tsx",
+    content:
+      "import { DurableObject } from \"cloudflare:workers\";\n" +
+      "\n" +
+      "/**\n" +
+      " * Page-only half of the todo app. The LiveState host lives in host.ts\n" +
+      " * (createWorker); /api is routed there by worker.ts. This class only serves\n" +
+      " * the HTML shell so createApp can compile client.tsx.\n" +
+      " */\n" +
+      "export class TodoPage extends DurableObject {\n" +
+      "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
-      "    if (url.pathname === \"/api/todos\") {\n" +
-      "      if (request.method === \"GET\") {\n" +
-      "        const todos = this.ctx.storage.sql\n" +
-      "          .exec<{ created_at: string; done: number; id: string; title: string }>(\n" +
-      "            \"SELECT id, title, done, created_at FROM todos ORDER BY created_at, id\",\n" +
-      "          )\n" +
-      "          .toArray()\n" +
-      "          .map((todo) => ({\n" +
-      "            createdAt: todo.created_at,\n" +
-      "            done: todo.done !== 0,\n" +
-      "            id: todo.id,\n" +
-      "            title: todo.title,\n" +
-      "          }));\n" +
-      "        return Response.json(todos);\n" +
-      "      }\n" +
-      "      if (request.method === \"POST\") {\n" +
-      "        const body = await request.json<{ title?: unknown }>();\n" +
-      "        const title = typeof body.title === \"string\" ? body.title.trim().slice(0, 200) : \"\";\n" +
-      "        if (title.length === 0) return new Response(\"title is required\", { status: 400 });\n" +
-      "        const todo = {\n" +
-      "          createdAt: new Date().toISOString(),\n" +
-      "          done: false,\n" +
-      "          id: crypto.randomUUID(),\n" +
-      "          title,\n" +
-      "        };\n" +
-      "        this.ctx.storage.sql.exec(\n" +
-      "          \"INSERT INTO todos (id, title, done, created_at) VALUES (?, ?, 0, ?)\",\n" +
-      "          todo.id,\n" +
-      "          todo.title,\n" +
-      "          todo.createdAt,\n" +
-      "        );\n" +
-      "        return Response.json(todo, { status: 201 });\n" +
-      "      }\n" +
-      "      return new Response(\"method not allowed\", { status: 405 });\n" +
-      "    }\n" +
-      "\n" +
-      "    const match = /^\\/api\\/todos\\/([^/]+)$/.exec(url.pathname);\n" +
-      "    if (match !== null) {\n" +
-      "      const id = match[1] ?? \"\";\n" +
-      "      if (request.method === \"PATCH\") {\n" +
-      "        const body = await request.json<{ done?: unknown }>();\n" +
-      "        if (typeof body.done !== \"boolean\") {\n" +
-      "          return new Response(\"done must be a boolean\", { status: 400 });\n" +
-      "        }\n" +
-      "        this.ctx.storage.sql.exec(\"UPDATE todos SET done = ? WHERE id = ?\", body.done ? 1 : 0, id);\n" +
-      "        return new Response(null, { status: 204 });\n" +
-      "      }\n" +
-      "      if (request.method === \"DELETE\") {\n" +
-      "        this.ctx.storage.sql.exec(\"DELETE FROM todos WHERE id = ?\", id);\n" +
-      "        return new Response(null, { status: 204 });\n" +
-      "      }\n" +
-      "      return new Response(\"method not allowed\", { status: 405 });\n" +
-      "    }\n" +
-      "\n" +
       "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
       "      return new Response(\"not found\", { status: 404 });\n" +
       "    }\n" +
@@ -663,6 +1387,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
       "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"dependencies\": {\n" +
+      "    \"zod\": \"4.3.6\"\n" +
+      "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
@@ -706,11 +1433,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
+      "import { guestbookHostRef } from \"./apps/guestbook/ref.ts\";\n" +
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
-      "const todoAppRef = {\n" +
+      "\n" +
+      "// Todo: LiveState host (createWorker) + createApp page shell. /api is Cap'n\n" +
+      "// Web; the browser uses useLiveStateRpc against liveState.\n" +
+      "const todoHostRef = {\n" +
       "  className: \"TodoApp\",\n" +
-      "  durableWorkerKey: \"app-todo\",\n" +
+      "  durableWorkerKey: \"app-todo-live\",\n" +
+      "  path: \"/\",\n" +
+      "  source: {\n" +
+      "    createWorker: {\n" +
+      "      entryPoint: \"apps/todo/host.ts\",\n" +
+      "      files: repoFiles,\n" +
+      "    },\n" +
+      "  },\n" +
+      "  type: \"stateful\",\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
+      "const todoPageRef = {\n" +
+      "  className: \"TodoPage\",\n" +
+      "  durableWorkerKey: \"app-todo-page\",\n" +
       "  path: \"/\",\n" +
       "  source: {\n" +
       "    createApp: {\n" +
@@ -722,9 +1465,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  },\n" +
       "  type: \"stateful\",\n" +
       "} satisfies StatefulDynamicWorkerRef;\n" +
-      "const guestbookAppRef = {\n" +
-      "  className: \"GuestbookApp\",\n" +
-      "  durableWorkerKey: \"app-guestbook\",\n" +
+      "\n" +
+      "// Guestbook: stream-processor host (createWorker) + createApp page. Shared\n" +
+      "// host ref lives in apps/guestbook/ref.ts so the wake subscription expression\n" +
+      "// cannot drift from the HTTP route.\n" +
+      "const guestbookPageRef = {\n" +
+      "  className: \"GuestbookPage\",\n" +
+      "  durableWorkerKey: \"app-guestbook-page\",\n" +
       "  path: \"/\",\n" +
       "  source: {\n" +
       "    createApp: {\n" +
@@ -829,7 +1576,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
-      "      return this.fetchDynamicWorker(req, todoAppRef);\n" +
+      "      const todoUrl = new URL(req.url);\n" +
+      "      if (todoUrl.pathname.startsWith(\"/api\")) {\n" +
+      "        return this.fetchDynamicWorker(req, todoHostRef);\n" +
+      "      }\n" +
+      "      return this.fetchDynamicWorker(req, todoPageRef);\n" +
       "    }\n" +
       "    if (app === \"counter\") {\n" +
       "      return this.fetchDynamicWorker(req, {\n" +
@@ -846,7 +1597,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
-      "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
+      "      // API hits the stream-processor host (createWorker); pages hit the\n" +
+      "      // createApp shell. First /api contact creates the /guestbook stream.\n" +
+      "      const guestbookUrl = new URL(req.url);\n" +
+      "      if (guestbookUrl.pathname.startsWith(\"/api\")) {\n" +
+      "        return this.fetchDynamicWorker(req, guestbookHostRef);\n" +
+      "      }\n" +
+      "      return this.fetchDynamicWorker(req, guestbookPageRef);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +
       "      // A collaborative Kanban board over this repo's tasks/ markdown\n" +
@@ -861,12 +1618,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      using itx = await this.env.ITX.get();\n" +
       "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (denied) return denied;\n" +
-      "      const url = new URL(req.url);\n" +
-      "      url.protocol = \"https:\";\n" +
+      "      const tasksUrl = new URL(req.url);\n" +
+      "      tasksUrl.protocol = \"https:\";\n" +
       "      const origin = await itx.kv.get(\"tasks-app-origin\");\n" +
-      "      url.host = typeof origin === \"string\" && origin !== \"\" ? origin : \"tasks.iterate.workers.dev\";\n" +
+      "      tasksUrl.host =\n" +
+      "        typeof origin === \"string\" && origin !== \"\" ? origin : \"tasks.iterate.workers.dev\";\n" +
       "      return fetch(\n" +
-      "        new Request(url, {\n" +
+      "        new Request(tasksUrl, {\n" +
       "          method: req.method,\n" +
       "          headers: req.headers,\n" +
       "          body: req.body,\n" +
@@ -889,9 +1647,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (basic React + SQLite Durable Object, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (LiveState + Cap'n Web, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
-      "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (basic React + SQLite Durable Object, public)</li>\n" +
+      "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor reduce on /guestbook, public)</li>\n" +
       "                <li><a href=\"${appUrl(\"tasks\")}\">tasks</a> (collaborative task board over tasks/, project members only)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +

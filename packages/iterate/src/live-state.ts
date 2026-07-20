@@ -31,6 +31,9 @@ export {
   retainCallback,
   type RetainedCallback,
 } from "./itx/rpc/retain.ts";
+// React hook lives in `./live-state-react.ts` and is re-exported from
+// `iterate/react` so server bundles that import `iterate/live-state` never
+// pull React. Clients: `import { useLiveStateRpc } from "iterate/react"`.
 
 /**
  * Expose mutable server state as a read-only Cap'n Web capability.
