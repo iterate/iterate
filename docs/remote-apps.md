@@ -166,6 +166,15 @@ material: newValue })`; visibility is an immutable birth-certificate fact.
    });
    ```
 
+   Mount from an **in-scope script** — an agent script, or from outside via
+   `itx.capabilityHosts.get("/").runScript("async (itx) => { ...the provide
+above... }")`. `provideCapability` returns an ownership handle that
+   revokes the mount when disposed, and a handle held over a Cap'n Web
+   session (an external client, the CLI) is disposed when that session
+   closes — so a mount made directly from a short-lived external session
+   quietly unmounts with it. In-scope scripts drop the handle without
+   disposal and the mount stays.
+
 4. **Use it.** `itx.todos.add("milk")` now works for agents, scripts, and
    the dashboard alike. Each invoke re-evaluates the expression from project
    authority: the platform dials your endpoint through project egress (the
