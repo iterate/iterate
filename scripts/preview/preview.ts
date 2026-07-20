@@ -2853,6 +2853,19 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
   }
 
+  // This is deliberately inherited, not copied: every app's preview
+  // environment root inherits _shared/preview, giving key rotation one source
+  // of truth. Fail closed if that topology has drifted instead of writing a
+  // second app-local copy that could later shadow the shared key.
+  for (const project of ["auth", "os", "semaphore", "streams-example-app"]) {
+    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_PRIVATE_JWK");
+    if (effectiveKey !== authSigningPrivateJwk) {
+      throw new Error(
+        `${project}/preview must inherit AUTH_FORGE_PRIVATE_JWK from _shared/preview`,
+      );
+    }
+  }
+
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
@@ -2878,9 +2891,9 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     const semaphoreClientId = `semaphore-preview-${slot}`;
     const streamsExampleClientId = `streams-example-app-preview-${slot}`;
 
-    ensureDopplerConfig("auth", config);
-    ensureDopplerConfig("semaphore", config);
-    ensureDopplerConfig("streams-example-app", config);
+    ensureDopplerConfig("auth", config, "preview");
+    ensureDopplerConfig("semaphore", config, "preview");
+    ensureDopplerConfig("streams-example-app", config, "preview");
 
     const existingSeed = input.rotate
       ? null
@@ -3001,14 +3014,17 @@ function setDopplerSecrets(project: string, config: string, secrets: Record<stri
   runDoppler(args);
 }
 
-function ensureDopplerConfig(project: string, config: string) {
+function ensureDopplerConfig(project: string, config: string, environment: string) {
   const existing = runDoppler(["configs", "--project", project, "--json"]);
-  const names = (JSON.parse(existing) as { name: string }[]).map((dopplerConfig) => {
-    return dopplerConfig.name;
-  });
-  if (!names.includes(config)) {
-    runDoppler(["configs", "create", config, "--project", project]);
+  const configs = JSON.parse(existing) as { environment: string; name: string }[];
+  const current = configs.find((dopplerConfig) => dopplerConfig.name === config);
+  if (!current) {
+    runDoppler(["configs", "create", config, "--project", project, "--environment", environment]);
     console.log(`created config ${project}/${config}`);
+  } else if (current.environment !== environment) {
+    throw new Error(
+      `${project}/${config} belongs to ${current.environment}, expected ${environment}`,
+    );
   }
 }
 

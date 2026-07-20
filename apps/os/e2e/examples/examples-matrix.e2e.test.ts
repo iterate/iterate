@@ -15,11 +15,15 @@
 import { expect, test as baseTest } from "vitest";
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 import { E2E_FILE_TEST_CONCURRENCY } from "../test-support/concurrency.ts";
-import { createTestProjectPool } from "../test-support/create-test-project-pool.ts";
+import {
+  createTestProjectPool,
+  type TestProjectLease,
+} from "../test-support/create-test-project-pool.ts";
 import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import { connectGlobal, connectProject } from "./e2e-env.ts";
 import {
   bakeProjectWorkerRunner,
+  ExampleRuntimeDeadlineError,
   MATRIX_RUNTIMES,
   runExampleCode,
   type MatrixRuntime,
@@ -107,21 +111,30 @@ baseTest("every catalogue example is either matrix-tested or explicitly excluded
 
 for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
-  // The budget is case-driven, not the blanket heavy ceiling. It bounds each
-  // runtime, while the test gets 30s more for pool acquisition and reporting.
+  const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
+  const runtimeTimeoutMs = exampleCase.completionTimeoutMs ?? 90_000;
+  // The case budget is shared wall time: parallel runtimes each get the full
+  // remainder concurrently, while an explicitly serial case passes the
+  // remaining aggregate budget to each successive runtime. Vitest gets 30s
+  // more for pool acquisition, cleanup, and reporting, so its watchdog never
+  // pre-empts the more diagnostic runtime deadline first.
   // A blanket 240s once let one stuck example consume both the lane and retry
   // without identifying the runtime that stalled.
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
-    { timeout: (exampleCase.completionTimeoutMs ?? 90_000) + 30_000 },
+    { timeout: runtimeTimeoutMs + 30_000 },
     async () => {
-      const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
       expect(runtimes.length).toBeGreaterThan(0);
 
       // Fresh per attempt; shared only when a case explicitly elects serial
       // runtime execution (the warm sandbox container).
       const attemptSalt = crypto.randomUUID().slice(0, 8);
-      const runRuntime = async (runtime: (typeof runtimes)[number], projectId: string) => {
+      const runRuntime = async (
+        runtime: (typeof runtimes)[number],
+        projectLease: TestProjectLease,
+        timeoutMs: number,
+      ) => {
+        const { projectId } = projectLease;
         if (runtime === "project-worker") await ensureProjectWorkerRunner(projectId);
         const ctx = {
           attemptSalt,
@@ -134,11 +147,15 @@ for (const example of MATRIX_EXAMPLES) {
             code: example.code,
             id: example.id,
             projectId,
-            timeoutMs: exampleCase.completionTimeoutMs ?? 90_000,
+            timeoutMs,
             vars,
           });
           exampleCase.assert(result, ctx, expect);
         } catch (error) {
+          // Promise.race can bound the caller, but it cannot retract an RPC
+          // already accepted by the server. Quarantine this project before
+          // unwinding the lease so late work cannot contaminate a retry.
+          if (error instanceof ExampleRuntimeDeadlineError) projectLease.retire();
           throw new Error(
             `example "${example.id}" failed in the ${runtime} runtime: ${
               error instanceof Error ? error.message : String(error)
@@ -163,9 +180,16 @@ for (const example of MATRIX_EXAMPLES) {
       if (exampleCase.runtimeExecution === "serial") {
         using itx = connectGlobal();
         using projectLease = await serialMatrixProjectPool.acquire(itx);
+        const caseDeadline = Date.now() + runtimeTimeoutMs;
         try {
           for (const runtime of runtimes) {
-            await runRuntime(runtime, projectLease.projectId);
+            const remainingMs = caseDeadline - Date.now();
+            if (remainingMs <= 0) {
+              throw new Error(
+                `example "${example.id}" exhausted its ${runtimeTimeoutMs}ms serial case budget before the ${runtime} runtime`,
+              );
+            }
+            await runRuntime(runtime, projectLease, remainingMs);
           }
         } finally {
           await cleanup(projectLease.projectId);
@@ -180,7 +204,7 @@ for (const example of MATRIX_EXAMPLES) {
           using itx = connectGlobal();
           using projectLease = await matrixProjectPools[runtime].acquire(itx);
           try {
-            await runRuntime(runtime, projectLease.projectId);
+            await runRuntime(runtime, projectLease, runtimeTimeoutMs);
           } finally {
             await cleanup(projectLease.projectId);
           }

@@ -128,7 +128,11 @@ export default defineConfig({
           environment: "node",
           // The engine e2e suites and the itx catalogue matrix are both node
           // black boxes against the deployed slot — one lane.
-          include: ["./e2e/vitest/**/*.test.ts", "./e2e/examples/*.e2e.test.ts"],
+          include: [
+            "./e2e/vitest/**/*.test.ts",
+            "./e2e/examples/*.e2e.test.ts",
+            "./e2e/test-support/*.test.ts",
+          ],
           // Ensure the target exists before any test runs: no-op against a
           // deployed APP_CONFIG_BASE_URL, otherwise reuse-or-start the local
           // dev server — the `pnpm spec` webServer contract (see

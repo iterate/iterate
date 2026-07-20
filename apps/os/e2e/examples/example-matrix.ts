@@ -62,34 +62,45 @@ async function runInCli(input: {
   timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), input.timeoutMs);
   // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
   // JSON document, with no package-runner banner in front of it.
-  const { stdout } = await execFileAsync(
-    "pnpm",
-    [
-      "exec",
-      "tsx",
-      "./scripts/cli.ts",
-      "itx",
-      "run",
-      "--eval",
-      input.code,
-      "--context",
-      input.projectId,
-      "--vars",
-      JSON.stringify(input.vars),
-      "--base-url",
-      baseUrl(),
-    ],
-    {
-      cwd: APP_ROOT,
-      env: process.env,
-      killSignal: "SIGKILL",
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: input.timeoutMs,
-    },
-  );
-  return JSON.parse(stdout);
+  try {
+    const { stdout } = await execFileAsync(
+      "pnpm",
+      [
+        "exec",
+        "tsx",
+        "./scripts/cli.ts",
+        "itx",
+        "run",
+        "--eval",
+        input.code,
+        "--context",
+        input.projectId,
+        "--vars",
+        JSON.stringify(input.vars),
+        "--base-url",
+        baseUrl(),
+      ],
+      {
+        cwd: APP_ROOT,
+        env: process.env,
+        killSignal: "SIGKILL",
+        maxBuffer: 10 * 1024 * 1024,
+        signal: abortController.signal,
+      },
+    );
+    return JSON.parse(stdout);
+  } catch (error) {
+    if (abortController.signal.aborted) {
+      throw new ExampleRuntimeDeadlineError("cli", input.timeoutMs, { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function runInNode(input: {
@@ -146,7 +157,7 @@ async function finishBeforeRuntimeDeadline<Result>(
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timeoutId = setTimeout(
-      () => reject(new Error(`${runtime} runtime exceeded ${timeoutMs}ms`)),
+      () => reject(new ExampleRuntimeDeadlineError(runtime, timeoutMs)),
       timeoutMs,
     );
   });
@@ -154,6 +165,17 @@ async function finishBeforeRuntimeDeadline<Result>(
     return await Promise.race([operation(), deadline]);
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+export class ExampleRuntimeDeadlineError extends Error {
+  constructor(
+    readonly runtime: MatrixRuntime,
+    readonly timeoutMs: number,
+    options?: ErrorOptions,
+  ) {
+    super(`${runtime} runtime exceeded ${timeoutMs}ms`, options);
+    this.name = "ExampleRuntimeDeadlineError";
   }
 }
 
