@@ -22,15 +22,16 @@ Let callers constrain generic Semaphore acquisition to an explicit set of resour
 
 ## Checklist
 
-- [x] Specify the public acquisition behavior with failing integration-style tests.  
+- [x] Specify the public acquisition behavior with failing integration-style tests.
   _Added live API coverage for generic and specific acquisition plus contract fallback tests._
-- [x] Add `allowedSlugs` to the public contract and Resource Coordinator inputs.  
+- [x] Add `allowedSlugs` to the public contract and Resource Coordinator inputs.
   _Both acquisition endpoints accept a validated, unique, non-empty slug list._
-- [x] Filter generic and specific acquisition atomically.  
+- [x] Filter generic and specific acquisition atomically.
   _The Resource Coordinator filters immediate/waiting candidates and rejects disallowed specific acquisition before eviction._
-- [x] Preserve the legacy-safe preview fallback for omitted input.  
+- [x] Preserve the legacy-safe preview fallback for omitted input.
   _Omitted input resolves to preview-1 through preview-9 only for environment-config leases; other resource types remain unrestricted._
-- [ ] Verify focused tests, typecheck, lint, and formatting.
+- [x] Verify focused tests, typecheck, lint, and formatting.
+  _Four unit tests, Semaphore typecheck, repository lint, and formatting pass locally; live E2E is delegated to the PR preview deployment._
 - [ ] Deploy Semaphore production before any client requires the new input.
 
 ## Implementation log
