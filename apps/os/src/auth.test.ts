@@ -80,4 +80,62 @@ describe("resolveItxAuth", () => {
       refresh: "never",
     });
   });
+
+  it("grants exactly one project for a verified project-secret credential", async () => {
+    const verifyProjectSecret = vi.fn().mockResolvedValue(true);
+    const auth = await resolveItxAuth({
+      config: config(),
+      credentials: { type: "project-secret", projectId: "prj_one", secret: "itxk_known" },
+      headers: new Headers(),
+      requestUrl: `${ORIGIN}/api`,
+      verifyProjectSecret,
+    });
+
+    expect(verifyProjectSecret).toHaveBeenCalledWith({
+      projectId: "prj_one",
+      secret: "itxk_known",
+    });
+    expect(auth.isAdmin()).toBe(false);
+    expect(auth.principal).toBe("project-secret:prj_one");
+    expect(auth.canAccessProject("prj_one")).toBe(true);
+    // No admin short-circuit, no directory to widen into: any OTHER project
+    // stays out of reach, synchronously and asynchronously.
+    expect(auth.canAccessProject("prj_other")).toBe(false);
+    await expect(async () => auth.assertCanAccessProject("prj_other")).rejects.toThrow(/no access/);
+  });
+
+  it("rejects a project-secret credential the verifier refuses, and an empty secret without dialing", async () => {
+    const verifyProjectSecret = vi.fn().mockResolvedValue(false);
+    await expect(
+      resolveItxAuth({
+        config: config(),
+        credentials: { type: "project-secret", projectId: "prj_one", secret: "wrong" },
+        headers: new Headers(),
+        requestUrl: `${ORIGIN}/api`,
+        verifyProjectSecret,
+      }),
+    ).rejects.toThrow(/missing or invalid auth/);
+
+    verifyProjectSecret.mockClear();
+    await expect(
+      resolveItxAuth({
+        config: config(),
+        credentials: { type: "project-secret", projectId: "prj_one", secret: "" },
+        headers: new Headers(),
+        requestUrl: `${ORIGIN}/api`,
+        verifyProjectSecret,
+      }),
+    ).rejects.toThrow(/missing or invalid auth/);
+    expect(verifyProjectSecret).not.toHaveBeenCalled();
+
+    // A deployment (or test) that wires no verifier serves no such lane.
+    await expect(
+      resolveItxAuth({
+        config: config(),
+        credentials: { type: "project-secret", projectId: "prj_one", secret: "itxk_known" },
+        headers: new Headers(),
+        requestUrl: `${ORIGIN}/api`,
+      }),
+    ).rejects.toThrow(/missing or invalid auth/);
+  });
 });
