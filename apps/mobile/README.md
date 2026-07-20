@@ -28,6 +28,12 @@ installing a development build, enable iOS Developer Mode and use the normal
 `start` command for Metro. Day-to-day JavaScript changes then hot-reload into
 that installed client.
 
+When `apps/mobile/package.json` gains a native module, the already-installed
+client cannot load it from Metro. Build and install a new development client
+before testing that change. The repo workspace's native Markdown renderer is
+one such module; a client built before it landed will fail when opening chat or
+a Markdown preview.
+
 This repository does not contain Apple or Expo credentials. The first signed
 physical-device development build completed through the linked
 `@mishanustom/iterate` EAS project on 2026-07-17; subsequent builds reuse its
@@ -94,7 +100,22 @@ mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
 `/agents` catalogue, so web/Slack-started chats open and continue here too.
 The thread screen renders only visible messages plus a "working…" row derived
 from in-flight activity (`src/lib/chat.ts`); a live stream subscription pushes
-updates into the query cache (`src/lib/live-thread.ts`).
+updates into the query cache (`src/lib/live-thread.ts`). Assistant messages are
+rendered as selectable Markdown; user messages remain literal text.
+
+## Editing repositories
+
+`/repos` is the first project destination in the drawer. It lists the repos
+exposed by `project.repos`, with `/repos/config` first, and opens a native file
+workspace backed by `Repo.listFiles()`, `readFile()`, and `commitFiles()`.
+Edits, new files, and deletes stay in a local working tree until they are
+committed together. If the remote head changes while local edits exist, commit
+is blocked until the user deliberately reloads.
+
+Markdown files have Preview and Source modes. Preview and assistant chat use
+`react-native-enriched-markdown`; Source uses the bundled CodeMirror editor and
+is canonical. The rich Markdown input is intentionally not used because it
+cannot losslessly represent every repo Markdown block construct.
 
 ## Approving held requests
 
@@ -136,16 +157,17 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 ## Layout
 
-| Path                       | What                                                                                    |
-| -------------------------- | --------------------------------------------------------------------------------------- |
-| `src/lib/itx-core.ts`      | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
-| `src/lib/auth.ts`          | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
-| `src/lib/chat.ts`          | Pure: stream events → bubbles + working flag; agent path conventions                    |
-| `src/lib/live-thread.ts`   | Live subscription per thread feeding the tanstack-query cache                           |
-| `src/lib/approver-core.ts` | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
-| `src/lib/approver.ts`      | Face-ID-gated Keychain storage binding for approver-core.ts                             |
-| `src/lib/approvals.ts`     | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
-| `src/lib/examples.ts`      | Filters the shared itx example catalogue to phone-runnable entries                      |
-| `src/app/`                 | expo-router screens: sign-in → projects → chat list → thread, approvals, examples       |
+| Path                           | What                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `src/lib/itx-core.ts`          | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
+| `src/lib/auth.ts`              | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
+| `src/lib/chat.ts`              | Pure: stream events → bubbles + working flag; agent path conventions                    |
+| `src/lib/live-thread.ts`       | Live subscription per thread feeding the tanstack-query cache                           |
+| `src/lib/repo-working-tree.ts` | Local source-preserving edits and explicit batch commit state                           |
+| `src/lib/approver-core.ts`     | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
+| `src/lib/approver.ts`          | Face-ID-gated Keychain storage binding for approver-core.ts                             |
+| `src/lib/approvals.ts`         | Egress-approval protocol: grant/reject/reconcile, ported from the CLI's approve-core.ts |
+| `src/lib/examples.ts`          | Filters the shared itx example catalogue to phone-runnable entries                      |
+| `src/app/`                     | expo-router screens: sign-in → projects → chat list → thread, approvals, examples       |
 
 `pnpm typecheck` / `pnpm test` run in root CI; nothing native does.
