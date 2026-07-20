@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { summarizeAgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
@@ -30,7 +31,11 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
           {isLive ? liveSummary(activity) : summarizeActivity(activity)}
         </Text>
       </Pressable>
-      {expanded ? activity.steps.map((step) => <StepView key={step.id} step={step} />) : null}
+      {expanded
+        ? activity.steps.map((step, index) => (
+            <StepView key={step.id} nextStep={activity.steps[index + 1]} step={step} />
+          ))
+        : null}
     </View>
   );
 }
@@ -45,7 +50,14 @@ function liveSummary(activity: AgentUiActivity): string {
   return "working…";
 }
 
-function StepView({ step }: { step: AgentUiStep }) {
+function StepView({ nextStep, step }: { nextStep: AgentUiStep | undefined; step: AgentUiStep }) {
+  const responseText =
+    step.kind === "llm"
+      ? llmResponseForDisplay(
+          step.responseText,
+          nextStep?.kind === "code" ? nextStep.code : undefined,
+        )
+      : "";
   return (
     <View style={styles.step}>
       <Text style={styles.stepLabel}>
@@ -60,7 +72,7 @@ function StepView({ step }: { step: AgentUiStep }) {
           {step.thinkingText !== "" ? (
             <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
           ) : null}
-          {step.responseText !== "" ? <CodeBlock text={step.responseText} /> : null}
+          {responseText !== "" ? <CodeBlock text={responseText} /> : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
         </>
       ) : (
