@@ -11,7 +11,9 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 ## Status
 
 Read-only planning is complete and the exact non-production batch was approved
-on 2026-07-20. Application is now in progress. Production deployment and
+on 2026-07-20. The repository map and all fifty Doppler configs are complete;
+required Auth/OAuth secret-name shape is verified for every new slot. External
+integration apps and Cloudflare resources remain. Production deployment and
 Semaphore lease publication remain later, separate approval boundaries.
 
 ## Goal
@@ -85,10 +87,15 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
 - [x] Obtain explicit approval for the concrete non-production batch.
   _The user approved the six-item batch below on 2026-07-20, requested roughly
   one second between operations, and requested audible `say` progress._
-- [ ] Add `preview_10`–`preview_19` to `envs.ts` with `UNPROVISIONED` IDs and
+- [x] Add `preview_10`–`preview_19` to `envs.ts` with `UNPROVISIONED` IDs and
   update live operational prose derived from a nine-slot fleet.
-- [ ] Create only approved missing Doppler configs and Auth client/runtime
+  _Added the ten OS/Semaphore entries and updated live nineteen-slot prose in
+  commit `37f2057ca`; real resource IDs will replace the markers after ensure._
+- [x] Create only approved missing Doppler configs and Auth client/runtime
   secrets; verify config inheritance and secret-name shape.
+  _Created all fifty app configs. The provisioner targeted only slots 10–19,
+  reported `rotated: false`, and every slot passed config and required-key
+  read-back without exposing values._
 - [ ] Create approved GitHub and Slack apps and pipe credentials directly into
   the matching `os/preview_N` configs.
 - [ ] Create Cloudflare resources sequentially, record returned IDs in
@@ -114,16 +121,16 @@ read back from the owning system.
 
 | Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
 | ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 11   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 12   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 13   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 14   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 15   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 16   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 17   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 18   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 19   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 10   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 11   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 12   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 13   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 14   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 15   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 16   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 17   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 18   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 19   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
 
 ## Read-only inventory
 
@@ -286,3 +293,7 @@ the recorded projection.
   without clicking Create.
 - 2026-07-20: The user explicitly approved the intended non-production writes.
   Production deployment and Semaphore lease creation remain unapproved.
+- 2026-07-20: The merged provisioner would have re-written slots 1–9 while
+  creating 10–19. Added and tested `--slots 10-19`, then used it to create only
+  the approved configs/secrets. All fifty configs and required inherited/local
+  secret names passed read-back; no values were printed.
