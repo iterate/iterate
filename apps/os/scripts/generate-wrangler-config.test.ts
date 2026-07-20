@@ -9,6 +9,7 @@ import {
   REQUIRED_SECRETS,
   envShapedVars,
   typecheckerConfig,
+  workerBundlerConfig,
 } from "./generate-wrangler-config.ts";
 
 it("does not emit the local forge JWKS into deployed builds", () => {
@@ -46,6 +47,7 @@ it.each([
 it("names the top-level configs by service so cf:service script tags stay env-less", () => {
   expect(config.name).toBe("os");
   expect(typecheckerConfig.name).toBe("os-typechecker");
+  expect(workerBundlerConfig.name).toBe("os-worker-bundler");
 });
 
 it("gives every deployed env its own worker name derived from the service name", () => {
@@ -64,35 +66,12 @@ it("binds the os worker to its own env's typechecker sidecar", () => {
   }
 });
 
-it("never binds the retired builder sidecar", () => {
-  // The esbuild-wasm builder is gone: dynamic workers build in the
-  // deployment's builder pool (deployed) or the dev server's host endpoint
-  // (local).
+it("binds the os worker to its own env's worker-bundler sidecar", () => {
   for (const [envName, envBlock] of Object.entries(config.env)) {
-    expect(
-      envBlock.services.find((service) => service.binding === "BUILDER"),
-      envName,
-    ).toBeUndefined();
-  }
-});
-
-it("hosts a worker-builder pool app sized to the pool", async () => {
-  // The pool addresses exactly WORKER_BUILDER_POOL_SIZE member names, so the
-  // container app's max_instances must match — smaller would deny placements
-  // for members that exist, larger would reserve quota nothing can use.
-  const { WORKER_BUILDER_POOL_SIZE } = await import("../src/domains/workers/builder-pool.ts");
-  for (const [envName, envBlock] of Object.entries(config.env)) {
-    const pool = (envBlock.containers ?? []).find(
-      (entry) => entry.class_name === "WorkerBuilderDurableObject",
-    );
-    expect(pool, envName).toBeDefined();
-    expect(pool?.max_instances, envName).toBe(WORKER_BUILDER_POOL_SIZE);
-    expect(pool?.instance_type, envName).toBe("standard-3");
-    expect(
-      envBlock.durable_objects.bindings.find((b) => b.class_name === "WorkerBuilderDurableObject")
-        ?.name,
-      envName,
-    ).toBe("WORKER_BUILDER");
+    const bundler = envBlock.services.find((service) => service.binding === "WORKER_BUNDLER");
+    expect(bundler?.service, envName).toBe(`${envBlock.name}-worker-bundler`);
+    const sidecarNames = Object.values(workerBundlerConfig.env).map((sidecar) => sidecar.name);
+    expect(sidecarNames, envName).toContain(bundler?.service);
   }
 });
 
@@ -249,17 +228,7 @@ it("keeps deployed sandbox capacity within account quota", () => {
     expect(
       containers.map((entry) => entry.instance_type),
       envName,
-      // The trailing standard-3 entry is the worker-builder pool's own app
-      // (npm + esbuild are CPU-bound; basic starved an e2e burst live).
-    ).toEqual([
-      "lite",
-      "basic",
-      "standard-1",
-      "standard-2",
-      "standard-3",
-      "standard-4",
-      "standard-3",
-    ]);
+    ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4"]);
     for (const entry of containers) {
       expect(entry.max_instances, `${envName} ${entry.instance_type}`).toBeGreaterThan(0);
     }

@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { ZodError } from "zod";
 import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
@@ -50,7 +51,13 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
    * scope's project, exactly like `project.workers.get(ref)` would.
    */
   override async fetch(request: Request): Promise<Response> {
-    const taken = takeWorkerFetchDispatch(request);
+    let taken: ReturnType<typeof takeWorkerFetchDispatch>;
+    try {
+      taken = takeWorkerFetchDispatch(request);
+    } catch (error) {
+      if (!(error instanceof SyntaxError || error instanceof ZodError)) throw error;
+      return new Response("invalid x-iterate-worker-dispatch header", { status: 400 });
+    }
     if (taken === null) {
       return new Response(
         "env.ITX.fetch requires the x-iterate-worker-dispatch header naming a worker ref",

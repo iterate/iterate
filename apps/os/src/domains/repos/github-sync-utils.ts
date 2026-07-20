@@ -17,3 +17,14 @@ export function githubFastForwardTransferDepth(input: {
   }
   return Math.max(input.requestedDepth ?? 1, input.aheadBy + 1);
 }
+
+/** The content-hash cache is absent after a server-side Artifact import: the
+ * Durable Object intentionally never checked out those files. Its durable
+ * pushed floor still records which GitHub commit was imported and is the
+ * correct ancestry base until a materialized head supersedes it. */
+export function githubSyncBaseCommitOid(input: {
+  cachedHeadCommitOid: string | null;
+  pushedFloor: string | undefined;
+}): string | null {
+  return input.cachedHeadCommitOid ?? input.pushedFloor ?? null;
+}

@@ -3,12 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports its runtime subpaths: the platform supplies those modules to every worker build, so the devDependency is only for typechecking and editor support after `npm install`.",
-  "dependencies": {
-    "@iterate-com/capnweb": "0.10.0"
-  },
+  "description": "Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.",
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
+    "@iterate-com/capnweb": "0.10.0",
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
     "typescript": "^5.9.3"
   }

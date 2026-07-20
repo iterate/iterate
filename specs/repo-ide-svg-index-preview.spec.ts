@@ -17,7 +17,7 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add icon.svg",
     changes: [
@@ -51,7 +51,7 @@ test("preview a staged snapshot from the readonly Index view", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   await project.repos.get("/repos/ide").commitFiles({
     message: "Add page.html",
     changes: [{ path: "page.html", content: "<h1>Committed</h1>" }],

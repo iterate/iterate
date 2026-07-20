@@ -153,10 +153,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoCollection",
     kind: "interface",
     sourceText:
-      "/** Repo catalog for either a project or the deployment-wide global scope. */\nexport interface RepoCollection {\n  __describe(): Promise<Description>;\n  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */\n  create(input: { path: string }): Promise<Repo>;\n  /** The repo at a path. */\n  get(path: string): Repo;\n}",
+      "/** Repo catalog for either a project or the deployment-wide global scope. */\nexport interface RepoCollection {\n  __describe(): Promise<Description>;\n  /** The repo at a path. */\n  get(path: string): Repo;\n}",
     summary: "Repo catalog for either a project or the deployment-wide global scope.",
     memberSummaries: {
-      create: "Create the repo at a path; resolves once its backing artifact is `repo/ready`.",
       get: "The repo at a path.",
     },
     referencedTypeNames: ["Description", "Repo"],
@@ -540,12 +539,12 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectRepoCollection",
     kind: "interface",
     sourceText:
-      "/** Project-scoped repo catalog with reduced-state listing. */\nexport interface ProjectRepoCollection extends RepoCollection {\n  /** Known repos, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n}",
+      "/** Project-scoped repo catalog with reduced-state listing. */\nexport interface ProjectRepoCollection extends RepoCollection {\n  __describe(): Promise<Description>;\n  /** Known repos, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n}",
     summary: "Project-scoped repo catalog with reduced-state listing.",
     memberSummaries: {
       list: "Known repos, read from the project processor's reduced state.",
     },
-    referencedTypeNames: ["RepoCollection", "StreamListItem"],
+    referencedTypeNames: ["RepoCollection", "Description", "StreamListItem"],
   },
   {
     name: "DeviceCollection",
@@ -640,10 +639,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Repo",
     kind: "interface",
     sourceText:
-      "/** Git-backed repo capability used by project workers and dynamic worker refs. */\nexport interface Repo {\n  __describe(): Promise<Description>;\n  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */\n  create(): Promise<Repo>;\n  /** Repo identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the repo's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */\n  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;\n  /**\n   * Safely replace text in one committed file and commit the result. The\n   * `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;\n  /** All committed file paths at HEAD. */\n  listFiles(): Promise<{ commitOid: string; paths: string[] }>;\n  /**\n   * Every task markdown file's contents at HEAD, keyed by path, in a single\n   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a\n   * `readFile()` per task: the task include mask is applied before contents\n   * are read, so cost scales with the number of tasks, not the repo size.\n   */\n  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }>;\n  /**\n   * Commit history of a branch, newest first — oid, message, author,\n   * timestamp (epoch ms), parent oids. Deliberately without per-commit file\n   * stats (those cost tree checkouts per commit); fetch them lazily per\n   * commit through `commitDetails`.\n   */\n  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;\n  /**\n   * One commit's metadata plus the files it changed versus its first parent\n   * (the whole tree for the root commit), with `git diff --numstat`-shaped\n   * +/- line counts; binary files are flagged instead of counted.\n   */\n  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;\n  /**\n   * Committed file contents at HEAD — or, with `commitOid`, pinned to that\n   * commit — null when the path does not exist there. `encoding: \"base64\"`\n   * reads raw bytes (images, PDFs) base64-encoded.\n   */\n  readFile(input: { path: string; encoding?: \"utf8\" | \"base64\"; commitOid?: string }): Promise<{\n    commitOid: string;\n    content: string;\n    path: string;\n  } | null>;\n  /**\n   * Back this repo with a real GitHub repository through a named GitHub\n   * connection. From then on every default-branch commit is mirrored to\n   * GitHub best-effort (failures journal on the repo stream and self-heal on\n   * the next commit), fast-forward default-branch pushes made on GitHub are\n   * imported through the Cloudflare Artifacts queue, and every GitHub webhook\n   * about that repository is cross-posted onto this repo's stream. If the\n   * GitHub repository does not exist and the installation can create org\n   * repositories, it is created private. Re-linking replaces the previous\n   * link.\n   */\n  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;\n  /** Remove the GitHub link and its webhook cross-post rule. */\n  unlinkGithub(): Promise<{ unlinked: boolean }>;\n  /**\n   * Push the default branch head to the linked GitHub repository now — the\n   * repair verb for a failed mirror push. Never forced by default; `force:\n   * true` makes this repo win over commits made directly on GitHub.\n   */\n  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;\n  /**\n   * Adopt the linked GitHub repository's default-branch head into this repo.\n   * Fast-forward only: fails when this repo has commits GitHub does not,\n   * unless `force: true` discards them. The synced head is immediately live\n   * for worker builds.\n   *\n   * The history transfers in-process. `depth` requests a bounded history\n   * window, but fast-forward syncs always retain the previous Artifacts head\n   * as well so queue-derived task diffs can read both sides. GitHub retains\n   * the full history, and a later deeper sync can always widen the window.\n   */\n  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;\n  /**\n   * Hard recovery: destroy and recreate the Artifacts repository from the\n   * linked GitHub repository's default branch. GitHub always wins and the\n   * operation runs even when the recorded commit oids already match. The\n   * source clone is completed before destruction; `depth` bounds memory for\n   * large histories without changing anything on GitHub.\n   */\n  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;\n  /** The repo stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<RepoProcessorState>;\n  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<RepoProcessorState>;\n}",
+      '/** Git-backed repo capability used by project workers and dynamic worker refs. */\nexport interface Repo {\n  __describe(): Promise<Description>;\n  /** Request creation and wait for the repo processor saga\'s terminal fact.\n   * The request chooses an empty seed, a private GitHub pull at depth one, or\n   * a public import performed by Cloudflare Artifacts outside the Worker\n   * isolate (full history unless `depth` is provided). Throws the saga\'s\n   * recorded error if creation fails. */\n  create(\n    input:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection: string;\n          depth?: number;\n          owner: string;\n          repo: string;\n        },\n  ): Promise<void>;\n  /** Repo identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the repo\'s server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */\n  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;\n  /**\n   * Safely replace text in one committed file and commit the result. The\n   * `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;\n  /** All committed file paths at HEAD. */\n  listFiles(): Promise<{ commitOid: string; paths: string[] }>;\n  /**\n   * Every task markdown file\'s contents at HEAD, keyed by path, in a single\n   * clone — the task board\'s bulk load. Cheaper than `listFiles()` plus a\n   * `readFile()` per task: the task include mask is applied before contents\n   * are read, so cost scales with the number of tasks, not the repo size.\n   */\n  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }>;\n  /**\n   * Commit history of a branch, newest first — oid, message, author,\n   * timestamp (epoch ms), parent oids. Deliberately without per-commit file\n   * stats (those cost tree checkouts per commit); fetch them lazily per\n   * commit through `commitDetails`.\n   */\n  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;\n  /**\n   * One commit\'s metadata plus the files it changed versus its first parent\n   * (the whole tree for the root commit), with `git diff --numstat`-shaped\n   * +/- line counts; binary files are flagged instead of counted.\n   */\n  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;\n  /**\n   * Committed file contents at HEAD — or, with `commitOid`, pinned to that\n   * commit — null when the path does not exist there. `encoding: "base64"`\n   * reads raw bytes (images, PDFs) base64-encoded.\n   */\n  readFile(input: { path: string; encoding?: "utf8" | "base64"; commitOid?: string }): Promise<{\n    commitOid: string;\n    content: string;\n    path: string;\n  } | null>;\n  /**\n   * Back this repo with a real GitHub repository through a named GitHub\n   * connection. From then on every default-branch commit is mirrored to\n   * GitHub best-effort (failures journal on the repo stream and self-heal on\n   * the next commit), fast-forward default-branch pushes made on GitHub are\n   * imported through the Cloudflare Artifacts queue, and every GitHub webhook\n   * about that repository is cross-posted onto this repo\'s stream. If the\n   * GitHub repository does not exist and the installation can create org\n   * repositories, it is created private. Re-linking replaces the previous\n   * link.\n   */\n  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;\n  /** Remove the GitHub link and its webhook cross-post rule. */\n  unlinkGithub(): Promise<{ unlinked: boolean }>;\n  /**\n   * Push the default branch head to the linked GitHub repository now — the\n   * repair verb for a failed mirror push. Never forced by default; `force:\n   * true` makes this repo win over commits made directly on GitHub.\n   */\n  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;\n  /**\n   * Adopt the linked GitHub repository\'s default-branch head into this repo.\n   * Fast-forward only: fails when this repo has commits GitHub does not,\n   * unless `force: true` discards them. The synced head is immediately live\n   * for worker builds.\n   *\n   * The history transfers in-process. `depth` requests a bounded history\n   * window, but fast-forward syncs always retain the previous Artifacts head\n   * as well so queue-derived task diffs can read both sides. GitHub retains\n   * the full history, and a later deeper sync can always widen the window.\n   */\n  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;\n  /**\n   * Hard recovery: destroy and recreate the Artifacts repository from the\n   * linked GitHub repository\'s default branch. GitHub always wins and the\n   * operation runs even when the recorded commit oids already match. The\n   * source clone is completed before destruction; `depth` bounds memory for\n   * large histories without changing anything on GitHub.\n   */\n  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;\n  /** The repo stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<RepoProcessorState>;\n  /** The repo\'s live state — its reduced processor state. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<RepoProcessorState>;\n}',
     summary: "Git-backed repo capability used by project workers and dynamic worker refs.",
     memberSummaries: {
-      create: "Create the repo if it does not exist yet; resolves once `repo/ready` lands.",
+      create: "Request creation and wait for the repo processor saga's terminal fact.",
       whoami: "Repo identity string (debug).",
       kill: "Restart the repo's server-side object; the next request boots it fresh.",
       commitFiles:
@@ -1713,9 +1712,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LinkGithubResult",
     kind: "typeAlias",
     sourceText:
-      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome\n * (a failed initial push does not fail the link — it is journaled on the repo\n * stream and repaired by `pushToGithub()` or the next commit). */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush: { ok: boolean; commitOid?: string; error?: string };\n};",
+      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome.\n * The compound public-import path reports that push as skipped because the\n * Artifact already came from GitHub. A failed initial push does not fail the\n * link — it is journaled and repaired by `pushToGithub()` or the next commit. */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush:\n    | { ok: true; commitOid: string }\n    | { ok: true; skipped: true }\n    | { ok: false; error: string };\n};",
     summary:
-      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome (a failed initial push does not fail the link — it is journaled on the repo stream and repaired by `pushToGithub()` or the next commit).",
+      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome.",
     memberSummaries: {},
     referencedTypeNames: ["GithubRepoLink"],
   },
@@ -1743,7 +1742,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  birthCertificate: { config: Record<string, never> } | null;\n  artifactName: string | null;\n  ready: boolean;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
+      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  birthCertificate:\n    | {\n        request:\n          | { type: "empty" }\n          | { type: "github-private"; connection: string; owner: string; repo: string }\n          | {\n              type: "github-public";\n              connection: string;\n              depth?: number | undefined;\n              owner: string;\n              repo: string;\n            };\n        artifactName: string;\n        defaultBranch: string;\n        remote: string;\n      }\n    | { config: unknown }\n    | null;\n  createRequest:\n    | { type: "empty" }\n    | { type: "github-private"; connection: string; owner: string; repo: string }\n    | {\n        type: "github-public";\n        connection: string;\n        depth?: number | undefined;\n        owner: string;\n        repo: string;\n      }\n    | null;\n  createFailure: {\n    error: string;\n    request:\n      | { type: "empty" }\n      | { type: "github-private"; connection: string; owner: string; repo: string }\n      | {\n          type: "github-public";\n          connection: string;\n          depth?: number | undefined;\n          owner: string;\n          repo: string;\n        };\n  } | null;\n  artifactName: string | null;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
     summary:
       "The repo processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1753,8 +1752,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerRef",
     kind: "typeAlias",
     sourceText:
-      "/** Worker recipe accepted by `workers.get` and worker-backed capabilities. */\nexport type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;",
-    summary: "Worker recipe accepted by `workers.get` and worker-backed capabilities.",
+      "/** Worker reference accepted by `workers.get` and worker-backed capabilities. */\nexport type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;",
+    summary: "Worker reference accepted by `workers.get` and worker-backed capabilities.",
     memberSummaries: {},
     referencedTypeNames: ["StatelessDynamicWorkerRef", "StatefulDynamicWorkerRef"],
   },
@@ -2075,7 +2074,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StatefulDynamicWorkerRef",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Stateful workers are Durable Object class exports hosted by\n * `StatefulWorkerDurableObject`.\n *\n * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is\n * not a source cache key: source changes deliberately affect the next use of the\n * same durable worker identity.\n */\nexport type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {\n  type: "stateful";\n  className: string;\n  durableWorkerKey: string;\n  /**\n   * What a call does when the worker\'s source changed since the running\n   * version. `"block"` (default) waits for the rebuild — commit-then-call\n   * sees the new code. `"stale-while-rebuild"` keeps answering with the\n   * running version and swaps to the new build in the background: better\n   * availability, but the next few calls after a commit may see old code.\n   * The policy rides the REF, not the durable identity — callers sharing one\n   * `durableWorkerKey` should agree on it (and on `source`), or each call\n   * flips the facet to its own version.\n   */\n  updatePolicy?: "block" | "stale-while-rebuild";\n};',
+      '/**\n * Stateful workers are Durable Object class exports hosted by\n * `StatefulWorkerDurableObject`.\n *\n * `durableWorkerKey` is the durable identity under `{ projectId, path }`. It is\n * not a source cache key: source changes deliberately affect the next use of the\n * same durable worker identity.\n */\nexport type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {\n  type: "stateful";\n  className: string;\n  durableWorkerKey: string;\n};',
     summary:
       "Stateful workers are Durable Object class exports hosted by `StatefulWorkerDurableObject`.",
     memberSummaries: {},
@@ -2399,11 +2398,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerSource",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Declarative source for a dynamic worker: an orthogonal file source plus\n * Cloudflare-compatible build options.\n *\n * Materialization resolves `files` to a file map and builds it through\n * Cloudflare's worker bundler; the loader-ready output is cached by a\n * deterministic build key, so the same source+options never builds twice.\n */\nexport type DynamicWorkerSource = {\n  files: WorkerFileSource;\n  options?: WorkerBuildOptions;\n};",
-    summary:
-      "Declarative source for a dynamic worker: an orthogonal file source plus Cloudflare-compatible build options.",
+      "/**\n * One direct worker-bundler call. The wrapper names deliberately match the\n * upstream functions; OS only resolves the repo-aware `files` value, adds its\n * platform virtual modules to `createWorker`, and caches the returned build.\n */\nexport type DynamicWorkerSource =\n  | { createApp: WorkerBundlerCreateAppOptions }\n  | { createWorker: WorkerBundlerCreateWorkerOptions };",
+    summary: "One direct worker-bundler call.",
     memberSummaries: {},
-    referencedTypeNames: ["WorkerFileSource", "WorkerBuildOptions"],
+    referencedTypeNames: ["WorkerBundlerCreateAppOptions", "WorkerBundlerCreateWorkerOptions"],
   },
   {
     name: "WorkspaceChange",
@@ -2434,20 +2432,57 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "WorkerBundlerCreateAppOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable `createApp` input. The generated browser bundles and explicit\n * text assets are retained in the host and served by worker-bundler's own\n * asset handler. ArrayBuffer assets and the esbuild plugin callback are the\n * only upstream inputs omitted from this data-only boundary. */\nexport type WorkerBundlerCreateAppOptions = WorkerBundlerOptions & {\n  assetConfig?: WorkerBundlerAssetConfig;\n  assets?: Record<string, string>;\n  client?: string | string[];\n  files: WorkerFileSource;\n  server?: string;\n};",
+    summary: "Serializable `createApp` input.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerOptions", "WorkerBundlerAssetConfig", "WorkerFileSource"],
+  },
+  {
+    name: "WorkerBundlerCreateWorkerOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable `createWorker` input. `files` is repo-aware; after resolving\n * it, OS passes the resulting path-to-source map to worker-bundler unchanged.\n * The plugin callback and custom `FileSystem` variants cannot cross Workers\n * RPC, so those are the only upstream inputs omitted here. */\nexport type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {\n  files: WorkerFileSource;\n  entryPoint?: string;\n  virtualModules?: Record<string, string>;\n};",
+    summary: "Serializable `createWorker` input.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerOptions", "WorkerFileSource"],
+  },
+  {
+    name: "WorkerBundlerOptions",
+    kind: "typeAlias",
+    sourceText:
+      '/**\n * The serializable `@cloudflare/worker-bundler` options shared by\n * `createWorker` and `createApp`.\n *\n * These fields are passed through unchanged. The method-specific types below\n * replace only `files` with a repo-aware value and omit callbacks that cannot\n * cross the isolated bundler Worker\'s RPC boundary.\n */\nexport type WorkerBundlerOptions = {\n  bundle?: boolean;\n  conditions?: string[];\n  define?: Record<string, string>;\n  externals?: string[];\n  jsx?: "transform" | "preserve" | "automatic";\n  jsxImportSource?: string;\n  loader?: Record<string, WorkerBundlerLoader>;\n  minify?: boolean;\n  registry?: string;\n  sourcemap?: boolean;\n  target?: string;\n};',
+    summary:
+      "The serializable `@cloudflare/worker-bundler` options shared by `createWorker` and `createApp`.",
+    memberSummaries: {},
+    referencedTypeNames: ["WorkerBundlerLoader"],
+  },
+  {
+    name: "WorkerBundlerAssetConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** JSON-safe `AssetConfig` accepted by worker-bundler\'s asset handler. */\nexport type WorkerBundlerAssetConfig = {\n  headers?: Record<string, { set?: Record<string, string>; unset?: string[] }>;\n  html_handling?: "auto-trailing-slash" | "force-trailing-slash" | "drop-trailing-slash" | "none";\n  not_found_handling?: "single-page-application" | "404-page" | "none";\n  redirects?: {\n    dynamic?: Record<string, { status: number; to: string }>;\n    static?: Record<string, { status: number; to: string }>;\n  };\n};',
+    summary: "JSON-safe `AssetConfig` accepted by worker-bundler's asset handler.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "WorkerFileSource",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Where a dynamic worker\'s source files come from.\n *\n * `inline` supplies the file map directly — the primitive behind run-script and\n * worker-backed provided capabilities where the caller hands over a small\n * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names\n * a project repo snapshot: a branch (late-bound, so future commits affect the\n * next use) or a pinned commit, narrowed by include/exclude glob masks so a\n * large repo does not become build input by default.\n */\nexport type WorkerFileSource =\n  | {\n      type: "inline";\n      files: Record<string, string>;\n    }\n  | {\n      type: "repo";\n      repoPath: string;\n      /**\n       * Defaults to the repo\'s default branch when omitted. A pinned commit\n       * may name the branch it lives on — clones are single-branch, so an\n       * off-default-branch commit is unreachable without it.\n       */\n      ref?: { branch: string } | { commitOid: string; branch?: string };\n      include?: string[];\n      exclude?: string[];\n    };',
+      '/**\n * Where a dynamic worker\'s source files come from.\n *\n * `inline` supplies the file map directly — the primitive behind run-script and\n * worker-backed provided capabilities where the caller hands over a small\n * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names\n * a project repo snapshot: a branch (late-bound, so future commits affect the\n * next use) or a pinned commit. The whole snapshot is passed through by\n * default; optional include/exclude glob masks let callers narrow it.\n */\nexport type WorkerFileSource =\n  | {\n      type: "inline";\n      files: Record<string, string>;\n    }\n  | {\n      type: "repo";\n      repoPath: string;\n      /**\n       * Defaults to the repo\'s default branch when omitted. A pinned commit\n       * may name the branch it lives on — clones are single-branch, so an\n       * off-default-branch commit is unreachable without it.\n       */\n      ref?: { branch: string } | { commitOid: string; branch?: string };\n      include?: string[];\n      exclude?: string[];\n    };',
     summary: "Where a dynamic worker's source files come from.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "WorkerBuildOptions",
+    name: "WorkerBundlerLoader",
     kind: "typeAlias",
     sourceText:
-      '/**\n * Build options for a dynamic worker.\n *\n * Deliberately small: exactly what the build recipe (build-recipe.ts — real\n * `npm install` plus wrangler\'s canonical bundling pipeline) expresses.\n * When the file map has a `package.json`, dependencies are installed from\n * the npm registry at build time (`--ignore-scripts`, lockfiles honored).\n */\nexport type WorkerBuildOptions = {\n  /** Entry point file path relative to the source root. Default: "worker.ts". */\n  entryPoint?: string;\n  /** Bundle to loader-ready output (default: true). `bundle: false` is the\n   * run-script fast path: inline JavaScript that is ALREADY loader-ready\n   * skips the build pipeline entirely. */\n  bundle?: boolean;\n  minify?: boolean;\n  /**\n   * Which build pipeline turns the source into loader-ready modules.\n   * "wrangler" (default): the platform\'s own bundle — npm install + wrangler\n   * dry-run, source code is PARSED but never executed. "vite": the source\'s\n   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes\n   * devDependencies and the build EXECUTES project code in the builder, so\n   * runtime artifacts stay project-scoped and the output is collected from\n   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +\n   * dist/client assets, served by a generated wrapper entry).\n   */\n  pipeline?: "wrangler" | "vite";\n  /** Build from this subdirectory of the resolved source: files outside it\n   * are dropped and paths are re-rooted, so a repo can host an app at e.g.\n   * `apps/tanstack/` with its own package.json and config. */\n  rootDir?: string;\n  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`\n   * runtime rides in this way). A source\'s own entry wins over the platform\'s. */\n  virtualModules?: Record<string, string>;\n};',
-    summary: "Build options for a dynamic worker.",
+      '/** Portable loader names accepted by `@cloudflare/worker-bundler`. */\nexport type WorkerBundlerLoader =\n  | "js"\n  | "jsx"\n  | "ts"\n  | "tsx"\n  | "json"\n  | "css"\n  | "text"\n  | "binary"\n  | "base64"\n  | "dataurl";',
+    summary: "Portable loader names accepted by `@cloudflare/worker-bundler`.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

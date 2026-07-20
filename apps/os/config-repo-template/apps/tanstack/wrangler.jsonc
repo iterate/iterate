@@ -1,8 +1,0 @@
-// Read only by the Vite build (@cloudflare/vite-plugin): the platform hosts
-// the built worker itself, so no deployment config lives here.
-{
-  "name": "project-tanstack",
-  "main": "./src/worker.ts",
-  "compatibility_date": "2026-05-01",
-  "compatibility_flags": ["nodejs_compat"],
-}

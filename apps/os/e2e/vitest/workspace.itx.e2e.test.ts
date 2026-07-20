@@ -151,7 +151,7 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   // -- mounts: a second repo joins the tree; commits route per mount --------
 
   using sideRepo = project.repos.get("/repos/e2e-side");
-  await sideRepo.create();
+  await sideRepo.create({ type: "empty" });
   await sideRepo.commitFiles({
     message: "seed a side-repo file",
     changes: [{ path: "side.md", content: "side repo truth" }],
@@ -180,7 +180,7 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   });
 
   // The deeper mount owns its subtree: reads route to the side repo, and the
-  // merged listing shows both repos' files (repos.create seeds the template,
+  // merged listing shows both repos' files (repo creation seeds the template,
   // so the side mount carries those files too — assert containment).
   expect(await workspace.readFile("/side/side.md")).toBe("side repo truth");
   expect(await workspace.glob("/side/**")).toContain("/side/side.md");

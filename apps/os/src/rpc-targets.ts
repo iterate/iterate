@@ -44,7 +44,7 @@ import type {
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "iterate/processors";
-import { StreamReceiverUnavailableError } from "iterate/processors";
+import { jsonValuesEqual, StreamReceiverUnavailableError } from "iterate/processors";
 import {
   disposeIgnoredRpcResult,
   LiveState,
@@ -95,7 +95,11 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
-import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
+import {
+  RepoCreateFailure,
+  RepoCreateRequest,
+  RepoProcessorContract,
+} from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
 import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
@@ -1079,55 +1083,6 @@ function streamDurableObjectName(props: { projectId: string | null; path: string
   return DurableObjectNameCodec.stringify(props, { allowNullProjectId: true });
 }
 
-async function requestRepoCreate(input: {
-  auth: ItxAuth;
-  path: string;
-  projectId: string | null;
-}): Promise<RepoRpcTarget> {
-  const path = normalizePath(input.path);
-  const stream = new StreamRpcTarget({
-    auth: input.auth,
-    path,
-    projectId: input.projectId,
-  });
-  const timing = { projectId: input.projectId, path };
-  const committed = await timedStep("create-timing", timing, "repo-append", () =>
-    stream.append(
-      {
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo-created:${input.projectId}:${path}`,
-        payload: { config: {} },
-      },
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-        processor: ["repos", ["get", path], "processor"],
-        processorSlug: RepoProcessorContract.slug,
-      }),
-    ),
-  );
-  const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-  if (createOffset === 0) throw new Error("repo create committed no events");
-  const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
-  await repo.processor.waitUntilProcessed({
-    offset: createOffset,
-    timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-  });
-
-  await timedStep("create-timing", timing, "wait-repo-ready", () =>
-    stream.waitForEvent({
-      afterOffset: committed[0]!.offset - 1,
-      eventTypes: ["events.iterate.com/repo/ready"],
-      predicate: (event) =>
-        event.payload?.projectId === input.projectId && event.payload?.path === path,
-      // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
-      // for the cold-slot outliers). Preview CI warms slots before the suites.
-      timeoutMs: 60_000,
-    }),
-  );
-
-  return repo;
-}
-
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   async __describe(): Promise<Description> {
@@ -1183,13 +1138,78 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     );
   }
 
-  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
-  create(): Promise<RepoRpcTarget> {
-    return requestRepoCreate({
+  /** Request creation and wait for the repo processor saga's terminal fact.
+   * The request chooses an empty seed, a private GitHub pull at depth one, or
+   * a public import performed by Cloudflare Artifacts outside the Worker
+   * isolate (full history unless `depth` is provided). Throws the saga's
+   * recorded error if creation fails. */
+  async create(
+    input:
+      | { type: "empty" }
+      | { type: "github-private"; connection: string; owner: string; repo: string }
+      | {
+          type: "github-public";
+          connection: string;
+          depth?: number;
+          owner: string;
+          repo: string;
+        },
+  ): Promise<void> {
+    const request = RepoCreateRequest.parse(input);
+    const path = normalizePath(this.props.path);
+    const stream = new StreamRpcTarget({
       auth: this.props.auth,
-      path: this.props.path,
+      path,
       projectId: this.props.projectId,
     });
+    const committed = await stream.append(
+      {
+        type: "events.iterate.com/repos/create-requested",
+        idempotencyKey: `repo-create-requested:${this.props.projectId}:${path}`,
+        payload: request,
+      },
+      buildDurableObjectProcessorSubscriptionConfiguredEvent({
+        durableObjectName: streamDurableObjectName({ projectId: this.props.projectId, path }),
+        idempotencyKey: `repo-processor-subscription:${this.props.projectId}:${path}`,
+        processor: ["repos", ["get", path], "processor"],
+        processorSlug: RepoProcessorContract.slug,
+      }),
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: `repo-catalog-subscription:${this.props.projectId}:${path}`,
+        payload: {
+          subscriptionKey: "repo-catalog",
+          description: "Copy the repo's terminal creation fact to the project catalog.",
+          selector: { eventTypes: ["events.iterate.com/repos/created"] },
+          delivery: {
+            mode: "push",
+            expression: ["streams", ["get", "/"], "acceptCrossPost"],
+          },
+          deliver: "new",
+        },
+      },
+    );
+    const recordedRequest = RepoCreateRequest.parse(committed[0]?.payload);
+    if (!jsonValuesEqual(recordedRequest, request)) {
+      throw new Error(`${path} was already requested with a different creation source.`);
+    }
+    const terminal = await stream.waitForEvent({
+      afterOffset: committed[0]!.offset - 1,
+      eventTypes: ["events.iterate.com/repos/created", "events.iterate.com/repos/create-failed"],
+      predicate: (event) => {
+        const terminalRequest =
+          event.type === "events.iterate.com/repos/create-failed"
+            ? RepoCreateFailure.parse(event.payload).request
+            : RepoCreateRequest.parse(event.payload?.request);
+        return jsonValuesEqual(terminalRequest, recordedRequest);
+      },
+      timeoutMs: 300_000,
+    });
+    if (terminal.type === "events.iterate.com/repos/create-failed") {
+      throw new Error(
+        `${path} could not be created: ${RepoCreateFailure.parse(terminal.payload).error}`,
+      );
+    }
   }
 
   /** Repo identity string (debug). */
@@ -1361,23 +1381,14 @@ class RepoCollectionRpcTarget<
 > extends IterateRpcTarget<Name> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: "Repo catalog: get(path) / create({ path }).",
-      children: { create: "Create a repo at a path.", get: "The repo at a path." },
+      instructions: "Repo catalog: get(path), then call create(...) on that repo.",
+      children: { get: "The repo at a path." },
     });
   }
 
   constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */
-  create(input: { path: string }): Promise<RepoRpcTarget> {
-    return requestRepoCreate({
-      auth: this.props.auth,
-      path: input.path,
-      projectId: this.props.projectId,
-    });
   }
 
   /** The repo at a path. */
@@ -1394,6 +1405,16 @@ class RepoCollectionRpcTarget<
 class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRepoCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
     super(projectProps);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: "Project repo catalog: list() or get(path); call create(...) on the repo.",
+      children: {
+        get: "The repo at a path.",
+        list: "Known project repos.",
+      },
+    });
   }
 
   /** Known repos, read from the project processor's reduced state. */
@@ -4292,21 +4313,24 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   // `invokeCapability({ path: ["__describe"] })` loads the worker and calls a
   // `__describe` the user code may export.
   async __describe() {
-    const source =
-      this.#ref.source.files.type === "inline"
+    const source = this.#ref.source;
+    const build = "createApp" in source ? source.createApp : source.createWorker;
+    const describedFiles =
+      build.files.type === "inline"
         ? {
-            ...this.#ref.source,
-            files: {
-              type: "inline" as const,
-              files: Object.fromEntries(
-                Object.entries(this.#ref.source.files.files).map(([name, text]) => [
-                  name,
-                  `${text.length} bytes`,
-                ]),
-              ),
-            },
+            files: Object.fromEntries(
+              Object.entries(build.files.files).map(([name, text]) => [
+                name,
+                `${text.length} bytes`,
+              ]),
+            ),
+            type: "inline" as const,
           }
-        : this.#ref.source;
+        : build.files;
+    const describedSource =
+      "createApp" in source
+        ? { createApp: { ...source.createApp, files: describedFiles } }
+        : { createWorker: { ...source.createWorker, files: describedFiles } };
     return describeNode({
       instructions:
         `A ${this.#ref.type} dynamic worker (described from its ref — the worker was NOT loaded). ` +
@@ -4326,7 +4350,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
           ? { entrypoint: this.#ref.entrypoint, propKeys: Object.keys(this.#ref.props ?? {}) }
           : { className: this.#ref.className, durableWorkerKey: this.#ref.durableWorkerKey }),
         path: this.#ref.path,
-        source,
+        source: describedSource,
         type: this.#ref.type,
       },
     });

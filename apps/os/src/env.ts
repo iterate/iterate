@@ -56,13 +56,11 @@ export interface Env {
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
   /**
-   * Local dev only: the vite dev server's `/__dev/worker-build` endpoint URL
-   * (generate-wrangler-config.ts sets it under `pnpm dev`). When present,
-   * dynamic worker builds run the shared build recipe on the HOST toolchain
-   * via this endpoint instead of the project's builder sandbox — local dev
-   * has no containers. Never set in deployed envs.
+   * The worker-bundler sidecar (src/worker-bundler.ts): the only OS script
+   * carrying esbuild-wasm. Source files cross this binding as inert data so a
+   * build cannot load the compiler into the product Worker's DO isolate.
    */
-  WORKER_BUILD_DEV_ENDPOINT?: string;
+  WORKER_BUNDLER: Service<import("./worker-bundler.ts").default>;
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types
@@ -113,15 +111,6 @@ export interface Env {
   >;
   SANDBOX_STANDARD_4: DurableObjectNamespace<
     import("./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts").SandboxStandard4DurableObject
-  >;
-  /**
-   * The deployment's worker-builder pool — stock SDK sandboxes that run every
-   * dynamic-worker build. Platform infrastructure, not project sandboxes: no
-   * catalogue, no streams, and project code can never reach this binding
-   * (src/domains/workers/builder-pool.ts).
-   */
-  WORKER_BUILDER: DurableObjectNamespace<
-    import("./domains/workers/builder-pool-sandbox.ts").WorkerBuilderDurableObject
   >;
   /**
    * Workspace persistence for sandbox containers. Container disk is

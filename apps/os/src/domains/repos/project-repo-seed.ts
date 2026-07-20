@@ -12,10 +12,10 @@ export const TEMPLATE_ITERATE_PACKAGE_SPEC = "https://pkg.pr.new/iterate/iterate
  * dependency optionally re-pointed via config (`iterateSdkPackageSpec`).
  * Preview deploys pass their PR's pkg.pr.new build so projects created there
  * — e2e tests included — install the branch tip's `iterate/sdk`, not
- * whatever main last published. Deliberately a find/replace on the manifests
- * that carry the spec (the repo root's devDependency for typechecking, and
- * the seeded tanstack app's runtime dependency): the generated file map
- * stays canonical, and the swap happens exactly where files become a repo.
+ * whatever main last published. Deliberately a find/replace on the manifest
+ * that carries the spec (the repo root's devDependency for typechecking):
+ * the generated file map stays canonical, and the swap happens exactly where
+ * files become a repo.
  */
 export function projectRepoSeedFiles(
   iterateSdkPackageSpec: string | undefined,

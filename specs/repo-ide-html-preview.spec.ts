@@ -17,7 +17,7 @@ test("toggle an html file between Code and its sandboxed Preview", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // The template ships no html, so seed one — a heading and a script-driven
   // button, enough to show the sandbox actually runs the document.
   await project.repos.get("/repos/ide").commitFiles({

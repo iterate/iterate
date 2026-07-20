@@ -120,17 +120,14 @@ bought.
 
 ## Bundling without the workspace (owner decision)
 
-> Shipped (PR #1612), with different details than sketched below: KV
-> `WORKER_BUILD_CACHE` (not R2) and a dedicated builder sidecar worker.
+> Shipped initially in PR #1612 and simplified in PR #2144: KV
+> `WORKER_BUILD_CACHE` and a stateless worker-bundler sidecar.
 
 The workspace object plays NO role in building. The repos domain already
-exposes `readFiles`/`listFiles` on the repo DO and the bundler runs on an
-in-memory vfs, so the whole path is: repo DO `readFiles(commit)` →
-@cloudflare/worker-bundler vfs → esbuild-wasm → R2 memo. No clone, no
-shell, no filesystem. Requires a new R2 bucket resource + binding
-(`ITX_BUILD_CACHE`) in the generated wrangler config
-(scripts/generate-wrangler-config.ts). No backcompat with the old
-checkout pipeline — `workerHost`/checkout storage dies with it.
+exposes commit-pinned snapshots on the repo DO and the bundler runs on an
+in-memory vfs, so the whole path is: repo DO `getFilesSnapshot(commit)` →
+@cloudflare/worker-bundler → esbuild-wasm → KV memo. No clone, shell,
+filesystem, or build container.
 
 ## The "no longer special" checklist for the project worker
 
@@ -138,7 +135,7 @@ checkout pipeline — `workerHost`/checkout storage dies with it.
   (the dial's ordinary `source` case covers repo sources).
 - workerHost build machinery in the Project DO (build chains, checkout
   keys, background rebuilds, ready flags): deleted — building is the
-  generic repo→R2 memo, owned by no DO.
+  generic repo→KV memo, owned by no DO.
 - Rebuilt per CALL with worker.ts verbatim → built per COMMIT, really
   bundled (TS, multi-file, deps), pinnable.
 - `worker` = one ordinary provide:
