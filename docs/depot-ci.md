@@ -255,8 +255,7 @@ reported completion` on main. Auth + OS deploy uses `4x16`; short deploy,
 
 These defaults keep a normal all-app main push to 28 requested vCPUs before
 notification jobs, down from 72, without reducing the parallel lint lane that
-uses the larger machine. Path filters avoid deploying iterate.com for unrelated
-monorepo changes.
+uses the larger machine.
 
 If an attempt receives a sandbox but produces no logs or metrics before
 failing, inspect `depot ci status`, `logs`, `metrics`, and `diagnose`. When the
@@ -308,7 +307,4 @@ When the autofix job fails with `pull request parse error: cannot find workflow
 run named "autofix.ci"`, the real signal is that autofix found a diff to apply
 (the apply step only contacts GitHub when there is one) and could not correlate
 the Depot run with a GitHub Actions run. Look at the `git diff` output in the
-job logs, apply the same fix locally (usually `pnpm format`), and push. A common
-cause is committing a locally regenerated file (for example
-`apps/iterate-com/backend/generated/skills-registry.ts`) whose generator output
-is not format-stable.
+job logs, apply the same fix locally (usually `pnpm format`), and push.
