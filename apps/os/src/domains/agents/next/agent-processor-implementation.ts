@@ -1,9 +1,10 @@
 // The clean-room agent processor IMPLEMENTATION: one `reduce` switch (the
-// pure fold) and one `processEvent` switch (side effects) plus the drive —
-// plain code over the fold, run after every delivery. The framework supplies
-// exactly four things: ordered at-least-once delivery, `delivery.caughtUp`,
-// the two side-effect lanes, and revival after eviction. Everything else here
-// is user space. Design: tasks/simplify-stream-processor-contract.md.
+// pure fold) and one `processEvent` switch whose job is side effects — first
+// the per-event ones, then the ones decided by looking at state. The
+// framework supplies exactly four things: ordered at-least-once delivery,
+// `delivery.caughtUp`, the two side-effect lanes, and revival after eviction.
+// Everything else here is user space.
+// Design: tasks/simplify-stream-processor-contract.md.
 
 import { StreamProcessor } from "iterate/processors";
 import {
@@ -201,7 +202,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
   // Synchronous. The two lanes are chosen HERE, at the dispatch site, never
   // inside helpers — helpers are plain async functions, unaware of their
   // lane. `blockProcessorWhile` registrations run in FIFO order, so the
-  // drive's work below always lands after the per-event work above.
+  // state-derived work below always lands after the per-event work above.
   protected override processEvent(args: ProcessArgs): undefined {
     const { event, state, previousState, blockProcessorWhile, runInBackground, append, delivery } =
       args;
@@ -314,7 +315,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
       // revived: no per-event effect — they matter through the fold below.
     }
 
-    // ------------------------------------------------------------- the drive
+    // ---------------------------------------- state-derived side effects
     // Plain code over the fold, after every delivery. Policy first: act only
     // at head — behind it the fold is partial and outcomes may sit in journal
     // pages not yet replayed.
@@ -355,7 +356,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // moves or an interrupt clears it before this fires, the requested
         // event's fold-guard turns the late intent into a harmless fact. A
         // droppable attempt: dying mid-window means the revival turn re-runs
-        // this drive with the window long closed and appends directly.
+        // this code with the window long closed and appends directly.
         runInBackground(async () => {
           await this.#sleep(windowClosesInMs);
           await append(requestedInput());

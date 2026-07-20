@@ -400,7 +400,7 @@ describe("AgentNextProcessor recovery", () => {
     h.appendRevived();
     await h.catchUp();
 
-    // The drive re-ran over the fold: desire still open, window long closed,
+    // processEvent re-ran over the fold: desire still open, window long closed,
     // intent appended synchronously, request adopted, LLM running.
     expect(h.journal.ofType(AGENT_LLM_REQUEST_REQUESTED)).toHaveLength(1);
     expect(h.llm.calls).toHaveLength(1);

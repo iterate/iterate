@@ -197,7 +197,7 @@ Design decisions already made in the jam (2026-07-20):
   path; cost is one journal round-trip per turn start.
 - **Debounce with NO wake event** (dropped `agent/turn-due`, and
   `stream/woken` isn't needed either): the delayed append IS the intent.
-  When the window is open, the drive schedules background
+  When the window is open, the at-head pass schedules background
   sleep-then-append-`llm-request-requested`, idempotency-keyed on the desire
   offset. The stale-closure hazard moves into the FOLD, where it belongs:
   `reduce` of `llm-request-requested` folds to nothing when no desire is
@@ -212,7 +212,7 @@ Design decisions already made in the jam (2026-07-20):
 - **Recovery = adopt-the-same-request, carried by `stream/processor-revived`
   alone.** Eviction with owed work → keepalive alarm fires in a fresh
   incarnation → appends the revived fact → its ordinary delivery at head runs
-  the same drive → open request not in `#inFlightLlmCalls` → run it again
+  the same processEvent code → open request not in `#inFlightLlmCalls` → run it again
   under the SAME requestedAtOffset (a zombie racing us collapses on the
   settle key). No crash-cancel, no `llm-request-started`: the prod contract's
   cancel-started-attempts-then-restart flow needs both, and buys attempt-level
@@ -234,7 +234,7 @@ DONE, split across two PRs:
   migrated, guestbook template + generated mirror regenerated); `validate`
   hook deleted; `eventsBehindObservedHead`, author-facing `streamMaxOffset`
   and `checkpointOffset` deleted; runner spec pins FIFO ordering;
-  `writing-stream-processors.md` rewritten (reconcile → "the drive",
+  `writing-stream-processors.md` rewritten (no named concept — state-derived side effects are plain processEvent code,
   filter-aware `caughtUp` framing, "Batches are transport, not semantics"),
   doctrine doc + CLAUDE.md index updated.
 - **This PR (`agent-next-processor`, stacked)** — clean-room processor:
@@ -313,7 +313,7 @@ Framework changes (this branch, in-place):
 ### Gap vs the production agent processor (audited 2026-07-20)
 
 Prod = `agent-processor-contract.ts` (1008 lines) + implementation (1948).
-Structurally it already matches the clean-room design (fold-derived drive at
+Structurally it already matches the clean-room design (state-derived side effects at
 head, journaled intent, everything downstream keyed on `llmRequestOffset`);
 the gap is bridge machinery. Event dispositions:
 
@@ -344,7 +344,7 @@ Source` → `wantsTurnSince { offset, atMs, source }`; DELETE
 `autonomousTurnCount` (loop breaker), failure streak
 (`consecutiveLlmFailures` + `lastLlmFailureRateLimited` — retry backoff adds
 into the debounce window: `DEBOUNCE_MS + backoffMs(streak)`),
-`activeScriptExecutionIds`. DELETE the 30-min backstop (drive settles expired
+`activeScriptExecutionIds`. DELETE the 30-min backstop (the at-head pass settles expired
 requests; quiet-stream noticing = the alarm task).
 
 Open decisions for the jam:

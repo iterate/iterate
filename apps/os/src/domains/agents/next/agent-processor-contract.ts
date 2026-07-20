@@ -51,7 +51,7 @@ export const SCRIPT_RUN_SETTLED = "events.iterate.com/capability-host/script-run
  * cannot delay a turn indefinitely. */
 export const AGENT_LLM_REQUEST_DEBOUNCE_MS = 250;
 
-/** How long a journaled intent stays runnable. Past this the drive settles it
+/** How long a journaled intent stays runnable. Past this the processor settles it
  * `failed` instead of running it: answering a ten-minute-old message with a
  * context snapshot from then does more harm than admitting the miss. Also the
  * per-attempt transport deadline, so an attempt can never outlive its intent. */
@@ -366,7 +366,7 @@ export const AgentNextProcessorContract = defineProcessorContract({
     SCRIPT_RUN_REQUESTED,
     SCRIPT_RUN_SETTLED,
     // The platform revival fact: its ordinary delivery at head is the
-    // guaranteed turn where the drive adopts orphaned work after an eviction.
+    // guaranteed turn where processEvent finds and re-runs orphaned work after an eviction.
     STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
   ],
   emits: [
