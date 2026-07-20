@@ -600,7 +600,7 @@ return {
 const secret = itx.secrets.get(vars.secretPath ?? "/secrets/example");
 
 // Store the material once, with the URLs it may be substituted into. From
-// here on, egress headers reference it as: getSecret({ path: "..." }).
+// here on, egress headers reference it as: getSecret("...").
 await secret.create({
   egress: { urls: ["https://postman-echo.com/"] },
   material: "demo-" + (vars.note ?? "material"),
@@ -681,7 +681,7 @@ await secret.create({
 const response = await itx.egress.fetch(
   new Request("https://postman-echo.com/get?source=itx-secret-example", {
     headers: {
-      "x-itx-secret": \`Bearer getSecret({ path: "\${secretPath}" })\`,
+      "x-itx-secret": \`Bearer getSecret("\${secretPath}")\`,
     },
   }),
 );
@@ -745,13 +745,13 @@ return;
 //
 // const api = await itx.openapi.connect({
 //   specUrl: apiOrigin + "/openapi.json",
-//   headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' },
+//   headers: { authorization: 'Bearer getSecret("' + secretPath + '")' },
 // });
 // return await api.__describe(); // operations list — then call them by operationId
 //
 // The same placeholder works on raw requests: itx.egress.fetch(new Request(
 //   apiOrigin + "/v1/me",
-//   { headers: { authorization: 'Bearer getSecret({ path: "' + secretPath + '" })' } },
+//   { headers: { authorization: 'Bearer getSecret("' + secretPath + '")' } },
 // ));
 //
 // If the user PASTES the key into chat instead of using the link: that is fine —
@@ -998,7 +998,7 @@ return { path };
 //
 // const cf = await itx.mcp.connect({
 //   url: mcpUrl,
-//   headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' },
+//   headers: { authorization: 'Bearer getSecret("' + path + '", { field: "accessToken" })' },
 // });
 // return await cf.__describe(); // the server's tools — then call them by name
 //
@@ -1006,7 +1006,7 @@ return { path };
 // future turns), mount the same recipe:
 // await itx.provideCapability({
 //   expression: ["mcp", ["connect", { url: mcpUrl,
-//     headers: { authorization: 'Bearer getSecret({ path: "' + path + '", field: "accessToken" })' } }]],
+//     headers: { authorization: 'Bearer getSecret("' + path + '", { field: "accessToken" })' } }]],
 //   instructions: "Cloudflare MCP server (OAuth). Tool names discovered from the server.",
 //   path: ["cloudflare"],
 //   type: "itx-expression",
@@ -1316,7 +1316,7 @@ await itx.capabilityHosts.get("/").provideCapability({
       "connect",
       {
         url: "https://api.githubcopilot.com/mcp/",
-        headers: { authorization: \`Bearer getSecret({ path: "\${tokenPath}" })\` },
+        headers: { authorization: \`Bearer getSecret("\${tokenPath}")\` },
       },
     ],
   ],

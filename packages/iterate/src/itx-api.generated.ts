@@ -862,8 +862,8 @@ export interface McpClientCollection {
    * send `authorizationUrl` to the user ("click here to connect"). When they
    * sign in, the token is stored write-only at `path` and — if you are an agent
    * — you are messaged so you can continue. Then connect like any bearer MCP:
-   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
-   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret(
+   * "<path>", { field: "accessToken" })' } })`. For a server that just wants a
    * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
    */
   beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult>;
@@ -2927,7 +2927,7 @@ export type McpBeginOAuthResult = {
    * messages you back so you can continue. */
   authorizationUrl: string;
   /** The `/secrets/…` path the token is stored at. Connect afterwards with
-   * `headers: { authorization: 'Bearer getSecret({ path: "<path>", field: "accessToken" })' }`. */
+   * `headers: { authorization: 'Bearer getSecret("<path>", { field: "accessToken" })' }`. */
   path: string;
 };
 
@@ -2984,7 +2984,7 @@ export type SandboxCreateInput = {
    * `sleep()` or `destroy()` explicitly. */
   keepAlive?: boolean;
   /** Initial env-var map, merged as if by `setEnvVars` — values are
-   * `getSecret({ path })` placeholders or non-secret literals, NEVER raw
+   * `getSecret(path)` placeholders or non-secret literals, NEVER raw
    * secret material. */
   env?: Record<string, string>;
 };
@@ -3032,7 +3032,7 @@ export type SandboxInstanceType =
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
  *   journaled as a `configured` event); values are conventionally
- *   `getSecret({ path })` placeholders substituted only at egress — real
+ *   `getSecret(path)` placeholders substituted only at egress — real
  *   secret material never enters the container. All sandbox egress flows
  *   through project egress policy; there is no direct internet path.
  * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace

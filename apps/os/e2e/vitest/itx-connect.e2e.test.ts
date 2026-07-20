@@ -30,7 +30,7 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
       timeoutMs: 30_000,
     });
 
-    const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
+    const headers = { authorization: `Bearer getSecret("${secretPath}")` };
     const specUrl = `${api.url}/openapi.json`;
 
     // Three call shapes exercised DELIBERATELY: pipelined on the un-awaited
@@ -118,7 +118,7 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
       description: "MCP secret to be available",
     });
 
-    const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
+    const headers = { authorization: `Bearer getSecret("${secretPath}")` };
 
     // Same three-lane coverage as the OpenAPI test above: un-awaited
     // promise, awaited handle, one-expression chain.
@@ -203,7 +203,7 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
       description: "expression built-in secret to be available",
     });
 
-    const headers = { authorization: `Bearer getSecret({ path: "${secretPath}" })` };
+    const headers = { authorization: `Bearer getSecret("${secretPath}")` };
     const petsInstructions = "Tiny Pets expression mount: call findPetsByStatus with a status.";
     const petsTypes =
       "export type Capability = { findPetsByStatus(input: { status: string }): Promise<unknown> };";

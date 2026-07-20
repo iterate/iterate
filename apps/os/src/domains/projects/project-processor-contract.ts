@@ -350,7 +350,7 @@ export const ProjectProcessorContract = defineProcessorContract({
             method: "POST",
             url: "https://api.stripe.com/v1/transfers",
             headers: {
-              authorization: 'Bearer getSecret({ path: "/secrets/stripe/prod" })',
+              authorization: 'Bearer getSecret("/secrets/stripe/prod")',
               "content-type": "application/x-www-form-urlencoded",
             },
             bodySha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",

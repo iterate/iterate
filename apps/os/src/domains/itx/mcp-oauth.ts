@@ -29,7 +29,7 @@
 // (`clientCreds: "material"`) so the Secret DO re-mints on 401 in its own trusted
 // code. The agent then connects like any bearer MCP:
 //   itx.mcp.connect({ url, headers: { authorization:
-//     'Bearer getSecret({ path: "<path>", field: "accessToken" })' } })
+//     'Bearer getSecret("<path>", { field: "accessToken" })' } })
 //
 // The two verbs are pure — key + fetch function in, data out — so the whole round
 // trip unit-tests with no network. rpc-targets.ts (begin) and integration-api.ts

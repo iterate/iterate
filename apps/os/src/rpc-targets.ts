@@ -2958,7 +2958,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // refreshes on 401.
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
-        authorization: `Bearer getSecret({ path: "${connectionPath}", field: "accessToken" })`,
+        authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
         request: args[0] as GmailRequestInput,
         send: (request) =>
           env.SECRET.getByName(
@@ -6680,8 +6680,8 @@ class McpClientCollectionRpcTarget extends IterateRpcTarget<"McpClientCollection
    * send `authorizationUrl` to the user ("click here to connect"). When they
    * sign in, the token is stored write-only at `path` and — if you are an agent
    * — you are messaged so you can continue. Then connect like any bearer MCP:
-   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret({ path:
-   * "<path>", field: "accessToken" })' } })`. For a server that just wants a
+   * `itx.mcp.connect({ url, headers: { authorization: 'Bearer getSecret(
+   * "<path>", { field: "accessToken" })' } })`. For a server that just wants a
    * bearer token you already hold, use `itx.secrets.collectFromUser` instead.
    */
   async beginOAuth(input: McpBeginOAuthInput): Promise<McpBeginOAuthResult> {
@@ -6922,7 +6922,7 @@ async function fetchSpec(
   props: OpenApiConnectInput,
   egress: FetchOnly,
 ): Promise<Record<string, unknown>> {
-  // Headers can contain getSecret({ path: "/secrets/..." }) placeholders.
+  // Headers can contain getSecret("/secrets/...") placeholders.
   // They must enter the project egress pipe, because that is the only place
   // secret material is substituted. Do not read or rewrite them here.
   const response = await egress.fetch(

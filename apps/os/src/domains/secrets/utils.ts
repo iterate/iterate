@@ -2,8 +2,8 @@ import { normalizePath } from "../durable-object-names.ts";
 
 /**
  * The egress placeholder grammar. A request may carry
- * `getSecret({ path: "/secrets/…" })` (substitute the whole material — which
- * must then be a string) or `getSecret({ path: "/secrets/…", field: "a.b" })`
+ * `getSecret("/secrets/…")` (substitute the whole material — which must then
+ * be a string) or `getSecret("/secrets/…", { field: "a.b" })`
  * (substitute one dotted field of structured material). Substitution reaches
  * headers and the request URL PATH (for providers that carry the credential
  * there, e.g. Telegram's `/bot<token>/…`) — never the query string, and never
@@ -21,8 +21,7 @@ import { normalizePath } from "../durable-object-names.ts";
  * payload so the placeholder stays findable without putting token bytes in
  * the container.
  */
-const SECRET_REFERENCE =
-  /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)/g;
+const SECRET_REFERENCE = /getSecret\(\s*"([^"]+)"\s*(?:,\s*\{\s*field\s*:\s*"([^"]+)"\s*\})?\s*\)/g;
 
 /** One parsed placeholder: the secret it addresses and, optionally, the dotted
  * field of that secret's material to substitute. */
@@ -145,7 +144,7 @@ function decodeBasicAuthorizationCredential(
   }
 }
 
-/** Substitute every `getSecret({ path… })` match in a plain header value. */
+/** Substitute every path-based `getSecret(...)` match in a plain header value. */
 function substituteSecretPlaceholdersInText(
   value: string,
   resolve: (reference: SecretReference) => string,
@@ -183,10 +182,9 @@ function substituteSecretPlaceholdersInHeaderValue(
 
 /**
  * A request URL as placeholder-matchable text. URL parsing percent-encodes the
- * placeholder's braces/spaces/quotes (`new Request("…/botgetSecret({ path:
- * "…" })/sendMessage")` stores `bot getSecret(%7B%20path…`), so matching and
- * substitution run on the decoded form. Returns the input unchanged when it
- * does not decode (a stray `%` outside any escape).
+ * placeholder's quotes (and its options object's braces/spaces when present),
+ * so matching and substitution run on the decoded form. Returns the input
+ * unchanged when it does not decode (a stray `%` outside any escape).
  */
 function decodedUrl(url: string): string {
   try {

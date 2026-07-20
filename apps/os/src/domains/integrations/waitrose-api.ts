@@ -233,7 +233,7 @@ export function connectionWaitroseClient(input: {
 }): ReturnType<typeof waitroseClient> {
   const stub = projectStub(itxEnv.PROJECT, input.projectId);
   return waitroseClient({
-    authorization: `Bearer getSecret({ path: "${waitroseSessionSecretPath(input.connection)}", field: "accessToken" })`,
+    authorization: `Bearer getSecret("${waitroseSessionSecretPath(input.connection)}", { field: "accessToken" })`,
     fetcher: (request) => stub.fetch(request),
   });
 }

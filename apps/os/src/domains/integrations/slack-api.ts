@@ -116,7 +116,7 @@ function slackEgressAdapter(input: {
  * so it IS the Slack SDK — no hand-mapped method table.
  */
 export function connectionSlackClient(input: { connection: string; projectId: string }): WebClient {
-  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
+  const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   return new WebClient(placeholder, {
     // Dials the project egress door (not the Secret DO directly, unlike
     // github/gmail) so project egress interceptors observe Slack calls.
@@ -213,7 +213,7 @@ async function downloadProjectSlackFile(input: {
   projectId: string;
   url: string;
 }): Promise<{ bytes: Uint8Array; contentType: string | undefined }> {
-  const placeholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
+  const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   const stub = projectStub(itxEnv.PROJECT, input.projectId);
   const buildRequest = (credential: string) =>
     new Request(input.url, { headers: { authorization: `Bearer ${credential}` } });
@@ -262,7 +262,7 @@ async function fetchSlackWithCredentialRecovery(input: {
   projectId: string;
   stub: SlackEgressStub;
 }): Promise<Response> {
-  const primaryPlaceholder = `getSecret({ path: "${slackBotTokenSecretPath(input.connection)}" })`;
+  const primaryPlaceholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   const primaryResponse = await input.stub.fetch(input.buildRequest(primaryPlaceholder));
   if (!(await isSlackCredentialFailure(primaryResponse))) return primaryResponse;
   return await retrySlackRequestWithDeploymentCredential({ ...input, primaryResponse });

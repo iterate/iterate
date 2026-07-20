@@ -57,7 +57,7 @@ describe("githubTokenEnvForConnections", () => {
   test("builds the connection secret's accessToken placeholder — never token bytes", () => {
     expect(
       githubTokenEnvForConnections([{ connection: "install-42", integration: "github" }]),
-    ).toBe('getSecret({ path: "/secrets/integrations/github/install-42", field: "accessToken" })');
+    ).toBe('getSecret("/secrets/integrations/github/install-42", { field: "accessToken" })');
   });
 
   test("null when the project has no GitHub connection (other integrations don't count)", () => {

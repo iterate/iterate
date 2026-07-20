@@ -55,8 +55,8 @@ test.skipIf(deployedBaseUrl() === null)(
     });
 
     const sandboxName = `egress-proof-${crypto.randomUUID()}`;
-    const secretPlaceholder = `getSecret({ path: "${secretPath}" })`;
-    const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret({ path: "${secretPath}" })`;
+    const secretPlaceholder = `getSecret("${secretPath}")`;
+    const proofHeader = `${EGRESS_PROOF_HEADER}: Bearer getSecret("${secretPath}")`;
     const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
     const issuerCommand = `echo | openssl s_client -connect ${echoUrl.hostname}:443 -servername ${echoUrl.hostname} 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || echo no-openssl`;
 
@@ -159,7 +159,7 @@ test.skipIf(deployedBaseUrl() === null)(
 );
 
 // Wrap a string as a single POSIX-shell double-quoted argument. The header
-// value carries `"` (inside `getSecret({ path: "..." })`), so `"` and the
+// value carries `"` (inside `getSecret("...")`), so `"` and the
 // other shell-active characters must be escaped for `exec`'s shell.
 function shellDoubleQuote(value: string): string {
   return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
