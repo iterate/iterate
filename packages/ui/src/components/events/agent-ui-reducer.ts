@@ -894,9 +894,7 @@ function reduceAgentUiEvent(
       const presence =
         existingIndex === -1
           ? [...state.presence, entry]
-          : state.presence.map((candidate, index) =>
-              index === existingIndex ? { ...candidate, ...entry } : candidate,
-            );
+          : state.presence.map((candidate, index) => (index === existingIndex ? entry : candidate));
       return { ...state, presence };
     }
 

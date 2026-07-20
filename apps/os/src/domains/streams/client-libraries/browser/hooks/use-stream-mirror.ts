@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useReducer, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
@@ -63,5 +63,8 @@ export function useStreamMirror(input: {
     [store],
   );
   const snapshot = useSyncExternalStore(subscribe, store.getSnapshot, store.getServerSnapshot);
+  useEffect(() => {
+    store.setSubscriberUser(subscriberUser);
+  }, [store, subscriberUser]);
   return { store, snapshot };
 }

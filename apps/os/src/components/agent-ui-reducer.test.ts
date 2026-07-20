@@ -521,6 +521,39 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("clears stale subscriber metadata when a subscription key reconnects", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: {
+          subscriptionKey: "browser:tab-1",
+          direction: "inbound",
+          subscriber: {
+            description: "browser",
+            user: { email: "jonas@example.com", name: "Jonas Temple" },
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: {
+          subscriptionKey: "browser:tab-1",
+          direction: "inbound",
+          subscriber: { description: "browser" },
+        },
+      },
+    ]);
+
+    expect(state.presence).toEqual([
+      {
+        subscriptionKey: "browser:tab-1",
+        direction: "inbound",
+        connected: true,
+        description: "browser",
+      },
+    ]);
+  });
+
   test("does not show the bootstrap stream wake in the agent feed", () => {
     const state = reduceAll([
       { type: "events.iterate.com/stream/created" },

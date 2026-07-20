@@ -64,6 +64,7 @@ import {
 import { catchUpDurableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
 import {
   browserStreamSubscriberDescriptor,
+  browserStreamSubscriberUserUpdate,
   type BrowserStreamSubscriberUser,
 } from "./browser-subscriber.ts";
 import { LiveAgentStateChannel, liveAgentStateChannelName } from "./live-agent-state-channel.ts";
@@ -247,6 +248,8 @@ export type StreamBrowserStore = Disposable & {
    * stale instead of waiting for the next paced probe.
    */
   nudge(): Promise<void>;
+  /** Refresh the identity announced by this browser's live subscription. */
+  setSubscriberUser(user: BrowserStreamSubscriberUser | undefined): void;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -267,7 +270,6 @@ const runtimeRegistry = new Map<
   {
     runtime: StreamBrowserStore;
     refreshTransport: (transport: BrowserStreamTransport) => void;
-    refreshSubscriberUser: (user: BrowserStreamSubscriberUser | undefined) => void;
     retain: () => void;
   }
 >();
@@ -301,7 +303,6 @@ export function acquireStreamRuntime(
       createStreamClient: args.createStreamClient,
       resetTransport: args.resetTransport,
     });
-    existing.refreshSubscriberUser(args.subscriberUser);
     // A pending idle-dispose must not fire between this acquire and the
     // commit's subscribe() — see retain()'s docstring.
     existing.retain();
@@ -326,7 +327,6 @@ function createStreamRuntime(
 ): {
   runtime: StreamBrowserStore;
   refreshTransport: (transport: BrowserStreamTransport) => void;
-  refreshSubscriberUser: (user: BrowserStreamSubscriberUser | undefined) => void;
   retain: () => void;
 } {
   // Mutable on purpose: re-acquires refresh it (see acquireStreamRuntime), and
@@ -646,7 +646,7 @@ function createStreamRuntime(
   // late "closed"/"error" callbacks are ignored and can't shorten an in-flight backoff. The
   // next connect() runs a fresh election that re-reads the persisted checkpoint, so the server
   // replays after the last applied offset.
-  function scheduleReconnect(connectionError: string, delayMs: number) {
+  function restartConnection(connectionError: string | undefined, delayMs: number) {
     if (disposed) return;
     connectionEpoch += 1;
     pendingIngestEvents = 0;
@@ -661,6 +661,10 @@ function createStreamRuntime(
       reconnectTimer = undefined;
       connect();
     }, delayMs);
+  }
+
+  function scheduleReconnect(connectionError: string, delayMs: number) {
+    restartConnection(connectionError, delayMs);
   }
 
   function reconnectNow() {
@@ -2227,6 +2231,15 @@ function createStreamRuntime(
       reconnectNow();
     },
     nudge,
+    setSubscriberUser(next) {
+      const update = browserStreamSubscriberUserUpdate({
+        current: subscriberUser,
+        next,
+        started,
+      });
+      subscriberUser = update.user;
+      if (update.reconnect) restartConnection(undefined, 0);
+    },
     isDisposed: () => disposed,
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
@@ -2269,9 +2282,6 @@ function createStreamRuntime(
     runtime,
     refreshTransport(next) {
       transport = next;
-    },
-    refreshSubscriberUser(next) {
-      subscriberUser = next;
     },
     // A re-acquire between "last listener unsubscribed" and the idle-dispose
     // timer firing means a render is about to subscribe: cancel the pending
