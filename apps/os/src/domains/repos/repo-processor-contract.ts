@@ -6,6 +6,8 @@ import {
 } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
+export const REPO_DEFAULT_BRANCH = "main";
+
 /**
  * The GitHub repository one repo mirrors to: a named GitHub connection (the
  * App installation whose token authenticates pushes) plus the owner/repo
@@ -42,6 +44,7 @@ export const RepoCreateRequest = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("github-public"),
     connection: z.string().trim().min(1),
+    depth: z.number().int().positive().optional(),
     owner: z.string().trim().min(1),
     repo: z.string().trim().min(1),
   }),
@@ -54,6 +57,11 @@ const RepoBirthCertificate = z.strictObject({
   artifactName: z.string().trim().min(1),
   defaultBranch: z.string().trim().min(1),
   remote: z.string().url(),
+});
+
+export const RepoCreateFailure = z.strictObject({
+  error: z.string().trim().min(1),
+  request: RepoCreateRequest,
 });
 
 // Replayed by existing repos when the 0.4 reducer refolds their journals.
@@ -84,7 +92,7 @@ const GithubWebhookReceivedPayload = z
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.4.0",
+  version: "0.4.1",
   description:
     "Projects repo lifecycle, Git activity, task changes, and linked GitHub default-branch imports.",
   stateSchema: z.object({
@@ -93,6 +101,7 @@ export const RepoProcessorContract = defineProcessorContract({
       .nullable()
       .default(null),
     createRequest: RepoCreateRequest.nullable().default(null),
+    createFailure: RepoCreateFailure.nullable().default(null),
     artifactName: z.string().nullable().default(null),
     defaultBranch: z.string().nullable().default(null),
     github: GithubLinkPayload.nullable().default(null),
@@ -124,7 +133,7 @@ export const RepoProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/repos/create-requested": {
       description:
-        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts with full history.",
+        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set).",
       payloadSchema: RepoCreateRequest,
       examples: [
         {
@@ -142,7 +151,7 @@ export const RepoProcessorContract = defineProcessorContract({
         },
         {
           description:
-            "Ask Cloudflare Artifacts to import a public GitHub repository directly with full history.",
+            "Ask Cloudflare Artifacts to import a public GitHub repository directly with full history. Set depth to request a shallow import instead.",
           payload: {
             type: "github-public",
             connection: "install-87654321",
@@ -165,6 +174,25 @@ export const RepoProcessorContract = defineProcessorContract({
             defaultBranch: "main",
             remote:
               "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repos/create-failed": {
+      description:
+        "The repo creation saga reached a terminal failure and did not declare the repo created.",
+      payloadSchema: RepoCreateFailure,
+      examples: [
+        {
+          description: "Cloudflare Artifacts rejected a public repository import.",
+          payload: {
+            error: "Cloudflare Artifacts 10400: An internal error occurred",
+            request: {
+              type: "github-public",
+              connection: "install-87654321",
+              owner: "acme-inc",
+              repo: "public-app",
+            },
           },
         },
       ],
@@ -529,6 +557,7 @@ export const RepoProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/repos/create-requested",
     "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/ready",
     "events.iterate.com/repo/cloudflare-artifact-event-received",
@@ -550,6 +579,7 @@ export const RepoProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/task-created",
     "events.iterate.com/repo/task-updated",

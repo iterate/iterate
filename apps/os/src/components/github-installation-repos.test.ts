@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertInstallationRepoCanBeCreated,
+  githubRepoCreateRequest,
   type InstallationRepo,
 } from "./github-installation-repos.ts";
 
@@ -28,5 +29,26 @@ describe("assertInstallationRepoCanBeCreated", () => {
     expect(() => assertInstallationRepoCanBeCreated({ ...repo, defaultBranch: "develop" })).toThrow(
       "default branch is main",
     );
+  });
+});
+
+describe("githubRepoCreateRequest", () => {
+  it("keeps public wizard imports shallow", () => {
+    expect(githubRepoCreateRequest(repo, "install-1")).toEqual({
+      connection: "install-1",
+      depth: 1,
+      owner: "iterate",
+      repo: "iterate",
+      type: "github-public",
+    });
+  });
+
+  it("uses the private depth-one transfer mode for private repos", () => {
+    expect(githubRepoCreateRequest({ ...repo, private: true }, "install-1")).toEqual({
+      connection: "install-1",
+      owner: "iterate",
+      repo: "iterate",
+      type: "github-private",
+    });
   });
 });

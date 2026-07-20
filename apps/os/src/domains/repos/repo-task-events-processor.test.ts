@@ -66,6 +66,14 @@ const REPO_CREATED = {
   },
 };
 
+const REPO_CREATE_FAILED = {
+  type: "events.iterate.com/repos/create-failed" as const,
+  payload: {
+    error: "Cloudflare Artifacts rejected the import",
+    request: REPO_CREATE_REQUESTED.payload,
+  },
+};
+
 const GITHUB_LINK_CONFIGURED = {
   type: "events.iterate.com/repo/github-link-configured" as const,
   payload: {
@@ -347,6 +355,47 @@ describe("RepoProcessor task change events", () => {
       beforeCommitOid: "before123",
       branch: "main",
     });
+  });
+
+  it("preserves a creation push that arrives before the created certificate", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const taskChangesForArtifactPush = vi.fn(async () => []);
+    const repo = newRepoProcessor(stream, taskChangesForArtifactPush);
+
+    await stream.append(REPO_CREATE_REQUESTED, artifactPush("main"));
+    await repo.runner.catchUp();
+    await repo.runner.catchUp();
+
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
+    ).toBe(true);
+    expect(taskChangesForArtifactPush).toHaveBeenCalledWith({
+      afterCommitOid: "after456",
+      beforeCommitOid: "before123",
+      branch: "main",
+    });
+  });
+
+  it("ignores Artifact pushes after creation has terminally failed", async () => {
+    const network = new MemoryStreamNetwork();
+    const stream = network.get("/repos/config");
+    const taskChangesForArtifactPush = vi.fn(async () => []);
+    const observeArtifactPush = vi.fn();
+    const repo = newRepoProcessor(
+      stream,
+      taskChangesForArtifactPush,
+      undefined,
+      observeArtifactPush,
+    );
+
+    await stream.append(REPO_CREATE_REQUESTED, REPO_CREATE_FAILED, artifactPush("main"));
+    await repo.runner.catchUp();
+
+    expect(observeArtifactPush).not.toHaveBeenCalled();
+    expect(
+      stream.events.some((event) => event.type === "events.iterate.com/repo/commit-completed"),
+    ).toBe(false);
   });
 
   it("ignores pushes to non-default branches", async () => {

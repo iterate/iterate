@@ -17,7 +17,7 @@ test("toggle a markdown file between Code and its rendered Preview", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // Seed a small markdown file rather than opening the large template README:
   // a short buffer settles CodeMirror well inside the tight action budget, so
   // the toggle stays clickable (and the demo reads cleanly).

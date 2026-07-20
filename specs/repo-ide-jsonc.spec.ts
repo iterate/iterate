@@ -22,7 +22,7 @@ test("a commented tsconfig still schema-validates (comments are tolerated)", asy
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // A comment, a trailing comma, and a schema violation (`strict` must be a
   // boolean). json5 tolerates the first two; the schema flags the third.
   await project.repos.get("/repos/ide").commitFiles({

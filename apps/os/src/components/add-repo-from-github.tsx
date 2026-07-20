@@ -18,6 +18,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { useItx, useItxQuery } from "iterate/react";
 import {
   assertInstallationRepoCanBeCreated,
+  githubRepoCreateRequest,
   listGithubConnections,
   type InstallationRepo,
 } from "~/components/github-installation-repos.ts";
@@ -142,20 +143,11 @@ function AddRepoFromGithubWizard({
       // The request is the repo saga's durable identity, so a retry after a
       // mid-flow failure resumes the same creation rather than starting a
       // second orchestration path in the browser.
-      await itx.repos.get(input.path).create({
-        connection,
-        owner: input.repo.owner,
-        repo: input.repo.name,
-        type: input.repo.private ? "github-private" : "github-public",
-      });
+      await itx.repos.get(input.path).create(githubRepoCreateRequest(input.repo, connection));
     },
     onSuccess: (_, variables) => {
       const github = `${variables.repo.owner}/${variables.repo.name}`;
-      toast.success(
-        variables.repo.private
-          ? `Added ${variables.path} from ${github} at depth one.`
-          : `Added ${variables.path} from ${github} with its full history.`,
-      );
+      toast.success(`Added ${variables.path} from ${github} at depth one.`);
       onAdded(variables.path);
     },
     onError: (error) => {
