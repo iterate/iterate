@@ -13,12 +13,11 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 Read-only planning is complete and the exact non-production batch was approved
 on 2026-07-20. The repository map, all fifty Doppler configs, and all ten
 GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
-has started with preview-10 Auth, Semaphore, Dummy Petshop, and partial OS
-resources. A Cloudflare account-subscription cardinality defect discovered by
-the OS ensure is fixed and confirmed live. The retry then exposed and fixed a
-fresh-slot Email Routing ordering defect; preview-10 OS resource reconciliation
-is ready to resume. Production deployment and Semaphore lease publication
-remain later, separate approval boundaries.
+is complete for all ten slots, including clean second ensures and every returned
+ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
+preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
+verification and the draft PR are next. Production deployment and Semaphore
+lease publication remain later, separate approval boundaries.
 
 ## Goal
 
@@ -106,8 +105,11 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   the state-checked manifest callback flow. Ten Slack bootstrap manifests were
   validated and created sequentially. All twenty Doppler JSON values passed
   read-back and every provider app name/ID was read back without secrets._
-- [ ] Create Cloudflare resources sequentially, record returned IDs in
+- [x] Create Cloudflare resources sequentially, record returned IDs in
   `envs.ts`, and prove idempotence with a clean second ensure pass.
+  _Auth, Semaphore, Dummy Petshop, and OS passed twice for every slot. All forty
+  assigned D1/KV IDs match live state; named DNS/R2/Queue resources were reused
+  on each second pass._
 - [ ] Run focused preview/config tests, Auth tests, typecheck, lint, and format
   checks; inspect generated Wrangler config for all ten slots.
 - [ ] Push the repository change, open a draft PR early, and keep its external-
@@ -135,10 +137,10 @@ read back from the owning system.
 | 13   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 | 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 | 15   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 16   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 17   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 18   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 19   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 16   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 17   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 18   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 19   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 
 ## Read-only inventory
 
@@ -346,3 +348,9 @@ the recorded projection.
   and OS second ensure. Every assigned ID matches `envs.ts`; no object was
   created or changed. The documented email catch-all deferral remains until
   first OS deploy and is tracked under the five-app deployment checkpoint.
+- 2026-07-20: Provisioned previews 11–19 sequentially with an audible pause
+  before every operation. For each slot, recorded its Auth D1, Semaphore D1,
+  project-directory KV, and build-cache KV IDs, then reran all four ensures.
+  Every second pass reused the exact IDs and named resources, with no creation,
+  warning, collision, or drift. No `UNPROVISIONED` marker remains in the new OS
+  or Semaphore entries.
