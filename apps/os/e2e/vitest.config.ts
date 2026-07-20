@@ -14,6 +14,7 @@ import {
   E2E_TEST_TIMEOUT_MS,
   RetryTelemetryReporter,
 } from "@iterate-com/shared/test-support/e2e-policy";
+import { E2E_FILE_TEST_CONCURRENCY } from "./test-support/concurrency.ts";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys.ts";
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
 
@@ -29,40 +30,45 @@ console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
 
-// Observed wall-clock seconds per file on a green preview lane (Depot run
-// 1wd5nxb87d, 2026-07-09). Used for longest-first scheduling below — vitest
+// Observed wall-clock seconds per file on a complete OS preview lane
+// (2026-07-20). Used for longest-first scheduling below — vitest
 // hands files to workers in sort order, so a slow file starting LAST becomes
 // the whole lane's tail (the itx catalogue at ~100s used to routinely start
 // mid-run and stretch the lane past 3 minutes). Unlisted files default to 15s
 // (roughly the observed median); exact numbers matter much less than the
 // slow/fast partition, so refresh only when the ranking visibly drifts.
 const observedFileSeconds: Record<string, number> = {
-  "agent-tools.itx.e2e.test.ts": 78,
-  "script-execution-concurrency.e2e.test.ts": 38,
+  // One shared fixture project; its slowest case runs four runtimes serially.
+  "examples-matrix.e2e.test.ts": 132,
+  "workspace.itx.e2e.test.ts": 67,
+  "itx-workers.e2e.test.ts": 51,
+  "worker-build.e2e.test.ts": 45,
+  "sandbox-timeout.e2e.test.ts": 43,
+  "script-execution-concurrency.e2e.test.ts": 42,
+  "repo-history.itx.e2e.test.ts": 41,
+  "agent-tools.itx.e2e.test.ts": 38,
+  "agent-response-cache.e2e.test.ts": 37,
   "streams.e2e.test.ts": 34,
-  "stream-lifecycle.e2e.test.ts": 33,
   "sandbox-egress.e2e.test.ts": 33,
+  "stream-lifecycle.e2e.test.ts": 33,
+  "stateful-worker-alarm.e2e.test.ts": 32,
   "live-capability-websocket.e2e.test.ts": 31,
+  "integrations-userspace.e2e.test.ts": 30,
   // The itx-*.e2e.test.ts entries are the old itx.e2e.test.ts catalogue
   // (104s as one file) split for file-level parallelism; per-file numbers
   // are estimates proportional to test counts, not yet observed.
   "itx-agents.e2e.test.ts": 25,
-  "integrations-userspace.e2e.test.ts": 23,
   "agent-codemode-fence.itx.e2e.test.ts": 19,
   "itx-connect.e2e.test.ts": 18,
-  "itx-workers.e2e.test.ts": 18,
   "slack-agent.e2e.test.ts": 18,
   "project-ingress.e2e.test.ts": 18,
   "scheduler.e2e.test.ts": 16,
   "agent-script-result-spill.itx.e2e.test.ts": 16,
   "itx-live-capabilities.e2e.test.ts": 15,
   "stream-security.e2e.test.ts": 15,
-  "worker-build.e2e.test.ts": 15,
-  "workspace.itx.e2e.test.ts": 13,
   "github-backed-repo.e2e.test.ts": 12,
   "itx-core.e2e.test.ts": 10,
   "itx-subscribe.e2e.test.ts": 10,
-  "repo-history.itx.e2e.test.ts": 10,
   "stream-wire.e2e.test.ts": 10,
   "itx-egress.e2e.test.ts": 8,
   "admin-project.itx.e2e.test.ts": 8,
@@ -99,27 +105,15 @@ const sharedResolve = {
 export default defineConfig({
   test: {
     // Run-scheduler options live at the ROOT test level — this is where vitest
-    // reads them, even with `projects`. Parallel in CI: each test provisions
-    // its own project against a deployed slot, so FILES are independent.
+    // reads them, even with `projects`. Parallel in CI: files either provision
+    // isolated projects or marker-isolate the examples matrix's shared fixture.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // 4 workers × maxConcurrency 2 = peak ~8 concurrent tests. History of
-    // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
-    // (DO-storage timeouts), 4×3 = ~12 still produced rotating
-    // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
-    // while. A later peak-12 revalidation looked green, but the agent-presence
-    // preview lane (2026-07-17) exposed three Cloudflare Durable Object storage
-    // resets during concurrent project births; one was hidden by the suite's
-    // single retry and two recovered inside the birth saga. Re-running the
-    // complete runnable catalogue at peak 8 with retries disabled produced
-    // zero storage resets in the matching trace window. The preview runner
-    // now keeps this peak from overlapping Playwright's eight workers; that
-    // omitted lane-wide load had still produced project-processor timeouts.
-    // Keep this at 4 unless a preview marathon plus trace audit proves a
-    // higher setting clean.
-    maxWorkers: 4,
+    // Twelve files × two cases keeps the proven aggregate peak while allowing
+    // the examples matrix to run four isolated runtimes inside each case.
+    maxWorkers: 12,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
-    maxConcurrency: 2,
+    maxConcurrency: E2E_FILE_TEST_CONCURRENCY,
     passWithNoTests: true,
     // Retry telemetry (policy rule 5 — see @iterate-com/shared
     // test-support/e2e-policy/budgets.ts): reporters DO belong at the root

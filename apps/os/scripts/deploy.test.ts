@@ -35,9 +35,9 @@ describe("preview Petshop deployment invariant", () => {
 });
 
 describe("PostHog source-map build credentials", () => {
-  it("passes the Doppler credentials to Vite without adding Worker secrets", () => {
+  it("passes production Doppler credentials to Vite without adding Worker secrets", () => {
     expect(
-      posthogBuildEnv({
+      posthogBuildEnv("prd", {
         POSTHOG_PERSONAL_API_KEY: "phx_personal",
         POSTHOG_PROJECT_ID: "123456",
       }),
@@ -47,15 +47,19 @@ describe("PostHog source-map build credentials", () => {
     });
   });
 
+  it("does not require or expose source-map credentials in previews", () => {
+    expect(posthogBuildEnv("preview_4", {})).toEqual({});
+  });
+
   it.each(["POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"])(
-    "fails the deploy before building when %s is absent",
+    "fails a production deploy before building when %s is absent",
     (missing) => {
       const secrets = {
         POSTHOG_PERSONAL_API_KEY: "phx_personal",
         POSTHOG_PROJECT_ID: "123456",
       };
       delete secrets[missing as keyof typeof secrets];
-      expect(() => posthogBuildEnv(secrets)).toThrow(missing);
+      expect(() => posthogBuildEnv("prd", secrets)).toThrow(missing);
     },
   );
 });

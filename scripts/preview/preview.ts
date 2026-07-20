@@ -1283,6 +1283,7 @@ export type CloudflarePreviewApp = {
     projectHostnameBases?: string[];
   };
   paths: string[];
+  /** Apps co-selected so this app deploys and tests against one coherent head. */
   previewDependencies?: CloudflarePreviewAppSlug[];
   /**
    * Public URLs of deployed preview dependencies that the app's e2e command
@@ -1525,7 +1526,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // propagating the new code to Durable Object nodes after wrangler exits.
     // Hold the exact deployed version steady at the edge before creating any
     // projects, otherwise the first object calls can be reset mid-saga.
-    previewReadyWorkerVersion: { stableForMs: 10_000 },
+    // Ten seconds still allowed Durable Object code-update resets for roughly
+    // another 30 seconds in a clean full-fleet run. Keep that rollout window
+    // outside project creation until post-deletion traces prove it shorter.
+    previewReadyWorkerVersion: { stableForMs: 40_000 },
     paths: [
       "apps/os/**",
       // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
@@ -1539,16 +1543,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS and binds auth's default RPC entrypoint, and its
-    // integration e2e talks to the slot's deployed dummy Petshop. Both must
-    // finish deploying before OS starts.
+    // OS bakes auth JWKS and binds auth's RPC entrypoint, and its integration
+    // e2e uses dummy Petshop. Co-select both; each deploy performs its own
+    // readiness polling, so all three can start together.
     previewDependencies: ["auth", "dummy-petshop"],
-    // Budgets sit ~25% above the observed green floor after the TUI, Vitest,
-    // and Playwright lanes became sequential to cap deployed-slot load
-    // (deploy 89–92s, e2e 431–441s as of 2026-07-18). Crossing them warns,
-    // never fails.
-    previewDeployBudgetMs: 115_000,
-    previewTestBudgetMs: 560_000,
+    previewDeployBudgetMs: 90_000,
+    previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
@@ -1564,8 +1564,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
-        // Remove stale retry-telemetry files FIRST — before any step that can
-        // exit the lane early (the smoke gate below). They survive from a
+        // Remove stale retry-telemetry files before any lane starts. They survive from a
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
@@ -1574,27 +1573,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
-        // Create-saga smoke: one sequential real project create pays the
-        // cold-start costs (cold DO chain, repo seed, worker probe) that
-        // otherwise surface as rotating "saw 0 events" timeout flakes across
-        // the concurrent e2e suites (see tasks/os-cold-create-latency.md),
-        // and fails loudly if the slot is broken before the suites start.
-        // The curl-round HTTP warmups that used to run alongside it were
-        // treating symptoms of zombie routes (routes dead at the edge →
-        // 522s) — structurally gone now that deploys never delete workers
-        // (routes are declared in wrangler config; DNS is create-only).
-        // Keep the gate visible and separately bounded. Before this watchdog,
-        // an RPC wedge before waitForEvent's 90s greeting timeout produced no
-        // suite output and survived until Depot killed the entire 10m job.
-        `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
-        // The built-package PTY spec, e2e vitest lane, and Playwright specs all
-        // hit the same deployed slot. They provision independent projects,
-        // but that does not make their aggregate load independent: overlapping
-        // vitest's eight in-flight tests with Playwright's eight workers caused
-        // project-processor self-pull timeouts while both suites stayed clean
-        // in isolation. Run the three remote suites sequentially so the slot's
-        // tested peak is eight. The browser download above still overlaps the
-        // remote work because it does not touch the slot.
+        // Smoke, TUI, Vitest, and Playwright own isolated state, so start them
+        // together. The examples matrix shares one project but marker-isolates
+        // every mutable resource.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -1609,16 +1590,20 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // Retry telemetry: the TUI and vitest lanes write the same compact
         // JSON shape (stale files were removed at the top of this script) for
         // preview.ts to fold into the PR body alongside Playwright's report.
-        `TUI_OK=0; E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts > /tmp/os-preview-tui.log 2>&1 || TUI_OK=$?`,
-        `E2E_OK=0; E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || E2E_OK=$?`,
-        'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
-        // Capture every lane's exit without aborting (set -e), then replay the
-        // redirected logs and fail once all three suites have had a chance to
-        // report their own result.
-        `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
+        'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
+        'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
+        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
+        'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
+        'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
+        "cat /tmp/os-preview-smoke.log",
         "cat /tmp/os-preview-vitest.log",
         "cat /tmp/os-preview-tui.log",
-        '[ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
+        '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
     collectRetryTelemetry: async ({ repositoryRoot }) => {
@@ -1648,8 +1633,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
-    // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
-    // auth, same as OS), so auth must finish before semaphore starts.
+    // Co-select auth; the deploy's own readiness poll removes any ordering need.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -4763,27 +4747,9 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 }
 
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
-  const selectedSlugs = new Set(apps.map((app) => app.slug));
-  const pendingSlugs = new Set(selectedSlugs);
-  const batches: PreviewAppRuntime[][] = [];
-
-  while (pendingSlugs.size > 0) {
-    const batch = apps.filter(
-      (app) =>
-        pendingSlugs.has(app.slug) &&
-        (app.previewDependencies ?? []).every(
-          (dependency) => !selectedSlugs.has(dependency) || !pendingSlugs.has(dependency),
-        ),
-    );
-    if (batch.length === 0) {
-      throw new Error(`Preview app dependencies contain a cycle: ${[...pendingSlugs].join(", ")}`);
-    }
-
-    batches.push(batch);
-    for (const app of batch) pendingSlugs.delete(app.slug);
-  }
-
-  return batches;
+  // Dependencies select a coherent set; they are not ordering constraints.
+  // Each app's deploy command owns its readiness checks, so start the fleet together.
+  return apps.length === 0 ? [] : [[...apps]];
 }
 
 async function mapWithConcurrency<T, Result>(

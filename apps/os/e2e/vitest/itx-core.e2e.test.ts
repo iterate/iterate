@@ -71,7 +71,15 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(messages).toContainEqual([
     expect.any(Number),
     "out",
-    ["push", ["pipeline", 1, ["projects", "create"], [{ slug: "alice-project" }]]],
+    [
+      "push",
+      [
+        "pipeline",
+        1,
+        ["projects", "create"],
+        [{ projectId: description.projectId, slug: "alice-project" }],
+      ],
+    ],
   ]);
 
   using stream = project.streams.get("/");

@@ -73,8 +73,12 @@ export function assertPreviewPetshopIntegrationConfigured(
   }
 }
 
-/** Build-only PostHog credentials: available to Vite, never shipped as Worker bindings. */
-export function posthogBuildEnv(secrets: Record<string, string | undefined>) {
+/** Production-only PostHog build credentials; never shipped as Worker bindings. */
+export function posthogBuildEnv(
+  envName: string,
+  secrets: Record<string, string | undefined>,
+): Record<string, string> {
+  if (envName !== "prd") return {};
   return {
     POSTHOG_PERSONAL_API_KEY: requiredBuildSecret(secrets, "POSTHOG_PERSONAL_API_KEY"),
     POSTHOG_PROJECT_ID: requiredBuildSecret(secrets, "POSTHOG_PROJECT_ID"),
@@ -147,7 +151,7 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     optionalSecrets: OPTIONAL_SECRETS,
-    buildEnv: (ctx) => posthogBuildEnv(ctx.secrets),
+    buildEnv: (ctx) => posthogBuildEnv(ctx.name, ctx.secrets),
     prepare: async (ctx, secretValues) => {
       // These are permanent fail-closed invariants, not a migration path.
       // Omitted Wrangler secrets survive code uploads, so check the current

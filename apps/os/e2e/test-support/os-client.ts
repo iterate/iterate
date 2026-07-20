@@ -4,6 +4,7 @@ import type { RpcStub } from "capnweb";
 import { connectItx } from "iterate/node";
 import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "./dev-server.ts";
+import { withTestProjectIdentifiers } from "./with-test-project-identifiers.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -44,7 +45,9 @@ export function createAdminOsItx(input: {
 export function createAdminOsItx(input?: { baseUrl?: string; context?: string }) {
   const baseUrl = input?.baseUrl ?? requireBaseUrl();
   const auth = { type: "admin-secret" as const, secret: requireAdminBearerToken() };
-  return input?.context
-    ? connectItx({ auth, baseUrl, projectId: input.context })
-    : connectItx({ auth, baseUrl });
+  return withTestProjectIdentifiers(
+    input?.context
+      ? connectItx({ auth, baseUrl, projectId: input.context })
+      : connectItx({ auth, baseUrl }),
+  );
 }

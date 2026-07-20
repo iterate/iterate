@@ -99,17 +99,17 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  test("deploys auth and dummy-petshop before OS", () => {
+  test("deploys OS and its selected dependencies in one batch", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["auth", "dummy-petshop"], ["os"]]);
+    ).toEqual([["os", "auth", "dummy-petshop"]]);
   });
 
-  test("keeps auth dependents parallel after auth is ready", () => {
+  test("deploys the whole selected fleet in one batch", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
@@ -118,10 +118,7 @@ describe("preview deploy ordering", () => {
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([
-      ["auth", "dummy-petshop"],
-      ["os", "semaphore", "streams-example-app"],
-    ]);
+    ).toEqual([["os", "semaphore", "streams-example-app", "auth", "dummy-petshop"]]);
   });
 });
 
@@ -451,45 +448,50 @@ describe("preview test commands", () => {
     expect(workflow).not.toContain("            /tmp/marathon");
   });
 
-  test("keeps the OS TUI, vitest, and Playwright sub-lanes sequential", () => {
+  test("starts every isolated OS sub-lane in parallel", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // Only the chromium download runs in the background: it does not touch the
-    // deployed slot. The three remote suites must not overlap their independent
-    // worker pools and accidentally exceed the slot's tested concurrency.
-    const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts >";
-    const e2eLane = "pnpm e2e --project node >";
+    const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
+    const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts";
+    const e2eLane = "pnpm e2e --project node";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
+    expect(script).toContain(smokeLane);
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
+    expect(script).toContain("env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
     expect(script).toContain('wait "$PW_INSTALL_PID"');
-    expect(script).not.toContain("TUI_PID");
-    expect(script).not.toContain("E2E_PID");
+    expect(script).toContain("SMOKE_PID");
+    expect(script).toContain("TUI_PID");
+    expect(script).toContain("E2E_PID");
+    expect(script).toContain('wait "$SMOKE_PID"');
+    expect(script).toContain('wait "$TUI_PID"');
+    expect(script).toContain('wait "$E2E_PID"');
+    expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
-    // Install kicks off first; each remote suite finishes before the next one
-    // starts, and the install is joined before Playwright needs Chromium.
-    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(tuiLane));
-    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(e2eLane));
-    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
-    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
-    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
+    // Each background lane starts before any join. Playwright starts as soon
+    // as Chromium is ready while those remote lanes are still running.
+    for (const lane of [smokeLane, tuiLane, e2eLane]) {
+      expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
+    }
+    expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
+    expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$E2E_PID"'));
   });
 
-  test("budgets the serialized OS preview lane from its measured green floor", () => {
+  test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
-      previewDeployBudgetMs: 115_000,
-      previewTestBudgetMs: 560_000,
+      previewDeployBudgetMs: 90_000,
+      previewTestBudgetMs: 100_000,
     });
 
     const workflow = parseYaml(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ) as { jobs: { preview: { "timeout-minutes": number } } };
-    // The ceiling leaves room for one retry of the slowest remote spec; 15
-    // minutes killed a 55/56-green run mid-retry and lost its artifacts.
+    // This is a diagnostic backstop, not the expected duration. Individual
+    // lanes retain tighter watchdogs and only tests own retries.
     expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
   });
 });

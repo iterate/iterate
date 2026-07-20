@@ -84,19 +84,12 @@ jobs:
       (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
-    # 8-core: the job is network-bound (waiting on deployed slots), not
-    # CPU-bound. Depot metrics on a full run showed peak CPU ~30% and peak
-    # memory ~10% of a 16-core box, so 8 cores keeps peak ~60% with headroom
-    # while halving the per-second cost. Re-check with
-    # `depot ci metrics --run <id>` before changing.
-    runs-on: depot-ubuntu-24.04-8
-    # Hard backstop on ONE attempt. The TUI, Vitest, and Playwright lanes are
-    # deliberately serialized to cap slot load (measured green runs ~9m30
-    # without container builds); each remote lane retains its own 180-480s
-    # watchdog, and this outer bound catches combined lane, setup, or deploy
-    # degeneration (2026-07-09 saw 31m and ~90m runaway attempts). Twenty
-    # minutes leaves room for one retry of the slowest remote spec — 15 killed
-    # a 55/56-green run mid-retry, which also lost its failure artifacts.
+    # The overlapping test pools peaked below ten cores on the 32-core runner;
+    # use the supported 16-core shape and keep allocation out of the long tail.
+    runs-on: depot-ubuntu-24.04-16
+    # Hard backstop on one attempt. Each parallel sub-lane retains its own
+    # tighter watchdog; this outer bound catches setup, deploy, and reporting
+    # runaways while leaving enough time to preserve failure artifacts.
     timeout-minutes: 20
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}

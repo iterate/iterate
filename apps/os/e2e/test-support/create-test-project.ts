@@ -3,6 +3,7 @@ import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug
 import { connectItx } from "iterate/node";
 import type { Agent, Project as ProjectRpcTarget } from "../../src/itx-api.generated.ts";
 import { createAdminOsItx, requireBaseUrl } from "./os-client.ts";
+import { freshTestProjectId } from "./with-test-project-identifiers.ts";
 
 /**
  * Create a disposable project against the deployment under test via itx (the
@@ -18,9 +19,10 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   const baseUrl = requireBaseUrl();
   // Trimmed: you get invalid DNS name errors if the slug is too long.
   const slug = uniqueFixtureSlug(opts.slugPrefix, { maxPrefixLength: 20 });
+  const projectId = freshTestProjectId();
 
   using session = createAdminOsItx({ baseUrl });
-  using created = session.projects.create({ slug });
+  using created = session.projects.create({ projectId, slug });
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 

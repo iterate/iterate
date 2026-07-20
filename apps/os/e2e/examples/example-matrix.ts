@@ -28,7 +28,13 @@ const AsyncFunction = async function () {}.constructor as new (
 
 export async function runExampleCode(
   runtime: MatrixRuntime,
-  input: { code: string; id: string; projectId: string; vars: Record<string, unknown> },
+  input: {
+    code: string;
+    id: string;
+    projectId: string;
+    timeoutMs: number;
+    vars: Record<string, unknown>;
+  },
 ): Promise<unknown> {
   // Exactly one attempt: transient absorption is the vitest CI retry's job
   // (E2E_CI_RETRIES, docs/testing.md#retries-and-timeouts). A retry wrapper
@@ -53,6 +59,7 @@ const APP_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 async function runInCli(input: {
   code: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
@@ -74,7 +81,13 @@ async function runInCli(input: {
       "--base-url",
       baseUrl(),
     ],
-    { cwd: APP_ROOT, env: process.env, maxBuffer: 10 * 1024 * 1024 },
+    {
+      cwd: APP_ROOT,
+      env: process.env,
+      killSignal: "SIGKILL",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: input.timeoutMs,
+    },
   );
   return JSON.parse(stdout);
 }
@@ -82,39 +95,66 @@ async function runInCli(input: {
 async function runInNode(input: {
   code: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   const script = new AsyncFunction("itx", "vars", "RpcTarget", input.code);
   using project = connectProject(input.projectId);
-  return await script(project, input.vars, RpcTarget);
+  return await finishBeforeRuntimeDeadline("node", input.timeoutMs, () =>
+    script(project, input.vars, RpcTarget),
+  );
 }
 
 async function runInRunScript(input: {
   id: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
   using project = connectProject(input.projectId);
   // The shared by-id door (test-support/run-example.ts) IS this runtime:
   // the matrix proves the exact envelope any e2e test gets from runExample.
-  return await runExample(input.id, {
-    capabilityHost: project.capabilityHost,
-    vars: input.vars,
-  });
+  return await finishBeforeRuntimeDeadline("run-script", input.timeoutMs, () =>
+    runExample(input.id, {
+      capabilityHost: project.capabilityHost,
+      vars: input.vars,
+    }),
+  );
 }
 
 async function runInProjectWorker(input: {
   code: string;
-  id?: string;
+  id: string;
   projectId: string;
+  timeoutMs: number;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
-  if (!input.id) throw new Error("project-worker runs are invoked by example id.");
   using project = connectProject(input.projectId);
   const worker = project.worker as unknown as {
     runItxExample(input: { id: string; vars: Record<string, unknown> }): Promise<unknown>;
   };
-  return await worker.runItxExample({ id: input.id, vars: input.vars });
+  return await finishBeforeRuntimeDeadline("project-worker", input.timeoutMs, () =>
+    worker.runItxExample({ id: input.id, vars: input.vars }),
+  );
+}
+
+async function finishBeforeRuntimeDeadline<Result>(
+  runtime: MatrixRuntime,
+  timeoutMs: number,
+  operation: () => Promise<Result>,
+): Promise<Result> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error(`${runtime} runtime exceeded ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([operation(), deadline]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /**
@@ -122,9 +162,10 @@ async function runInProjectWorker(input: {
  * example baked in as `async (itx, vars) => { <body> }`, dispatched by id
  * through ONE exported method. `project.worker.runItxExample(...)` reaches the
  * repo-sourced default worker, and the script's handle is the worker's own
- * `await this.env.ITX.get()` — the same project-scoped itx every other runtime
- * connects to from outside. Plain JavaScript: dynamic workers may import
- * "cloudflare:workers" and nothing else.
+ * `await this.env.ITX.get()`. Each runtime has an exclusive project lease, so
+ * this proves the same project-scoped itx semantics without sharing mutable
+ * repo state with the other runtimes. Plain JavaScript: dynamic workers may
+ * import "cloudflare:workers" and nothing else.
  */
 export function projectWorkerRunnerSource(examples: ItxExample[]): string {
   const scripts = examples

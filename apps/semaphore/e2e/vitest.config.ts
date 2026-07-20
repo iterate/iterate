@@ -4,7 +4,8 @@ import { E2E_CI_RETRIES, E2E_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-su
 export default defineConfig({
   test: {
     environment: "node",
-    fileParallelism: false,
+    // Both files generate unique resource types and clean up their own rows.
+    fileParallelism: process.env.CI === "true",
     hookTimeout: E2E_TEST_TIMEOUT_MS,
     include: ["./e2e/vitest/**/*.test.ts"],
     testTimeout: E2E_TEST_TIMEOUT_MS,
