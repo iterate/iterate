@@ -81,8 +81,14 @@ describe("secret reference parsing", () => {
       method: "POST",
     });
 
-    await expect(secretReferencesFromRequest(request)).resolves.toEqual([{ path }]);
-    await expect(secretReferencePathsFromRequest(request)).resolves.toEqual([path]);
+    await expect(secretReferencesFromRequest(request)).resolves.toMatchObject({
+      problems: [],
+      references: [{ path }],
+    });
+    await expect(secretReferencePathsFromRequest(request)).resolves.toMatchObject({
+      paths: [path],
+      problems: [],
+    });
   });
 
   test("parses path-only and path+field placeholders across headers", async () => {
@@ -98,10 +104,10 @@ describe("secret reference parsing", () => {
     ]);
     await expect(
       secretReferencePathsFromRequest(new Request("https://petshop.example/api", { headers })),
-    ).resolves.toEqual([
-      "/secrets/integrations/petshop-home",
-      "/secrets/integrations/petshop-home/jonas",
-    ]);
+    ).resolves.toMatchObject({
+      paths: ["/secrets/integrations/petshop-home", "/secrets/integrations/petshop-home/jonas"],
+      problems: [],
+    });
   });
 
   test("whole-material placeholder (no field key) parses", () => {
@@ -120,8 +126,14 @@ describe("secret reference parsing", () => {
       { method: "POST" },
     );
     expect(request.url).toContain("%7B"); // the parser really did encode it
-    await expect(secretReferencesFromRequest(request)).resolves.toEqual([{ path }]);
-    await expect(secretReferencePathsFromRequest(request)).resolves.toEqual([path]);
+    await expect(secretReferencesFromRequest(request)).resolves.toMatchObject({
+      problems: [],
+      references: [{ path }],
+    });
+    await expect(secretReferencePathsFromRequest(request)).resolves.toMatchObject({
+      paths: [path],
+      problems: [],
+    });
   });
 
   test("URL and header placeholders addressing the same secret dedupe to one reference", async () => {
@@ -132,7 +144,28 @@ describe("secret reference parsing", () => {
         headers: { "x-also": `getSecret({ path: "${path}" })` },
       },
     );
-    await expect(secretReferencesFromRequest(request)).resolves.toEqual([{ path }]);
+    await expect(secretReferencesFromRequest(request)).resolves.toMatchObject({
+      problems: [],
+      references: [{ path }],
+    });
+  });
+
+  test("reports malformed opted-in JSON without throwing", async () => {
+    const result = await secretReferencePathsFromRequest(
+      new Request("https://api.example.com/messages", {
+        body: "{not-json",
+        headers: {
+          "content-type": "application/json",
+          "x-iterate-secret-template": "json",
+        },
+        method: "POST",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      paths: [],
+      problems: [{ code: "secret_json_template_invalid_body" }],
+    });
   });
 });
 
