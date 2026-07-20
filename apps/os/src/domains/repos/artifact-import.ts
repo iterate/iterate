@@ -1,4 +1,4 @@
-export type GithubArtifactImport = {
+type GithubArtifactImport = {
   branch: string;
   depth: number;
   owner: string;
