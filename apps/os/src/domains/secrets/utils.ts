@@ -48,7 +48,10 @@ export type PlatformReference = { platform: string };
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
   if (!normalized.startsWith("/secrets/")) {
-    throw new Error(`secret path must start with "/secrets/", got "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path must start with "/secrets/", got "${normalized}"`,
+    );
   }
   // A secret path becomes a Durable Object name (`durable-object-names.ts`),
   // and that name is reparsed with WHATWG `URL` — which collapses `.`/`..`
@@ -58,11 +61,17 @@ export function normalizeSecretPath(path: string): string {
   // through it) so the addressed path and the displayed path cannot diverge.
   // eslint-disable-next-line no-control-regex -- control chars are exactly what we reject
   if (/[\u0000-\u0020\u007f?#%\\]/.test(normalized)) {
-    throw new Error(`secret path has an illegal character: "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path has an illegal character: "${normalized}"`,
+    );
   }
   for (const segment of normalized.slice(1).split("/")) {
     if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`secret path has an empty or dot segment: "${normalized}"`);
+      throw new SecretSubstitutionError(
+        "secret_reference_invalid_path",
+        `secret path has an empty or dot segment: "${normalized}"`,
+      );
     }
   }
   return normalized;
@@ -87,14 +96,24 @@ export async function secretReferencesFromRequest(
   request: Request,
 ): Promise<{ problems: SecretSubstitutionError[]; references: SecretReference[] }> {
   const byKey = new Map<string, SecretReference>();
-  request.headers.forEach((value) => collectSecretReferences(byKey, value));
-  collectSecretReferences(byKey, decodedUrl(request.url));
-  const jsonTemplate = await inspectSecretJsonTemplate(request);
-  if (jsonTemplate.problem !== undefined) {
-    return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+  try {
+    request.headers.forEach((value) => collectSecretReferences(byKey, value));
+    collectSecretReferences(byKey, decodedUrl(request.url));
+    const jsonTemplate = await inspectSecretJsonTemplate(request);
+    if (jsonTemplate.problem !== undefined) {
+      return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+    }
+    if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
+    return { problems: [], references: [...byKey.values()] };
+  } catch (error) {
+    if (
+      error instanceof SecretSubstitutionError &&
+      error.code === "secret_reference_invalid_path"
+    ) {
+      return { problems: [error], references: [...byKey.values()] };
+    }
+    throw error;
   }
-  if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
-  return { problems: [], references: [...byKey.values()] };
 }
 
 /** The distinct secret PATHS referenced across a request's headers, URL, and
@@ -531,6 +550,7 @@ type SecretErrorCode =
   | "secret_not_found"
   | "secret_reference_field_not_found"
   | "secret_reference_foreign"
+  | "secret_reference_invalid_path"
   | "secret_reference_outside_url_path"
   | "secret_reference_required";
 

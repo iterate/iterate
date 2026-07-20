@@ -342,7 +342,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // getSecret placeholder must not be a way to slip a `deny`/`hold` rule —
     // just without the secret-path matchers. A request that then matches no
     // rule falls to the egress lanes, which report the canonical error.
-    const { paths: secretPaths } = await secretReferencePathsFromRequest(request);
+    const scanned = await secretReferencePathsFromRequest(request);
+    const secretPaths = scanned.problems.length === 0 ? scanned.paths : [];
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
     if (rule === undefined) return this.#egress(request);
@@ -353,6 +354,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
         ruleKey: rule.ruleKey,
       });
     }
+    if (scanned.problems[0] !== undefined) return this.#egress(request);
     return this.#holdForHumanApproval({ request, rule, secretPaths });
   }
 

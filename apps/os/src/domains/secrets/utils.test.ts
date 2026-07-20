@@ -168,6 +168,17 @@ describe("secret reference parsing", () => {
     });
   });
 
+  test("reports an invalid secret path without throwing", async () => {
+    const result = await secretReferencePathsFromRequest(
+      new Request('https://api.example.com/getSecret({ path: "/not-a-secret" })'),
+    );
+
+    expect(result).toMatchObject({
+      paths: [],
+      problems: [{ code: "secret_reference_invalid_path" }],
+    });
+  });
+
   test("stops reading an opted-in JSON body once it exceeds the byte limit", async () => {
     let pulls = 0;
     const body = new ReadableStream<Uint8Array>({
