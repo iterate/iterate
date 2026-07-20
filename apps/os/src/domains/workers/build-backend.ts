@@ -96,87 +96,83 @@ function collectWorkerOutputs(result: CreateWorkerResult): {
 }
 
 /**
- * Workerd provides these without a modules-map entry when nodejs_compat is on
- * (and cloudflare: always). Everything else that still appears as a bare
- * import after bundling needs an explicit module or the isolate will not load.
+ * Node-only packages that worker-bundler often leaves as bare externals when
+ * bundling SDKs like @slack/web-api / axios. They are not needed under
+ * workerd (native fetch, no HTTP proxy agents). Allow-listed rather than
+ * "stub every leftover bare import" so intentional externals (zod for the
+ * processors virtual module, user deps the installer missed) stay loud.
  */
-const WORKERD_RUNTIME_MODULE_PREFIXES = ["cloudflare:", "node:", "bun:"] as const;
-const WORKERD_BARE_NODE_BUILTINS = new Set([
-  "assert",
-  "async_hooks",
-  "buffer",
-  "child_process",
-  "cluster",
-  "console",
-  "constants",
-  "crypto",
-  "dgram",
-  "diagnostics_channel",
-  "dns",
-  "domain",
-  "events",
-  "fs",
-  "http",
-  "http2",
-  "https",
-  "inspector",
-  "module",
-  "net",
-  "os",
-  "path",
-  "perf_hooks",
-  "process",
-  "punycode",
-  "querystring",
-  "readline",
-  "repl",
-  "stream",
-  "string_decoder",
-  "sys",
-  "timers",
-  "tls",
-  "trace_events",
-  "tty",
-  "url",
-  "util",
-  "v8",
-  "vm",
-  "wasi",
-  "worker_threads",
-  "zlib",
+const STUBBABLE_NPM_PACKAGES = new Set([
+  "agent-base",
+  "form-data",
+  "http-proxy-agent",
+  "https-proxy-agent",
+  "pac-proxy-agent",
+  "proxy-agent",
+  "proxy-from-env",
+  "socks-proxy-agent",
 ]);
 
 /** Exported for unit tests — pure rewrite over a modules map. */
 export function stubBareNpmExternals(modules: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = { ...modules };
   const needed = new Set<string>();
-  for (const source of Object.values(out)) {
+  for (const source of Object.values(modules)) {
     for (const spec of bareModuleSpecifiers(source)) {
-      if (isWorkerdRuntimeModule(spec)) continue;
-      if (spec in out) continue;
+      if (!shouldStubBareNpmPackage(spec)) continue;
+      if (spec in modules) continue;
       needed.add(spec);
     }
   }
+  if (needed.size === 0) return modules;
+
+  // Relative stub paths: Worker Loader module keys are file-like. Rewriting
+  // the import keeps resolution inside the modules map without relying on
+  // bare package-name keys.
+  const out: Record<string, string> = {};
+  for (const [name, source] of Object.entries(modules)) {
+    let rewritten = source;
+    for (const spec of needed) {
+      const rel = `./${stubModulePath(spec)}`;
+      const q = JSON.stringify(rel);
+      rewritten = rewritten
+        .replaceAll(`from "${spec}"`, `from ${q}`)
+        .replaceAll(`from '${spec}'`, `from ${q}`)
+        .replaceAll(`require("${spec}")`, `require(${q})`)
+        .replaceAll(`require('${spec}')`, `require(${q})`)
+        .replaceAll(`import("${spec}")`, `import(${q})`)
+        .replaceAll(`import('${spec}')`, `import(${q})`)
+        .replaceAll(`import "${spec}"`, `import ${q}`)
+        .replaceAll(`import '${spec}'`, `import ${q}`);
+    }
+    out[name] = rewritten;
+  }
   for (const spec of needed) {
-    // Dual CJS/ESM surface: esbuild may emit either import or require for the
-    // same leftover external. Empty default is enough for optional SDK paths
-    // (proxy agents, node form-data) that user code does not exercise.
-    out[spec] =
-      `"use strict";\n` +
-      `const empty = Object.create(null);\n` +
-      `export default empty;\n` +
-      `export const __esModule = true;\n`;
+    const path = stubModulePath(spec);
+    if (!(path in out)) {
+      out[path] =
+        `"use strict";\n` +
+        `const empty = Object.create(null);\n` +
+        `export default empty;\n` +
+        `export const __esModule = true;\n`;
+    }
   }
   return out;
 }
 
-function isWorkerdRuntimeModule(spec: string): boolean {
-  if (WORKERD_RUNTIME_MODULE_PREFIXES.some((prefix) => spec.startsWith(prefix))) return true;
-  if (WORKERD_BARE_NODE_BUILTINS.has(spec)) return true;
-  // Subpaths of node builtins (stream/promises, fs/promises, …)
+function shouldStubBareNpmPackage(spec: string): boolean {
+  if (STUBBABLE_NPM_PACKAGES.has(spec)) return true;
   const slash = spec.indexOf("/");
-  if (slash > 0 && WORKERD_BARE_NODE_BUILTINS.has(spec.slice(0, slash))) return true;
+  if (slash > 0 && STUBBABLE_NPM_PACKAGES.has(spec.slice(0, slash))) return true;
+  // Scoped packages: @scope/name
+  if (spec.startsWith("@")) {
+    const parts = spec.split("/");
+    if (parts.length >= 2 && STUBBABLE_NPM_PACKAGES.has(`${parts[0]}/${parts[1]}`)) return true;
+  }
   return false;
+}
+
+function stubModulePath(spec: string): string {
+  return `.iterate-external/${spec.replace(/^@/, "").replaceAll("/", "__")}.js`;
 }
 
 /** Bare package / builtin specifiers referenced by import or require. */

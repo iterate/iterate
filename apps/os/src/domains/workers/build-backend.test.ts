@@ -21,26 +21,26 @@ describe("bareModuleSpecifiers", () => {
 });
 
 describe("stubBareNpmExternals", () => {
-  it("adds stub modules for leftover npm bare imports", () => {
+  it("rewrites allow-listed leftover npm bare imports to relative stubs", () => {
     const modules = {
       "bundle.js":
-        'import Agent from "https-proxy-agent";\nimport "cloudflare:workers";\nexport default {};\n',
+        'import Agent from "https-proxy-agent";\nimport "cloudflare:workers";\nimport { z } from "zod";\nexport default {};\n',
     };
     const out = stubBareNpmExternals(modules);
-    expect(out["https-proxy-agent"]).toContain("export default");
-    expect(out["bundle.js"]).toBe(modules["bundle.js"]);
-    // Runtime modules stay external — no stub entry.
-    expect(out["cloudflare:workers"]).toBeUndefined();
+    expect(out["bundle.js"]).toContain('from "./.iterate-external/https-proxy-agent.js"');
+    expect(out["bundle.js"]).toContain('from "zod"'); // intentional external stays
+    expect(out["bundle.js"]).toContain('import "cloudflare:workers"');
+    expect(out[".iterate-external/https-proxy-agent.js"]).toContain("export default");
+    // Never invent bare package-name module keys.
+    expect(out["https-proxy-agent"]).toBeUndefined();
+    expect(out["zod"]).toBeUndefined();
   });
 
-  it("does not stub bare node builtins that nodejs_compat provides", () => {
+  it("does not touch node builtins or unlisted packages", () => {
     const modules = {
       "bundle.js": 'import fs from "fs";\nimport path from "path";\nimport "stream/promises";\n',
     };
-    const out = stubBareNpmExternals(modules);
-    expect(out["fs"]).toBeUndefined();
-    expect(out["path"]).toBeUndefined();
-    expect(out["stream/promises"]).toBeUndefined();
+    expect(stubBareNpmExternals(modules)).toEqual(modules);
   });
 
   it("does not overwrite an already-present module key", () => {
@@ -50,5 +50,6 @@ describe("stubBareNpmExternals", () => {
     };
     const out = stubBareNpmExternals(modules);
     expect(out["form-data"]).toBe("export default 'real';\n");
+    expect(out["bundle.js"]).toBe(modules["bundle.js"]);
   });
 });
