@@ -73,7 +73,7 @@ export async function executeWorkerBuild(input: {
     // paths that actually need those packages still fail loudly at call time.
     return {
       mainModule: collected.mainModule,
-      modules: polyfillEsbuildNodeRequire(stubBareNpmExternals(collected.modules)),
+      modules: adaptBundleForWorkerd(collected.modules),
     };
   } catch (error) {
     if (error instanceof WorkerBuildFailedError) throw error;
@@ -113,8 +113,24 @@ const STUBBABLE_NPM_PACKAGES = new Set([
   "socks-proxy-agent",
 ]);
 
+/**
+ * Make worker-bundler ESM output load under workerd:
+ * 1. Patch esbuild's `__require` helper (CJS→ESM interop) to resolve
+ *    `node:*` builtins and allow-listed Node-only packages.
+ * 2. Only import the builtins actually referenced (importing every node:*
+ *    into every bundle OOM'd Durable Objects).
+ * 3. Stub agent/proxy packages as classes — they are extended with
+ *    `class X extends require("agent-base")`.
+ */
+export function adaptBundleForWorkerd(modules: Record<string, string>): Record<string, string> {
+  return polyfillEsbuildNodeRequire(stubBareNpmExternals(modules));
+}
+
 /** Exported for unit tests — pure rewrite over a modules map. */
 export function stubBareNpmExternals(modules: Record<string, string>): Record<string, string> {
+  // After esbuild, leftover externals appear as __require("pkg") not require().
+  // Keep bare names for __require — the node-require polyfill resolves them
+  // against imported stub modules. Only rewrite static ESM import forms.
   const needed = new Set<string>();
   for (const source of Object.values(modules)) {
     for (const spec of bareModuleSpecifiers(source)) {
@@ -125,10 +141,7 @@ export function stubBareNpmExternals(modules: Record<string, string>): Record<st
   }
   if (needed.size === 0) return modules;
 
-  // Relative stub paths: Worker Loader module keys are file-like. Rewriting
-  // the import keeps resolution inside the modules map without relying on
-  // bare package-name keys.
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = { ...modules };
   for (const [name, source] of Object.entries(modules)) {
     let rewritten = source;
     for (const spec of needed) {
@@ -137,8 +150,6 @@ export function stubBareNpmExternals(modules: Record<string, string>): Record<st
       rewritten = rewritten
         .replaceAll(`from "${spec}"`, `from ${q}`)
         .replaceAll(`from '${spec}'`, `from ${q}`)
-        .replaceAll(`require("${spec}")`, `require(${q})`)
-        .replaceAll(`require('${spec}')`, `require(${q})`)
         .replaceAll(`import("${spec}")`, `import(${q})`)
         .replaceAll(`import('${spec}')`, `import(${q})`)
         .replaceAll(`import "${spec}"`, `import ${q}`)
@@ -149,12 +160,6 @@ export function stubBareNpmExternals(modules: Record<string, string>): Record<st
   for (const spec of needed) {
     const path = stubModulePath(spec);
     if (!(path in out)) {
-      // Agent packages (agent-base, *-proxy-agent) are extended with
-      // `class X extends require("agent-base")`. An empty object throws
-      // "Class extends value #<Object> is not a constructor". Export a
-      // no-op class so inheritance and `new` both succeed; real HTTP proxy
-      // behaviour is unused under workerd (native fetch).
-      // ESM only — Worker Loader modules have no CommonJS `module`.
       out[path] =
         `class IterateExternalStub {\n` +
         `  constructor() {}\n` +
@@ -170,7 +175,6 @@ function shouldStubBareNpmPackage(spec: string): boolean {
   if (STUBBABLE_NPM_PACKAGES.has(spec)) return true;
   const slash = spec.indexOf("/");
   if (slash > 0 && STUBBABLE_NPM_PACKAGES.has(spec.slice(0, slash))) return true;
-  // Scoped packages: @scope/name
   if (spec.startsWith("@")) {
     const parts = spec.split("/");
     if (parts.length >= 2 && STUBBABLE_NPM_PACKAGES.has(`${parts[0]}/${parts[1]}`)) return true;
@@ -182,35 +186,7 @@ function stubModulePath(spec: string): string {
   return `.iterate-external/${spec.replace(/^@/, "").replaceAll("/", "__")}.js`;
 }
 
-/** Bare package / builtin specifiers referenced by import or require. */
-export function bareModuleSpecifiers(source: string): string[] {
-  const found = new Set<string>();
-  const patterns = [
-    /\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
-    /\bimport\s*["']([^"']+)["']/g,
-  ];
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      const spec = match[1];
-      if (spec === undefined || spec.length === 0) continue;
-      if (spec.startsWith(".") || spec.startsWith("/")) continue;
-      found.add(spec);
-    }
-  }
-  return [...found].sort();
-}
-
-/**
- * Node builtins workerd provides under `nodejs_compat` (our Worker Loader
- * mounts every isolate with that flag). esbuild's CJS→ESM interop emits a
- * `__require` helper that throws `Dynamic require of "node:os" is not
- * supported` at runtime even with `platform: "node"`, because the ESM
- * isolate has no CommonJS `require`. Rewrite that helper to serve real
- * `node:*` modules instead.
- */
-const WORKERD_NODE_BUILTINS = [
+const WORKERD_NODE_BUILTIN_SET = new Set([
   "assert",
   "async_hooks",
   "buffer",
@@ -238,7 +214,37 @@ const WORKERD_NODE_BUILTINS = [
   "url",
   "util",
   "zlib",
-] as const;
+]);
+
+/** Bare package / builtin / __require specifiers. */
+export function bareModuleSpecifiers(source: string): string[] {
+  const found = new Set<string>();
+  const patterns = [
+    /\bfrom\s*["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\b__require\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\bimport\s*["']([^"']+)["']/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const spec = match[1];
+      if (spec === undefined || spec.length === 0) continue;
+      if (spec.startsWith(".") || spec.startsWith("/")) continue;
+      found.add(spec);
+    }
+  }
+  return [...found].sort();
+}
+
+function normalizeNodeBuiltinId(spec: string): string | null {
+  if (spec.startsWith("node:")) {
+    const name = spec.slice("node:".length).split("/")[0]!;
+    return WORKERD_NODE_BUILTIN_SET.has(name) ? name : null;
+  }
+  const name = spec.split("/")[0]!;
+  return WORKERD_NODE_BUILTIN_SET.has(name) ? name : null;
+}
 
 /** Exported for unit tests. */
 export function polyfillEsbuildNodeRequire(
@@ -251,10 +257,16 @@ export function polyfillEsbuildNodeRequire(
       out[name] = source;
       continue;
     }
-    // esbuild emits exactly:
-    //   throw Error('Dynamic require of "' + x + '" is not supported')
-    // (single-quoted outer string, double quotes around the inserted id).
-    // Replace the throw with a lookup into a prelude-provided table.
+    const neededBuiltins = new Set<string>();
+    const neededStubs = new Set<string>();
+    for (const spec of bareModuleSpecifiers(source)) {
+      const builtin = normalizeNodeBuiltinId(spec);
+      if (builtin !== null) {
+        neededBuiltins.add(builtin);
+        continue;
+      }
+      if (shouldStubBareNpmPackage(spec)) neededStubs.add(spec);
+    }
     const rewritten = source
       .replace(
         /throw Error\('Dynamic require of "' \+ (\w+) \+ '" is not supported'\)/g,
@@ -273,53 +285,67 @@ export function polyfillEsbuildNodeRequire(
       continue;
     }
     touched = true;
-    out[name] = `${nodeRequirePrelude()}\n${rewritten}`;
+    out[name] =
+      `${nodeRequirePrelude([...neededBuiltins].sort(), [...neededStubs].sort())}\n${rewritten}`;
   }
   return touched ? out : modules;
 }
 
-function nodeRequirePrelude(): string {
-  const imports = WORKERD_NODE_BUILTINS.map(
-    (name) => `import * as __iterate_node_${name} from ${JSON.stringify(`node:${name}`)};`,
-  ).join("\n");
-  const entries = WORKERD_NODE_BUILTINS.flatMap((name) => [
-    `${JSON.stringify(name)}: __iterate_node_${name}`,
-    `${JSON.stringify(`node:${name}`)}: __iterate_node_${name}`,
-  ]).join(",\n  ");
-  // Primary CJS export names for builtins that workerd exposes only as named
-  // ESM exports (no .default). require("events") === EventEmitter in Node.
-  const primaryExports: Record<string, string> = {
-    events: "EventEmitter",
-    stream: "Stream",
-    domain: "Domain",
-    string_decoder: "StringDecoder",
-  };
-  const primaryEntries = Object.entries(primaryExports)
-    .flatMap(([name, exportName]) => [
-      `${JSON.stringify(name)}: ${JSON.stringify(exportName)}`,
-      `${JSON.stringify(`node:${name}`)}: ${JSON.stringify(exportName)}`,
+function nodeRequirePrelude(builtinNames: string[], stubSpecs: string[]): string {
+  const names = new Set(builtinNames);
+  if (names.size > 0 || stubSpecs.length > 0) {
+    // Common class-extends bases for Slack/axios-shaped graphs.
+    names.add("events");
+    names.add("stream");
+    names.add("util");
+  }
+  const list = [...names].sort();
+  const stubImports = stubSpecs
+    .map((spec, i) => {
+      const path = `./${stubModulePath(spec)}`;
+      return `import __iterate_stub_${i} from ${JSON.stringify(path)};`;
+    })
+    .join("\n");
+  const stubEntries = stubSpecs
+    .map((spec, i) => `${JSON.stringify(spec)}: __iterate_stub_${i}`)
+    .join(",\n  ");
+  const builtinImports = list
+    .map((name) => `import * as __iterate_node_${name} from ${JSON.stringify(`node:${name}`)};`)
+    .join("\n");
+  const builtinEntries = list
+    .flatMap((name) => [
+      `${JSON.stringify(name)}: __iterate_node_${name}`,
+      `${JSON.stringify(`node:${name}`)}: __iterate_node_${name}`,
     ])
     .join(",\n  ");
-  return `${imports}
+
+  return `${stubImports}
+${builtinImports}
+const __iterateStubs = {
+  ${stubEntries}
+};
 const __iterateNodeBuiltins = {
-  ${entries}
+  ${builtinEntries}
 };
 const __iterateNodePrimary = {
-  ${primaryEntries}
+  "events": "EventEmitter",
+  "node:events": "EventEmitter",
+  "stream": "Stream",
+  "node:stream": "Stream",
+  "string_decoder": "StringDecoder",
+  "node:string_decoder": "StringDecoder"
 };
 function __iterateCjsInterop(ns, id) {
   if (ns == null || typeof ns !== "object") return ns;
-  // Prefer default (matches Node ESM→CJS interop for dual packages).
   let main = ns.default;
-  // workerd often omits .default on node:* namespaces — fall back to the
-  // historical CJS main export (EventEmitter, Stream, …).
   if (main == null) {
     const primary = __iterateNodePrimary[id];
     if (primary !== undefined && typeof ns[primary] === "function") main = ns[primary];
   }
+  if (main == null && (id === "stream" || id === "node:stream") && typeof ns.Readable === "function") {
+    main = ns.Readable;
+  }
   if (main == null) return ns;
-  // Copy named exports onto the main export so require("events").EventEmitter
-  // and require("stream").Readable keep working after interop.
   if (typeof main === "function" || typeof main === "object") {
     for (const key of Object.keys(ns)) {
       if (key === "default") continue;
@@ -331,6 +357,9 @@ function __iterateCjsInterop(ns, id) {
   return main;
 }
 function __iterateNodeRequire(id) {
+  if (Object.prototype.hasOwnProperty.call(__iterateStubs, id)) {
+    return __iterateStubs[id];
+  }
   const mod = __iterateNodeBuiltins[id];
   if (mod === undefined) {
     throw Error('Dynamic require of "' + id + '" is not supported');
