@@ -34,7 +34,7 @@ export async function sendExpoPushNotification(
         [SECRET_JSON_TEMPLATE_HEADER]: "json",
       },
       body: JSON.stringify({
-        to: `getSecret({ path: "${input.pushTokenSecretPath}" })`,
+        to: `getSecret("${input.pushTokenSecretPath}")`,
         title: input.title,
         body: input.body,
         data: input.data,
