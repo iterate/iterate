@@ -305,6 +305,25 @@ test("keeps provider diagnostics visible after the provider exits", async () => 
   });
 });
 
+test("reports a later crash after the provider recovers from a diagnostic", async () => {
+  const process = new FakeProviderProcess();
+  const sharing = createChatComputerSharing({
+    launch: () => process,
+    name: "joebloggsComputer",
+  });
+
+  sharing.start();
+  process.stderr.write("temporary provider diagnostic\n");
+  process.stdout.write(`${JSON.stringify({ type: "status", loggedIn: true })}\n`);
+  process.emit("exit", 2);
+  await endProviderStdout(process);
+
+  expect(sharing.snapshot()).toMatchObject({
+    status: "error",
+    notice: "itx.joebloggsComputer stopped unexpectedly (exit 2)",
+  });
+});
+
 class FakeProviderProcess extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();

@@ -96,6 +96,10 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
       let hasExited = false;
       let exitCode: number | null = null;
       let stdoutEnded = false;
+      const publishProviderActivity = (next: ChatComputerSharingSnapshot) => {
+        exitIsExplained = false;
+        publish(next);
+      };
       const finishExit = () => {
         if (process !== launched || !hasExited || !stdoutEnded) return;
         process = undefined;
@@ -152,21 +156,21 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
           return;
         }
         if (event.type === "call" && event.method) {
-          publish({
+          publishProviderActivity({
             status: "live",
             notice: `itx.${input.name}.${event.method}: ${event.summary || "using your computer"}`,
           });
           return;
         }
         if (event.type === "call-done" && event.method && event.ok === false) {
-          publish({
+          publishProviderActivity({
             status: "error",
             notice: `itx.${input.name}.${event.method} failed: ${event.error || "unknown error"}`,
           });
           return;
         }
         if (event.type === "call-done" && event.method && event.ok === true) {
-          publish({
+          publishProviderActivity({
             status: "live",
             notice: `shared itx.${input.name} for this chat`,
           });
@@ -190,13 +194,13 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
             return;
           }
           if (event.reconnecting === true) {
-            publish({
+            publishProviderActivity({
               status: "reconnecting",
               notice: `itx.${input.name} dropped — reconnecting`,
             });
             return;
           }
-          publish({
+          publishProviderActivity({
             status: "live",
             notice: `shared itx.${input.name} for this chat`,
           });
