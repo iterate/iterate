@@ -199,6 +199,56 @@ export const envs = {
     workerBuildCacheKvId: "3599fdcb79db418db0ead561f1ef85f7",
     authDbId: "ebf149cb-d3ed-48c5-a2d0-010166b25033",
   }),
+  preview_10: previewSlot(10, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_11: previewSlot(11, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_12: previewSlot(12, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_13: previewSlot(13, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_14: previewSlot(14, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_15: previewSlot(15, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_16: previewSlot(16, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_17: previewSlot(17, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_18: previewSlot(18, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
+  preview_19: previewSlot(19, {
+    projectDirectoryKvId: UNPROVISIONED,
+    workerBuildCacheKvId: UNPROVISIONED,
+    authDbId: UNPROVISIONED,
+  }),
 } satisfies Record<string, DeployedEnv>;
 
 /** A deployed environment name, e.g. "prd" or "preview_3". */
@@ -325,6 +375,16 @@ export const semaphoreEnvs = {
   preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
   preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
   preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
+  preview_10: semaphorePreviewSlot(10, UNPROVISIONED),
+  preview_11: semaphorePreviewSlot(11, UNPROVISIONED),
+  preview_12: semaphorePreviewSlot(12, UNPROVISIONED),
+  preview_13: semaphorePreviewSlot(13, UNPROVISIONED),
+  preview_14: semaphorePreviewSlot(14, UNPROVISIONED),
+  preview_15: semaphorePreviewSlot(15, UNPROVISIONED),
+  preview_16: semaphorePreviewSlot(16, UNPROVISIONED),
+  preview_17: semaphorePreviewSlot(17, UNPROVISIONED),
+  preview_18: semaphorePreviewSlot(18, UNPROVISIONED),
+  preview_19: semaphorePreviewSlot(19, UNPROVISIONED),
 } satisfies Record<EnvName, SemaphoreEnv>;
 
 /**
