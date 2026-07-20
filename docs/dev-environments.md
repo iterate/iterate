@@ -330,8 +330,8 @@ To expand the fleet rather than use an existing slot, see
 
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
-and `<proj-slug>.iterate-preview-N.app`. There are nineteen slots
-(`preview-1..19`), leased via semaphore (`environment-config-lease`).
+and `<proj-slug>.iterate-preview-N.app`. There are currently nineteen
+`preview-<n>` slots, leased via semaphore (`environment-config-lease`).
 
 ### The lease model: one slot per PR, for the PR's whole life
 

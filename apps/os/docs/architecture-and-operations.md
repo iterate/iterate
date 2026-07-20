@@ -180,7 +180,7 @@ Slack/Google integration config returns with the integrations domain
 
 OAuth clients in the Iterate Auth Worker and the matching Doppler values are
 managed by `scripts/sync-auth-clients.ts` (`pnpm auth:sync-clients`). For each
-target Doppler config (`dev_<name>`, `preview_1`–`preview_19`, `prd`) it
+target Doppler config (`dev_<name>`, `preview_<n>`, `prd`) it
 ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
 `APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and
