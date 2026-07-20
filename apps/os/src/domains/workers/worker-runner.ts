@@ -105,28 +105,6 @@ export class DynamicWorkerRunner {
     return { klass: this.#durableObjectClass<T>(ref, worker), resolved };
   }
 
-  /** Resolve and serve one createApp asset without creating a dynamic Worker
-   * isolate. */
-  async resolveAsset(
-    ref: DynamicWorkerRef,
-    request: Request,
-    buildBudgetMs?: number,
-  ): Promise<Response | null> {
-    const resolved = await resolveWorkerSource({
-      buildBudgetMs,
-      projectId: this.#projectId,
-      source: ref.source,
-      waitUntil: this.#waitUntil,
-    });
-    const asset = await env.WORKER_BUNDLER.handleAssetRequest(
-      request,
-      resolved.assetManifest,
-      resolved.assets,
-      resolved.assetConfig,
-    );
-    return asset === null ? null : withWorkerCommit(asset, resolved.commitOid);
-  }
-
   #durableObjectClass<T extends DurableObjectClass>(
     ref: StatefulDynamicWorkerRef,
     worker: WorkerStub,
@@ -162,6 +140,27 @@ export class DynamicWorkerRunner {
     traceRole?: DynamicWorkerTraceRole;
   }): Promise<Response> {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
+      let resolved: ResolvedWorkerSource | undefined;
+      if ("createApp" in ref.source && (request.method === "GET" || request.method === "HEAD")) {
+        resolved = await resolveWorkerSource({
+          buildBudgetMs,
+          projectId: this.#projectId,
+          source: ref.source,
+          waitUntil: this.#waitUntil,
+        });
+        const asset = await env.WORKER_BUNDLER.handleAssetRequest(
+          request,
+          resolved.assetManifest,
+          resolved.assets,
+          resolved.assetConfig,
+        );
+        if (asset !== null) {
+          const response = withWorkerCommit(asset, resolved.commitOid);
+          span.setAttribute("http.response.status_code", response.status);
+          return response;
+        }
+      }
+
       let response: Response;
       if (ref.type === "stateful") {
         // The hosting DO resolves the facet and stamps its trusted build
@@ -172,31 +171,18 @@ export class DynamicWorkerRunner {
           ) as unknown as Fetcher
         ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref }));
       } else {
-        const resolved = await resolveWorkerSource({
+        resolved ??= await resolveWorkerSource({
           buildBudgetMs,
           projectId: this.#projectId,
           source: ref.source,
           waitUntil: this.#waitUntil,
         });
-        const asset =
-          "createApp" in ref.source
-            ? await env.WORKER_BUNDLER.handleAssetRequest(
-                request,
-                resolved.assetManifest,
-                resolved.assets,
-                resolved.assetConfig,
-              )
-            : null;
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
-        if (asset !== null) {
-          response = withWorkerCommit(asset, resolved.commitOid);
-        } else {
-          const entrypoint = this.#loadResolved(ref, resolved).getEntrypoint(ref.entrypoint, {
-            props: ref.props ?? {},
-          }) as Fetcher;
-          response = withWorkerCommit(await entrypoint.fetch(request), resolved.commitOid);
-        }
+        const entrypoint = this.#loadResolved(resolved).getEntrypoint(ref.entrypoint, {
+          props: ref.props ?? {},
+        }) as Fetcher;
+        response = withWorkerCommit(await entrypoint.fetch(request), resolved.commitOid);
       }
       span.setAttribute("http.response.status_code", response.status);
       return response;
@@ -287,15 +273,14 @@ export class DynamicWorkerRunner {
       source: ref.source,
       waitUntil: this.#waitUntil,
     });
-    return { resolved, worker: this.#loadResolved(ref, resolved) };
+    return { resolved, worker: this.#loadResolved(resolved) };
   }
 
-  #loadResolved(ref: DynamicWorkerRef, resolved: ResolvedWorkerSource): WorkerStub {
+  #loadResolved(resolved: ResolvedWorkerSource): WorkerStub {
     return loadResolvedWorker({
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
       projectId: this.#projectId,
-      ref,
       resolved,
       scopePath: this.#scopePath,
     });

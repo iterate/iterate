@@ -54,7 +54,7 @@ export type WorkerBuildFailure = {
   status: "failed";
 };
 
-export type WorkerBuildRecord = WorkerBuildArtifact | WorkerBuildFailure;
+type WorkerBuildRecord = WorkerBuildArtifact | WorkerBuildFailure;
 
 /** An error returned by the worker-bundler call. Name-based because it crosses Workers
  * RPC; repo, KV, and sidecar transport errors deliberately keep other names. */

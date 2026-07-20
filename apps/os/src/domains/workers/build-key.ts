@@ -10,9 +10,8 @@ import type { DynamicWorkerSource } from "./schemas.ts";
  *
  * `contentHash` is the checkout's content identity (from the repo's head
  * cache). When present it replaces the commit oid in the content key, so
- * equivalent commits within one project reuse its artifact. Pinned-commit
- * refs skip the head cache and have no content identity, hence the
- * optionality.
+ * equivalent commits reuse one artifact even across projects. Pinned-commit
+ * refs skip the head cache and have no content identity, hence the optionality.
  *
  * A plain type, not a schema: only the trusted resolver constructs this
  * value (worker-loader.ts resolveFileSource), hashes it into the key, and
@@ -90,7 +89,6 @@ type NormalizedRepoSourceIdentity = {
   content: string;
   exclude?: string[];
   include?: string[];
-  repoPath: string;
   type: "repo";
 };
 
@@ -109,7 +107,6 @@ function normalizeResolvedSource(
     content: source.contentHash ?? `commit:${source.commitOid}`,
     exclude: source.exclude === undefined ? undefined : [...source.exclude].sort(),
     include: source.include === undefined ? undefined : [...source.include].sort(),
-    repoPath: source.repoPath,
     type: "repo",
   };
 }

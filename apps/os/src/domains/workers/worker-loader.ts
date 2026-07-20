@@ -1,6 +1,6 @@
 import { itxEnv as env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { DynamicWorkerRef, DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
+import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
   buildFailureMessageFromError,
   isWorkerBuildFailedError,
@@ -39,6 +39,7 @@ export type ResolvedWorkerSource = {
 export type WorkerBindings = Record<string, unknown>;
 
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
+const inFlightArtifactResolutions = new Map<string, Promise<ResolvedWorkerSource>>();
 const RESOLVED_ARTIFACT_MEMO_LIMIT = 64;
 
 export async function resolveWorkerSource({
@@ -101,23 +102,43 @@ async function resolveThroughBuild(input: {
   });
   let artifact = resolvedArtifactMemo.get(buildKey);
   if (artifact === undefined) {
-    const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
-    const record = await store.get(buildKey);
-    if (record?.status === "failed") throw new WorkerBuildFailedError(record.message);
-    artifact =
-      record?.status === "complete"
-        ? memoizeArtifact(record)
-        : await runBuild(
-            store,
-            { projectId: input.projectId, resolved, source: input.source },
-            buildKey,
-          );
+    let resolution = inFlightArtifactResolutions.get(buildKey);
+    if (resolution === undefined) {
+      resolution = resolveArtifact(buildKey, {
+        projectId: input.projectId,
+        resolved,
+        source: input.source,
+      });
+      inFlightArtifactResolutions.set(buildKey, resolution);
+    }
+    try {
+      artifact = await resolution;
+    } finally {
+      if (inFlightArtifactResolutions.get(buildKey) === resolution) {
+        inFlightArtifactResolutions.delete(buildKey);
+      }
+    }
   }
   return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
 }
 
-/** Build one immutable source snapshot. Duplicate cold builds are harmless:
- * they produce the same key and converge on the same KV record. */
+async function resolveArtifact(
+  buildKey: string,
+  context: {
+    projectId: string;
+    resolved: ResolvedWorkerFileSource;
+    source: DynamicWorkerSource;
+  },
+): Promise<ResolvedWorkerSource> {
+  const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
+  const record = await store.get(buildKey);
+  if (record?.status === "failed") throw new WorkerBuildFailedError(record.message);
+  return record?.status === "complete"
+    ? memoizeArtifact(record)
+    : await runBuild(store, context, buildKey);
+}
+
+/** Build one immutable source snapshot. */
 async function runBuild(
   store: KvWorkerBuildArtifactStore,
   context: {
@@ -245,31 +266,18 @@ export function loadResolvedWorker({
   bindings,
   globalOutbound,
   projectId,
-  ref,
   resolved,
   scopePath,
 }: {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
   projectId: string;
-  ref: DynamicWorkerRef;
   resolved: ResolvedWorkerSource;
   scopePath: string;
 }): WorkerStub {
-  const exportKey =
-    ref.type === "stateless"
-      ? `entrypoint:${ref.entrypoint ?? "default"}`
-      : `durable-object:${ref.className}`;
-  const cacheKey = [
-    "worker-loader",
-    env.WORKER_SELF,
-    projectId,
-    ref.path,
-    scopePath,
-    ref.type,
-    exportKey,
-    resolved.cacheKey,
-  ].join(":");
+  const cacheKey = ["worker-loader", env.WORKER_SELF, projectId, scopePath, resolved.cacheKey].join(
+    ":",
+  );
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,

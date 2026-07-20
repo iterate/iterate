@@ -8,10 +8,10 @@ const path = require("node:path");
  * module, embedded as the string worker-loader.ts injects into every dynamic
  * worker build as `virtualModules["iterate/processors"]`. Unlike the sdk
  * embed (a single dependency-free file, transform only), this is a real
- * esbuild bundle. Builds never install project packages, so every dependency
- * of this platform module is embedded except the platform's shared Cap'n Web
- * module and workerd-provided modules. Drift between the package source and
- * the embed is a fixable codegen lint error.
+ * esbuild bundle. This platform module is self-contained regardless of the
+ * project's package.json: every dependency is embedded except the platform's
+ * shared Cap'n Web module and workerd-provided modules. Drift between the
+ * package source and the embed is a fixable codegen lint error.
  */
 exports.iterateProcessorsVirtualModule = ({ meta }) => {
   const entry = path.resolve(

@@ -24,14 +24,14 @@ import type {
   WorkerBundlerCreateWorkerOptions,
 } from "./domains/workers/schemas.ts";
 
-export type WorkerBundlerCreateWorkerResult = {
+type WorkerBundlerCreateWorkerResult = {
   mainModule: string;
   modules: Record<string, WorkerBuildModule>;
   warnings: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
 };
 
-export type WorkerBundlerCreateAppResult = WorkerBundlerCreateWorkerResult & {
+type WorkerBundlerCreateAppResult = WorkerBundlerCreateWorkerResult & {
   assetConfig?: WorkerBundlerAssetConfig;
   assetManifest: Record<string, WorkerBuildAssetMetadata>;
   assets: Record<string, string>;
@@ -39,12 +39,12 @@ export type WorkerBundlerCreateAppResult = WorkerBundlerCreateWorkerResult & {
 
 /** Name preserved across Workers RPC so OS caches errors from the bundler call,
  * while raw service-binding failures remain retryable. */
-export class WorkerBundlerBuildError extends Error {
+class WorkerBundlerBuildError extends Error {
   override readonly name = "WorkerBundlerBuildError";
 }
 
 /** RPC-only entrypoint: inert source values in, loader-ready text out. */
-export class WorkerBundlerEntrypoint extends WorkerEntrypoint {
+export default class WorkerBundlerEntrypoint extends WorkerEntrypoint {
   override fetch(): Response {
     return Response.json({ worker: "os-worker-bundler" }, { status: 404 });
   }
@@ -162,5 +162,3 @@ function loaderReadyModules(modules: Modules): Record<string, WorkerBuildModule>
   }
   return result;
 }
-
-export default WorkerBundlerEntrypoint;

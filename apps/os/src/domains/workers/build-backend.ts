@@ -34,17 +34,12 @@ export function workerVirtualModules(overrides?: Record<string, string>): Record
   return { ...PLATFORM_VIRTUAL_MODULES, ...overrides };
 }
 
-type WorkerBundlerService = Pick<
-  import("../../worker-bundler.ts").WorkerBundlerEntrypoint,
-  "createApp" | "createWorker"
->;
-
 /** Resolve `files`, then make one direct createWorker/createApp call in the
  * isolated compiler sidecar. */
 export async function executeWorkerBuild(input: {
   files: Record<string, string>;
   source: DynamicWorkerSource;
-  workerBundler: WorkerBundlerService;
+  workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
 }): Promise<{
   assetConfig?: WorkerBundlerAssetConfig;
   assetManifest: Record<string, WorkerBuildAssetMetadata>;

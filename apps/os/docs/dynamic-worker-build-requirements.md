@@ -85,8 +85,9 @@ artifact until expiry.
 KV stores one JSON record per key: either the complete modules/assets (30-day
 TTL) or a bounded error returned by the worker-bundler call (15-minute TTL).
 Errors before that call (repo reads) and failures reaching or writing KV are
-not cached. Duplicate cold builds are permitted and converge on the same
-record.
+not cached. Concurrent callers in one OS isolate share the same in-flight
+resolution. Separate isolates may still build the same immutable key and
+converge on its one record; there is no distributed lock.
 
 Browser fetches may stop waiting at a small budget while the same promise
 continues under `waitUntil`; callers see the self-refreshing building page.
@@ -100,6 +101,33 @@ Its registry client, package-format support, resolver, esbuild Wasm startup,
 CPU/memory limits, and output behavior are the build system's limits. There is
 no Vite, Tailwind CLI, TanStack Start adapter, lifecycle-script runner, native
 module toolchain, or compatibility shim around it.
+
+The current upstream installer has deliberately narrow npm semantics:
+
+- it reads only the root `package.json` and installs `dependencies` plus their
+  recursive `dependencies`; it does not install root `devDependencies`, peer
+  dependencies, workspaces, or lockfiles;
+- exact versions, semver ranges, `latest`/`*`, and dist-tags resolve through
+  registry metadata; git, URL, file, and workspace specifications do not;
+- it runs no lifecycle scripts and exposes a registry URL, not registry auth;
+- package tarballs are reduced to a fixed set of text extensions. Native
+  binaries, Wasm payloads, images, fonts, and other binary package files are
+  omitted.
+
+The OS artifact is one JSON KV value, so Cloudflare KV's 25 MiB value limit is
+a hard upper bound before JSON overhead. Builds and Loader isolates also live
+under Workers' 128 MiB isolate memory limit, including esbuild Wasm and
+in-memory source/artifact maps. See the official [KV
+limits](https://developers.cloudflare.com/kv/platform/limits/) and [Workers
+limits](https://developers.cloudflare.com/workers/platform/limits/).
+
+Today each asset lookup sends the cached text asset map through the bundler
+service so it can use the upstream handler. That is faithful and simple for
+small apps, but not a large-asset architecture. Cloudflare's own [Dynamic
+Worker static-assets
+guidance](https://developers.cloudflare.com/dynamic-workers/usage/static-assets/)
+points toward host-owned KV or R2 asset storage; moving assets there is a
+follow-up once the package exposes a host-friendly handler boundary.
 
 Warnings are preserved as successful build metadata and logged; OS does not
 reinterpret them as errors. The JSON artifact cache currently accepts text

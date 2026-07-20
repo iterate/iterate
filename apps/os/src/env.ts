@@ -56,7 +56,7 @@ export interface Env {
    * carrying esbuild-wasm. Source files cross this binding as inert data so a
    * build cannot load the compiler into the product Worker's DO isolate.
    */
-  WORKER_BUNDLER: Service<import("./worker-bundler.ts").WorkerBundlerEntrypoint>;
+  WORKER_BUNDLER: Service<import("./worker-bundler.ts").default>;
   /**
    * The typechecker sidecar (src/typechecker.ts): compiles virtual TypeScript
    * projects and returns diagnostics, behind provide-time capability-types

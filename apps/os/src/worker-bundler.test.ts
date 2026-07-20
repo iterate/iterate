@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WorkerBundlerEntrypoint } from "./worker-bundler.ts";
+import WorkerBundlerEntrypoint from "./worker-bundler.ts";
 
 const { createApp, createMemoryStorage, createWorker, handleAssetRequest, storage } = vi.hoisted(
   () => ({

@@ -218,7 +218,15 @@ describe("resolveWorkerSource", () => {
       waitUntil,
     });
     await expect(budgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
-    expect(pending).toHaveLength(1);
+    const secondBudgeted = resolveWorkerSource({
+      buildBudgetMs: 0,
+      projectId: "prj_slow",
+      source: repoSource("/repos/budgeted-build"),
+      waitUntil,
+    });
+    await expect(secondBudgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
+    expect(pending).toHaveLength(2);
+    expect(h.state.buildCalls).toEqual(["SLOW"]);
 
     releaseBuild();
     await Promise.all(pending.splice(0));
@@ -269,7 +277,6 @@ describe("resolveWorkerSource", () => {
       bindings: {},
       globalOutbound: {} as Fetcher,
       projectId: "prj_wrangler",
-      ref: { path: "/", source: repoSource("ignored"), type: "stateless" },
       resolved,
       scopePath: "/",
     });

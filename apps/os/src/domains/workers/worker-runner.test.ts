@@ -3,6 +3,21 @@ import { recordedSpans, resetRecordedSpans } from "../../test/cloudflare-workers
 import type { DynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runner.ts";
 
+const h = vi.hoisted(() => ({
+  handleAssetRequest: vi.fn(),
+  loadResolvedWorker: vi.fn(),
+  resolveWorkerSource: vi.fn(),
+  statefulFetch: vi.fn(),
+  workerGetByName: vi.fn(),
+}));
+
+vi.mock("../../env.ts", () => ({
+  itxEnv: {
+    WORKER: { getByName: h.workerGetByName },
+    WORKER_BUNDLER: { handleAssetRequest: h.handleAssetRequest },
+  },
+}));
+
 vi.mock("../itx/utils.ts", () => ({
   itxEntrypointBinding: () => ({}),
   itxEntrypointProps: () => ({}),
@@ -13,10 +28,8 @@ vi.mock("../projects/utils.ts", () => ({
 }));
 
 vi.mock("./worker-loader.ts", () => ({
-  loadResolvedWorker: vi.fn(),
-  resolveWorkerSource: vi.fn(async () => {
-    throw new Error("stop after entering the trace span");
-  }),
+  loadResolvedWorker: h.loadResolvedWorker,
+  resolveWorkerSource: h.resolveWorkerSource,
 }));
 
 const privateMarker = "customer@example.com/private-worker";
@@ -47,9 +60,25 @@ const statefulRef = {
   source: inlineRef.source,
   type: "stateful",
 } satisfies DynamicWorkerRef;
+const statefulAppRef = {
+  ...statefulRef,
+  source: {
+    createApp: {
+      files: { files: { "server.ts": "export default {}" }, type: "inline" },
+      server: "server.ts",
+    },
+  },
+} satisfies DynamicWorkerRef;
 
 beforeEach(() => {
   resetRecordedSpans();
+  h.handleAssetRequest.mockReset();
+  h.loadResolvedWorker.mockReset();
+  h.resolveWorkerSource
+    .mockReset()
+    .mockRejectedValue(new Error("stop after entering the trace span"));
+  h.statefulFetch.mockReset().mockRejectedValue(new Error("stop at stateful fetch"));
+  h.workerGetByName.mockReset().mockReturnValue({ fetch: h.statefulFetch });
 });
 
 describe("dynamic worker spans", () => {
@@ -112,5 +141,40 @@ describe("dynamic worker spans", () => {
       },
     ]);
     expect(JSON.stringify(recordedSpans)).not.toContain(privateMarker);
+  });
+});
+
+describe("createApp asset dispatch", () => {
+  it("serves a stateful app asset before waking its Durable Object", async () => {
+    h.resolveWorkerSource.mockResolvedValue({
+      assetConfig: undefined,
+      assetManifest: { "/client.js": { etag: "asset-etag" } },
+      assets: { "client.js": "console.log('client')" },
+      cacheKey: "build-key",
+      commitOid: "commit-1",
+      mainModule: "server.js",
+      modules: {},
+      wranglerConfig: undefined,
+    });
+    h.handleAssetRequest.mockResolvedValue(
+      new Response("console.log('client')", {
+        headers: { "content-type": "text/javascript" },
+      }),
+    );
+    const runner = new DynamicWorkerRunner({
+      exports: {} as ExecutionContext["exports"],
+      projectId: "prj_private",
+      scopePath: statefulAppRef.path,
+      waitUntil: () => undefined,
+    });
+
+    const response = await runner.fetch({
+      ref: statefulAppRef,
+      request: new Request("https://example.com/client.js"),
+    });
+
+    expect(await response.text()).toBe("console.log('client')");
+    expect(h.handleAssetRequest).toHaveBeenCalledOnce();
+    expect(h.workerGetByName).not.toHaveBeenCalled();
   });
 });

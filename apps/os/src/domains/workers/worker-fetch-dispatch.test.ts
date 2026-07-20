@@ -50,7 +50,7 @@ describe("worker fetch dispatch header", () => {
     expect(takeWorkerFetchDispatch(new Request("https://snake.example.com/ws"))).toBeNull();
   });
 
-  test("malformed header throws (internal callers compose it, so this is a bug)", () => {
+  test("malformed header throws for its caller to classify", () => {
     const headers = new Headers({ [WORKER_FETCH_DISPATCH_HEADER]: '{"nope":true}' });
     expect(() =>
       takeWorkerFetchDispatch(new Request("https://snake.example.com/ws", { headers })),

@@ -72,14 +72,21 @@ describe("workerBuildKey", () => {
   });
 
   it("keys repo sources by content identity when the repo provides one", async () => {
-    const withContent = (commitOid: string, contentHash: string): WorkerBuildInput => ({
+    const withContent = (
+      commitOid: string,
+      contentHash: string,
+      repoPath = "/",
+    ): WorkerBuildInput => ({
       ...baseInput,
-      files: { commitOid, contentHash, repoPath: "/", type: "repo" },
+      files: { commitOid, contentHash, repoPath, type: "repo" },
     });
     // Same source and build options converge on one cached build request even
     // when equivalent content appears under different commits.
     expect(await workerBuildKey(withContent("a".repeat(40), "content-1"))).toBe(
       await workerBuildKey(withContent("b".repeat(40), "content-1")),
+    );
+    expect(await workerBuildKey(withContent("a".repeat(40), "content-1", "/repos/one"))).toBe(
+      await workerBuildKey(withContent("b".repeat(40), "content-1", "/repos/two")),
     );
     // ...while different content never shares a key.
     expect(await workerBuildKey(withContent("a".repeat(40), "content-1"))).not.toBe(
