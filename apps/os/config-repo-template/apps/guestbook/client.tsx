@@ -161,18 +161,13 @@ type GuestbookApi = {
   sign(name: string, message: string): Promise<void>;
 };
 
-function useGuestbookApi(): {
-  api: GuestbookApi | null;
-  error: string | undefined;
-} {
+function useGuestbookApi(): GuestbookApi | null {
   const [api, setApi] = useState<GuestbookApi | null>(null);
-  const [error, setError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so
     // setApi(stub) would make React CALL the stub as an updater.
     setApi(() => null);
-    setError(undefined);
     const endpoint = new URL("/api", window.location.href);
     endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
     const publicApi = newWebSocketRpcSession<GuestbookApi>(endpoint.toString());
@@ -183,11 +178,11 @@ function useGuestbookApi(): {
     };
   }, []);
 
-  return { api, error };
+  return api;
 }
 
 export function GuestbookClient() {
-  const { api, error: dialError } = useGuestbookApi();
+  const api = useGuestbookApi();
   const { value: state, error: liveError } = useLiveStateRpc(
     api,
     (session) => session.liveState,
@@ -198,7 +193,7 @@ export function GuestbookClient() {
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState("");
 
-  const error = dialError ?? liveError ?? (signError.length > 0 ? signError : undefined);
+  const error = liveError ?? (signError.length > 0 ? signError : undefined);
   const entries = state?.entries ?? [];
   const title = state?.birthCertificate?.config.title ?? "Guestbook";
 

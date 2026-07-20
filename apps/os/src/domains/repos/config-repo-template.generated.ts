@@ -373,18 +373,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  sign(name: string, message: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
-      "function useGuestbookApi(): {\n" +
-      "  api: GuestbookApi | null;\n" +
-      "  error: string | undefined;\n" +
-      "} {\n" +
+      "function useGuestbookApi(): GuestbookApi | null {\n" +
       "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
-      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so\n" +
       "    // setApi(stub) would make React CALL the stub as an updater.\n" +
       "    setApi(() => null);\n" +
-      "    setError(undefined);\n" +
       "    const endpoint = new URL(\"/api\", window.location.href);\n" +
       "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
       "    const publicApi = newWebSocketRpcSession<GuestbookApi>(endpoint.toString());\n" +
@@ -395,11 +390,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    };\n" +
       "  }, []);\n" +
       "\n" +
-      "  return { api, error };\n" +
+      "  return api;\n" +
       "}\n" +
       "\n" +
       "export function GuestbookClient() {\n" +
-      "  const { api, error: dialError } = useGuestbookApi();\n" +
+      "  const api = useGuestbookApi();\n" +
       "  const { value: state, error: liveError } = useLiveStateRpc(\n" +
       "    api,\n" +
       "    (session) => session.liveState,\n" +
@@ -410,7 +405,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  const [signing, setSigning] = useState(false);\n" +
       "  const [signError, setSignError] = useState(\"\");\n" +
       "\n" +
-      "  const error = dialError ?? liveError ?? (signError.length > 0 ? signError : undefined);\n" +
+      "  const error = liveError ?? (signError.length > 0 ? signError : undefined);\n" +
       "  const entries = state?.entries ?? [];\n" +
       "  const title = state?.birthCertificate?.config.title ?? \"Guestbook\";\n" +
       "\n" +
@@ -1103,13 +1098,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  remove(id: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
-      "function useTodoApi(): { api: TodoApi | null; error: string | undefined } {\n" +
+      "function useTodoApi(): TodoApi | null {\n" +
       "  const [api, setApi] = useState<TodoApi | null>(null);\n" +
-      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    setApi(() => null);\n" +
-      "    setError(undefined);\n" +
       "    const endpoint = new URL(\"/api\", window.location.href);\n" +
       "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
       "    const publicApi = newWebSocketRpcSession<TodoApi>(endpoint.toString());\n" +
@@ -1120,11 +1113,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    };\n" +
       "  }, []);\n" +
       "\n" +
-      "  return { api, error };\n" +
+      "  return api;\n" +
       "}\n" +
       "\n" +
       "export function TodoClient() {\n" +
-      "  const { api, error: dialError } = useTodoApi();\n" +
+      "  const api = useTodoApi();\n" +
       "  const { value: state, error: liveError } = useLiveStateRpc(\n" +
       "    api,\n" +
       "    (session) => session.liveState,\n" +
@@ -1133,7 +1126,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  const [title, setTitle] = useState(\"\");\n" +
       "  const [actionError, setActionError] = useState(\"\");\n" +
       "\n" +
-      "  const error = dialError ?? liveError ?? (actionError.length > 0 ? actionError : undefined);\n" +
+      "  const error = liveError ?? (actionError.length > 0 ? actionError : undefined);\n" +
       "  const todos = state?.todos ?? [];\n" +
       "\n" +
       "  const run = async (action: () => Promise<void>) => {\n" +

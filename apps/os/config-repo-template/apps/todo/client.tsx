@@ -154,13 +154,11 @@ type TodoApi = {
   remove(id: string): Promise<void>;
 };
 
-function useTodoApi(): { api: TodoApi | null; error: string | undefined } {
+function useTodoApi(): TodoApi | null {
   const [api, setApi] = useState<TodoApi | null>(null);
-  const [error, setError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     setApi(() => null);
-    setError(undefined);
     const endpoint = new URL("/api", window.location.href);
     endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
     const publicApi = newWebSocketRpcSession<TodoApi>(endpoint.toString());
@@ -171,11 +169,11 @@ function useTodoApi(): { api: TodoApi | null; error: string | undefined } {
     };
   }, []);
 
-  return { api, error };
+  return api;
 }
 
 export function TodoClient() {
-  const { api, error: dialError } = useTodoApi();
+  const api = useTodoApi();
   const { value: state, error: liveError } = useLiveStateRpc(
     api,
     (session) => session.liveState,
@@ -184,7 +182,7 @@ export function TodoClient() {
   const [title, setTitle] = useState("");
   const [actionError, setActionError] = useState("");
 
-  const error = dialError ?? liveError ?? (actionError.length > 0 ? actionError : undefined);
+  const error = liveError ?? (actionError.length > 0 ? actionError : undefined);
   const todos = state?.todos ?? [];
 
   const run = async (action: () => Promise<void>) => {
