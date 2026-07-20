@@ -564,23 +564,23 @@ export const CoreProcessorContract = defineProcessorContract({
               processor: {
                 announcement: {
                   slug: "agent",
-                  version: "1.0.0",
+                  version: "5.0.0",
                   description:
-                    "Maintains provider-neutral model context and requests LLM work from a provider processor.",
+                    "Maintains model-visible history, schedules debounced offset-identified LLM turns, and executes scripts through the capability host.",
                   consumes: [
                     "events.iterate.com/agents/context-added",
-                    "events.iterate.com/agent/llm-request-completed",
+                    "events.iterate.com/agent/llm-request-settled",
                   ],
                   emits: [
                     "events.iterate.com/agents/context-added",
-                    "events.iterate.com/agent/llm-request-scheduled",
+                    "events.iterate.com/agent/llm-request-requested",
                   ],
                   ownedEvents: [
                     {
                       type: "events.iterate.com/agents/context-added",
-                      description: "A provider-neutral model context item was added.",
+                      description: "A model-visible context item was added.",
                     },
-                    { type: "events.iterate.com/agent/llm-request-scheduled" },
+                    { type: "events.iterate.com/agent/llm-request-requested" },
                   ],
                 },
               },

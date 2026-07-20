@@ -13,20 +13,12 @@
 // commit; settlements point back with that offset, and idempotency keys are
 // derived from offsets.
 //
-// JOURNAL COMPATIBILITY is a hard requirement: this contract replaced the
-// previous agent contract in place (same slug, same streams, same committed
-// events). Every historical committed event must still parse — a context
-// event that fails parse is SKIPPED from the fold, which for conversation
-// items is silent conversation loss. That is why:
-//   - the context-added payload is a SUPERSET of every historical shape
-//     (refs, compaction, the slack/telegram/email/github actor variants);
-//   - `llm-request-requested.expiresAt` is optional (the oldest events have
-//     none; historical events also carry a `requestId` the parse now strips);
-//   - the LEGACY settlement events `llm-request-completed` and
-//     `llm-request-cancelled` are still consumed (fold arms close a matching
-//     open request) even though this processor never emits them. Historical
-//     `llm-request-scheduled` / `llm-request-started` are deliberately NOT
-//     consumed — skipping them is harmless.
+// The context-added payload is ONE flat shape for every role, and its richer
+// fields are live product features: `refs` carries coordinates for retrieving
+// source material on demand, the actor union names every authoring lane
+// (user, agent, script, integration, slack, telegram, email, github) and
+// drives the prompt-time trust demotion, and `compaction` marks the
+// structural history rewrite produced by context compaction.
 
 import { z } from "zod";
 import { AgentRuntime } from "@iterate-com/shared/agent-events";
@@ -384,8 +376,7 @@ export const AgentProcessorContract = defineProcessorContract({
         // `.partial()` keeps field defaults (a patch built from it would
         // resurrect defaults for omitted keys and clobber configured values
         // on merge), so the patch shape is spelled out without them. Per-knob
-        // docs live on the state schema's config. `llm.model` is optional so
-        // every historical configured event parses.
+        // docs live on the state schema's config.
         config: z
           .object({
             llm: z.object({ model: z.string().min(1).optional() }).optional(),
@@ -441,17 +432,12 @@ export const AgentProcessorContract = defineProcessorContract({
         "request already is open — a late debounced intent is a harmless journal fact.",
       payloadSchema: z.object({
         model: z.string().meta({ description: "Model pinned for this turn." }),
-        expiresAt: z
-          .number()
-          .optional()
-          .meta({
-            description:
-              "Absolute epoch-ms horizon (trigger time + llmRequestExpiryMs — deterministic, " +
-              "so concurrent schedulings of the same trigger dedupe on the idempotency key): " +
-              "past it the request settles cancelled/expired instead of running. Optional " +
-              "only for historical events; absent, the fold defaults it from the event's " +
-              "createdAt plus the configured expiry.",
-          }),
+        expiresAt: z.number().meta({
+          description:
+            "Absolute epoch-ms horizon (trigger time + llmRequestExpiryMs — deterministic, " +
+            "so concurrent schedulings of the same trigger dedupe on the idempotency key): " +
+            "past it the request settles cancelled/expired instead of running.",
+        }),
       }),
       examples: [
         {
@@ -718,63 +704,6 @@ export const AgentProcessorContract = defineProcessorContract({
         },
       ],
     },
-    // ------------------------------------------------------------------------
-    // LEGACY-JOURNAL BRIDGE. The two settlement events of the previous agent
-    // contract, consumed but NEVER emitted: historical journals carry them,
-    // and without fold arms that close a matching open request, the first
-    // historical llm-request-requested would open a request that never
-    // settles — every later requested would fold to nothing and the assistant
-    // fold-guard would drop every subsequent assistant turn (silent
-    // conversation loss on refold). Schemas are deliberately loose: every
-    // historical event must parse.
-    // ------------------------------------------------------------------------
-    "events.iterate.com/agent/llm-request-completed": {
-      description:
-        "LEGACY (journal bridge, never emitted): the previous contract's terminal success/failure " +
-        "fact. Consumed so historical journals refold correctly; new turns settle with " +
-        "agent/llm-request-settled.",
-      payloadSchema: z.looseObject({
-        llmRequestOffset: z.number().int().positive(),
-        durationMs: z.number().int().nonnegative().optional(),
-        result: z.looseObject({ status: z.enum(["success", "failure"]) }),
-      }),
-      examples: [
-        {
-          description: "A historical success settlement, as the previous contract journaled it.",
-          payload: {
-            durationMs: 2340,
-            llmRequestOffset: 57,
-            result: {
-              status: "success",
-              usage: { completion_tokens: 118, prompt_tokens: 4096, total_tokens: 4214 },
-            },
-          },
-        },
-      ],
-    },
-    "events.iterate.com/agent/llm-request-cancelled": {
-      description:
-        "LEGACY (journal bridge, never emitted): the previous contract's cancellation fact. " +
-        "Consumed so historical journals refold correctly; cancellation is now a result kind " +
-        "inside agent/llm-request-settled.",
-      payloadSchema: z.looseObject({
-        phase: z.enum(["scheduled", "requested"]),
-        reason: z.string(),
-        requestId: z.string().optional(),
-        llmRequestOffset: z.number().int().positive().optional(),
-      }),
-      examples: [
-        {
-          description:
-            "A historical interrupt of a running request, as the previous contract journaled it.",
-          payload: {
-            phase: "requested",
-            reason: "interrupted-by-user-input",
-            llmRequestOffset: 58,
-          },
-        },
-      ],
-    },
   },
   consumes: [
     "events.iterate.com/agent/created",
@@ -787,9 +716,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/summary-updated",
     "events.iterate.com/agent/paused",
     "events.iterate.com/agent/resumed",
-    // The legacy-journal bridge (see the event definitions above).
-    "events.iterate.com/agent/llm-request-completed",
-    "events.iterate.com/agent/llm-request-cancelled",
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
     // Every error on the stream — the processor's own emissions, the runner's
@@ -827,8 +753,8 @@ export type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 /** The agent processor's reduced state, inferred from the contract's `stateSchema`. */
 export type AgentProcessorState = ProcessorState<AgentProcessorContract>;
 
-/** One model-visible context item's payload — the compatibility contract for
- * every historical committed `agents/context-added` event. */
+/** One model-visible context item's payload — the wire contract for every
+ * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
 
 /** A file attached to an agent context item: content type, filename, project
@@ -854,10 +780,11 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
  * The context-item payload — used twice in the contract (the
  * `agents/context-added` event and the state's `contextItems`), so it lives in
  * this hoisted function instead of inline. One flat object for every role; the
- * role-specific fields are optional and documented per-field. This is a
- * SUPERSET of every historical payload shape (the previous contract's
- * four-arm role union), so every committed event parses — parse failure means
- * the item silently drops from the fold, i.e. conversation loss.
+ * role-specific fields are optional and documented per-field. `refs` and the
+ * actor union are how the slack/telegram/email/github integrations attach
+ * provenance and source coordinates; `compaction` marks the structural
+ * history rewrite produced by context compaction. Parse failure means the
+ * item silently drops from the fold, i.e. conversation loss.
  */
 function agentContextItemSchema() {
   return z
@@ -1046,10 +973,11 @@ function agentContextItemSchema() {
 
 /**
  * A file reference riding on an agent context item or web message — used by
- * both, so hoisted. Deliberately NOT strict (matching the previous contract):
- * a historical attachment with extra keys must still parse. The URL is stored
- * at attach time, not re-minted per read, so history stays deterministic;
- * links in old conversations expire with the signature.
+ * both, so hoisted. Deliberately NOT strict: an attachment with extra keys
+ * still parses (dropping a conversation item over an unknown attachment key
+ * would be silent conversation loss). The URL is stored at attach time, not
+ * re-minted per read, so history stays deterministic; links in old
+ * conversations expire with the signature.
  */
 function agentFileAttachmentSchema() {
   return z.object({

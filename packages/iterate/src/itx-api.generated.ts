@@ -2244,27 +2244,8 @@ export type AgentEventInput =
     >
   | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>
   | TypedConsumedEventInput<
-      "events.iterate.com/agent/llm-request-cancelled",
-      {
-        [x: string]: unknown;
-        phase: "requested" | "scheduled";
-        reason: string;
-        requestId?: string | undefined;
-        llmRequestOffset?: number | undefined;
-      }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/agent/llm-request-completed",
-      {
-        [x: string]: unknown;
-        llmRequestOffset: number;
-        durationMs?: number | undefined;
-        result: { [x: string]: unknown; status: "failure" | "success" };
-      }
-    >
-  | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-requested",
-      { model: string; expiresAt?: number | undefined }
+      { model: string; expiresAt: number }
     >
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-settled",
@@ -3340,8 +3321,8 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-/** One model-visible context item's payload — the compatibility contract for
- * every historical committed `agents/context-added` event. */
+/** One model-visible context item's payload — the wire contract for every
+ * committed `agents/context-added` event. */
 export type AgentContextAddedPayload = AgentProcessorState["contextItems"][number]["payload"];
 
 /** Dynamic invocation envelope used by flattened live capabilities. */

@@ -87,9 +87,19 @@ test(
     });
     expect(response).toMatchObject({ type: "events.iterate.com/agents/web-message-sent" });
 
+    // The turn really ran: a requested event landed and its settlement points
+    // back at that event's own offset (the request's identity).
     const agentEvents = await agent.stream.getEvents({ limit: 500 });
+    const requested = agentEvents.find(
+      (event) => event.type === "events.iterate.com/agent/llm-request-requested",
+    );
+    expect(requested).toBeDefined();
     expect(
-      agentEvents.some((event) => event.type === "events.iterate.com/agent/llm-request-started"),
+      agentEvents.some(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-settled" &&
+          event.payload?.requestOffset === requested?.offset,
+      ),
     ).toBe(true);
   },
 );

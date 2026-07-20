@@ -6,7 +6,6 @@
 
 import { useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
-import { summarizeAgentUiActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
@@ -47,7 +46,6 @@ function liveSummary(activity: AgentUiActivity): string {
   if (current?.kind === "llm" && current.responseText !== "") return "writing code…";
   if (current?.kind === "llm" && current.thinkingText !== "") return "thinking…";
   if (current?.kind === "llm") return "waiting for a response…";
-  if (summarizeAgentUiActivity(activity).restartPending) return "restarted — continuing…";
   return "working…";
 }
 
@@ -98,13 +96,11 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
     ...(step.durationMs ? [`${(step.durationMs / 1000).toFixed(1)}s`] : []),
     ...(step.outputTokens ? [`${step.outputTokens} tok`] : []),
     ...(step.outcome === "failed" ? ["failed"] : []),
-    ...(step.cancelReason === "durable-object-crashed"
-      ? ["agent restarted"]
-      : step.cancelReason === "interrupted-by-user-input"
-        ? ["stopped for your new message"]
-        : step.outcome === "cancelled"
-          ? ["cancelled"]
-          : []),
+    ...(step.cancelReason === "interrupted-by-user-input"
+      ? ["stopped for your new message"]
+      : step.outcome === "cancelled"
+        ? ["cancelled"]
+        : []),
   ];
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }

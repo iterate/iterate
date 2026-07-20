@@ -135,14 +135,19 @@ function ProjectAgentDetailContent() {
     return event;
   }
 
-  async function interruptAgentMessage(llmRequestOffset: number) {
+  async function interruptAgentMessage() {
+    // Cancellation is a property of new input, never a free-standing command:
+    // the agent processor settles the open request as cancelled
+    // (interrupted-by-user-input) when an interrupting context item lands. A
+    // developer item with no actor stays out of the chat feed while telling
+    // the model why its response stopped.
     const itx = await connectItx(project.id);
     await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agent/llm-request-cancelled",
+      type: "events.iterate.com/agents/context-added",
       payload: {
-        phase: "requested",
-        llmRequestOffset,
-        reason: "interrupted-by-user-input",
+        role: "developer",
+        content: "The user interrupted the in-progress response from the web chat.",
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
       },
     });
   }

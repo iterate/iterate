@@ -1050,7 +1050,7 @@ describe("TelegramAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
     });
     await deliver();
     // chat_id goes back as the integer Telegram issued.
@@ -1064,7 +1064,7 @@ describe("TelegramAgentProcessor", () => {
 
     await stream.append({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+      payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
     });
     await deliver();
     expect(telegramCalls).toEqual([
@@ -1089,7 +1089,7 @@ describe("TelegramAgentProcessor", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+        payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
       },
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "an old reply" } },
     );
@@ -1132,7 +1132,7 @@ describe("TelegramAgentProcessor", () => {
     await stream.append(
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+        payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
       },
       { type: "events.iterate.com/telegram/webhook-received", payload: botEcho },
     );
@@ -1255,7 +1255,7 @@ describe("TelegramAgentProcessor", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:1" },
+        payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
       },
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "answer to 10" } },
     );
@@ -1271,7 +1271,7 @@ describe("TelegramAgentProcessor", () => {
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
-        payload: { model: "gpt-test", provider: "openai-ws", requestId: "llm-request:2" },
+        payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
       },
       {
         type: "events.iterate.com/telegram/webhook-received",
@@ -1432,7 +1432,10 @@ describe("TelegramAgentProcessor", () => {
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
-      { type: "events.iterate.com/agent/llm-request-requested", payload: { requestId: "r1" } },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
+      },
       {
         type: "events.iterate.com/telegram/send-requested",
         payload: { text: "It's hunter2." },

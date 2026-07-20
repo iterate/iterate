@@ -4,10 +4,9 @@
  * "Ran code 2× · 3 requests · 7.4 s", steps read "gpt-5 · 1.2s". Live status
  * is "Thinking" / "Waiting for a response" / "Running code 0.9s".
  */
-import {
-  summarizeAgentUiActivity,
-  type AgentUiActivity,
-  type AgentUiStep,
+import type {
+  AgentUiActivity,
+  AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export { formatAgentUiActivitySummary as formatActivitySummary } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -19,13 +18,11 @@ export function formatStepLine(step: AgentUiStep): string {
   const label =
     step.kind === "code"
       ? "Ran code"
-      : step.cancelReason === "durable-object-crashed"
-        ? "Agent restarted"
-        : step.cancelReason === "interrupted-by-user-input"
-          ? "Stopped for your new message"
-          : step.outcome === "cancelled"
-            ? "Request cancelled"
-            : (step.model ?? "LLM request");
+      : step.cancelReason === "interrupted-by-user-input"
+        ? "Stopped for your new message"
+        : step.outcome === "cancelled"
+          ? "Request cancelled"
+          : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
     if (step.outcome === "cancelled" && step.model != null) parts.push(step.model);
@@ -57,9 +54,6 @@ export function formatLiveActivityLabel(
   }
   const llm = running.findLast((step) => step.kind === "llm");
   if (llm == null || llm.kind !== "llm") {
-    if (summarizeAgentUiActivity(activity).restartPending) {
-      return "Restarted — continuing…";
-    }
     return "Working…";
   }
   if (llm.thinkingText !== "" && llm.responseText === "") return "Thinking";

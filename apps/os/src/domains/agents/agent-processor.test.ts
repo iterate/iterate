@@ -4,10 +4,7 @@
 // different body is REJECTED), virtual time, and eviction-faithful crash().
 // Scenarios are ordered steps — typed appends, advanceTime, crash, and
 // function steps driving the scripted LLM transport (the only agent-specific
-// fake, defined here). The legacy-journal suite feeds OLD-contract events
-// (scheduled/requested-with-requestId/started/completed/cancelled) through
-// the new fold — the journal-compatibility contract of the in-place
-// replacement (tasks/agent-processor-replacement.md).
+// fake, defined here).
 
 import { describe, expect, it } from "vitest";
 import type { ConsumedInput, StreamEvent } from "iterate/processors";
@@ -17,6 +14,7 @@ import {
   type HarnessSubstrate,
 } from "iterate/processors/testing";
 import {
+  AgentLiveState,
   AgentProcessorContract,
   type AgentContextAddedPayload,
 } from "./agent-processor-contract.ts";
@@ -27,7 +25,6 @@ import {
   contextWindowTokens,
   prepareAgentLlmMessages,
   projectContextAdded,
-  reduceAgentEvents,
   type AgentProcessorDeps,
 } from "./agent-processor-implementation.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
@@ -342,6 +339,144 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
     expect(h.llm.calls).toHaveLength(0);
   });
+
+  it("a non-interrupting message during an open request parks as the next trigger: no abort, no concurrent dial", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("one")],
+      ["advanceTime", 10_000],
+      ["append", userMessage("two")],
+    );
+
+    // The open request keeps running untouched; the new message queues.
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.signal.aborted).toBe(false);
+    expect(h.state().openRequest).not.toBeNull();
+    expect(h.state().pendingLlmRequestTrigger).not.toBeNull();
+
+    // After settlement the parked trigger runs its own turn over the new message.
+    await h.play(() => h.llm.respond("answer one"), ["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(2);
+    expect(h.llm.calls[1]!.messages.map((message) => message.content).join("\n")).toContain("two");
+    expect(h.events(REQUESTED)).toHaveLength(2);
+  });
+
+  it("an interrupt with only a debounce pending invents no cancelled settlement: it is just the newest trigger", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("first thought")],
+      ["advanceTime", 100], // inside the debounce window — nothing is open yet
+      ["append", userMessage("scrap that", { behaviour: "interrupt-current-request" })],
+      ["advanceTime", 10_000],
+    );
+
+    // Nothing was open, so nothing was cancelled; ONE request covers both
+    // messages (the late parked intent from message 1 folded harmlessly).
+    expect(h.events(SETTLED)).toHaveLength(0);
+    expect(h.llm.calls).toHaveLength(1);
+    const prompt = h.llm.calls[0]!.messages.map((message) => message.content).join("\n");
+    expect(prompt).toContain("first thought");
+    expect(prompt).toContain("scrap that");
+
+    await h.play(() => h.llm.respond("scrapped"), ["advanceTime", 60_000]);
+    expect(h.state().openRequest).toBeNull();
+    expect(h.events(SETTLED)).toMatchObject([{ payload: { result: { status: "succeeded" } } }]);
+    expect(h.llm.calls).toHaveLength(1); // no second dial ever ran
+  });
+
+  it("a stray raw llm-request-requested while a request is open folds to nothing", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    const requested = h.events(REQUESTED)[0]!;
+    expect(h.llm.calls).toHaveLength(1);
+
+    // A raw-appended sibling intent is a harmless journal fact: no parallel
+    // turn, and the open request still names the FIRST requested event.
+    await h.play([
+      "append",
+      { type: REQUESTED, payload: { model: "m", expiresAt: h.clock.now + 600_000 } },
+    ]);
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.state().openRequest).toMatchObject({ requestedAtOffset: requested.offset });
+
+    await h.play(() => h.llm.respond("Hi!"), ["advanceTime", 60_000]);
+    expect(h.state().openRequest).toBeNull();
+    expect(h.state().pendingLlmRequestTrigger).toBeNull();
+    expect(h.events(SETTLED)).toHaveLength(1);
+    expect(h.llm.calls).toHaveLength(1); // the stray never got a turn of its own
+  });
+
+  it("agent-to-agent mail renders the reply door and burns the autonomous budget", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: CONTEXT_ADDED,
+          payload: {
+            role: "developer",
+            content: "status?",
+            actor: { type: "agent", path: "/agents/main" },
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    // The sender cannot see this conversation, so the prompt carries the door.
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.map((message) => message.content).join("\n")).toContain(
+      'To reply to /agents/main (which cannot see this conversation): await itx.agents.get("/agents/main").message(text)',
+    );
+
+    // Inter-agent mail is an agent-loop trigger: agent↔agent ping-pong burns
+    // the autonomous budget toward the breaker; a human message resets it.
+    await h.play(() => h.llm.respond("On it."));
+    expect(h.state().autonomousTurnCount).toBe(1);
+    await h.play(["append", userMessage("thanks")], ["advanceTime", 10_000]);
+    expect(h.state().autonomousTurnCount).toBe(0);
+  });
+
+  it("a keyed slot coalesces until a request seals it; later updates append occurrences the prompt renders with key provenance", async () => {
+    const h = makeAgentHarness();
+    const statusUpdate = (content: string): AgentEventInput => ({
+      type: CONTEXT_ADDED,
+      payload: {
+        role: "developer",
+        content,
+        key: "integration/github/status",
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+    const occurrences = () =>
+      h.state().contextItems.filter((item) => item.payload.key === "integration/github/status");
+
+    // Ten uncovered updates collapse to ONE occurrence holding the newest value.
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      ...Array.from({ length: 10 }, (_, index) => statusUpdate(`status ${index + 1}`)),
+    ]);
+    expect(occurrences()).toMatchObject([{ payload: { content: "status 10" } }]);
+
+    // A request covers the slot; the next update appends a second occurrence
+    // instead of rewriting covered history.
+    await h.play(["append", userMessage("what's up?")], ["advanceTime", 10_000], () =>
+      h.llm.respond("Checking."),
+    );
+    await h.play(["append", statusUpdate("status 11")]);
+    expect(occurrences()).toMatchObject([
+      { payload: { content: "status 10" } },
+      { payload: { content: "status 11" } },
+    ]);
+
+    // The prompt renders each occurrence on its own @offset line with key= provenance.
+    await h.play(["append", userMessage("and now?")], ["advanceTime", 10_000]);
+    const prompt = h.llm.calls[1]!.messages.map((message) => message.content).join("\n");
+    expect(prompt.split('key="integration/github/status"')).toHaveLength(3);
+  });
 });
 
 // =============================================================================
@@ -457,6 +592,38 @@ describe("AgentProcessor recovery", () => {
       h.state().contextItems.find((item) => item.payload.content.includes("expired")),
     ).toMatchObject({ payload: { role: "developer", actor: { type: "integration" } } });
   });
+
+  it("a transient outage on the settlement append does not lose the turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(1);
+
+    // The atomic assistant+settled append hits a stream hiccup: nothing
+    // commits (batches are atomic) and the incarnation's in-flight slot
+    // clears, so the request stays owed in the journal.
+    await h.play(
+      () => {
+        h.stream.failAppendsOfType = SETTLED;
+      },
+      () => h.llm.respond("first try"),
+      () => {
+        h.stream.failAppendsOfType = undefined;
+      },
+      // Any delivery at head finds the request unsettled → adoption re-dials.
+      ["append", REVIVED],
+    );
+    expect(h.events(SETTLED)).toHaveLength(0);
+    expect(h.llm.calls).toHaveLength(2);
+
+    await h.play(() => h.llm.respond("second try"));
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { result: { status: "succeeded", text: "second try" } } },
+    ]);
+    expect(
+      h.state().contextItems.filter((item) => item.payload.role === "assistant"),
+    ).toMatchObject([{ payload: { content: "second try" } }]);
+    expect(h.state().openRequest).toBeNull();
+  });
 });
 
 // =============================================================================
@@ -544,6 +711,62 @@ describe("AgentProcessor failure policy", () => {
     expect(h.state().paused).toBeNull();
     expect(h.state().autonomousTurnCount).toBe(0);
     expect(h.llm.calls).toHaveLength(3);
+  });
+
+  it("the retry window is debounce + 2^(n-1)×base, capped at backoffMaxMs", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: {
+            config: {
+              llmRequestRetryPolicy: {
+                maxAttempts: 3,
+                backoffBaseMs: 10_000,
+                backoffMaxMs: 15_000,
+              },
+            },
+          },
+        },
+        userMessage("Hello"),
+      ],
+      ["advanceTime", 10_000],
+      () => h.llm.fail("boom 1"),
+    );
+    const debounceMs = h.state().config.llmRequestDebounceMs;
+
+    // Failure 1: backoff 2^0 × base folds into the debounce window — no retry
+    // one tick before it closes, the retry exactly when it does.
+    await h.play(["advanceTime", debounceMs + 10_000 - 1]);
+    expect(h.llm.calls).toHaveLength(1);
+    await h.play(["advanceTime", 1]);
+    expect(h.llm.calls).toHaveLength(2);
+
+    // Failure 2: 2 × base = 20_000 loses to the 15_000 cap.
+    await h.play(() => h.llm.fail("boom 2"), ["advanceTime", debounceMs + 15_000 - 1]);
+    expect(h.llm.calls).toHaveLength(2);
+    await h.play(["advanceTime", 1]);
+    expect(h.llm.calls).toHaveLength(3);
+  });
+
+  it("a successful settlement resets the consecutive-failure streak", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
+      ["advanceTime", 10_000],
+      () => h.llm.fail("boom"),
+    );
+    expect(h.state().consecutiveLlmFailures).toBe(1);
+
+    // The fold's own retry (debounce + backoff) succeeds → streak zero — the
+    // other half of the breaker arithmetic next to the user-input reset.
+    await h.play(["advanceTime", 120_000]);
+    expect(h.llm.calls).toHaveLength(2);
+    await h.play(() => h.llm.respond("ok"));
+    expect(h.state().consecutiveLlmFailures).toBe(0);
   });
 });
 
@@ -805,6 +1028,215 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).not.toContain("saved in your workspace");
   });
 
+  it("renders a failed settlement as corrective input that triggers the next turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("read my email")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.email.read()\n```"),
+    );
+    const executionId = (
+      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
+        executionId: string;
+      }
+    ).executionId;
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: {
+            executionId,
+            settlement: {
+              status: "failed",
+              error: "gmail exploded",
+              failureKind: "runtime",
+              phase: "execution",
+              executionMayHaveOccurred: true,
+              cancellation: "external-work-may-continue",
+            },
+          },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    // The failure renders with its phase/kind and the error text…
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script failed"));
+    expect(rendered).toMatchObject({ payload: { role: "developer" } });
+    expect(rendered!.payload.content).toContain("failed during execution (runtime)");
+    expect(rendered!.payload.content).toContain("gmail exploded");
+    // …and is an agent-loop trigger: the model gets a turn to react.
+    expect(h.llm.calls).toHaveLength(2);
+    expect(h.llm.calls[1]!.messages.map((message) => message.content).join("\n")).toContain(
+      "gmail exploded",
+    );
+  });
+
+  it("renders a small string result raw: newlines intact, no JSON escaping, no json fence", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("fetch the note")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.note()\n```"),
+    );
+    const executionId = (
+      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
+        executionId: string;
+      }
+    ).executionId;
+
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId,
+          settlement: { status: "succeeded", result: 'line one\nline "two"' },
+        },
+      },
+    ]);
+
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
+    // The string is fed to the model as ITSELF, not as an escaped JSON string.
+    expect(rendered!.payload.content).toContain('line one\nline "two"');
+    expect(rendered!.payload.content).not.toContain("\\n");
+    expect(rendered!.payload.content).not.toContain("```json");
+  });
+
+  it("spills an object result as pretty-printed JSON with a readFile pointer", async () => {
+    const written: { path: string; content: string }[] = [];
+    const h = makeAgentHarness(undefined, {
+      writeWorkspaceFile: async (input) => {
+        written.push(input);
+      },
+    });
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { scriptResultHistoryLimit: 100 } },
+        },
+        userMessage("fetch the big object"),
+      ],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
+    );
+    const executionId = (
+      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
+        executionId: string;
+      }
+    ).executionId;
+
+    const result = { items: "x".repeat(500) };
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId, settlement: { status: "succeeded", result } },
+      },
+    ]);
+
+    // The full result spills as pretty-printed .json (strings spill as .txt).
+    const spilled = JSON.stringify(result, null, 2);
+    expect(written).toMatchObject([
+      { path: "/script-results/.gitignore", content: "*\n" },
+      {
+        path: expect.stringMatching(/^\/script-results\/agent-output-\d+\.json$/),
+        content: spilled,
+      },
+    ]);
+    // The rendered item: a bounded preview plus the paste-ready read recipe.
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
+    expect(rendered!.payload.content).toContain("saved in your workspace at");
+    expect(rendered!.payload.content).toContain(
+      'JSON.parse(await itx.workspace.readFile("/script-results/',
+    );
+    expect(rendered!.payload.content).toContain(
+      `showing the first 100 of ${spilled.length.toLocaleString("en-US")} chars`,
+    );
+    expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
+  });
+
+  it("a markdown fence inside a string literal does not truncate script extraction", async () => {
+    // The prd incident: extraction once cut the script at the first embedded
+    // ``` and executed an unparseable prefix. Fences only count at line
+    // starts — a ``` inside a string literal always sits mid-line.
+    const h = makeAgentHarness();
+    const script = [
+      "async (itx) => {",
+      '  const banner = "```text\\n" + (await itx.status()) + "\\n```";',
+      "  return banner;",
+      "}",
+    ].join("\n");
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("format the status")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("Reading now.\n\n```ts\n" + script + "\n```"),
+    );
+
+    const requests = h.events("events.iterate.com/capability-host/script-run-requested");
+    expect(requests).toHaveLength(1);
+    expect((requests[0]!.payload as { code: string }).code).toBe(script);
+  });
+
+  it("rejects a mixed-language multi-block response without executing the TypeScript block", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("do it")],
+      ["advanceTime", 10_000],
+      () =>
+        h.llm.respond("```ts\nasync (itx) => itx.a()\n```\n\n```python\nprint('next step')\n```"),
+    );
+
+    // One runnable ts block plus ANY other fenced block is still 2 blocks:
+    // nothing executes, and the feedback says so.
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
+    const feedback = h
+      .state()
+      .contextItems.find((item) => item.payload.content.includes("2 fenced code blocks"));
+    expect(feedback).toMatchObject({
+      payload: { role: "developer", llmRequestPolicy: { behaviour: "after-current-request" } },
+    });
+  });
+
+  it("prose without a fence is a deliberate silent no-op; a non-ts fence gets corrective feedback", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("thoughts?")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("Just thinking out loud, nothing to run."),
+      ["advanceTime", 60_000],
+    );
+    // No fence anywhere = a deliberate no-op turn: no script, no feedback,
+    // no follow-up trigger, no extra dial.
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
+    expect(
+      h.state().contextItems.some((item) => item.payload.content.includes("did NOT run")),
+    ).toBe(false);
+    expect(h.state().pendingLlmRequestTrigger).toBeNull();
+    expect(h.llm.calls).toHaveLength(1);
+
+    // A single fence with a non-TypeScript tag is a MALFORMED attempt, not a
+    // no-op: the model must hear that its code did not run.
+    await h.play(["append", userMessage("try again")], ["advanceTime", 10_000], () =>
+      h.llm.respond("```python\nprint('hi')\n```"),
+    );
+    expect(
+      h.state().contextItems.find((item) => item.payload.content.includes("did NOT run")),
+    ).toMatchObject({ payload: { role: "developer" } });
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toHaveLength(0);
+  });
+
   it("a full replay (fresh cursor over the same journal) redelivers every event without wedging on per-event appends", async () => {
     // The harshest at-least-once redelivery: a fresh progress store over the
     // SAME journal replays every event, so every per-event blocked append
@@ -956,6 +1388,29 @@ describe("AgentProcessor stream facts", () => {
     );
   });
 
+  it("a raw cancelled settlement append (a stop button) closes the open request; the zombie answer folds to nothing", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    const requested = h.events(REQUESTED)[0]!;
+    expect(h.state().openRequest).not.toBeNull();
+
+    await h.play([
+      "append",
+      {
+        type: SETTLED,
+        payload: {
+          requestOffset: requested.offset,
+          result: { status: "cancelled", reason: "interrupted-by-user-input" },
+        },
+      },
+    ]);
+    expect(h.state().openRequest).toBeNull();
+
+    // The in-flight zombie's answer folds to nothing (no open request).
+    await h.play(() => h.llm.respond("too late"));
+    expect(h.state().contextItems.some((item) => item.payload.content === "too late")).toBe(false);
+  });
+
   it("agent/configured merges partial patches; omitted keys keep their values", async () => {
     const h = makeAgentHarness();
     await h.play([
@@ -978,6 +1433,32 @@ describe("AgentProcessor stream facts", () => {
     });
   });
 
+  it("a model reconfiguration applies to the NEXT request", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("Hi!"),
+    );
+    expect(h.llm.calls[0]!.model).toBe("test-model");
+
+    // The intent's model comes from config at scheduling time — a mid-life
+    // patch drives the next requested event and dial, no rebirth needed.
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { llm: { model: "better-model" } } },
+        },
+        userMessage("use it"),
+      ],
+      ["advanceTime", 10_000],
+    );
+    expect((h.events(REQUESTED)[1]!.payload as { model: string }).model).toBe("better-model");
+    expect(h.llm.calls[1]!.model).toBe("better-model");
+  });
+
   it("llm-response-chunk is FORCIBLY ephemeral: absent defaults in, explicit false is rejected", () => {
     const built = AgentProcessorContract.buildEvent({
       type: "events.iterate.com/agent/llm-response-chunk",
@@ -994,6 +1475,37 @@ describe("AgentProcessor stream facts", () => {
         ephemeral: false,
       }),
     ).toThrow();
+  });
+
+  it("strict wire shapes reject unknown keys; birth stays policy-free", async () => {
+    // agent/configured cannot smuggle non-config policy fields.
+    expect(() =>
+      AgentProcessorContract.parseEventInput({
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { systemPrompt: "sneaky" } },
+      }),
+    ).toThrow();
+    // A context payload with a stray field fails closed…
+    const contextPayloadSchema = AgentProcessorContract.events[CONTEXT_ADDED].payloadSchema;
+    expect(
+      contextPayloadSchema.safeParse({ role: "system", content: "x", order: "00" }).success,
+    ).toBe(false);
+    // …and so does the live-state push surface.
+    expect(AgentLiveState.safeParse({ unexpected: true }).success).toBe(false);
+
+    // agent/created is deliberately open (provenance may ride along), but the
+    // fold keeps policy out of the birth certificate: a smuggled config is
+    // inert — configuration only ever enters through agent/configured.
+    const h = makeAgentHarness();
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/agent/created",
+        payload: { config: { llm: { model: "smuggled-model" } } },
+      },
+    ]);
+    expect(h.state().birthCertificate).not.toBeNull();
+    expect(h.state().config.llm.model).not.toBe("smuggled-model");
   });
 });
 
@@ -1061,6 +1573,38 @@ describe("AgentProcessor summary", () => {
     expect(h.state().runtimeChange).toMatchObject({
       runtime: { triggers: { pending: 1, runnable: 1 } },
     });
+  });
+
+  it("runtimeChange tracks the fold through a full turn without any journal event", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+
+    // Opening the request flips the runtime: exact counts, stamped with the
+    // offset of the requested event whose fold flipped them.
+    const requested = h.events(REQUESTED)[0]!;
+    expect(h.state().runtimeChange).toMatchObject({
+      runtime: {
+        triggers: { pending: 0, runnable: 0 },
+        llmRequests: { scheduled: 0, requested: 1, started: 0 },
+        runningScripts: 0,
+      },
+      sinceOffset: requested.offset,
+    });
+
+    // Settlement flips it back to all-quiet, stamped with the settled event.
+    await h.play(() => h.llm.respond("Hi!"));
+    const settled = h.events(SETTLED)[0]!;
+    expect(h.state().runtimeChange).toMatchObject({
+      runtime: {
+        triggers: { pending: 0, runnable: 0 },
+        llmRequests: { scheduled: 0, requested: 0, started: 0 },
+        runningScripts: 0,
+      },
+      sinceOffset: settled.offset,
+    });
+
+    // The presence lane is pure state: no runtime event type is ever journaled.
+    expect(h.events().every((row) => !row.type.includes("runtime"))).toBe(true);
   });
 });
 
@@ -1165,190 +1709,345 @@ describe("AgentProcessor compaction", () => {
       true,
     );
   });
-});
 
-// =============================================================================
-// Legacy journals — the compatibility contract of the in-place replacement
-// =============================================================================
-
-describe("AgentProcessor legacy journals", () => {
-  it("refolds an old-contract journal: legacy settlements close requests, crash-cancels re-queue, every assistant turn survives, the compaction barrier applies", async () => {
+  it("a malformed compaction item whose cutoff is not earlier than itself folds to nothing", async () => {
     const h = makeAgentHarness();
-    const raw = (type: string, payload: unknown) =>
-      h.stream.append({ type, payload: payload as Record<string, unknown> });
-
-    // A journal exactly as the PREVIOUS agent processor wrote it — synthetic
-    // ids, scheduled/started lifecycle, completed/cancelled settlements, a
-    // slack-transcribed input with refs, and a compaction item.
-    await raw("events.iterate.com/agent/created", {});
-    await raw("events.iterate.com/agent/configured", {
-      config: { llm: { model: "legacy-model" } },
-    });
-    await raw(CONTEXT_ADDED, {
-      role: "system",
-      key: "agent/system-prompt",
-      content: "Legacy system prompt.",
-    });
-    await raw(CONTEXT_ADDED, {
-      role: "developer",
-      content: "A Slack user asked: what's our uptime?",
-      actor: { type: "slack", userId: "U123" },
-      refs: [
-        {
-          type: "event",
-          streamPath: "/integrations/slack/acme",
-          offset: 81,
-          eventType: "events.iterate.com/slack/webhook-received",
-        },
-      ],
-      llmRequestPolicy: { behaviour: "after-current-request" },
-    });
-    await raw("events.iterate.com/agent/llm-request-scheduled", {
-      debounceMs: 250,
-      model: "legacy-model",
-      requestId: "llm-request:gen-0",
-    });
-    const [requested1] = await raw("events.iterate.com/agent/llm-request-requested", {
-      model: "legacy-model",
-      requestId: "llm-request:gen-0",
-      expiresAt: h.clock.now + 600_000,
-    });
-    await raw("events.iterate.com/agent/llm-request-started", {
-      llmRequestOffset: requested1!.offset,
-      model: "legacy-model",
-    });
-    await raw(CONTEXT_ADDED, {
-      role: "assistant",
-      content: "First reply (99.98% uptime).",
-      llmRequestOffset: requested1!.offset,
-    });
-    await raw("events.iterate.com/agent/llm-request-completed", {
-      durationMs: 1200,
-      llmRequestOffset: requested1!.offset,
-      result: {
-        status: "success",
-        usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
-      },
-    });
-    await raw("events.iterate.com/agent/token-usage-reported", {
-      llmRequestOffset: requested1!.offset,
-      model: "legacy-model",
-      maxContextTokens: 272_000,
-      inputTokens: 100,
-      outputTokens: 20,
-    });
-    // Second turn dies with the host: crash-cancel re-queues, a fresh
-    // request answers.
-    await raw(CONTEXT_ADDED, {
-      role: "user",
-      content: "And last month?",
-      actor: { type: "user", origin: "web" },
-      llmRequestPolicy: { behaviour: "after-current-request" },
-    });
-    await raw("events.iterate.com/agent/llm-request-scheduled", {
-      debounceMs: 250,
-      model: "legacy-model",
-      requestId: "llm-request:gen-1",
-    });
-    const [requested2] = await raw("events.iterate.com/agent/llm-request-requested", {
-      model: "legacy-model",
-      requestId: "llm-request:gen-1",
-      expiresAt: h.clock.now + 600_000,
-    });
-    await raw("events.iterate.com/agent/llm-request-started", {
-      llmRequestOffset: requested2!.offset,
-      model: "legacy-model",
-    });
-    await raw("events.iterate.com/agent/llm-request-cancelled", {
-      phase: "requested",
-      reason: "durable-object-crashed",
-      llmRequestOffset: requested2!.offset,
-    });
-    await raw("events.iterate.com/agent/llm-request-scheduled", {
-      debounceMs: 250,
-      model: "legacy-model",
-      requestId: "llm-request:gen-2",
-    });
-    const [requested3] = await raw("events.iterate.com/agent/llm-request-requested", {
-      model: "legacy-model",
-      requestId: "llm-request:gen-2",
-      expiresAt: h.clock.now + 600_000,
-    });
-    await raw(CONTEXT_ADDED, {
-      role: "assistant",
-      content: "Second reply (99.95% last month).",
-      llmRequestOffset: requested3!.offset,
-    });
-    await raw("events.iterate.com/agent/llm-request-completed", {
-      durationMs: 900,
-      llmRequestOffset: requested3!.offset,
-      result: { status: "success" },
-    });
-    // A historical compaction through the FIRST request's offset.
-    await raw(CONTEXT_ADDED, {
-      role: "developer",
-      content: "[Earlier conversation history was compacted. Summary:]\n\nUptime chat so far.",
-      compaction: { replacesHistoryThrough: requested1!.offset },
-      llmRequestPolicy: { behaviour: "dont-trigger-request" },
-    });
-
-    await h.settle();
-
-    const state = h.state();
-    // Every legacy request settled — the fold-guard cannot strand one open.
-    expect(state.openRequest).toBeNull();
-    expect(state.pendingLlmRequestTrigger).toBeNull();
-    expect(h.llm.calls).toHaveLength(0); // nothing re-ran
-    expect(h.events(REQUESTED)).toHaveLength(3);
-    expect(h.events(SETTLED)).toHaveLength(0); // no new-style settlements invented
-
-    // BOTH assistant turns survive the refold (the crash-cancel re-queue is
-    // what lets requested3 open, so its reply folds in), the slack item died
-    // at the compaction barrier, and the summary sits behind the system
-    // prompt.
-    const contents = state.contextItems.map((item) => item.payload.content);
-    expect(contents.some((content) => content.includes("First reply"))).toBe(true);
-    expect(contents.some((content) => content.includes("Second reply"))).toBe(true);
-    expect(contents.some((content) => content.includes("Slack user asked"))).toBe(false);
-    expect(state.contextItems[0]!.payload).toMatchObject({ role: "system" });
-    expect(state.contextItems[1]!.payload.compaction).toMatchObject({
-      replacesHistoryThrough: requested1!.offset,
-    });
-    // Coverage sealed at least through the newest request.
-    expect(state.lastLlmRequestOffset).toBeGreaterThanOrEqual(requested3!.offset);
-    // Legacy usage reports fold into lifetime totals.
-    expect(state.tokenUsage).toMatchObject({ totalInputTokens: 100, totalOutputTokens: 20 });
-
-    // The same journal refolds identically OFF-runtime (the replay/prompt
-    // read path).
-    const refolded = reduceAgentEvents(h.events());
-    expect(refolded.contextItems.map((item) => item.offset)).toEqual(
-      state.contextItems.map((item) => item.offset),
-    );
-  });
-
-  it("a raw legacy cancelled append still stops the open request (the old stop button keeps working)", async () => {
-    const h = makeAgentHarness();
-    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
-    const requested = h.events(REQUESTED)[0]!;
-    expect(h.state().openRequest).not.toBeNull();
-
     await h.play([
       "append",
+      ...NEW_AGENT_EVENTS,
+      userMessage("keep me", { behaviour: "dont-trigger-request" }),
       {
-        type: "events.iterate.com/agent/llm-request-cancelled",
+        type: CONTEXT_ADDED,
         payload: {
-          phase: "requested",
-          reason: "interrupted-by-user-input",
-          llmRequestOffset: requested.offset,
+          role: "developer",
+          content: "malformed summary",
+          compaction: { replacesHistoryThrough: 99 },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     ]);
-    expect(h.state().openRequest).toBeNull();
 
-    // The in-flight zombie's answer folds to nothing (no open request).
-    await h.play(() => h.llm.respond("too late"));
-    expect(h.state().contextItems.some((item) => item.payload.content === "too late")).toBe(false);
+    // Fail closed: a summary can replace only history that existed before the
+    // summary itself, so the raw append rewrites nothing — and folds to
+    // nothing itself.
+    expect(h.state().contextItems.some((item) => item.payload.content === "keep me")).toBe(true);
+    expect(h.state().contextItems.some((item) => item.payload.compaction !== undefined)).toBe(
+      false,
+    );
+    expect(
+      h.state().contextItems.some((item) => item.payload.content === "malformed summary"),
+    ).toBe(false);
+  });
+
+  it("an item landing between the barrier and the summary survives, ordered behind the summary", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("First question")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("First answer"),
+    );
+    await h.play(["append", userMessage("Second question")], ["advanceTime", 10_000], () =>
+      h.llm.respond("Second answer"),
+    );
+    const secondRequestOffset = h.events(REQUESTED)[1]!.offset;
+
+    await h.stream.append({
+      type: "events.iterate.com/agent/token-usage-reported",
+      payload: {
+        llmRequestOffset: secondRequestOffset,
+        model: "compactor-model",
+        maxContextTokens: 1_000,
+        inputTokens: 600,
+        outputTokens: 50,
+      },
+    });
+    const catchUp = h.runner().catchUp();
+    for (let i = 0; i < 50 && h.llm.calls.length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(h.llm.calls).toHaveLength(3);
+    // A message commits AFTER the measured request but BEFORE the summary
+    // item — a later journal fact the rewrite must not eat.
+    await h.stream.append({
+      type: CONTEXT_ADDED,
+      payload: {
+        role: "user",
+        content: "unanswered while compacting",
+        actor: { type: "user", origin: "web" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+    h.llm.respond("Dense summary.");
+    await catchUp;
+    await h.settle();
+
+    const items = h.state().contextItems;
+    expect(items[0]!.payload.role).toBe("system");
+    const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
+    const survivorIndex = items.findIndex(
+      (item) => item.payload.content === "unanswered while compacting",
+    );
+    expect(summaryIndex).toBeGreaterThan(0);
+    expect(survivorIndex).toBeGreaterThan(summaryIndex); // survived, BEHIND the summary
+  });
+
+  it("compaction collapses repeated keyed system occurrences and journals the summary call's usage", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("First question")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("First answer"),
+    );
+    const requestOffset = h.events(REQUESTED)[0]!.offset;
+
+    // The covered keyed prompt update appends a SECOND occurrence; an unkeyed
+    // system fact rides along.
+    await h.play([
+      "append",
+      {
+        type: CONTEXT_ADDED,
+        payload: { role: "system", key: "agent/system-prompt", content: "You are v2." },
+      },
+      { type: CONTEXT_ADDED, payload: { role: "system", content: "Unkeyed durable fact." } },
+    ]);
+    expect(
+      h.state().contextItems.filter((item) => item.payload.key === "agent/system-prompt"),
+    ).toHaveLength(2);
+
+    await h.stream.append({
+      type: "events.iterate.com/agent/token-usage-reported",
+      payload: {
+        llmRequestOffset: requestOffset,
+        model: "compactor-model",
+        maxContextTokens: 1_000,
+        inputTokens: 900,
+        outputTokens: 50,
+      },
+    });
+    const catchUp = h.runner().catchUp();
+    for (let i = 0; i < 50 && h.llm.calls.length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(h.llm.calls).toHaveLength(2);
+    h.llm.respond("Dense summary.", { inputTokens: 141_000, outputTokens: 20 });
+    await catchUp;
+    await h.settle();
+
+    // System facts survive on both sides of the barrier, but historical
+    // occurrences of the SAME key collapse to the latest — repeated prompt
+    // updates cannot grow the compaction-immune prefix forever.
+    const items = h.state().contextItems;
+    expect(items.filter((item) => item.payload.key === "agent/system-prompt")).toMatchObject([
+      { payload: { content: "You are v2." } },
+    ]);
+    const factIndex = items.findIndex((item) => item.payload.content === "Unkeyed durable fact.");
+    const summaryIndex = items.findIndex((item) => item.payload.compaction !== undefined);
+    expect(factIndex).toBeGreaterThanOrEqual(0);
+    expect(summaryIndex).toBeGreaterThan(factIndex);
+    expect(items.some((item) => item.payload.content === "First question")).toBe(false);
+    // The summary call's own usage is journaled on the compaction item, so
+    // cost views see the cache split.
+    expect(items[summaryIndex]!.payload.compaction).toMatchObject({
+      replacesHistoryThrough: requestOffset,
+      usage: { inputTokens: 141_000, outputTokens: 20 },
+    });
+  });
+
+  it("refolding a fully settled journal performs zero LLM dials and appends nothing — including no re-summarize", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("First question")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("First answer"),
+    );
+    const requestOffset = h.events(REQUESTED)[0]!.offset;
+    await h.stream.append({
+      type: "events.iterate.com/agent/token-usage-reported",
+      payload: {
+        llmRequestOffset: requestOffset,
+        model: "compactor-model",
+        maxContextTokens: 1_000,
+        inputTokens: 900,
+        outputTokens: 50,
+      },
+    });
+    const catchUp = h.runner().catchUp();
+    for (let i = 0; i < 50 && h.llm.calls.length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    h.llm.respond("Dense summary.");
+    await catchUp;
+    await h.settle();
+    expect(h.state().openRequest).toBeNull();
+    expect(h.state().pendingLlmRequestTrigger).toBeNull();
+    const journalledOffsets = h.events().map((row) => row.offset);
+
+    // A fresh incarnation over the same journal: turn adoption must not fire
+    // for the settled request and the compaction guard must skip the summary.
+    const replay = makeAgentHarness({
+      clock: h.clock,
+      stream: h.stream,
+      progress: makeMemoryProgressStore(),
+    });
+    await replay.settle();
+    expect(replay.llm.calls).toHaveLength(0);
+    expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
+    expect(
+      replay.state().contextItems.filter((item) => item.payload.compaction !== undefined),
+    ).toHaveLength(1);
+  });
+
+  it("an earlier-cutoff summary does not suppress compaction of a later request", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("First question")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("First answer"),
+    );
+    await h.play(["append", userMessage("Second question")], ["advanceTime", 10_000], () =>
+      h.llm.respond("Second answer"),
+    );
+    const [firstRequestOffset, secondRequestOffset] = h.events(REQUESTED).map((row) => row.offset);
+
+    // An existing compaction item covering request 1 only.
+    await h.play([
+      "append",
+      {
+        type: CONTEXT_ADDED,
+        payload: {
+          role: "developer",
+          content: "[Old summary through request 1]",
+          compaction: { replacesHistoryThrough: firstRequestOffset! },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      },
+    ]);
+
+    // The guard is per-request-offset, not "a summary exists": an
+    // over-threshold report for request 2 still summarizes at ITS barrier.
+    await h.stream.append({
+      type: "events.iterate.com/agent/token-usage-reported",
+      payload: {
+        llmRequestOffset: secondRequestOffset!,
+        model: "compactor-model",
+        maxContextTokens: 1_000,
+        inputTokens: 900,
+        outputTokens: 50,
+      },
+    });
+    const catchUp = h.runner().catchUp();
+    for (let i = 0; i < 50 && h.llm.calls.length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(h.llm.calls).toHaveLength(3);
+    h.llm.respond("Rebased summary.");
+    await catchUp;
+    await h.settle();
+
+    const compactionRows = h
+      .events(CONTEXT_ADDED)
+      .filter((row) => (row.payload as { compaction?: unknown }).compaction !== undefined);
+    expect(compactionRows).toHaveLength(2);
+    expect(compactionRows[1]).toMatchObject({
+      payload: { compaction: { replacesHistoryThrough: secondRequestOffset } },
+    });
+  });
+
+  it("same-frame over-threshold reports coalesce onto the newest request and its model", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("First question")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("First answer"),
+    );
+    await h.play(["append", userMessage("Second question")], ["advanceTime", 10_000], () =>
+      h.llm.respond("Second answer"),
+    );
+    const [firstRequestOffset, secondRequestOffset] = h.events(REQUESTED).map((row) => row.offset);
+
+    // BOTH reports land in one batch: summarizing the old prefix now would be
+    // thrown away by the newer request's compaction, so only the newest runs.
+    await h.stream.append(
+      {
+        type: "events.iterate.com/agent/token-usage-reported",
+        payload: {
+          llmRequestOffset: firstRequestOffset!,
+          model: "model-a",
+          maxContextTokens: 1_000,
+          inputTokens: 800,
+          outputTokens: 10,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/token-usage-reported",
+        payload: {
+          llmRequestOffset: secondRequestOffset!,
+          model: "model-b",
+          maxContextTokens: 1_000,
+          inputTokens: 900,
+          outputTokens: 10,
+        },
+      },
+    );
+    const catchUp = h.runner().catchUp();
+    for (let i = 0; i < 50 && h.llm.calls.length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(h.llm.calls).toHaveLength(3); // exactly ONE summary dial
+    expect(h.llm.calls[2]!.model).toBe("model-b");
+    h.llm.respond("Coalesced summary.");
+    await catchUp;
+    await h.settle();
+
+    expect(h.llm.calls).toHaveLength(3); // the older report never dialed
+    expect(
+      h.state().contextItems.filter((item) => item.payload.compaction !== undefined),
+    ).toMatchObject([{ payload: { compaction: { replacesHistoryThrough: secondRequestOffset } } }]);
+  });
+
+  it("token tallies accumulate cached and reasoning components", async () => {
+    const h = makeAgentHarness();
+    await h.play([
+      "append",
+      ...NEW_AGENT_EVENTS,
+      {
+        type: "events.iterate.com/agent/token-usage-reported",
+        payload: {
+          llmRequestOffset: 1,
+          model: "m",
+          maxContextTokens: 272_000,
+          inputTokens: 10,
+          outputTokens: 2,
+          cachedInputTokens: 8,
+          reasoningOutputTokens: 1,
+        },
+      },
+    ]);
+    expect(h.state().tokenUsage).toEqual({
+      totalInputTokens: 10,
+      totalOutputTokens: 2,
+      totalCachedInputTokens: 8,
+      totalReasoningOutputTokens: 1,
+    });
+  });
+
+  it("no parseable usage means no report: the token event is skipped, not zero-filled", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("Hi!"), // the vendor reported no usage
+    );
+    expect(h.events("events.iterate.com/agent/token-usage-reported")).toHaveLength(0);
+    expect(
+      (h.events(SETTLED)[0]!.payload as { result: Record<string, unknown> }).result,
+    ).not.toHaveProperty("usage");
+
+    // Failed attempts never report either.
+    await h.play(["append", userMessage("again")], ["advanceTime", 10_000], () =>
+      h.llm.fail("boom"),
+    );
+    expect(h.events("events.iterate.com/agent/token-usage-reported")).toHaveLength(0);
   });
 });
 
@@ -1450,6 +2149,85 @@ describe("prompt building", () => {
     // The timestamp is the requested event's own journaled createdAt — the
     // request replays byte-identically.
     expect(messages.at(-1)!.content).toBe(`Current date and time (UTC): ${events[4]!.createdAt}`);
+  });
+
+  it("demotes telegram, email, and github developer items to user; agent mail stays trusted", () => {
+    const taxonomy: StreamEvent[] = [
+      streamEvent(1, "events.iterate.com/agent/created", {}),
+      streamEvent(2, CONTEXT_ADDED, {
+        role: "system",
+        key: "agent/system-prompt",
+        content: "prompt",
+      }),
+      streamEvent(3, CONTEXT_ADDED, {
+        role: "developer",
+        content: "from telegram",
+        actor: { type: "telegram", username: "tg-user" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      }),
+      streamEvent(4, CONTEXT_ADDED, {
+        role: "developer",
+        content: "from email",
+        actor: { type: "email", address: "dana@example.com" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      }),
+      streamEvent(5, CONTEXT_ADDED, {
+        role: "developer",
+        content: "from github",
+        actor: { type: "github", login: "octocat" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      }),
+      streamEvent(6, CONTEXT_ADDED, {
+        role: "developer",
+        content: "from another agent",
+        actor: { type: "agent", path: "/agents/main" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      }),
+      streamEvent(7, "events.iterate.com/agent/llm-request-requested", { model: "m" }),
+    ];
+    const { messages } = buildAgentLlmRequestBody({ events: taxonomy, llmRequestOffset: 7 });
+    const byContent = (needle: string) =>
+      messages.find((message) => message.content.includes(needle))!;
+
+    // Every integration-lane author is DEMOTED to user with its provenance
+    // rendered; only the agent-actor item keeps developer precedence.
+    expect(byContent("from telegram")).toMatchObject({ role: "user" });
+    expect(byContent("from telegram").content).toContain('actor=telegram:"tg-user"');
+    expect(byContent("from email")).toMatchObject({ role: "user" });
+    expect(byContent("from email").content).toContain('actor=email:"dana@example.com"');
+    expect(byContent("from github")).toMatchObject({ role: "user" });
+    expect(byContent("from github").content).toContain('actor=github:"octocat"');
+    expect(byContent("from another agent")).toMatchObject({ role: "developer" });
+  });
+
+  it("files on a context-added event ride through to the projected message", () => {
+    const file = {
+      contentType: "image/png",
+      filename: "chart.png",
+      path: "/agents/test/chart.png",
+      size: 123,
+      url: "https://files.example/chart.png?sig=abc",
+    };
+    const rows: StreamEvent[] = [
+      streamEvent(1, "events.iterate.com/agent/created", {}),
+      streamEvent(2, CONTEXT_ADDED, {
+        role: "system",
+        key: "agent/system-prompt",
+        content: "prompt",
+      }),
+      streamEvent(3, CONTEXT_ADDED, {
+        role: "user",
+        content: "look at this chart",
+        actor: { type: "user", origin: "web" },
+        files: [file],
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      }),
+      streamEvent(4, "events.iterate.com/agent/llm-request-requested", { model: "m" }),
+    ];
+    const { messages } = buildAgentLlmRequestBody({ events: rows, llmRequestOffset: 4 });
+    const projected = messages.find((message) => message.content.includes("look at this chart"))!;
+    expect(projected).toMatchObject({ role: "user", files: [file] });
+    expect(projected.content).toContain("@3");
   });
 
   it("the compaction request is the normal request byte-for-byte, with the instruction appended last", () => {

@@ -115,15 +115,6 @@ import {
  * All tuning (model, debounce, expiry, retry policy, breaker threshold,
  * script truncation, compaction trigger) lives in `state.config` with schema
  * defaults; `agent/configured` merges partial patches.
- *
- * LEGACY JOURNALS: this processor replaced the previous agent processor in
- * place, so the fold also consumes the old contract's terminal events
- * (`llm-request-completed` / `llm-request-cancelled`) purely as settlement
- * facts that close a matching open request — without them the first
- * historical requested event would open a request nothing ever settles and
- * every later assistant turn would drop from the refold. Historical
- * `llm-request-scheduled` / `llm-request-started` events are unconsumed and
- * skip harmlessly.
  */
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
@@ -444,9 +435,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         break;
       }
       // created / configured / requested / settled / paused / resumed /
-      // summary-updated / legacy completed / legacy cancelled /
-      // script-run-requested / revived: no per-event effect — they matter
-      // through the fold below.
+      // summary-updated / script-run-requested / revived: no per-event
+      // effect — they matter through the fold below.
     }
 
     // ---------------------------------------- state-derived side effects
@@ -1234,11 +1224,7 @@ function reduceAgentEventCore(input: {
         pendingLlmRequestTrigger: null,
         openRequest: {
           requestedAtOffset: event.offset,
-          // Historical requested events may carry no expiresAt (and raw
-          // appends may omit it): default from the event's own commit time.
-          expiresAt:
-            event.payload.expiresAt ??
-            Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+          expiresAt: event.payload.expiresAt,
           model: event.payload.model,
         },
         // The turn covers everything folded so far: keyed context updates
@@ -1275,58 +1261,6 @@ function reduceAgentEventCore(input: {
             }
           : {}),
       };
-    }
-    // ----------------------------------------------------------------------
-    // LEGACY-JOURNAL BRIDGE: the previous contract's terminal events, folded
-    // purely as settlement facts. A matching offset closes the open request
-    // with the streak arithmetic; a HIGHER offset also closes it — a legacy
-    // journal that settled a LATER request has necessarily moved past the
-    // one this fold thinks is open (e.g. a stale lost-timer re-fire the old
-    // fold ignored but this one opened), and leaving it open would drop
-    // every subsequent assistant turn. A LOWER offset is a genuinely stale
-    // settlement (the old reconciler settling a superseded stray) — no-op.
-    // ----------------------------------------------------------------------
-    case "events.iterate.com/agent/llm-request-completed": {
-      const open = state.openRequest;
-      if (open === null || event.payload.llmRequestOffset < open.requestedAtOffset) return state;
-      if (event.payload.llmRequestOffset > open.requestedAtOffset) {
-        return { ...state, openRequest: null };
-      }
-      const settled = { ...state, openRequest: null };
-      // No retry trigger here: the old processor rendered every failure as a
-      // developer context item whose own fold (above) carries the trigger.
-      return event.payload.result.status === "success"
-        ? { ...settled, consecutiveLlmFailures: 0 }
-        : { ...settled, consecutiveLlmFailures: state.consecutiveLlmFailures + 1 };
-    }
-    case "events.iterate.com/agent/llm-request-cancelled": {
-      if (event.payload.phase !== "requested" || event.payload.llmRequestOffset === undefined) {
-        // Scheduled-phase cancels have nothing to close here: the scheduled
-        // event itself is unconsumed and never opened anything.
-        return state;
-      }
-      const open = state.openRequest;
-      if (open === null || event.payload.llmRequestOffset < open.requestedAtOffset) return state;
-      const closed = { ...state, openRequest: null };
-      // The old crash-cancel re-queued the turn (the user asked and never got
-      // an answer), and the re-scheduled requested event that follows in the
-      // journal only opens if a trigger is pending — so the bridge re-queues
-      // too, or every crash-recovered conversation would refold without its
-      // post-crash turns.
-      if (
-        event.payload.llmRequestOffset === open.requestedAtOffset &&
-        event.payload.reason === "durable-object-crashed"
-      ) {
-        return {
-          ...closed,
-          pendingLlmRequestTrigger: {
-            offset: event.offset,
-            atMs: Date.parse(event.createdAt),
-            source: "agent-loop",
-          },
-        };
-      }
-      return closed;
     }
     case "events.iterate.com/agent/token-usage-reported":
       return {
@@ -1420,7 +1354,7 @@ function reduceAgentEventCore(input: {
  * malformed event is a fact of the log, not an exception). Reducer bugs, by
  * contrast, throw — swallowing them would silently fold wrong state.
  */
-export function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState {
+function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState {
   let state = AgentProcessorContract.stateSchema.parse({});
   for (const event of events) {
     const definition = getConsumedEventDefinition({

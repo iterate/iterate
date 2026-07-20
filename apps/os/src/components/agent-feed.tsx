@@ -11,7 +11,6 @@ import {
   PaperclipIcon,
   PauseIcon,
   PlayIcon,
-  RefreshCwIcon,
 } from "lucide-react";
 import {
   formatAgentUiActivitySummary,
@@ -282,7 +281,7 @@ function AgentActivityRow({
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
   const summary = summarizeAgentUiActivity(activity);
-  const failed = summary.outcome === "failed" || summary.outcome === "restart-failed";
+  const failed = summary.outcome === "failed";
 
   return (
     <div className="flex flex-col py-0.5">
@@ -301,8 +300,6 @@ function AgentActivityRow({
           <CircleAlertIcon data-icon="inline-start" className="text-destructive" />
         ) : summary.outcome === "interrupted" ? (
           <BanIcon data-icon="inline-start" className="text-destructive" />
-        ) : summary.outcome === "recovered" ? (
-          <RefreshCwIcon data-icon="inline-start" />
         ) : (
           <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
@@ -500,7 +497,6 @@ function AgentActivityStep({
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
   const failed = step.kind === "code" ? step.success === false : step.outcome === "failed";
-  const cancelReason = step.kind === "llm" ? step.cancelReason : undefined;
   const inspect =
     step.kind === "llm"
       ? onInspectLlmRequest == null
@@ -528,9 +524,7 @@ function AgentActivityStep({
           failed && "text-destructive hover:text-destructive",
         )}
       >
-        {cancelReason === "durable-object-crashed" ? (
-          <RefreshCwIcon data-icon="inline-start" />
-        ) : step.kind === "llm" && step.outcome === "cancelled" ? (
+        {step.kind === "llm" && step.outcome === "cancelled" ? (
           <BanIcon data-icon="inline-start" className="text-destructive" />
         ) : step.kind === "llm" ? (
           <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
@@ -543,14 +537,6 @@ function AgentActivityStep({
         <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
         <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
       </Button>
-      {cancelReason === "durable-object-crashed" ? (
-        <span
-          className="ml-3 text-[11px] text-muted-foreground"
-          data-testid="agent-feed-recovery-reason"
-        >
-          Platform restarted this agent.
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -560,8 +546,8 @@ function stepLabel(step: AgentUiStep): string {
     if (step.status === "running") return "Running code";
     return step.success === false ? "Code failed" : "Ran code";
   }
-  if (step.cancelReason === "durable-object-crashed") return "Agent restarted";
   if (step.cancelReason === "interrupted-by-user-input") return "Stopped for your new message";
+  if (step.cancelReason === "expired") return "Request expired";
   if (step.outcome === "cancelled") return "Request cancelled";
   return step.model ?? "LLM request";
 }
@@ -609,9 +595,7 @@ export function AgentLiveActivity({
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
-  const summary = summarizeAgentUiActivity(live);
   const doneSummary = summarizeAgentUiActivity(live, doneSteps);
-  const recovering = summary.restartPending;
   const working = isAgentUiActivityWorking(live, runtime);
   const activityToggleId = `live-activity:${live.id}`;
   const activityExpanded = toggledIds.has(activityToggleId);
@@ -638,10 +622,8 @@ export function AgentLiveActivity({
     currentWorkKind === "code" || currentWorkKind === "llm"
       ? runningSteps.findLast((step) => step.kind === currentWorkKind)
       : liveStep;
-  const recoveringBetweenWork = recovering && currentWorkKind == null && currentStep == null;
-  const currentLabel = recoveringBetweenWork
-    ? "Restarted — continuing…"
-    : currentWorkKind === "code"
+  const currentLabel =
+    currentWorkKind === "code"
       ? "Running code"
       : currentWorkKind === "llm"
         ? currentStep?.kind === "llm"
@@ -650,9 +632,7 @@ export function AgentLiveActivity({
         : currentWorkKind === "queued"
           ? "Queued"
           : liveActivityLabel(currentStep == null ? [] : [currentStep]);
-  const currentStartedAtMs = recoveringBetweenWork
-    ? summary.recoveryStartedAtMs
-    : (currentStep?.startedAtMs ?? live.startedAtMs);
+  const currentStartedAtMs = currentStep?.startedAtMs ?? live.startedAtMs;
   const inspectCurrentWork =
     currentStep?.kind === "llm"
       ? onInspectLlmRequest == null

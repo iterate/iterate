@@ -12,16 +12,17 @@ export const AGENT_WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-messag
 export const AGENT_CONTEXT_ADDED_TYPE = "events.iterate.com/agents/context-added";
 export const EGRESS_PROOF_HEADER = "x-itx-egress-proof";
 
-/** Journal a synthetic provider response with the same durable request/start
- * evidence the agent processor requires before assistant code is executable.
- * Keeping this in one helper prevents e2e from weakening or lying about that
- * trust boundary merely to bypass the paid provider call. */
+/** Journal a synthetic provider response with the same durable
+ * request/settlement evidence the agent processor requires before assistant
+ * code is executable: a requested event whose OWN offset is the request's
+ * identity, the assistant context item linked to it, and the settled fact
+ * closing it. Keeping this in one helper prevents e2e from weakening or lying
+ * about that trust boundary merely to bypass the paid provider call. */
 export async function appendSyntheticProviderOutput(
   stream: Stream,
   content: string,
 ): Promise<{ assistantContext: StreamEvent; llmRequestOffset: number }> {
   const model = "e2e/synthetic-provider";
-  const requestId = `e2e-synthetic-provider:${crypto.randomUUID()}`;
   // `offset` is the Stream DO's hidden optimistic assertion. Keeping the
   // whole lifecycle in one asserted append means no subscriber can observe a
   // bare requested event and start a real provider attempt in the gap. The
@@ -41,27 +42,22 @@ export async function appendSyntheticProviderOutput(
     }
     const llmRequestOffset = (coreProcessorState as { maxOffset: number }).maxOffset + 1;
     try {
-      const [, , assistantContext] = await stream.append(
+      const [, assistantContext] = await stream.append(
         asserted(llmRequestOffset, {
           type: "events.iterate.com/agent/llm-request-requested",
-          payload: { model, requestId, expiresAt: Date.now() + 60_000 },
+          payload: { model, expiresAt: Date.now() + 60_000 },
         }),
         asserted(llmRequestOffset + 1, {
-          type: "events.iterate.com/agent/llm-request-started",
-          idempotencyKey: `agent/llm-request-started@${llmRequestOffset}`,
-          payload: { model, llmRequestOffset },
-        }),
-        asserted(llmRequestOffset + 2, {
           type: AGENT_CONTEXT_ADDED_TYPE,
           payload: { role: "assistant", content, llmRequestOffset },
         }),
-        asserted(llmRequestOffset + 3, {
-          type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: `agent/llm-request-completed@${llmRequestOffset}`,
+        asserted(llmRequestOffset + 2, {
+          type: "events.iterate.com/agent/llm-request-settled",
+          idempotencyKey: `agent/llm-request-settled@${llmRequestOffset}`,
           payload: {
+            requestOffset: llmRequestOffset,
             durationMs: 0,
-            llmRequestOffset,
-            result: { status: "success" },
+            result: { status: "succeeded", text: content },
           },
         }),
       );
