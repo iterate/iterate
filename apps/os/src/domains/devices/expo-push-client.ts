@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SECRET_JSON_TEMPLATE_HEADER } from "../secrets/utils.ts";
 import type { DevicePushMessage, DevicePushSender } from "./device-processor-implementation.ts";
 
 const ExpoTicket = z.discriminatedUnion("status", [
@@ -21,22 +22,19 @@ const ExpoReceipt = z.discriminatedUnion("status", [
 ]);
 
 export async function sendExpoPushNotification(
-  input: DevicePushMessage & { token: string },
-  fetcher: (request: Request) => Promise<Response> = fetch,
+  input: DevicePushMessage & { pushTokenSecretPath: string },
+  fetcher: (request: Request) => Promise<Response>,
 ): ReturnType<DevicePushSender> {
-  if (!/^(Exponent|Expo)PushToken\[[^\]]+\]$/.test(input.token)) {
-    return {
-      status: "error",
-      error: "InvalidExpoPushToken",
-      message: "The enrolled token is not an Expo push token.",
-    };
-  }
   const response = await fetcher(
     new Request("https://exp.host/--/api/v2/push/send", {
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        [SECRET_JSON_TEMPLATE_HEADER]: "json",
+      },
       body: JSON.stringify({
-        to: input.token,
+        to: `getSecret({ path: "${input.pushTokenSecretPath}" })`,
         title: input.title,
         body: input.body,
         data: input.data,
