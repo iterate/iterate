@@ -24,6 +24,7 @@ import {
   platformReferencesFromHeaders,
   secretErrorResponse,
   secretReferencePathsFromRequest,
+  SECRET_JSON_TEMPLATE_HEADER,
   SecretSubstitutionError,
 } from "../secrets/utils.ts";
 import { SlackProcessor } from "../integrations/slack-processor-implementation.ts";
@@ -343,7 +344,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // rule falls to the egress lanes, which report the canonical error.
     let secretPaths: string[] = [];
     try {
-      secretPaths = secretReferencePathsFromRequest(request);
+      secretPaths = await secretReferencePathsFromRequest(request);
     } catch {
       secretPaths = [];
     }
@@ -630,8 +631,9 @@ export class ProjectDurableObject extends DurableObject<Env> {
     try {
       // Placeholders live in the request envelope: headers, or the URL for
       // providers that authenticate in the URL path (Telegram).
-      secretPaths = secretReferencePathsFromRequest(request);
-    } catch {
+      secretPaths = await secretReferencePathsFromRequest(request);
+    } catch (error) {
+      if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       return secretErrorResponse("secret_reference_required");
     }
     const platformReferences = platformReferencesFromHeaders(request.headers);
@@ -658,6 +660,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
         if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
         throw error;
       }
+    }
+
+    if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
+      return secretErrorResponse("secret_reference_required");
     }
 
     // One request, one secret: the referenced Secret DO substitutes its own

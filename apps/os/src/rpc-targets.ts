@@ -2287,11 +2287,11 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
   }
 
   append(...events: DeviceAppendInput[]): Promise<StreamEvent[]> {
-    return this.durableObjectStub.append(this.props.auth.principal, ...events);
+    return this.durableObjectStub.append(...events);
   }
 
   revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
-    return this.durableObjectStub.revoke(this.props.auth.principal, reason);
+    return this.durableObjectStub.revoke(reason);
   }
 
   kill(): Promise<void> {
@@ -6545,7 +6545,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution; intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -6558,7 +6558,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     super();
   }
 
-  /** Outbound fetch with the project's identity and secret substitution. */
+  /** Outbound fetch with project identity and secret substitution. Set
+   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
+   * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }

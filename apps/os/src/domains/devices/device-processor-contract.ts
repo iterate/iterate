@@ -16,15 +16,22 @@ const StoredEncryptedDevicePushToken = EncryptedDevicePushToken.extend({
 
 export const DeviceNotificationDestination = NotificationDestination;
 
+const DeviceConfig = z.strictObject({
+  appVersion: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  notificationsStatus: z.literal("granted"),
+  ownerId: z.string().trim().min(1),
+  platform: z.enum(["ios", "android"]),
+});
+
 const DeviceBirthCertificate = z.strictObject({
-  config: z.strictObject({
-    appVersion: z.string().trim().min(1),
-    encryptedPushToken: EncryptedDevicePushToken,
-    label: z.string().trim().min(1),
-    notificationsStatus: z.literal("granted"),
-    ownerId: z.string().trim().min(1),
-    platform: z.enum(["ios", "android"]),
-  }),
+  config: z.union([
+    DeviceConfig.extend({
+      pushTokenSecretPath: z.string().trim().min(1),
+      pushTokenSecretUpdatedOffset: z.number().int().positive(),
+    }),
+    DeviceConfig.extend({ encryptedPushToken: EncryptedDevicePushToken }),
+  ]),
 });
 
 const DeviceNotificationRequest = z.strictObject({
@@ -58,12 +65,14 @@ export const DeviceNotificationOutcome = z.discriminatedUnion("kind", [
 
 export const DeviceProcessorContract = defineProcessorContract({
   slug: "device",
-  version: "0.1.0",
+  version: "0.2.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   processorDeps: [CoreProcessorContract, NotificationIntentContract],
   stateSchema: z.object({
     birthCertificate: DeviceBirthCertificate.nullable().default(null),
     encryptedPushToken: StoredEncryptedDevicePushToken.nullable().default(null),
+    pushTokenSecretPath: z.string().nullable().default(null),
+    pushTokenSecretUpdatedOffset: z.number().int().positive().nullable().default(null),
     revokedAt: z.string().nullable().default(null),
     tokenUpdatedOffset: z.number().int().min(0).default(0),
     lastNotificationOpenedAt: z.string().nullable().default(null),
@@ -89,11 +98,29 @@ export const DeviceProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/device/push-token-updated": {
       description: "Replaces the encrypted push credential and current app metadata.",
+      payloadSchema: z.union([
+        z.strictObject({
+          appVersion: z.string().trim().min(1),
+          label: z.string().trim().min(1),
+          notificationsStatus: z.literal("granted"),
+          ownerId: z.string().trim().min(1),
+          pushTokenSecretPath: z.string().trim().min(1),
+          pushTokenSecretUpdatedOffset: z.number().int().positive(),
+        }),
+        z.strictObject({
+          appVersion: z.string().trim().min(1),
+          encryptedPushToken: EncryptedDevicePushToken,
+          label: z.string().trim().min(1),
+          notificationsStatus: z.literal("granted"),
+        }),
+      ]),
+    },
+    "events.iterate.com/device/push-token-secret-linked": {
+      description: "Completes bounded migration of a legacy encrypted device token into Secrets.",
       payloadSchema: z.strictObject({
-        appVersion: z.string().trim().min(1),
-        encryptedPushToken: EncryptedDevicePushToken,
-        label: z.string().trim().min(1),
-        notificationsStatus: z.literal("granted"),
+        migratedFromOffset: z.number().int().positive(),
+        pushTokenSecretPath: z.string().trim().min(1),
+        pushTokenSecretUpdatedOffset: z.number().int().positive(),
       }),
     },
     "events.iterate.com/device/revoked": {
@@ -134,6 +161,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/notification-requested",
     "events.iterate.com/notification/requested",
     "events.iterate.com/device/push-token-updated",
+    "events.iterate.com/device/push-token-secret-linked",
     "events.iterate.com/device/revoked",
     "events.iterate.com/device/notification-attempt-started",
     "events.iterate.com/device/notification-ticket-observed",
@@ -149,6 +177,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/notification-ticket-observed",
     "events.iterate.com/device/notification-settled",
     "events.iterate.com/device/revoked",
+    "events.iterate.com/device/push-token-secret-linked",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
   ],

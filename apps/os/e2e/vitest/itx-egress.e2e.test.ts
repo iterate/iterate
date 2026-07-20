@@ -367,6 +367,31 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     expect(explicitResponse).toMatchObject({ status: 200 });
     expect(echoedEgressProofHeader(await explicitResponse.json())).toBe(expected);
 
+    const jsonResponse = await project.egress.fetch(
+      new Request(echo.url, {
+        body: JSON.stringify({
+          nested: [{ token: `getSecret({ path: "${secretPath}" })` }],
+          note: `Bearer getSecret({ path: "${secretPath}" })`,
+        }),
+        headers: {
+          "content-type": "application/json",
+          "x-iterate-secret-template": "json",
+        },
+        method: "POST",
+      }),
+    );
+    const jsonEcho = (await jsonResponse.json()) as {
+      body: unknown;
+      headers: Record<string, string>;
+    };
+    expect(jsonEcho).toMatchObject({
+      body: {
+        nested: [{ token: "actual-secret-material" }],
+        note: `Bearer getSecret({ path: "${secretPath}" })`,
+      },
+    });
+    expect(jsonEcho.headers["x-iterate-secret-template"]).toBeUndefined();
+
     using probe = egressProbeWorker(project);
     const workerBody = await probe.probeFetch({
       headerValue: secretReference,
@@ -374,7 +399,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     });
     expect(echoedEgressProofHeader(workerBody)).toBe(expected);
 
-    await waitForCondition(async () => (await secret.__describe()).audit.usedCount === 2, {
+    await waitForCondition(async () => (await secret.__describe()).audit.usedCount === 3, {
       description: "secret usage audit to fold",
     });
     // Child-stream birth certificates propagate to the project root stream

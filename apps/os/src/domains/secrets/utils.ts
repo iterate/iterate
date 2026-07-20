@@ -6,9 +6,9 @@ import { normalizePath } from "../durable-object-names.ts";
  * must then be a string) or `getSecret({ path: "/secrets/…", field: "a.b" })`
  * (substitute one dotted field of structured material). Substitution reaches
  * headers and the request URL PATH (for providers that carry the credential
- * there, e.g. Telegram's `/bot<token>/…`) — never the query string, and never
- * the body: a header or path segment is a substitutable reference, everything
- * else is bytes the composer already holds (see
+ * there, e.g. Telegram's `/bot<token>/…`). An explicitly opted-in JSON body
+ * may also carry exact-reference string values; embedded references, object
+ * keys, unmarked bodies, and URL query strings are never substituted (see
  * apps/os/docs/integrations-and-secrets-design.md §1 and ADR 0005). A
  * placeholder outside the path fails loudly at substitution instead of
  * leaking the literal reference string to the provider. The `field` key is
@@ -23,6 +23,11 @@ import { normalizePath } from "../durable-object-names.ts";
  */
 const SECRET_REFERENCE =
   /getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)/g;
+const EXACT_SECRET_REFERENCE =
+  /^getSecret\(\s*\{\s*path\s*:\s*"([^"]+)"\s*(?:,\s*field\s*:\s*"([^"]+)"\s*)?\}\s*\)$/;
+
+export const SECRET_JSON_TEMPLATE_HEADER = "x-iterate-secret-template";
+const MAX_SECRET_JSON_TEMPLATE_BYTES = 1024 * 1024;
 
 /** One parsed placeholder: the secret it addresses and, optionally, the dotted
  * field of that secret's material to substitute. */
@@ -78,25 +83,24 @@ export function secretReferencesFromHeaders(headers: Headers): SecretReference[]
  * query must still route to the Secret DO, where substitution rejects it
  * loudly (see {@link substituteSecretRequest}) instead of the request sailing
  * through egress with the literal placeholder in it. */
-export function secretReferencesFromRequest(request: {
-  headers: Headers;
-  url: string;
-}): SecretReference[] {
+export async function secretReferencesFromRequest(request: Request): Promise<SecretReference[]> {
   const byKey = new Map<string, SecretReference>();
   request.headers.forEach((value) => collectSecretReferences(byKey, value));
   collectSecretReferences(byKey, decodedUrl(request.url));
+  const jsonTemplate = await parseSecretJsonTemplate(request);
+  if (jsonTemplate !== undefined) collectJsonSecretReferences(byKey, jsonTemplate);
   return [...byKey.values()];
 }
 
-/** The distinct secret PATHS referenced across a request's headers and URL —
+/** The distinct secret PATHS referenced across a request's headers, URL, and
+ * explicitly opted-in JSON body —
  * used by the project egress door to pick which Secret DO to hand the request
  * to (exactly one; multi-secret requests are not supported) and as a cheap
  * presence check. */
-export function secretReferencePathsFromRequest(request: {
-  headers: Headers;
-  url: string;
-}): string[] {
-  return [...new Set(secretReferencesFromRequest(request).map((reference) => reference.path))];
+export async function secretReferencePathsFromRequest(request: Request): Promise<string[]> {
+  return [
+    ...new Set((await secretReferencesFromRequest(request)).map((reference) => reference.path)),
+  ];
 }
 
 function collectSecretReferences(byKey: Map<string, SecretReference>, value: string): void {
@@ -107,6 +111,23 @@ function collectSecretReferences(byKey: Map<string, SecretReference>, value: str
       byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
     }
   }
+}
+
+function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value: unknown): void {
+  if (typeof value === "string") {
+    const match = EXACT_SECRET_REFERENCE.exec(value);
+    if (match === null) return;
+    const path = normalizeSecretPath(match[1]!);
+    const field = match[2];
+    byKey.set(`${path} ${field || ""}`, field === undefined ? { path } : { field, path });
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonSecretReferences(byKey, item);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  for (const item of Object.values(value)) collectJsonSecretReferences(byKey, item);
 }
 
 /**
@@ -295,9 +316,9 @@ export function substituteSecretHeaders(
 }
 
 /**
- * Rewrites every `getSecret(...)` placeholder in every header AND in the
- * request URL's PATH — never the query (or fragment/userinfo/host), and never
- * the body. URL substitution exists for providers that authenticate in the
+ * Rewrites every `getSecret(...)` placeholder in every header, the request
+ * URL's PATH, and exact string values in an explicitly opted-in JSON body —
+ * never the query (or fragment/userinfo/host). URL substitution exists for providers that authenticate in the
  * URL path (Telegram's `/bot<token>/<method>`; there is no header auth), and
  * the path is deliberately ALL it covers: a placeholder anywhere else in the
  * URL throws here — silently passing the literal placeholder through to the
@@ -306,11 +327,21 @@ export function substituteSecretHeaders(
  * {@link decodedUrl}); a URL whose path carries no placeholder stays
  * byte-identical.
  */
-export function substituteSecretRequest(
+export async function substituteSecretRequest(
   request: Request,
   resolve: (reference: SecretReference) => string,
-): Request {
-  const substituted = substituteSecretHeaders(request, resolve);
+): Promise<Request> {
+  const jsonTemplate = await parseSecretJsonTemplate(request);
+  let substituted = substituteSecretHeaders(request, resolve);
+  if (jsonTemplate !== undefined) {
+    const headers = new Headers(substituted.headers);
+    headers.delete(SECRET_JSON_TEMPLATE_HEADER);
+    headers.delete("content-length");
+    substituted = new Request(substituted, {
+      body: JSON.stringify(substituteSecretJsonValues(jsonTemplate, resolve)),
+      headers,
+    });
+  }
   const url = new URL(request.url);
   for (const [part, value] of [
     ["query", url.search],
@@ -341,6 +372,43 @@ export function substituteSecretRequest(
   if (!pathHasPlaceholder) return substituted;
   url.pathname = rewrittenPath;
   return new Request(url.toString(), substituted);
+}
+
+async function parseSecretJsonTemplate(request: Request): Promise<unknown | undefined> {
+  const mode = request.headers.get(SECRET_JSON_TEMPLATE_HEADER);
+  if (mode === null) return undefined;
+  if (mode !== "json") throw new SecretSubstitutionError("secret_json_template_invalid_mode");
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
+    throw new SecretSubstitutionError("secret_json_template_invalid_content_type");
+  }
+  const body = await request.clone().text();
+  if (new TextEncoder().encode(body).byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
+    throw new SecretSubstitutionError("secret_json_template_body_too_large");
+  }
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new SecretSubstitutionError("secret_json_template_invalid_body");
+  }
+}
+
+function substituteSecretJsonValues(
+  value: unknown,
+  resolve: (reference: SecretReference) => string,
+): unknown {
+  if (typeof value === "string") {
+    const match = EXACT_SECRET_REFERENCE.exec(value);
+    if (match === null) return value;
+    const path = normalizeSecretPath(match[1]!);
+    const field = match[2];
+    return resolve(field === undefined ? { path } : { field, path });
+  }
+  if (Array.isArray(value)) return value.map((item) => substituteSecretJsonValues(item, resolve));
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, substituteSecretJsonValues(item, resolve)]),
+  );
 }
 
 /** Hex-encoded keyed HMAC-SHA256 over caller bytes — the webhook-signature
@@ -421,6 +489,10 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
 
 type SecretErrorCode =
   | "secret_fetch_failed"
+  | "secret_json_template_body_too_large"
+  | "secret_json_template_invalid_body"
+  | "secret_json_template_invalid_content_type"
+  | "secret_json_template_invalid_mode"
   | "secret_material_not_a_string"
   | "secret_not_allowed_for_origin"
   | "secret_not_found"
