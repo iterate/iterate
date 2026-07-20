@@ -32,17 +32,17 @@ function conversationRows(): string[] {
     }),
     row("events.iterate.com/agent/llm-request-requested", {
       model: "openai/gpt-5.5",
-      requestId: "llm-request:gen-0",
+      expiresAt: Date.parse("2026-07-11T00:01:00.000Z"),
     }),
     row("events.iterate.com/agents/context-added", {
       role: "assistant",
       content: "hi there",
       llmRequestOffset: 3,
     }),
-    row("events.iterate.com/agent/llm-request-completed", {
+    row("events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 3,
       durationMs: 1234,
-      llmRequestOffset: 3,
-      result: { status: "success" },
+      result: { status: "succeeded", text: "hi there" },
     }),
     row("events.iterate.com/agents/context-added", {
       role: "user",
@@ -61,7 +61,7 @@ function conversationRows(): string[] {
     }),
     row("events.iterate.com/agent/llm-request-requested", {
       model: "openai/gpt-5.5",
-      requestId: "llm-request:gen-1",
+      expiresAt: Date.parse("2026-07-11T00:01:00.000Z"),
     }),
   ];
 }
@@ -94,7 +94,7 @@ describe("replayLlmRequest", () => {
         content: "Current date and time (UTC): 2026-07-11T00:00:03.000Z",
       },
     ]);
-    // Settled by the completed event that references this offset.
+    // Settled by the settled event that points back at this offset.
     expect(replay?.outcome).toEqual({ status: "success", durationMs: 1234, errorMessage: null });
   });
 
@@ -113,18 +113,35 @@ describe("replayLlmRequest", () => {
     expect(lastMessage?.content).toContain("look at this");
     // The hint line IS what the model saw — the file never travels inline.
     expect(lastMessage?.content).toContain('itx.files.get("/agents/web/demo/abc-cat.png")');
-    // No completion for this request yet.
+    // No settlement for this request yet.
     expect(replay?.outcome).toBeNull();
   });
 
-  it("reports failed and cancelled outcomes", () => {
+  it("reports succeeded, failed, and cancelled outcomes from the settled event", () => {
+    const succeeded = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows(),
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          durationMs: 1500,
+          result: {
+            status: "succeeded",
+            text: "hi again",
+            usage: { inputTokens: 10, outputTokens: 2 },
+          },
+        }),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(succeeded?.outcome).toEqual({ status: "success", durationMs: 1500, errorMessage: null });
+
     const failed = replayLlmRequest({
       rawEventJsons: [
         ...conversationRows(),
-        row("events.iterate.com/agent/llm-request-completed", {
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
           durationMs: 30012,
-          llmRequestOffset: 7,
-          result: { status: "failure", error: { message: "LLM request timed out" } },
+          result: { status: "failed", errorMessage: "LLM request timed out" },
         }),
       ],
       llmRequestOffset: 7,
@@ -138,10 +155,13 @@ describe("replayLlmRequest", () => {
     const cancelled = replayLlmRequest({
       rawEventJsons: [
         ...conversationRows(),
-        row("events.iterate.com/agent/llm-request-cancelled", {
-          phase: "requested",
-          reason: "interrupted-by-user-input",
-          llmRequestOffset: 7,
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "hi ag",
+          },
         }),
       ],
       llmRequestOffset: 7,
@@ -151,6 +171,24 @@ describe("replayLlmRequest", () => {
       durationMs: null,
       errorMessage: null,
     });
+  });
+
+  it("recovers the interrupted partial from the settled fact when chunks are gone", () => {
+    const replay = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows(),
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "hi ag",
+          },
+        }),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(replay?.response).toEqual({ text: "hi ag", thinkingText: "", source: "output" });
   });
 
   it("returns the committed output as the response, with thinking from chunks", () => {
@@ -248,23 +286,21 @@ describe("replayLlmRequest", () => {
 
   it("derives token counts, latency, and tokens/second from the lifecycle events", () => {
     // Request 7 (still open in conversationRows). Timeline — createdAt encodes
-    // the offset as seconds (see row()): started at :10, first chunk at :11,
-    // last chunk at :14, completed at :15 → first chunk after 1s, generation
-    // window 4s, 100 output tok = 25 tok/s.
+    // the offset as seconds (see row()): requested at :07, first chunk at :10,
+    // last chunk at :14, settled at :15. Time-to-first-chunk anchors on the
+    // requested event itself (there is no dial event, so it includes any
+    // pre-dial delay): 3s. Generation window first chunk → settled: 5s,
+    // 100 output tok = 20 tok/s.
     const rows = [
       ...conversationRows(),
       row(
-        "events.iterate.com/agent/llm-request-started",
-        { llmRequestOffset: 7, model: "openai/gpt-5.5" },
-        10,
-      ),
-      row(
-        "events.iterate.com/agent/llm-request-completed",
+        "events.iterate.com/agent/llm-request-settled",
         {
+          requestOffset: 7,
           durationMs: 5000,
-          llmRequestOffset: 7,
           result: {
-            status: "success",
+            status: "succeeded",
+            text: "ab",
             rawResponse: { streamed: true, cloudflareAiGatewayResponseCacheStatus: "HIT" },
           },
         },
@@ -288,7 +324,7 @@ describe("replayLlmRequest", () => {
       row(
         "events.iterate.com/agent/llm-response-chunk",
         { chunk: { choices: [{ delta: { content: "a" } }] }, llmRequestOffset: 7, sequence: 0 },
-        11,
+        10,
       ),
       row(
         "events.iterate.com/agent/llm-response-chunk",
@@ -309,13 +345,39 @@ describe("replayLlmRequest", () => {
         reasoningOutputTokens: 18,
         maxContextTokens: 272000,
       },
-      timeToFirstChunkMs: 1000,
-      generationMs: 4000,
+      timeToFirstChunkMs: 3000,
+      generationMs: 5000,
       chunkCount: 2,
-      outputTokensPerSecond: 25,
+      outputTokensPerSecond: 20,
       gatewayCacheStatus: "HIT",
       rawResponse: { streamed: true, cloudflareAiGatewayResponseCacheStatus: "HIT" },
     });
+  });
+
+  it("ends the generation window at the last chunk when the request never settled", () => {
+    // Request 7 streamed two chunks and then nothing more committed — no
+    // settled event. The window can only be measured to the last chunk.
+    const chunkRows = [
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "a" } }] }, llmRequestOffset: 7, sequence: 0 },
+        10,
+      ),
+      row(
+        "events.iterate.com/agent/llm-response-chunk",
+        { chunk: { choices: [{ delta: { content: "b" } }] }, llmRequestOffset: 7, sequence: 1 },
+        14,
+      ),
+    ];
+    const replay = replayLlmRequest({
+      rawEventJsons: conversationRows(),
+      chunkEventJsons: chunkRows,
+      llmRequestOffset: 7,
+    });
+    // Requested at :07 → first chunk :10; first chunk :10 → last chunk :14.
+    expect(replay?.stats.timeToFirstChunkMs).toBe(3000);
+    expect(replay?.stats.generationMs).toBe(4000);
+    expect(replay?.outcome).toBeNull();
   });
 
   it("reports empty stats when the journal has no usage or chunks", () => {

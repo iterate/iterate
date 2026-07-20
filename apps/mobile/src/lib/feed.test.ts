@@ -20,11 +20,11 @@ test("a full round reduces to user → activity → assistant", () => {
       executionId: "e1",
       settlement: { status: "succeeded", result: 1 },
     }),
-    // Activities settle only once every step is done — the completed event is
+    // Activities settle only once every step is done — the settled event is
     // what closes the roll-up, not the assistant message.
-    event(5, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestOffset: 2,
-      result: { status: "success" },
+    event(5, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 2,
+      result: { status: "succeeded", text: "Done." },
     }),
     event(6, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
   ]);
@@ -70,9 +70,9 @@ test("summarizes a settled activity", () => {
       executionId: "e1",
       settlement: { status: "succeeded" },
     }),
-    event(4, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestOffset: 1,
-      result: { status: "success" },
+    event(4, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 1,
+      result: { status: "succeeded", text: "ok" },
     }),
     event(5, "events.iterate.com/agents/web-message-sent", { message: "ok" }),
   ]);
@@ -84,9 +84,9 @@ test("a late durable script result replaces its provisional activity", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
     event(2, "events.iterate.com/agent/llm-request-requested", {}),
-    event(3, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestOffset: 2,
-      result: { status: "success" },
+    event(3, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 2,
+      result: { status: "succeeded", text: "Done." },
     }),
     event(4, "events.iterate.com/capability-host/script-run-requested", {
       executionId: "slow-script",
@@ -114,21 +114,21 @@ test("a late durable script result replaces its provisional activity", () => {
   });
 });
 
-test("a historical stream without an idle boundary still shows its completed reply", () => {
+test("a reply that lands before a durable script's settlement still ends not-working", () => {
   const feed = reduceFeed(PATH, [
     event(1, "events.iterate.com/agents/context-added", { content: "go", role: "user" }),
     event(2, "events.iterate.com/agent/llm-request-requested", {}),
-    event(3, "events.iterate.com/agent/llm-request-completed", {
-      llmRequestOffset: 2,
-      result: { status: "success" },
+    event(3, "events.iterate.com/agent/llm-request-settled", {
+      requestOffset: 2,
+      result: { status: "succeeded", text: "Done." },
     }),
     event(4, "events.iterate.com/capability-host/script-run-requested", {
       executionId: "script",
       code: "async () => 'done'",
       expiresAt: Date.UTC(2026, 0, 1, 0, 2),
     }),
-    // Old deployments could emit the visible message before the script's
-    // settlement, then end without the newer authoritative runtime-idle fact.
+    // The visible message can arrive while a durable script is still pending
+    // (well before its deadline); the trailing settlement must close the feed.
     event(5, "events.iterate.com/agents/web-message-sent", { message: "Done." }),
     event(6, "events.iterate.com/capability-host/script-run-settled", {
       executionId: "script",

@@ -73,11 +73,8 @@ export type AgentUiActivity = {
 export type AgentUiActivitySummary = {
   codeCount: number;
   requestCount: number;
-  retryCount: number;
-  outcome: "clean" | "recovering" | "recovered" | "interrupted" | "restart-failed" | "failed";
-  restartPending: boolean;
+  outcome: "clean" | "interrupted" | "failed";
   interruptedWithPartialResponse: boolean;
-  recoveryStartedAtMs: number | null;
 };
 
 /** One canonical interpretation of activity attempts for every UI surface. */
@@ -87,57 +84,39 @@ export function summarizeAgentUiActivity(
 ): AgentUiActivitySummary {
   let codeCount = 0;
   let requestCount = 0;
-  let retryCount = 0;
-  let lastRestartIndex = -1;
-  let lastCompletionIndex = -1;
   let failed = false;
   let interrupted = false;
   let interruptedWithPartialResponse = false;
-  let recoveryStartedAtMs: number | null = null;
 
-  steps.forEach((step, index) => {
+  for (const step of steps) {
     if (step.kind === "code") {
       codeCount += 1;
       failed ||= step.success === false;
-      return;
+      continue;
     }
 
+    requestCount += 1;
     const cancelled = step.outcome === "cancelled";
-    const crashCancel = cancelled && step.cancelReason === "durable-object-crashed";
-    if (!crashCancel) requestCount += 1;
-    if (step.outcome === "failed" || (cancelled && step.cancelReason == null)) failed = true;
-    if (step.outcome === "completed") lastCompletionIndex = index;
-    if (crashCancel) {
-      retryCount += 1;
-      lastRestartIndex = index;
-      recoveryStartedAtMs = step.startedAtMs + (step.durationMs ?? 0);
-    }
     if (cancelled && step.cancelReason === "interrupted-by-user-input") {
       interrupted = true;
       interruptedWithPartialResponse ||= step.thinkingText !== "" || step.responseText !== "";
+    } else if (step.outcome === "failed" || cancelled) {
+      // Any cancellation other than the user's own interrupt (expired, or a
+      // reason this UI doesn't recognize) means the turn produced nothing.
+      failed = true;
     }
-  });
+  }
 
-  const restartPending = lastRestartIndex > lastCompletionIndex && activity.status === "running";
   const outcome: AgentUiActivitySummary["outcome"] = failed
     ? "failed"
     : interrupted
       ? "interrupted"
-      : lastRestartIndex === -1
-        ? "clean"
-        : lastCompletionIndex > lastRestartIndex
-          ? "recovered"
-          : restartPending
-            ? "recovering"
-            : "restart-failed";
+      : "clean";
   return {
     codeCount,
     requestCount,
-    retryCount,
     outcome,
-    restartPending,
     interruptedWithPartialResponse,
-    recoveryStartedAtMs,
   };
 }
 
@@ -153,9 +132,6 @@ export function formatAgentUiActivitySummary(
   const parts: string[] = [];
   if (summary.codeCount > 0) parts.push(`Ran code ${summary.codeCount}×`);
   parts.push(`${summary.requestCount} request${summary.requestCount === 1 ? "" : "s"}`);
-  if (summary.retryCount > 0) {
-    parts.push(`${summary.retryCount} ${summary.retryCount === 1 ? "retry" : "retries"}`);
-  }
   if (summary.outcome === "interrupted") {
     parts.push(
       summary.interruptedWithPartialResponse && options.interruptedPartialHint != null
@@ -163,8 +139,6 @@ export function formatAgentUiActivitySummary(
         : "interrupted",
     );
   }
-  if (summary.outcome === "recovered") parts.push("recovered");
-  if (summary.outcome === "restart-failed") parts.push("restart failed");
   if (summary.outcome === "failed") parts.push("failed");
   const totalMs =
     activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
@@ -197,8 +171,7 @@ export function isAgentUiActivityWorking(
   return (
     activity != null &&
     (isAgentRuntimeVisiblyActive(runtime) ||
-      activity.steps.some((step) => step.status === "running") ||
-      summarizeAgentUiActivity(activity).restartPending)
+      activity.steps.some((step) => step.status === "running"))
   );
 }
 
@@ -250,12 +223,25 @@ export type AgentUiStreamPauseItem = {
   timestampMs: number;
 };
 
+/** The platform revived a processor whose incarnation died owing background
+ * work. Recovery is adoption — the open request survives and settles normally
+ * — so this renders as a subtle marker, never as a cancelled/failed step. */
+export type AgentUiProcessorRevivedItem = {
+  kind: "processor-revived";
+  id: string;
+  processorSlug?: string;
+  /** Lifetime revival count for this processor, when the payload carries it. */
+  revivals?: number;
+  timestampMs: number;
+};
+
 export type AgentUiItem =
   | AgentUiMessageItem
   | AgentUiActivity
   | AgentUiStreamWakeItem
   | AgentUiChildStreamItem
-  | AgentUiStreamPauseItem;
+  | AgentUiStreamPauseItem
+  | AgentUiProcessorRevivedItem;
 
 export type AgentUiProcessorAnnouncement = {
   slug: string;
@@ -540,11 +526,9 @@ function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem):
 // ---------------------------------------------------------------------------
 
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
-const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
-const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
+const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
 const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
-const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
 const AGENT_LLM_RESPONSE_CHUNK = "events.iterate.com/agent/llm-response-chunk";
 const SCRIPT_EXECUTION_REQUESTED = "events.iterate.com/capability-host/script-run-requested";
 const SCRIPT_EXECUTION_COMPLETED = "events.iterate.com/capability-host/script-run-settled";
@@ -554,9 +538,12 @@ const TELEGRAM_SEND_REQUESTED = "events.iterate.com/telegram/send-requested";
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
+const STREAM_PROCESSOR_REVIVED = "events.iterate.com/stream/processor-revived";
 const STREAM_CHILD_STREAM_CREATED = "events.iterate.com/stream/child-stream-created";
 const STREAM_PAUSED = "events.iterate.com/stream/paused";
 const STREAM_RESUMED = "events.iterate.com/stream/resumed";
+const AGENT_PAUSED = "events.iterate.com/agent/paused";
+const AGENT_RESUMED = "events.iterate.com/agent/resumed";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -670,10 +657,7 @@ function reduceAgentUiEvent(
 
     case AGENT_LLM_REQUEST_REQUESTED: {
       const base =
-        state.queuedUserMessages.length === 0 ||
-        (state.live != null && summarizeAgentUiActivity(state.live).restartPending)
-          ? state
-          : settleLive(state, timestampMs, items);
+        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
       const ready =
         base.live === null &&
         (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
@@ -694,13 +678,6 @@ function reduceAgentUiEvent(
       return { ...ready, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case AGENT_LLM_REQUEST_STARTED: {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      const model = readString(event, "model");
-      if (llmRequestOffset == null || model == null) return state;
-      return updateLlmStep(state, llmRequestOffset, (step) => ({ ...step, model }));
-    }
-
     case AGENT_LLM_RESPONSE_CHUNK: {
       const llmRequestOffset = readLlmRequestOffset(event);
       const chunk = readPayloadRecord(event)?.chunk;
@@ -716,47 +693,43 @@ function reduceAgentUiEvent(
       }));
     }
 
-    case AGENT_LLM_REQUEST_COMPLETED: {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      if (llmRequestOffset == null) return state;
+    case AGENT_LLM_REQUEST_SETTLED: {
+      // The ONE terminal fact for a request (succeeded | failed | cancelled),
+      // pointing back at the requested event's offset via `requestOffset`.
       const payload = readPayloadRecord(event);
-      const result = isRecord(payload?.result) ? payload.result : undefined;
-      const status = typeof result?.status === "string" ? result.status : "success";
+      const requestOffset = payload?.requestOffset;
+      if (payload == null || typeof requestOffset !== "number") return state;
+      const result = isRecord(payload.result) ? payload.result : undefined;
+      const status = typeof result?.status === "string" ? result.status : "succeeded";
       const usage = readUsageTokens(result?.usage);
       const errorMessage =
-        isRecord(result?.error) && typeof result.error.message === "string"
-          ? result.error.message
-          : undefined;
-      return updateLlmStep(state, llmRequestOffset, (step) =>
+        typeof result?.errorMessage === "string" ? result.errorMessage : undefined;
+      const parsedCancelReason = AgentLlmRequestCancelReason.safeParse(result?.reason);
+      const cancelReason = parsedCancelReason.success ? parsedCancelReason.data : null;
+      // The durable record of what streamed before an interrupt. Chunks are
+      // ephemeral, so a rebuild from the journal (refresh, TUI/mobile) has an
+      // empty responseText — the settled fact fills it in.
+      const partialText = typeof result?.partialText === "string" ? result.partialText : null;
+      return updateLlmStep(state, requestOffset, (step) =>
         step.outcome != null
           ? step
           : {
               ...step,
               status: "done",
-              outcome: status === "success" ? "completed" : "failed",
-              ...(typeof payload?.durationMs === "number"
-                ? { durationMs: payload.durationMs }
+              outcome:
+                status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
+              ...(partialText !== null && step.responseText === ""
+                ? { responseText: partialText }
                 : {}),
+              ...(typeof payload.durationMs === "number"
+                ? { durationMs: payload.durationMs }
+                : status === "cancelled"
+                  ? { durationMs: Math.max(0, timestampMs - step.startedAtMs) }
+                  : {}),
               ...(usage.input == null ? {} : { inputTokens: usage.input }),
               ...(usage.output == null ? {} : { outputTokens: usage.output }),
               ...(errorMessage == null ? {} : { errorMessage }),
-            },
-      );
-    }
-
-    case AGENT_LLM_REQUEST_CANCELLED: {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      const cancelReason = readLlmCancelReason(event);
-      if (llmRequestOffset == null) return state;
-      return updateLlmStep(state, llmRequestOffset, (step) =>
-        step.outcome != null
-          ? step
-          : {
-              ...step,
-              status: "done",
-              outcome: "cancelled",
               ...(cancelReason == null ? {} : { cancelReason }),
-              durationMs: Math.max(0, timestampMs - step.startedAtMs),
             },
       );
     }
@@ -945,6 +918,23 @@ function reduceAgentUiEvent(
       });
     }
 
+    case STREAM_PROCESSOR_REVIVED: {
+      // A processor incarnation died owing background work and the platform
+      // revived it. The open request was ADOPTED and settles normally, so
+      // this is a subtle marker — never a cancelled or failed step.
+      const payload = readPayloadRecord(event);
+      const processorSlug =
+        typeof payload?.processorSlug === "string" ? payload.processorSlug : undefined;
+      const revivals = typeof payload?.revivals === "number" ? payload.revivals : undefined;
+      return emitItem(state, items, {
+        kind: "processor-revived",
+        id: `processor-revived-${event.offset}`,
+        ...(processorSlug === undefined ? {} : { processorSlug }),
+        ...(revivals === undefined ? {} : { revivals }),
+        timestampMs,
+      });
+    }
+
     case STREAM_CHILD_STREAM_CREATED: {
       const childPath = readString(event, "childPath");
       if (childPath == null) return state;
@@ -956,7 +946,11 @@ function reduceAgentUiEvent(
       });
     }
 
+    // The stream-level facts (the whole stream stops accepting appends) and
+    // the agent-level facts (the turn loop parks — the autonomous breaker, or
+    // an operator) render as the same pause/resume marker rows.
     case STREAM_PAUSED:
+    case AGENT_PAUSED:
       return emitItem(state, items, {
         kind: "stream-paused",
         id: `stream-paused-${event.offset}`,
@@ -966,6 +960,7 @@ function reduceAgentUiEvent(
       });
 
     case STREAM_RESUMED:
+    case AGENT_RESUMED:
       return emitItem(state, items, {
         kind: "stream-resumed",
         id: `stream-resumed-${event.offset}`,
@@ -1281,11 +1276,10 @@ function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeS
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {
   if (!isRecord(usage)) return {};
-  const input = usage.input_tokens ?? usage.prompt_tokens;
-  const output = usage.output_tokens ?? usage.completion_tokens;
+  // The settled event's normalized usage (the contract's camelCase shape).
   return {
-    ...(typeof input === "number" ? { input } : {}),
-    ...(typeof output === "number" ? { output } : {}),
+    ...(typeof usage.inputTokens === "number" ? { input: usage.inputTokens } : {}),
+    ...(typeof usage.outputTokens === "number" ? { output: usage.outputTokens } : {}),
   };
 }
 
@@ -1487,11 +1481,6 @@ function readNumber(event: Event, key: string): number | null {
 /** The llm-request-requested offset an LLM lifecycle event references. */
 function readLlmRequestOffset(event: Event): number | null {
   return readNumber(event, "llmRequestOffset");
-}
-
-function readLlmCancelReason(event: Event): AgentLlmRequestCancelReason | null {
-  const parsed = AgentLlmRequestCancelReason.safeParse(readString(event, "reason"));
-  return parsed.success ? parsed.data : null;
 }
 
 function readRecord(event: Event, key: string): Record<string, unknown> | null {

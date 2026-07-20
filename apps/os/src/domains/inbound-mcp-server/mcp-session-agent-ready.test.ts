@@ -48,6 +48,8 @@ describe("ensureMcpSessionAgentReady", () => {
         role: "system",
         key: "agent/system-prompt",
         content: MCP_AGENT_SYSTEM_PROMPT,
+        // The processor ignores the defaulted policy on system items.
+        llmRequestPolicy: { behaviour: "after-current-request" },
       },
     });
   });

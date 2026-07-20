@@ -25,13 +25,18 @@ test("agent create installs only generic machinery; later events configure it", 
 
   // create() resolves with the same agent handle, so create chains.
   using created = await agent.create({ note: "birth facts ride the certificate" });
-  expect((await created.processor.snapshot()).state).toMatchObject({
-    birthCertificate: { note: "birth facts ride the certificate" },
+  const createdSnapshot = await created.processor.snapshot();
+  expect(createdSnapshot.state).toMatchObject({
+    birthCertificate: { createdAtOffset: expect.any(Number) },
   });
+  const [birthEvent] = await created.stream.getEvents({
+    eventTypes: ["events.iterate.com/agent/created"],
+  });
+  expect(birthEvent?.payload).toEqual({ note: "birth facts ride the certificate" });
   // An identical-payload retry dedupes on the birth idempotency keys …
   using retried = await agent.create({ note: "birth facts ride the certificate" });
   expect((await retried.processor.snapshot()).state).toMatchObject({
-    birthCertificate: { note: "birth facts ride the certificate" },
+    birthCertificate: createdSnapshot.state.birthCertificate,
   });
   // … while a different payload over the existing agent fails loudly (the
   // stream rejects a same-key-different-body created event).
@@ -41,7 +46,7 @@ test("agent create installs only generic machinery; later events configure it", 
     })(),
   ).rejects.toThrow();
   expect((await agent.processor.snapshot()).state).toMatchObject({
-    birthCertificate: { note: "birth facts ride the certificate" },
+    birthCertificate: createdSnapshot.state.birthCertificate,
   });
 
   await expect(
@@ -89,10 +94,12 @@ test("agent create installs only generic machinery; later events configure it", 
     },
   });
   await agent.processor.waitUntilProcessed({ offset: configured.offset, timeoutMs: 30_000 });
-  expect((await agent.processor.snapshot()).state.context.system).toContainEqual(
+  expect((await agent.processor.snapshot()).state.contextItems).toContainEqual(
     expect.objectContaining({
-      key: "test/config-after-create",
-      content: "configuration is an ordinary event after generic creation",
+      payload: expect.objectContaining({
+        key: "test/config-after-create",
+        content: "configuration is an ordinary event after generic creation",
+      }),
     }),
   );
 });
@@ -340,14 +347,12 @@ test("Agent create replays its earlier birth and setup events through its subscr
   const agentSnapshot = await agent.processor.snapshot();
   expect(agentSnapshot.offset).toBeGreaterThanOrEqual(agentSubscriptionOffset);
   expect(agentSnapshot.state).toMatchObject({
-    birthCertificate: {},
+    birthCertificate: { createdAtOffset: expect.any(Number) },
     config: { llm: { model: expect.any(String) } },
-    context: {
-      system: expect.arrayContaining([
-        expect.objectContaining({ key: "agent/system-prompt" }),
-        expect.objectContaining({ key: "agent/boot-context" }),
-      ]),
-    },
+    contextItems: expect.arrayContaining([
+      expect.objectContaining({ payload: expect.objectContaining({ key: "agent/system-prompt" }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ key: "agent/boot-context" }) }),
+    ]),
   });
 
   const capabilityHostSnapshot = await agent.capabilityHost.processor.snapshot();

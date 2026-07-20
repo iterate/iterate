@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./agent-processor-contract.ts";
-import { agentCreationForPath, agentSystemPromptContextEvent } from "./agent-defaults.ts";
+import {
+  agentCreationForPath,
+  agentSystemPromptContextEvent,
+  DEFAULT_AGENT_SYSTEM_PROMPT,
+} from "./agent-defaults.ts";
 
 const PROJECT_ID = "prj_defaults_test";
 
@@ -94,6 +97,9 @@ describe("agentCreationForPath", () => {
       role: "system",
       key: "agent/system-prompt",
       content: DEFAULT_AGENT_SYSTEM_PROMPT,
+      // The flat context payload defaults the policy on every role; the
+      // processor ignores it on system items.
+      llmRequestPolicy: { behaviour: "after-current-request" },
     });
   });
 

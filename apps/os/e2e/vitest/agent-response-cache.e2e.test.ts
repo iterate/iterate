@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { ensureOnboardingAgentReady } from "../../src/lib/onboarding-agent.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-const LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-completed";
+const LLM_REQUEST_SETTLED_TYPE = "events.iterate.com/agent/llm-request-settled";
 const WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 
 test("a second project's onboarding turn replays the first one's answer from the AI Gateway cache", async () => {
@@ -44,19 +44,21 @@ async function runOnboardingBirthTurn(slug: string): Promise<LlmCompletionEviden
     eventTypes: [WEB_MESSAGE_SENT_TYPE],
     timeoutMs: 90_000,
   });
-  // The FIRST completion is the birth turn — the request whose masked body is
-  // identical across projects by construction. Later turns (script results
-  // feeding back) may carry their own entropy and are not this test's claim.
-  const events = await agent.stream.getEvents({ eventTypes: [LLM_REQUEST_COMPLETED_TYPE] });
-  const completed = events.at(0) as
+  // The FIRST succeeded settlement is the birth turn — the request whose
+  // masked body is identical across projects by construction. Later turns
+  // (script results feeding back) may carry their own entropy and are not this
+  // test's claim; failed/cancelled settlements never carry a cached response.
+  const events = await agent.stream.getEvents({ eventTypes: [LLM_REQUEST_SETTLED_TYPE] });
+  const settled = events.find(
+    (event) => (event.payload?.result as { status?: unknown } | undefined)?.status === "succeeded",
+  ) as
     | {
         payload?: {
           result?: { rawResponse?: { cloudflareAiGatewayResponseCacheStatus?: unknown } };
         };
       }
     | undefined;
-  const cacheStatus =
-    completed?.payload?.result?.rawResponse?.cloudflareAiGatewayResponseCacheStatus;
+  const cacheStatus = settled?.payload?.result?.rawResponse?.cloudflareAiGatewayResponseCacheStatus;
   return {
     cacheStatus: typeof cacheStatus === "string" ? cacheStatus : undefined,
     greeting: String((greeting.payload as { message?: unknown } | undefined)?.message ?? ""),

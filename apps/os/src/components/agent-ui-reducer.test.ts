@@ -47,23 +47,6 @@ function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unkn
   return { ...state, items };
 }
 
-function llmEvent(
-  lifecycle: "requested" | "completed" | "cancelled",
-  offset: number,
-  reason = "durable-object-crashed",
-) {
-  return {
-    type: `events.iterate.com/agent/llm-request-${lifecycle}`,
-    ...(lifecycle === "requested" ? { offset } : {}),
-    payload:
-      lifecycle === "requested"
-        ? { model: "gpt-test" }
-        : lifecycle === "completed"
-          ? { llmRequestOffset: offset, result: { status: "success" } }
-          : { phase: "requested", llmRequestOffset: offset, reason },
-  };
-}
-
 function projectRuntime(
   reduced: ReturnType<typeof reduceAll>,
   sinceOffset: number,
@@ -156,11 +139,15 @@ describe("agent-ui reducer", () => {
         payload: { executionId: "x1", settlement: { status: "succeeded", result: 12 } },
       },
       {
-        type: "events.iterate.com/agent/llm-request-completed",
+        type: "events.iterate.com/agent/llm-request-settled",
         payload: {
-          llmRequestOffset: 5,
+          requestOffset: 5,
           durationMs: 2100,
-          result: { status: "success", usage: { input_tokens: 9400, output_tokens: 300 } },
+          result: {
+            status: "succeeded",
+            text: "There are 12 inputs.",
+            usage: { inputTokens: 9400, outputTokens: 300 },
+          },
         },
       },
       {
@@ -190,6 +177,115 @@ describe("agent-ui reducer", () => {
       result: 12,
       success: true,
       durationMs: 1000,
+    });
+  });
+
+  test("llm-request-settled succeeded closes the step", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "hi" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          durationMs: 2100,
+          result: {
+            status: "succeeded",
+            text: "done",
+            usage: { inputTokens: 9400, outputTokens: 300 },
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "There are 12 inputs." },
+      },
+    ]);
+
+    expect(state.live).toBeNull();
+    expect(state.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);
+    const activity = state.items[1];
+    if (activity?.kind !== "activity") throw new Error("expected activity item");
+    expect(activity.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "completed",
+      durationMs: 2100,
+      inputTokens: 9400,
+      outputTokens: 300,
+    });
+  });
+
+  test("llm-request-settled failed and cancelled map to step outcomes", () => {
+    const failed = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          result: { status: "failed", errorMessage: "model exploded" },
+        },
+      },
+    ]);
+    expect(failed.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "failed",
+      errorMessage: "model exploded",
+    });
+
+    const interrupted = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "Hel",
+          },
+        },
+      },
+    ]);
+    expect(interrupted.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "cancelled",
+      cancelReason: "interrupted-by-user-input",
+    });
+
+    const expired = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 5, result: { status: "cancelled", reason: "expired" } },
+      },
+    ]);
+    expect(expired.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "cancelled",
+      cancelReason: "expired",
     });
   });
 
@@ -299,8 +395,8 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: { llmRequestOffset: 10, result: { status: "success" } },
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 10, result: { status: "succeeded", text: "20" } },
       },
       {
         type: "events.iterate.com/agents/web-message-sent",
@@ -445,6 +541,79 @@ describe("agent-ui reducer", () => {
     expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
   });
 
+  test("a durable rebuild recovers the interrupted partial from the settled fact", () => {
+    // Chunks are ephemeral: a refold from the journal has none, so the step's
+    // streamed text must come from settled.result.partialText.
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test", expiresAt: Date.parse("2026-06-11T00:10:00.000Z") },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "Let me check your cal",
+          },
+        },
+      },
+    ]);
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "cancelled",
+      cancelReason: "interrupted-by-user-input",
+      responseText: "Let me check your cal",
+    });
+  });
+
+  test("shows a subtle processor-revived marker without disturbing a live activity", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: { role: "user", actor: { type: "user", origin: "web" }, content: "hi" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test", expiresAt: Date.parse("2026-06-11T00:10:00.000Z") },
+      },
+      // The incarnation died mid-turn; the platform revived the processor and
+      // the open request was ADOPTED — it settles normally afterwards.
+      {
+        type: "events.iterate.com/stream/processor-revived",
+        payload: { processorSlug: "agent", revivals: 2, version: "test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 5,
+          durationMs: 2100,
+          result: { status: "succeeded", text: "hi again" },
+        },
+      },
+    ]);
+
+    // The marker emitted in place; the adopted request still settled as one
+    // ordinary completed step — no cancelled/failed outcome from the crash.
+    expect(state.items).toContainEqual({
+      kind: "processor-revived",
+      id: "processor-revived-3",
+      processorSlug: "agent",
+      revivals: 2,
+      timestampMs: Date.parse("2026-06-11T00:00:03.000Z"),
+    });
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "completed",
+    });
+  });
+
   test("shows child stream creation events in the agent feed", () => {
     const state = reduceAll([
       {
@@ -493,6 +662,38 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
+  test("shows agent pause and resume (the turn-loop breaker) as the same marker rows", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/paused",
+        payload: {
+          reason: "autonomous turn limit reached (100 consecutive turns without external input)",
+        },
+      },
+      {
+        type: "events.iterate.com/agent/resumed",
+        payload: { reason: "external input" },
+      },
+    ]);
+
+    expect(state.items).toEqual([
+      {
+        kind: "stream-paused",
+        id: "stream-paused-1",
+        text: "Agent paused",
+        reason: "autonomous turn limit reached (100 consecutive turns without external input)",
+        timestampMs: Date.parse("2026-06-11T00:00:01.000Z"),
+      },
+      {
+        kind: "stream-resumed",
+        id: "stream-resumed-2",
+        text: "Agent resumed",
+        reason: "external input",
+        timestampMs: Date.parse("2026-06-11T00:00:02.000Z"),
+      },
+    ]);
+  });
+
   test("settles a completed LLM request at run-level idle even without an assistant message", () => {
     const state = projectRuntime(
       reduceAll([
@@ -502,11 +703,11 @@ describe("agent-ui reducer", () => {
           payload: { model: "gpt-test" },
         },
         {
-          type: "events.iterate.com/agent/llm-request-completed",
+          type: "events.iterate.com/agent/llm-request-settled",
           payload: {
-            llmRequestOffset: 7,
+            requestOffset: 7,
             durationMs: 250,
-            result: { status: "success" },
+            result: { status: "succeeded", text: "done" },
           },
         },
       ]),
@@ -791,11 +992,11 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/llm-request-completed",
+        type: "events.iterate.com/agent/llm-request-settled",
         payload: {
-          llmRequestOffset: 7,
+          requestOffset: 7,
           durationMs: 100,
-          result: { status: "success" },
+          result: { status: "succeeded", text: "on it" },
         },
       },
       {
@@ -839,11 +1040,14 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent/llm-request-cancelled",
+        type: "events.iterate.com/agent/llm-request-settled",
         payload: {
-          phase: "requested",
-          llmRequestOffset: 7,
-          reason: "interrupted-by-user-input",
+          requestOffset: 7,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "old partial",
+          },
         },
       },
       {
@@ -1147,66 +1351,99 @@ describe("agent-ui reducer", () => {
     ]);
   });
 
-  test("keeps a failed activity together while a crashed request restarts", () => {
+  test("groups expired and unrecognized cancellations into one failed activity", () => {
     const state = projectRuntime(
       reduceAll([
-        llmEvent("requested", 7),
-        llmEvent("cancelled", 7, "future-cancel-reason"),
-        llmEvent("requested", 11),
-        llmEvent("cancelled", 11),
         {
-          type: "events.iterate.com/agents/context-added",
-          payload: { role: "user", content: "queued" },
+          type: "events.iterate.com/agent/llm-request-requested",
+          offset: 7,
+          payload: { model: "gpt-test" },
         },
-        llmEvent("requested", 16),
+        {
+          type: "events.iterate.com/agent/llm-request-settled",
+          payload: {
+            requestOffset: 7,
+            result: { status: "cancelled", reason: "future-cancel-reason" },
+          },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-requested",
+          offset: 11,
+          payload: { model: "gpt-test" },
+        },
+        {
+          type: "events.iterate.com/agent/llm-request-settled",
+          payload: { requestOffset: 11, result: { status: "cancelled", reason: "expired" } },
+        },
       ]),
-      17,
+      5,
     );
 
     expect(state.live).toBeNull();
-    expect(state.items).toHaveLength(2);
+    expect(state.items).toHaveLength(1);
     const activity = state.items[0];
     if (activity?.kind !== "activity") throw new Error("expected activity item");
+    // A reason this UI does not recognize stays unmapped; a cancelled step
+    // without a recognized reason still counts as a failure.
     expect(activity.steps[0]).toMatchObject({
       kind: "llm",
       status: "done",
       outcome: "cancelled",
       durationMs: 1_000,
     });
-    expect(activity.steps[1]).toMatchObject({ outcome: "cancelled" });
-    expect(summarizeAgentUiActivity(activity).outcome).toBe("failed");
+    expect(activity.steps[0]).not.toHaveProperty("cancelReason");
+    expect(activity.steps[1]).toMatchObject({ outcome: "cancelled", cancelReason: "expired" });
+    expect(summarizeAgentUiActivity(activity)).toMatchObject({
+      outcome: "failed",
+      requestCount: 2,
+    });
   });
 
-  test("classifies crash recovery and preserves the first settled fact", () => {
-    const state = projectRuntime(
-      reduceAll([
-        llmEvent("requested", 1),
-        llmEvent("cancelled", 1),
-        {
-          type: "events.iterate.com/agents/context-added",
-          payload: { role: "user", content: "and check the logs" },
+  test("the first settlement wins when a duplicate races in", () => {
+    // The contract collapses a zombie incarnation racing an interrupt to one
+    // settlement; if both appends still land, the UI must keep the first fact.
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 1,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 1,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "Hel",
+          },
         },
-        { type: "events.iterate.com/agents/web-message-sent", payload: { message: "deferred" } },
-        llmEvent("completed", 1),
-        llmEvent("requested", 6),
-        llmEvent("completed", 6),
-        llmEvent("cancelled", 6),
-      ]),
-      8,
-    );
-
-    const activity = state.items[0];
-    if (activity?.kind !== "activity") throw new Error("expected activity item");
-    expect(state.items.map((item) => item.kind)).toEqual(["activity", "assistant", "user"]);
-    expect(state.items[2]).toMatchObject({ text: "and check the logs" });
-    expect(activity.steps).toMatchObject([
-      { outcome: "cancelled", cancelReason: "durable-object-crashed" },
-      { outcome: "completed" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: {
+          requestOffset: 1,
+          durationMs: 2_000,
+          result: {
+            status: "succeeded",
+            text: "late zombie response",
+            usage: { inputTokens: 100, outputTokens: 10 },
+          },
+        },
+      },
     ]);
-    expect(summarizeAgentUiActivity(activity)).toMatchObject({
-      outcome: "recovered",
+
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "cancelled",
+      cancelReason: "interrupted-by-user-input",
+    });
+    expect(state.live?.steps[0]).not.toHaveProperty("inputTokens");
+    if (state.live == null) throw new Error("expected live activity");
+    expect(summarizeAgentUiActivity(state.live)).toMatchObject({
+      outcome: "interrupted",
       requestCount: 1,
-      retryCount: 1,
     });
   });
 

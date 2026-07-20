@@ -15,15 +15,16 @@ describe("createAgentFeedModel", () => {
   test("folds a chat round into user, activity, and assistant items", () => {
     const model = createAgentFeedModel();
 
-    const changed = model.applyEvents([
-      event("events.iterate.com/agents/context-added", {
-        role: "user",
-        content: "hello agent",
-        actor: { type: "user", origin: "web" },
-        llmRequestPolicy: { behaviour: "after-current-request" },
-      }),
-      event("events.iterate.com/agent/llm-request-requested", { model: "gpt-test" }),
-    ]);
+    const contextAdded = event("events.iterate.com/agents/context-added", {
+      role: "user",
+      content: "hello agent",
+      actor: { type: "user", origin: "web" },
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    });
+    const requested = event("events.iterate.com/agent/llm-request-requested", {
+      model: "gpt-test",
+    });
+    const changed = model.applyEvents([contextAdded, requested]);
     expect(changed).toBe(true);
 
     // The user message settles immediately; the LLM round is still live.
@@ -36,15 +37,15 @@ describe("createAgentFeedModel", () => {
     });
 
     model.applyEvents([
-      event("events.iterate.com/agent/llm-request-completed", {
-        llmRequestOffset: 2,
+      event("events.iterate.com/agent/llm-request-settled", {
+        requestOffset: requested.offset,
         durationMs: 10,
-        result: { status: "success" },
+        result: { status: "succeeded", text: "hi human" },
       }),
       event("events.iterate.com/agents/web-message-sent", { message: "hi human" }),
     ]);
 
-    // LLM completion settles the live activity; the assistant reply follows.
+    // The settled request closes the live activity; the assistant reply follows.
     snapshot = model.snapshot();
     expect(snapshot.live).toBeNull();
     expect(snapshot.items.map((item) => item.kind)).toEqual(["user", "activity", "assistant"]);

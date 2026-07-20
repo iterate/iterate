@@ -78,6 +78,13 @@ export function FeedItem(props: { item: AgentUiItem }) {
   if (item.kind === "child-stream-created") {
     return <text fg={COLORS.textMuted}>✦ child stream created: {item.childPath}</text>;
   }
+  if (item.kind === "processor-revived") {
+    return (
+      <text fg={COLORS.textMuted}>
+        ✦ {item.processorSlug == null ? "processor" : `${item.processorSlug} processor`} revived
+      </text>
+    );
+  }
   return <text fg={COLORS.textMuted}>✦ {item.text}</text>;
 }
 

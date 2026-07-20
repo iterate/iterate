@@ -37,10 +37,10 @@ const AGENT_BORN = {
 
 /** A journaled LLM turn start — what the agent processor emits; here it only
  * matters as a typing-worthy lifecycle fact and the reply_to snapshot. */
-function llmRequested(requestId: string): AgentEventInput {
+function llmRequested(): AgentEventInput {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: { model: "gpt-test", requestId },
+    payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
   };
 }
 
@@ -297,7 +297,7 @@ describe("TelegramAgentProcessor", () => {
     await h.play(["append", AGENT_BORN, webhook(humanMessageWebhookPayload({}))]);
     h.telegramCalls.length = 0;
 
-    await h.play(["append", llmRequested("llm-request:1")]);
+    await h.play(["append", llmRequested()]);
     expect(h.telegramCalls).toEqual([
       { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
     ]);
@@ -305,7 +305,7 @@ describe("TelegramAgentProcessor", () => {
 
   it("uses the explicit birth certificate as the typing target before any webhook", async () => {
     const h = makeAgentHarness();
-    await h.play(["append", AGENT_BORN], ["append", llmRequested("llm-request:1")]);
+    await h.play(["append", AGENT_BORN], ["append", llmRequested()]);
 
     expect(h.telegramCalls).toEqual([
       { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
@@ -325,7 +325,7 @@ describe("TelegramAgentProcessor", () => {
     await stream.append(
       AGENT_BORN,
       webhook(humanMessageWebhookPayload({ text: "hello from the past" })),
-      llmRequested("llm-request:1"),
+      llmRequested(),
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "an old reply" } },
     );
     clock.now += 60 * 60_000; // well past the typing freshness horizon
@@ -368,7 +368,7 @@ describe("TelegramAgentProcessor", () => {
       is_bot: true,
       first_name: "iterate",
     };
-    await h.play(["append", llmRequested("llm-request:1"), webhook(botEcho)]);
+    await h.play(["append", llmRequested(), webhook(botEcho)]);
 
     expect(h.telegramCalls).toEqual([
       { method: "sendChatAction", body: { action: "typing", chat_id: CHAT_ID } },
@@ -487,7 +487,7 @@ describe("TelegramAgentProcessor", () => {
       "append",
       AGENT_BORN,
       webhook(humanMessageWebhookPayload({ messageId: 10, text: "first question" })),
-      llmRequested("llm-request:1"),
+      llmRequested(),
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "answer to 10" } },
     ]);
     expect(h.sentMessages.at(-1)).not.toHaveProperty("reply_to_message_id");
@@ -497,7 +497,7 @@ describe("TelegramAgentProcessor", () => {
     await h.play([
       "append",
       webhook(humanMessageWebhookPayload({ messageId: 11, text: "second question" })),
-      llmRequested("llm-request:2"),
+      llmRequested(),
       webhook(humanMessageWebhookPayload({ messageId: 12, text: "and another thing" })),
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "answer to 11" } },
     ]);
@@ -647,7 +647,10 @@ describe("TelegramAgentProcessor", () => {
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
-      { type: "events.iterate.com/agent/llm-request-requested", payload: { requestId: "r1" } },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: { model: "gpt-test", expiresAt: Date.now() + 60_000 },
+      },
       { type: "events.iterate.com/telegram/send-requested", payload: { text: "It's hunter2." } },
       { type: "events.iterate.com/telegram/message-sent", payload: { messageId: 9001 } },
     );
