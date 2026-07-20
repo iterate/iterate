@@ -16,8 +16,9 @@ GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
 is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
-verification is green; the draft PR is next. Production deployment and
-Semaphore lease publication remain later, separate approval boundaries.
+verification is green. Draft PR #2161 is open without a preview label; CI and
+review monitoring is in progress. Production deployment and Semaphore lease
+publication remain later, separate approval boundaries.
 
 ## Goal
 
@@ -115,8 +116,10 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _149 focused preview/config tests and 65 Auth tests pass. All five generated
   app blocks were inspected for slots 10–19; full typecheck, lint, and format
   checks are green._
-- [ ] Push the repository change, open a draft PR early, and keep its external-
+- [x] Push the repository change, open a draft PR early, and keep its external-
   user summary and this ledger current.
+  _Draft PR https://github.com/iterate/iterate/pull/2161 is open without the
+  `preview` label, so it cannot deploy before the merge/approval boundary._
 - [ ] Merge the repository change before deploying or leasing the slots.
 - [ ] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
   each slot from current `main`; verify integrations and operational telemetry.
@@ -364,3 +367,7 @@ the recorded projection.
   independently typecheck, and the full monorepo typecheck is green. The 149
   focused tests, 65 Auth tests, full lint, full format check, and generated
   five-app config audit for every new slot all pass.
+- 2026-07-20: Pushed `ops/create-preview-slots-10-19` and opened draft PR #2161
+  without a preview label. The PR body separates completed non-production
+  provisioning from the unapproved post-merge deploy and production lease
+  phases.
