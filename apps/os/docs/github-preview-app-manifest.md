@@ -38,7 +38,9 @@ current task.
 ## Manifest
 
 Replace every `N` with the slot number. Preview OS URLs use `.com`; `.app` is
-the hosted-project domain.
+the hosted-project domain. `default_permissions` uses GitHub's manifest/API
+permission keys, which differ from several labels shown in the settings UI.
+The manifest below was accepted by GitHub's review flow on 2026-07-20.
 
 ```json
 {
@@ -59,26 +61,28 @@ the hosted-project domain.
     "administration": "write",
     "attestations": "write",
     "checks": "write",
-    "code_scanning_alerts": "write",
-    "commit_statuses": "write",
+    "security_events": "write",
+    "statuses": "write",
     "contents": "write",
-    "dependabot_alerts": "write",
+    "vulnerability_alerts": "write",
     "deployments": "write",
+    "discussions": "write",
     "environments": "write",
     "issues": "write",
     "metadata": "read",
     "pages": "write",
     "pull_requests": "write",
-    "repository_security_advisories": "write",
+    "repository_advisories": "write",
     "secret_scanning_alerts": "write",
     "secrets": "read",
-    "variables": "read",
-    "webhooks": "write",
+    "actions_variables": "read",
+    "repository_hooks": "write",
     "workflows": "write",
+    "merge_queues": "read",
     "members": "read",
     "organization_administration": "write",
-    "projects": "write",
-    "email_addresses": "read"
+    "organization_projects": "write",
+    "emails": "read"
   },
   "default_events": [
     "branch_protection_rule",
@@ -96,7 +100,6 @@ the hosted-project domain.
     "discussion",
     "discussion_comment",
     "fork",
-    "installation_repositories",
     "installation_target",
     "issue_comment",
     "issues",
@@ -128,6 +131,10 @@ the hosted-project domain.
 `request_oauth_on_install` gives OS a user-to-server token after installation;
 that is needed for user-scoped actions such as creating a personal repository.
 The Check Runs API requires a GitHub App and `checks: write`.
+`installation_repositories` is sent automatically to GitHub Apps and is not a
+valid explicit subscription. The `merge_group` subscription requires
+`merge_queues: read` even though the GitHub settings UI describes it as the
+Merge queues permission.
 
 ## Agent-led creation
 

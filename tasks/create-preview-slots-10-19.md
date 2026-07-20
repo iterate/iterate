@@ -1,5 +1,5 @@
 ---
-status: planning-awaiting-github-sudo
+status: planning-awaiting-approval
 size: large
 branch: ops/create-preview-slots-10-19
 started: 2026-07-20
@@ -10,11 +10,11 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 
 ## Status
 
-Read-only planning is roughly 90% complete. Repository, Semaphore, Doppler,
-Cloudflare, domain, capacity, GitHub ownership, and Slack workspace inventories
-are recorded below; no external state has been changed. The remaining planning
-step is a sudo-protected read of the existing `iterate (preview-10)` GitHub App
-settings before presenting the concrete apply approval.
+Read-only planning is complete. Repository, Semaphore, Doppler, Cloudflare,
+domain, capacity, GitHub, and Slack inventories are recorded below; no external
+state has been changed. The exact non-production batch is ready for explicit
+approval. Production deployment and Semaphore lease publication remain later,
+separate approval boundaries.
 
 ## Goal
 
@@ -74,14 +74,16 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   missing domain without purchasing anything.
   _All twenty zones are already active, so this batch requires no domain
   registration and has a $0 domain-purchase ceiling._
-- [ ] Inventory intended GitHub App names in `iterate` and Slack App names in
+- [x] Inventory intended GitHub App names in `iterate` and Slack App names in
   the identified workspace without creating or modifying apps.
-  _GitHub slots 11–19 are absent; slot 10 exists under `iterate` and awaits a
-  sudo-protected settings read. Slack workspace `T0675PSN873` (`iterate`) has no
-  installed preview-10–19 bots and the signed-in owner has no apps with those
-  names._
-- [ ] Write the exact missing-object plan, per-slot stage states, intended
+  _GitHub slots 11–19 are absent; slot 10 exists under `iterate` with stale
+  `.app` URLs and an incomplete permission/event set. Slack workspace
+  `T0675PSN873` (`iterate`) has no installed preview-10–19 bots and the signed-in
+  owner has no apps with those names._
+- [x] Write the exact missing-object plan, per-slot stage states, intended
   writes, current prices, price ceiling request, and stop conditions below.
+  _The batch has no purchases. Provider writes, credential generation, and
+  stop conditions are enumerated below; production leasing is excluded._
 - [ ] Obtain explicit approval for the concrete non-production batch.
 - [ ] Add `preview_10`–`preview_19` to `envs.ts` with `UNPROVISIONED` IDs and
   update live operational prose derived from a nine-slot fleet.
@@ -210,15 +212,20 @@ GitHub organization: `iterate`.
 
 - `iterate (preview-10)` exists as private App ID `4233983`, slug
   `iterate-preview-10`, owned by `iterate`, with no installation in the
-  organization. Its public external URL is the stale
-  `https://os.iterate-preview-10.app`; current instructions require `.com`.
-  Callback/webhook settings still need the sudo-protected read. Because the
-  one-time manifest credentials were not stored in `os/preview_10`, recovery
-  will require separately approved changes/credential generation rather than
-  pretending this App is new.
+  organization. Its homepage, callback, and webhook URLs all use the stale
+  `os.iterate-preview-10.app` host; current instructions require `.com`. It is
+  missing repository-advisory write, Actions-variable read, Merge-queue read,
+  and email-address read permission, plus explicit `merge_group` and
+  `repository_advisory` subscriptions. `installation_repositories` is delivered
+  automatically and cannot be explicitly selected. Because the one-time
+  manifest credentials were not stored in `os/preview_10`, recovery requires
+  approved generation of a new client secret, private key, and webhook secret.
+  Existing client secrets and keys will not be deleted in this batch.
 - `iterate (preview-11)` through `iterate (preview-19)` and their expected
   slugs return no GitHub App and can be created through the reviewed manifest
-  flow after approval.
+  flow after approval. A preview-11 manifest with the exact corrected
+  permissions and events in `github-preview-app-manifest.md` reaches GitHub's
+  final review page successfully; Create has not been clicked.
 
 Slack workspace: `iterate` (`T0675PSN873`).
 
@@ -232,8 +239,7 @@ Slack workspace: `iterate` (`T0675PSN873`).
 
 ## Intended non-production writes
 
-This is the batch that will be presented for approval after the final GitHub
-read:
+This is the batch presented for approval:
 
 1. Commit the repository edits above with `UNPROVISIONED` IDs.
 2. Create the 50 missing app-level Doppler configs and run the non-rotating Auth
@@ -241,10 +247,12 @@ read:
 3. Create Slack apps `iterate (preview-10)`–`iterate (preview-19)` in workspace
    `T0675PSN873` and write only `APP_CONFIG_INTEGRATIONS__SLACK` to their
    matching `os/preview_N` configs.
-4. Recover the existing GitHub preview-10 App only through separately approved
-   exact setting/credential changes; create GitHub Apps preview-11–19 in the
-   `iterate` organization; write only `APP_CONFIG_INTEGRATIONS__GITHUB` to the
-   matching OS configs.
+4. Update preview-10's three URLs from `.app` to `.com`, add the four missing
+   permissions and two explicit subscriptions listed above, generate a new
+   client secret/private key/webhook secret without deleting old credentials,
+   and write the recovered integration to `os/preview_10`. Create GitHub Apps
+   preview-11–19 in `iterate` from the reviewed manifest and write each returned
+   integration only to the matching OS config.
 5. Run the four create-only Cloudflare ensure commands for every slot, paste
    the resulting 40 assigned IDs into `envs.ts`, and require a no-change second
    pass.
@@ -253,6 +261,12 @@ read:
 
 Production Semaphore lease creation is explicitly outside this approval and
 will be requested only after all ten slots deploy and verify cleanly.
+
+Stop and request new approval if a target name exists unexpectedly, an owner or
+workspace differs, a provider review shows different permissions/URLs, a
+purchase is requested, an existing credential would need deletion, an ensure
+command wants to replace/delete a resource, or provider capacity differs from
+the recorded projection.
 
 ## Implementation log
 
@@ -264,3 +278,9 @@ will be requested only after all ten slots deploy and verify cleanly.
   current and projected Cloudflare capacity against the 2026-07-20 official
   limits; and attached Playwriter to the explicitly authorized main Chrome for
   authenticated GitHub/Slack ownership checks.
+- 2026-07-20: Completed the sudo-protected preview-10 settings audit. A dry-run
+  preview-11 GitHub manifest review exposed invalid UI-label aliases and an
+  invalid explicit `installation_repositories` subscription in the merged
+  runbook. Corrected the manifest to GitHub's API keys, added the Merge-queue
+  permission required by `merge_group`, and reached the final review page
+  without clicking Create.
