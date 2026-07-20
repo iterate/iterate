@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { SignJWT } from "jose";
 import {
   localProjectAppSessionValidator,
@@ -68,7 +68,7 @@ describe("verifyProjectAppSessionToken", () => {
 
 describe("localProjectAppSessionValidator", () => {
   it("matches the auth worker's validate contract: audience and project must bind", async () => {
-    const validate = localProjectAppSessionValidator(SECRET, async () => null);
+    const validate = localProjectAppSessionValidator(SECRET);
     const token = await sign(CLAIMS);
 
     const valid = await validate({
@@ -87,31 +87,5 @@ describe("localProjectAppSessionValidator", () => {
       }),
     ).toBeNull();
     expect(await validate({ audience: CLAIMS.audience, projectId: "prj_other", token })).toBeNull();
-  });
-
-  it("falls back to the auth worker only when the local signature check refuses", async () => {
-    // A legacy-signed token: local verify refuses, the RPC (which knows the
-    // old secret) answers — the rotation window. A bound-but-wrong audience
-    // on a VALID signature is a plain refusal, never a fallback.
-    const legacyToken = await sign(CLAIMS, { secret: "previous-secret" });
-    const fallback = vi.fn().mockResolvedValue({ expiresAt: 123, userId: "usr_legacy" });
-    const validate = localProjectAppSessionValidator(SECRET, fallback);
-
-    const legacy = await validate({
-      audience: CLAIMS.audience,
-      projectId: CLAIMS.projectId,
-      token: legacyToken,
-    });
-    expect(legacy).toMatchObject({ userId: "usr_legacy" });
-    expect(fallback).toHaveBeenCalledOnce();
-
-    fallback.mockClear();
-    const currentToken = await sign(CLAIMS);
-    await validate({
-      audience: "https://wrong.example",
-      projectId: CLAIMS.projectId,
-      token: currentToken,
-    });
-    expect(fallback).not.toHaveBeenCalled();
   });
 });

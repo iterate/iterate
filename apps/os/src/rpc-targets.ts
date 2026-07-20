@@ -292,7 +292,6 @@ import {
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
 import {
-  decodeUnverifiedProjectAppSessionClaims,
   localProjectAppSessionValidator,
   verifyProjectAppSessionToken,
 } from "./auth/project-app-session-token.ts";
@@ -5015,9 +5014,7 @@ function projectAppSessionValidator(): (
 ) => Promise<ValidatedProjectAppSession | null> {
   const secret = parseConfig(env).projectAppSessionSecret;
   if (secret === undefined) return (input) => env.AUTH.validateProjectAppSession(input);
-  return localProjectAppSessionValidator(secret.exposeSecret(), (input) =>
-    env.AUTH.validateProjectAppSession(input),
-  );
+  return localProjectAppSessionValidator(secret.exposeSecret());
 }
 /**
  * THE one table of project built-ins: member name -> one-line blip. The
@@ -5759,31 +5756,13 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
           }),
         ).verifyMaterialField({ value: secret }),
       // The project-app-session lane's verifier: local HS256 against the
-      // shared session secret — no auth-worker hop on the hot path;
-      // membership was checked at mint time and the token's 15-minute TTL
-      // bounds revocation lag. A local refusal falls back to the auth
-      // worker's validate RPC (cold path) so tokens minted under a previous
-      // secret — or a deployment with no shared secret at all — still
-      // authenticate during a rotation window.
+      // shared session secret — no auth-worker hop; membership was checked
+      // at mint time and the token's 15-minute TTL bounds revocation lag.
       verifyProjectAppSession: async (token) => {
         const secret = this.props.config.projectAppSessionSecret;
-        if (secret !== undefined) {
-          const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
-          if (claims !== null) return { projectId: claims.projectId, userId: claims.userId };
-        }
-        // The validate RPC needs the token's own audience/project binding;
-        // decode WITHOUT verifying — the auth worker re-verifies everything,
-        // legacy secrets included.
-        const unverified = decodeUnverifiedProjectAppSessionClaims(token);
-        if (unverified === null) return null;
-        const validated = await env.AUTH.validateProjectAppSession({
-          audience: unverified.audience,
-          projectId: unverified.projectId,
-          token,
-        });
-        return validated === null
-          ? null
-          : { projectId: unverified.projectId, userId: validated.userId };
+        if (secret === undefined) return null;
+        const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
+        return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
       },
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });

@@ -20,12 +20,6 @@ const ProjectAppSessionClaims = z
 
 type SessionDependencies = {
   secret: string;
-  /**
-   * Transition-only: tokens minted under the previous secret verify against
-   * this until they age out (15-minute TTL), so introducing the dedicated
-   * project-app-session secret never bounces live sessions.
-   */
-  legacySecret?: string;
   userCanAccessProject(input: { projectId: string; userId: string }): Promise<boolean>;
 };
 
@@ -67,11 +61,7 @@ export async function validateProjectAppSession(
   let rawClaims: unknown;
   try {
     input = parseValidateInput(rawInput);
-    rawClaims =
-      (await verifyJWT<unknown>(input.token, dependencies.secret)) ??
-      (dependencies.legacySecret
-        ? await verifyJWT<unknown>(input.token, dependencies.legacySecret)
-        : null);
+    rawClaims = await verifyJWT<unknown>(input.token, dependencies.secret);
   } catch {
     return null;
   }
