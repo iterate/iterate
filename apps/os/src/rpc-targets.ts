@@ -5219,12 +5219,15 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // /secrets/project-api-key — what the `project-secret` /api credential is
     // verified against, inside the Secret DO. Empty egress pin: unlike every
     // other secret it can never be substituted into ANY outbound request.
-    // Born `visibility: "readable"` (an immutable birth-certificate fact): pairing an
-    // external app is reveal()-and-copy, as often as needed; rotation is an
-    // ordinary material update. Off the create critical path and idempotent
-    // (the DO's create dedupes), so a lost race costs nothing and re-creation
-    // is a no-op.
-    this.props.ctx.waitUntil(
+    // Born `visibility: "readable"` (an immutable birth-certificate fact):
+    // pairing an external app is reveal()-and-copy, as often as needed;
+    // rotation is an ordinary material update. The DO's create dedupes, so
+    // re-seeding is a no-op: the ready path below AWAITS one seed (a
+    // waitUntilReady caller finds the key existing), the fast path only
+    // nudges it, and a failed nudge is logged — the documented pairing flow
+    // (docs/remote-apps.md) ensure-creates before reveal(), which heals a
+    // permanently lost seed.
+    const seedProjectApiKey = () =>
       env.SECRET.getByName(
         DurableObjectNameCodec.stringify({
           projectId: registered.projectId,
@@ -5236,8 +5239,15 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
           material: generateProjectApiKeyMaterial(),
           visibility: "readable",
         })
-        .catch(() => undefined),
-    );
+        .then(
+          () => undefined,
+          (error: unknown) => {
+            console.warn("project create: api-key seed failed (ensure-create on reveal heals)", {
+              projectId: registered.projectId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          },
+        );
     const project = itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -5263,10 +5273,12 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // nudge is telemetry, not a create failure — durable delivery retries
     // and the checklist's stall detector cover the rest.
     if (args.waitUntilReady === false) {
+      this.props.ctx.waitUntil(seedProjectApiKey());
       this.props.ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
       return project;
     }
 
+    await timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey);
     await driveBirth("wait-project-birth");
     await timedStep("create-timing", timing, "wait-project-ready", () => project.waitUntilReady());
     return project;
