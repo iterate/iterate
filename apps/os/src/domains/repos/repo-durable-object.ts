@@ -71,10 +71,6 @@ import {
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
-import {
-  importPublicGithubSnapshotToArtifact,
-  isGithubArtifactImportRecord,
-} from "./github-artifact-import.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
@@ -96,7 +92,6 @@ const TASK_FILE_INCLUDE_PATTERNS = [
 // on the repo stream are the record of TRUTH for inspection; this key is
 // written in the same methods that append them, so the two cannot drift.
 const GITHUB_LINK_KV_KEY = "github-link:v1";
-const GITHUB_ARTIFACT_IMPORT_KV_KEY = "github-artifact-import:v1";
 
 // The durable HEAD-tree cache's materialized commit oid (default branch only).
 // Presence doubles as the "materialized once" sentinel; every HEAD read
@@ -173,31 +168,6 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
     this.ctx.abort("kill requested");
-  }
-
-  /**
-   * Create this repo's Artifact by asking Cloudflare Artifacts to import a
-   * public GitHub snapshot. No packfiles or inflated git objects enter this
-   * Durable Object. The durable intent makes a retry after a successful
-   * import safe without allowing an unrelated pre-existing Artifact to be
-   * silently adopted.
-   */
-  importPublicGithubSnapshot(input: {
-    branch: "main";
-    depth: 1;
-    owner: string;
-    repo: string;
-  }): Promise<{ imported: true }> {
-    return this.#serializeWrite(async () => {
-      return importPublicGithubSnapshotToArtifact({
-        artifacts: this.requireArtifacts(),
-        name: this.artifactName(),
-        owner: input.owner,
-        prior: this.ctx.storage.kv.get<unknown>(GITHUB_ARTIFACT_IMPORT_KV_KEY),
-        repo: input.repo,
-        save: (record) => this.ctx.storage.kv.put(GITHUB_ARTIFACT_IMPORT_KV_KEY, record),
-      });
-    });
   }
 
   get processor() {
@@ -1532,12 +1502,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // A prior push is authoritative evidence that an existing Artifact is
     // already seeded. Recovery only needs to journal repo/ready; cloning the
     // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
-    if (
-      lastPushAt !== null ||
-      isGithubArtifactImportRecord(this.ctx.storage.kv.get<unknown>(GITHUB_ARTIFACT_IMPORT_KV_KEY))
-    ) {
-      return { artifactName, defaultBranch, remote };
-    }
+    if (lastPushAt !== null) return { artifactName, defaultBranch, remote };
 
     const token = await timedStep("create-timing", timing, "artifact-token", () =>
       artifactToken(this.requireArtifacts(), artifactName),

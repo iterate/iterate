@@ -658,11 +658,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Repo",
     kind: "interface",
     sourceText:
-      "/** Git-backed repo capability used by project workers and dynamic worker refs. */\nexport interface Repo {\n  __describe(): Promise<Description>;\n  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */\n  create(): Promise<Repo>;\n  /**\n   * Create a new repo from GitHub. Public, non-empty repositories whose\n   * default branch is main are imported by Cloudflare Artifacts at depth 1,\n   * so their git objects never inflate inside the Repo Durable Object.\n   * Other repositories keep the authenticated create/link/depth-1-sync path.\n   */\n  createFromGithub(input: { connection: string; owner: string; repo: string }): Promise<{\n    importedByArtifacts: boolean;\n    link: LinkGithubResult;\n    sync: GithubSyncResult | null;\n    syncError: string | null;\n  }>;\n  /** Repo identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the repo's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */\n  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;\n  /**\n   * Safely replace text in one committed file and commit the result. The\n   * `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;\n  /** All committed file paths at HEAD. */\n  listFiles(): Promise<{ commitOid: string; paths: string[] }>;\n  /**\n   * Every task markdown file's contents at HEAD, keyed by path, in a single\n   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a\n   * `readFile()` per task: the task include mask is applied before contents\n   * are read, so cost scales with the number of tasks, not the repo size.\n   */\n  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }>;\n  /**\n   * Commit history of a branch, newest first — oid, message, author,\n   * timestamp (epoch ms), parent oids. Deliberately without per-commit file\n   * stats (those cost tree checkouts per commit); fetch them lazily per\n   * commit through `commitDetails`.\n   */\n  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;\n  /**\n   * One commit's metadata plus the files it changed versus its first parent\n   * (the whole tree for the root commit), with `git diff --numstat`-shaped\n   * +/- line counts; binary files are flagged instead of counted.\n   */\n  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;\n  /**\n   * Committed file contents at HEAD — or, with `commitOid`, pinned to that\n   * commit — null when the path does not exist there. `encoding: \"base64\"`\n   * reads raw bytes (images, PDFs) base64-encoded.\n   */\n  readFile(input: { path: string; encoding?: \"utf8\" | \"base64\"; commitOid?: string }): Promise<{\n    commitOid: string;\n    content: string;\n    path: string;\n  } | null>;\n  /**\n   * Back this repo with a real GitHub repository through a named GitHub\n   * connection. From then on every default-branch commit is mirrored to\n   * GitHub best-effort (failures journal on the repo stream and self-heal on\n   * the next commit), fast-forward default-branch pushes made on GitHub are\n   * imported through the Cloudflare Artifacts queue, and every GitHub webhook\n   * about that repository is cross-posted onto this repo's stream. If the\n   * GitHub repository does not exist and the installation can create org\n   * repositories, it is created private. Re-linking replaces the previous\n   * link.\n   */\n  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;\n  /** Remove the GitHub link and its webhook cross-post rule. */\n  unlinkGithub(): Promise<{ unlinked: boolean }>;\n  /**\n   * Push the default branch head to the linked GitHub repository now — the\n   * repair verb for a failed mirror push. Never forced by default; `force:\n   * true` makes this repo win over commits made directly on GitHub.\n   */\n  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;\n  /**\n   * Adopt the linked GitHub repository's default-branch head into this repo.\n   * Fast-forward only: fails when this repo has commits GitHub does not,\n   * unless `force: true` discards them. The synced head is immediately live\n   * for worker builds.\n   *\n   * The history transfers in-process. `depth` requests a bounded history\n   * window, but fast-forward syncs always retain the previous Artifacts head\n   * as well so queue-derived task diffs can read both sides. GitHub retains\n   * the full history, and a later deeper sync can always widen the window.\n   */\n  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;\n  /**\n   * Hard recovery: destroy and recreate the Artifacts repository from the\n   * linked GitHub repository's default branch. GitHub always wins and the\n   * operation runs even when the recorded commit oids already match. The\n   * source clone is completed before destruction; `depth` bounds memory for\n   * large histories without changing anything on GitHub.\n   */\n  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;\n  /** The repo stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<RepoProcessorState>;\n  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<RepoProcessorState>;\n}",
+      "/** Git-backed repo capability used by project workers and dynamic worker refs. */\nexport interface Repo {\n  __describe(): Promise<Description>;\n  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */\n  create(): Promise<Repo>;\n  /** Repo identity string (debug). */\n  whoami(): Promise<string>;\n  /** Restart the repo's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** Commit a batch of file changes; use `edit` for a targeted single-string replacement. */\n  commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>;\n  /**\n   * Safely replace text in one committed file and commit the result. The\n   * `oldString` must match exactly once unless `replaceAll` is true.\n   */\n  edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;\n  /** All committed file paths at HEAD. */\n  listFiles(): Promise<{ commitOid: string; paths: string[] }>;\n  /**\n   * Every task markdown file's contents at HEAD, keyed by path, in a single\n   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a\n   * `readFile()` per task: the task include mask is applied before contents\n   * are read, so cost scales with the number of tasks, not the repo size.\n   */\n  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }>;\n  /**\n   * Commit history of a branch, newest first — oid, message, author,\n   * timestamp (epoch ms), parent oids. Deliberately without per-commit file\n   * stats (those cost tree checkouts per commit); fetch them lazily per\n   * commit through `commitDetails`.\n   */\n  log(input: { branch?: string; limit?: number }): Promise<RepoLogResult>;\n  /**\n   * One commit's metadata plus the files it changed versus its first parent\n   * (the whole tree for the root commit), with `git diff --numstat`-shaped\n   * +/- line counts; binary files are flagged instead of counted.\n   */\n  commitDetails(input: { branch?: string; commitOid: string }): Promise<RepoCommitDetails>;\n  /**\n   * Committed file contents at HEAD — or, with `commitOid`, pinned to that\n   * commit — null when the path does not exist there. `encoding: \"base64\"`\n   * reads raw bytes (images, PDFs) base64-encoded.\n   */\n  readFile(input: { path: string; encoding?: \"utf8\" | \"base64\"; commitOid?: string }): Promise<{\n    commitOid: string;\n    content: string;\n    path: string;\n  } | null>;\n  /**\n   * Back this repo with a real GitHub repository through a named GitHub\n   * connection. From then on every default-branch commit is mirrored to\n   * GitHub best-effort (failures journal on the repo stream and self-heal on\n   * the next commit), fast-forward default-branch pushes made on GitHub are\n   * imported through the Cloudflare Artifacts queue, and every GitHub webhook\n   * about that repository is cross-posted onto this repo's stream. If the\n   * GitHub repository does not exist and the installation can create org\n   * repositories, it is created private. Re-linking replaces the previous\n   * link.\n   */\n  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<LinkGithubResult>;\n  /** Remove the GitHub link and its webhook cross-post rule. */\n  unlinkGithub(): Promise<{ unlinked: boolean }>;\n  /**\n   * Push the default branch head to the linked GitHub repository now — the\n   * repair verb for a failed mirror push. Never forced by default; `force:\n   * true` makes this repo win over commits made directly on GitHub.\n   */\n  pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }>;\n  /**\n   * Adopt the linked GitHub repository's default-branch head into this repo.\n   * Fast-forward only: fails when this repo has commits GitHub does not,\n   * unless `force: true` discards them. The synced head is immediately live\n   * for worker builds.\n   *\n   * The history transfers in-process. `depth` requests a bounded history\n   * window, but fast-forward syncs always retain the previous Artifacts head\n   * as well so queue-derived task diffs can read both sides. GitHub retains\n   * the full history, and a later deeper sync can always widen the window.\n   */\n  syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;\n  /**\n   * Hard recovery: destroy and recreate the Artifacts repository from the\n   * linked GitHub repository's default branch. GitHub always wins and the\n   * operation runs even when the recorded commit oids already match. The\n   * source clone is completed before destruction; `depth` bounds memory for\n   * large histories without changing anything on GitHub.\n   */\n  resetFromGithub(input: { depth?: number }): Promise<GithubResetResult>;\n  /** The repo stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<RepoProcessorState>;\n  /** The repo's live state — its reduced processor state. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<RepoProcessorState>;\n}",
     summary: "Git-backed repo capability used by project workers and dynamic worker refs.",
     memberSummaries: {
       create: "Create the repo if it does not exist yet; resolves once `repo/ready` lands.",
-      createFromGithub: "Create a new repo from GitHub.",
       whoami: "Repo identity string (debug).",
       kill: "Restart the repo's server-side object; the next request boots it fresh.",
       commitFiles:
@@ -688,14 +687,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     },
     referencedTypeNames: [
       "Description",
-      "LinkGithubResult",
-      "GithubSyncResult",
       "CommitRepoFilesInput",
       "CommitRepoFilesResult",
       "EditRepoFileInput",
       "EditRepoFileResult",
       "RepoLogResult",
       "RepoCommitDetails",
+      "LinkGithubResult",
+      "GithubSyncResult",
       "GithubResetResult",
       "WakeableStreamProcessorRpc",
       "RepoProcessorState",
@@ -1690,26 +1689,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "LinkGithubResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome\n * (a failed initial push does not fail the link — it is journaled on the repo\n * stream and repaired by `pushToGithub()` or the next commit). */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush: { ok: boolean; commitOid?: string; error?: string };\n};",
-    summary:
-      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome (a failed initial push does not fail the link — it is journaled on the repo stream and repaired by `pushToGithub()` or the next commit).",
-    memberSummaries: {},
-    referencedTypeNames: ["GithubRepoLink"],
-  },
-  {
-    name: "GithubSyncResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `repo.syncFromGithub` returns: whether the head moved, the adopted\n * commit, and the head it replaced (null when the branch had no cached head). */\nexport type GithubSyncResult = {\n  branch: string;\n  changed: boolean;\n  commitOid: string;\n  forced: boolean;\n  previousCommitOid: string | null;\n};",
-    summary:
-      "What `repo.syncFromGithub` returns: whether the head moved, the adopted commit, and the head it replaced (null when the branch had no cached head).",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "CommitRepoFilesInput",
     kind: "typeAlias",
     sourceText:
@@ -1763,6 +1742,26 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "What `repo.commitDetails` returns: one commit's metadata plus the files it changed versus its first parent (versus an empty tree for the root commit).",
     memberSummaries: {},
     referencedTypeNames: ["RepoLogCommit", "RepoCommitFileChange"],
+  },
+  {
+    name: "LinkGithubResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome\n * (a failed initial push does not fail the link — it is journaled on the repo\n * stream and repaired by `pushToGithub()` or the next commit). */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush: { ok: boolean; commitOid?: string; error?: string };\n};",
+    summary:
+      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome (a failed initial push does not fail the link — it is journaled on the repo stream and repaired by `pushToGithub()` or the next commit).",
+    memberSummaries: {},
+    referencedTypeNames: ["GithubRepoLink"],
+  },
+  {
+    name: "GithubSyncResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `repo.syncFromGithub` returns: whether the head moved, the adopted\n * commit, and the head it replaced (null when the branch had no cached head). */\nexport type GithubSyncResult = {\n  branch: string;\n  changed: boolean;\n  commitOid: string;\n  forced: boolean;\n  previousCommitOid: string | null;\n};",
+    summary:
+      "What `repo.syncFromGithub` returns: whether the head moved, the adopted commit, and the head it replaced (null when the branch had no cached head).",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "GithubResetResult",
@@ -2069,16 +2068,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["SecretRefresh"],
   },
   {
-    name: "GithubRepoLink",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n  /** GitHub's stable database identity for this repository. */\n  repositoryId: number;\n};",
-    summary:
-      "The GitHub repository a repo is linked to: the named GitHub connection (an App installation) whose token authenticates mirror pushes, its installation id, and the owner/repo coordinates on GitHub.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "RepoFileChange",
     kind: "typeAlias",
     sourceText:
@@ -2102,6 +2091,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** One changed file in a commit — `git diff --numstat`-shaped counts. */\nexport type RepoCommitFileChange = {\n  path: string;\n  status: "added" | "deleted" | "modified";\n  /** Lines added; 0 for binary files. */\n  additions: number;\n  /** Lines removed; 0 for binary files. */\n  deletions: number;\n  /** True when either side of the diff sniffs binary (NUL byte). */\n  binary: boolean;\n};',
     summary: "One changed file in a commit — `git diff --numstat`-shaped counts.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "GithubRepoLink",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n  /** GitHub's stable database identity for this repository. */\n  repositoryId: number;\n};",
+    summary:
+      "The GitHub repository a repo is linked to: the named GitHub connection (an App installation) whose token authenticates mirror pushes, its installation id, and the owner/repo coordinates on GitHub.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

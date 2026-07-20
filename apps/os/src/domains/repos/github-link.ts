@@ -80,53 +80,12 @@ function githubCrossPostSubscriptionEvent(input: {
   };
 }
 
-/**
- * Authorize the selected repository through its installation connection and
- * decide whether Cloudflare's credential-free public import can seed it. The
- * wizard still uses the authenticated depth-1 transfer for private, empty, or
- * non-main-default repositories.
- */
-export async function canImportGithubRepoPublicly(input: {
-  connection: string;
-  owner: string;
-  projectId: string;
-  repo: string;
-}): Promise<boolean> {
-  const status = await getConnectionStatus({
-    connection: input.connection,
-    projectId: input.projectId,
-    provider: "github",
-  });
-  if (!status.connected || status.externalId === null) {
-    throw new Error(
-      `GitHub connection "${input.connection}" is not connected; use itx.integrations.list() to see connections.`,
-    );
-  }
-  try {
-    const response = await connectionOctokit({
-      connection: input.connection,
-      projectId: input.projectId,
-    }).rest.repos.get({ owner: input.owner.trim(), repo: input.repo.trim() });
-    return (
-      response.data.private === false &&
-      response.data.default_branch === "main" &&
-      response.data.pushed_at !== null
-    );
-  } catch (error) {
-    throw normalizeGithubError(error, input.connection);
-  }
-}
-
 export async function linkRepoToGithub(input: {
   connection: string;
   owner: string;
   projectId: string;
   repo: string;
   repoPath: string;
-  /** The caller has already imported this existing GitHub head into the
-   * Artifact, so pushing it back to GitHub would be redundant and can exceed
-   * the Repo isolate's memory limit for a large tree. */
-  skipInitialPush?: boolean;
 }): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
   // Trim at the boundary: a padded owner/repo would store a link (and a
@@ -288,14 +247,12 @@ export async function linkRepoToGithub(input: {
   // "visible after the next commit". Failure is journaled, not fatal (a
   // pre-existing GitHub repo with unrelated history is the expected case —
   // the caller then picks syncFromGithub() or pushToGithub({ force: true })).
-  let initialPush: LinkGithubResult["initialPush"] = { ok: true };
-  if (input.skipInitialPush !== true) {
-    try {
-      const pushed = await repoStub.pushToGithub({});
-      initialPush = { commitOid: pushed.commitOid, ok: true };
-    } catch (error) {
-      initialPush = { error: String(error), ok: false };
-    }
+  let initialPush: LinkGithubResult["initialPush"];
+  try {
+    const pushed = await repoStub.pushToGithub({});
+    initialPush = { commitOid: pushed.commitOid, ok: true };
+  } catch (error) {
+    initialPush = { error: String(error), ok: false };
   }
 
   return { ...link, created, initialPush };

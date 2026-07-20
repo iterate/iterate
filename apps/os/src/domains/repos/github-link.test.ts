@@ -9,11 +9,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { GITHUB_CONNECTED_EVENT_TYPE } from "../integrations/utils.ts";
-import {
-  canImportGithubRepoPublicly,
-  linkRepoToGithub,
-  unlinkRepoFromGithub,
-} from "./github-link.ts";
+import { linkRepoToGithub, unlinkRepoFromGithub } from "./github-link.ts";
 
 const network = await vi.hoisted(async () => {
   const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
@@ -22,8 +18,6 @@ const network = await vi.hoisted(async () => {
     githubLink: null as Record<string, unknown> | null,
     /** What the fake GitHub API answers: repo exists / missing / create fails. */
     githubRepoExists: true,
-    githubRepoPrivate: false,
-    githubPushedAt: "2026-07-20T10:00:00Z" as string | null,
     githubRepositoryId: 101,
     githubCreateStatus: 201,
     pushShouldFail: false,
@@ -49,8 +43,6 @@ const network = await vi.hoisted(async () => {
       repoCalls.length = 0;
       state.githubLink = null;
       state.githubRepoExists = true;
-      state.githubRepoPrivate = false;
-      state.githubPushedAt = "2026-07-20T10:00:00Z";
       state.githubRepositoryId = 101;
       state.githubCreateStatus = 201;
       state.pushShouldFail = false;
@@ -73,8 +65,6 @@ const network = await vi.hoisted(async () => {
                   default_branch: "main",
                   full_name: "acme/widgets",
                   id: state.githubRepositoryId,
-                  private: state.githubRepoPrivate,
-                  pushed_at: state.githubPushedAt,
                 });
               }
               return Response.json({ message: "Not Found" }, { status: 404 });
@@ -241,26 +231,6 @@ describe("linkRepoToGithub", () => {
       },
       deliver: "new",
     });
-  });
-
-  test("skips the mirror push after a service-side Artifact import", async () => {
-    seedConnectedFact();
-
-    const result = await linkRepoToGithub({ ...linkInput(), skipInitialPush: true });
-
-    expect(result.initialPush).toEqual({ ok: true });
-    expect(network.repoCalls.map((call) => call.method)).toEqual(["configureGithubLink"]);
-  });
-
-  test("allows service-side import only for a public, non-empty main repository", async () => {
-    seedConnectedFact();
-
-    await expect(canImportGithubRepoPublicly(linkInput())).resolves.toBe(true);
-    network.state.githubRepoPrivate = true;
-    await expect(canImportGithubRepoPublicly(linkInput())).resolves.toBe(false);
-    network.state.githubRepoPrivate = false;
-    network.state.githubPushedAt = null;
-    await expect(canImportGithubRepoPublicly(linkInput())).resolves.toBe(false);
   });
 
   test("creates the GitHub repo (private, in-org) when it does not exist", async () => {
