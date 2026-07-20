@@ -129,7 +129,7 @@ read back from the owning system.
 
 | Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
 | ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 10   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 | 11   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 | 12   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 | 13   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
@@ -341,5 +341,8 @@ the recorded projection.
 - 2026-07-20: The repaired OS ensure completed its pre-deploy phase and returned
   project-directory KV `975b82fbaaf94f2285c2a080b0893f9d` and build-cache KV
   `225a2d03540343c8a80a80e8ee81a92e`; both are now recorded in `envs.ts`.
-  Preview-10's four-command second ensure remains before its ledger cell can be
-  checked.
+  The subsequent four-command second ensure is recorded below.
+- 2026-07-20: Preview-10 passed the complete Auth, Semaphore, Dummy Petshop,
+  and OS second ensure. Every assigned ID matches `envs.ts`; no object was
+  created or changed. The documented email catch-all deferral remains until
+  first OS deploy and is tracked under the five-app deployment checkpoint.
