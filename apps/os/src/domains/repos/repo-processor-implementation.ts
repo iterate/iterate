@@ -1,5 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract, type RepoBirthConfig } from "./repo-processor-contract.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
@@ -7,7 +7,11 @@ import {
 } from "./repo-task-events.ts";
 
 type RepoProcessorDeps = {
-  createRepoArtifact(input: { path: string; projectId: string | null }): Promise<{
+  createRepoArtifact(input: {
+    config: RepoBirthConfig;
+    path: string;
+    projectId: string | null;
+  }): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;
@@ -276,6 +280,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       // holds the frame; a nested blockProcessorWhile would register after the
       // runner's per-event blocker snapshot and never be awaited.
       const payload = await this.deps.createRepoArtifact({
+        config: args.state.birthCertificate.config,
         path: this.path,
         projectId: this.projectId,
       });

@@ -92,7 +92,11 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
-import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
+import {
+  RepoProcessorContract,
+  sameRepoBirthConfig,
+  type RepoBirthConfig,
+} from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
 import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
@@ -112,7 +116,11 @@ import {
   SandboxProcessorContract,
   type SandboxProcessorState,
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
-import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
+import {
+  githubRepositoryImportCandidate,
+  linkRepoToGithub,
+  unlinkRepoFromGithub,
+} from "./domains/repos/github-link.ts";
 import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
@@ -1074,6 +1082,7 @@ function streamDurableObjectName(props: { projectId: string | null; path: string
 
 async function requestRepoCreate(input: {
   auth: ItxAuth;
+  config?: RepoBirthConfig;
   path: string;
   projectId: string | null;
 }): Promise<RepoRpcTarget> {
@@ -1089,7 +1098,7 @@ async function requestRepoCreate(input: {
       {
         type: "events.iterate.com/repo/created",
         idempotencyKey: `repo-created:${input.projectId}:${path}`,
-        payload: { config: {} },
+        payload: { config: input.config ?? {} },
       },
       buildDurableObjectProcessorSubscriptionConfiguredEvent({
         durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
@@ -1389,9 +1398,98 @@ class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRep
     super(projectProps);
   }
 
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Project repo catalog: list(), get(path), create({ path }), or createFromGithub({...}).",
+      children: {
+        create: "Create an empty seeded repo at a path.",
+        createFromGithub:
+          "Create and link a repo from GitHub; eligible public repos import directly through Cloudflare Artifacts at depth one.",
+        get: "The repo at a path.",
+        list: "Known project repos.",
+      },
+    });
+  }
+
   /** Known repos, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]> {
     return projectProcessorState(this.projectProps.projectId).then((state) => state.repos);
+  }
+
+  /** Create a new project repo from a GitHub repository. Public, non-empty
+   * main branches are cloned by Cloudflare Artifacts at depth one, outside the
+   * Repo Durable Object; private/empty/non-main repositories retain the
+   * authenticated seed/link/sync flow. */
+  async createFromGithub(input: {
+    connection: string;
+    owner: string;
+    path: string;
+    repo: string;
+  }): Promise<{
+    imported: boolean;
+    link: LinkGithubResult;
+    path: string;
+    sync: GithubSyncResult | null;
+    syncError: string | null;
+  }> {
+    const path = normalizePath(input.path);
+    const github = {
+      connection: input.connection.trim(),
+      owner: input.owner.trim(),
+      repo: input.repo.trim(),
+    };
+    const candidate = await githubRepositoryImportCandidate({
+      ...github,
+      projectId: this.projectProps.projectId,
+    });
+    const imported = candidate.importable;
+    const config: RepoBirthConfig = {
+      github: {
+        owner: github.owner,
+        repo: github.repo,
+        ...(imported ? { artifactImport: { branch: candidate.defaultBranch, depth: 1 } } : {}),
+      },
+    };
+
+    const existing = (await projectProcessorState(this.projectProps.projectId)).repos.some(
+      (repo) => repo.path === path,
+    );
+    if (existing) {
+      const snapshot = await this.get(path).processor.snapshot();
+      if (!sameRepoBirthConfig(snapshot.state.birthCertificate?.config, config)) {
+        throw new Error(
+          `${path} already exists. To back an existing repo with GitHub, use the GitHub panel on that repo's page.`,
+        );
+      }
+    }
+
+    const repo = await requestRepoCreate({
+      auth: this.projectProps.auth,
+      config,
+      path,
+      projectId: this.projectProps.projectId,
+    });
+    const snapshot = await repo.processor.snapshot();
+    if (!sameRepoBirthConfig(snapshot.state.birthCertificate?.config, config)) {
+      throw new Error(`${path} was concurrently created from a different source.`);
+    }
+    const link = await linkRepoToGithub({
+      ...github,
+      projectId: this.projectProps.projectId,
+      repoPath: path,
+      skipInitialPush: imported,
+    });
+    if (imported) return { imported, link, path, sync: null, syncError: null };
+
+    let sync: GithubSyncResult | null = null;
+    let syncError: string | null = null;
+    try {
+      sync = await repo.syncFromGithub({ force: true, depth: 1 });
+    } catch (error) {
+      syncError = error instanceof Error ? error.message : String(error);
+    }
+    return { imported, link, path, sync, syncError };
   }
 }
 

@@ -128,10 +128,9 @@ function AddRepoFromGithubWizard({
 
   const addRepo = useMutation({
     mutationFn: async (input: { path: string; repo: InstallationRepo }) => {
-      // The wizard only ADDS repos. `repos.create` is create-if-absent, so an
-      // existing path would sail through and the force-sync below would
-      // discard its history — re-check against the live list right before
-      // mutating (the submit gate can race a repo created since last render).
+      // The wizard only ADDS repos. Re-check against the live list right
+      // before mutating: the submit gate can race a repo created since the
+      // last render.
       if (existingRepoPaths === undefined) {
         throw new Error("The project's repo list has not loaded yet; try again in a moment.");
       }
@@ -146,32 +145,20 @@ function AddRepoFromGithubWizard({
       // the exemption already in place, the taken-path gate red-flags the very
       // repo this mutation is creating while it is still being seeded.
       setCreatedHere((previous) => new Set(previous).add(input.path));
-      // create is "create if it does not exist yet", so a retry after a
-      // mid-flow failure is safe and finishes the job.
-      await itx.repos.create({ path: input.path });
-      const repo = itx.repos.get(input.path);
-      const link = await repo.linkGithub({
+      // createFromGithub records the source in the repo's birth certificate,
+      // so a retry after a mid-flow failure is safe and finishes the job.
+      return await itx.repos.createFromGithub({
         connection,
         owner: input.repo.owner,
+        path: input.path,
         repo: input.repo.name,
       });
-      // Adopt GitHub's complete current main tree without cloning its history
-      // into the Repo Durable Object. force: the fresh repo's starter seed is
-      // history GitHub has never seen — GitHub wins. An empty GitHub repository
-      // has nothing to adopt: the link's initial push already seeded it, and
-      // the sync reports changed: false.
-      let sync: { changed: boolean; commitOid: string } | null = null;
-      let syncError: string | null = null;
-      try {
-        sync = await repo.syncFromGithub({ force: true, depth: 1 });
-      } catch (error) {
-        syncError = error instanceof Error ? error.message : String(error);
-      }
-      return { link, path: input.path, sync, syncError };
     },
     onSuccess: (result, variables) => {
       const github = `${result.link.owner}/${result.link.repo}`;
-      if (result.syncError !== null) {
+      if (result.imported) {
+        toast.success(`Added ${result.path} from ${github} at depth one.`);
+      } else if (result.syncError !== null) {
         toast.warning(
           `${result.path} is linked to ${github}, but pulling main failed: ${result.syncError} Use "Sync from GitHub" in the repo's GitHub panel to retry.`,
         );

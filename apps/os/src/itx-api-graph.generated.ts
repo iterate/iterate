@@ -526,12 +526,19 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectRepoCollection",
     kind: "interface",
     sourceText:
-      "/** Project-scoped repo catalog with reduced-state listing. */\nexport interface ProjectRepoCollection extends RepoCollection {\n  /** Known repos, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n}",
+      "/** Project-scoped repo catalog with reduced-state listing. */\nexport interface ProjectRepoCollection extends RepoCollection {\n  __describe(): Promise<Description>;\n  /** Known repos, read from the project processor's reduced state. */\n  list(): Promise<StreamListItem[]>;\n  /** Create a new project repo from a GitHub repository. Public, non-empty\n   * main branches are cloned by Cloudflare Artifacts at depth one, outside the\n   * Repo Durable Object; private/empty/non-main repositories retain the\n   * authenticated seed/link/sync flow. */\n  createFromGithub(input: {\n    connection: string;\n    owner: string;\n    path: string;\n    repo: string;\n  }): Promise<{\n    imported: boolean;\n    link: LinkGithubResult;\n    path: string;\n    sync: GithubSyncResult | null;\n    syncError: string | null;\n  }>;\n}",
     summary: "Project-scoped repo catalog with reduced-state listing.",
     memberSummaries: {
       list: "Known repos, read from the project processor's reduced state.",
+      createFromGithub: "Create a new project repo from a GitHub repository.",
     },
-    referencedTypeNames: ["RepoCollection", "StreamListItem"],
+    referencedTypeNames: [
+      "RepoCollection",
+      "Description",
+      "StreamListItem",
+      "LinkGithubResult",
+      "GithubSyncResult",
+    ],
   },
   {
     name: "DeviceCollection",
@@ -1557,6 +1564,26 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "LinkGithubResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome.\n * The compound public-import path reports that push as skipped because the\n * Artifact already came from GitHub. A failed initial push does not fail the\n * link — it is journaled and repaired by `pushToGithub()` or the next commit. */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush:\n    | { ok: true; commitOid: string }\n    | { ok: true; skipped: true }\n    | { ok: false; error: string };\n};",
+    summary:
+      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome.",
+    memberSummaries: {},
+    referencedTypeNames: ["GithubRepoLink"],
+  },
+  {
+    name: "GithubSyncResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** What `repo.syncFromGithub` returns: whether the head moved, the adopted\n * commit, and the head it replaced (null when the branch had no cached head). */\nexport type GithubSyncResult = {\n  branch: string;\n  changed: boolean;\n  commitOid: string;\n  forced: boolean;\n  previousCommitOid: string | null;\n};",
+    summary:
+      "What `repo.syncFromGithub` returns: whether the head moved, the adopted commit, and the head it replaced (null when the branch had no cached head).",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "DeviceDescription",
     kind: "typeAlias",
     sourceText:
@@ -1707,26 +1734,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["RepoLogCommit", "RepoCommitFileChange"],
   },
   {
-    name: "LinkGithubResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `repo.linkGithub` returns: the recorded link, whether the GitHub\n * repository was created by this call, and the initial mirror push's outcome\n * (a failed initial push does not fail the link — it is journaled on the repo\n * stream and repaired by `pushToGithub()` or the next commit). */\nexport type LinkGithubResult = GithubRepoLink & {\n  created: boolean;\n  initialPush: { ok: boolean; commitOid?: string; error?: string };\n};",
-    summary:
-      "What `repo.linkGithub` returns: the recorded link, whether the GitHub repository was created by this call, and the initial mirror push's outcome (a failed initial push does not fail the link — it is journaled on the repo stream and repaired by `pushToGithub()` or the next commit).",
-    memberSummaries: {},
-    referencedTypeNames: ["GithubRepoLink"],
-  },
-  {
-    name: "GithubSyncResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `repo.syncFromGithub` returns: whether the head moved, the adopted\n * commit, and the head it replaced (null when the branch had no cached head). */\nexport type GithubSyncResult = {\n  branch: string;\n  changed: boolean;\n  commitOid: string;\n  forced: boolean;\n  previousCommitOid: string | null;\n};",
-    summary:
-      "What `repo.syncFromGithub` returns: whether the head moved, the adopted commit, and the head it replaced (null when the branch had no cached head).",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "GithubResetResult",
     kind: "typeAlias",
     sourceText:
@@ -1740,7 +1747,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "RepoProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  birthCertificate: { config: Record<string, never> } | null;\n  artifactName: string | null;\n  ready: boolean;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
+      '/**\n * The repo processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape.\n */\nexport type RepoProcessorState = {\n  birthCertificate: {\n    config: {\n      github?:\n        | {\n            owner: string;\n            repo: string;\n            artifactImport?: { branch: string; depth: number } | undefined;\n          }\n        | undefined;\n    };\n  } | null;\n  artifactName: string | null;\n  ready: boolean;\n  defaultBranch: string | null;\n  github: {\n    connection: string;\n    installationId: string;\n    owner: string;\n    repo: string;\n    repositoryId: number;\n  } | null;\n  githubImport: {\n    branch: string;\n    requestId: string;\n    requestedCommitOid: string;\n    status: "requested" | "started";\n  } | null;\n  initialized: boolean;\n  lastGithubPush: {\n    at: string;\n    branch: string;\n    commitOid: string | null;\n    error: string | null;\n    ok: boolean;\n  } | null;\n  remote: string | null;\n};',
     summary:
       "The repo processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1957,6 +1964,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "GithubRepoLink",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n  /** GitHub's stable database identity for this repository. */\n  repositoryId: number;\n};",
+    summary:
+      "The GitHub repository a repo is linked to: the named GitHub connection (an App installation) whose token authenticates mirror pushes, its installation id, and the owner/repo coordinates on GitHub.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "DeviceEnrollInput",
     kind: "typeAlias",
     sourceText:
@@ -2046,16 +2063,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     sourceText:
       '/** One changed file in a commit — `git diff --numstat`-shaped counts. */\nexport type RepoCommitFileChange = {\n  path: string;\n  status: "added" | "deleted" | "modified";\n  /** Lines added; 0 for binary files. */\n  additions: number;\n  /** Lines removed; 0 for binary files. */\n  deletions: number;\n  /** True when either side of the diff sniffs binary (NUL byte). */\n  binary: boolean;\n};',
     summary: "One changed file in a commit — `git diff --numstat`-shaped counts.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "GithubRepoLink",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * The GitHub repository a repo is linked to: the named GitHub connection (an\n * App installation) whose token authenticates mirror pushes, its installation\n * id, and the owner/repo coordinates on GitHub.\n */\nexport type GithubRepoLink = {\n  connection: string;\n  installationId: string;\n  owner: string;\n  repo: string;\n  /** GitHub's stable database identity for this repository. */\n  repositoryId: number;\n};",
-    summary:
-      "The GitHub repository a repo is linked to: the named GitHub connection (an App installation) whose token authenticates mirror pushes, its installation id, and the owner/repo coordinates on GitHub.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

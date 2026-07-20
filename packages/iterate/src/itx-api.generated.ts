@@ -891,8 +891,25 @@ export interface OpenApiCollection {
 
 /** Project-scoped repo catalog with reduced-state listing. */
 export interface ProjectRepoCollection extends RepoCollection {
+  __describe(): Promise<Description>;
   /** Known repos, read from the project processor's reduced state. */
   list(): Promise<StreamListItem[]>;
+  /** Create a new project repo from a GitHub repository. Public, non-empty
+   * main branches are cloned by Cloudflare Artifacts at depth one, outside the
+   * Repo Durable Object; private/empty/non-main repositories retain the
+   * authenticated seed/link/sync flow. */
+  createFromGithub(input: {
+    connection: string;
+    owner: string;
+    path: string;
+    repo: string;
+  }): Promise<{
+    imported: boolean;
+    link: LinkGithubResult;
+    path: string;
+    sync: GithubSyncResult | null;
+    syncError: string | null;
+  }>;
 }
 
 /** Enrolled mobile installations within one project. */
@@ -2992,6 +3009,29 @@ export type OpenApiConnectInput = {
   specUrl: string;
 };
 
+/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
+ * repository was created by this call, and the initial mirror push's outcome.
+ * The compound public-import path reports that push as skipped because the
+ * Artifact already came from GitHub. A failed initial push does not fail the
+ * link — it is journaled and repaired by `pushToGithub()` or the next commit. */
+export type LinkGithubResult = GithubRepoLink & {
+  created: boolean;
+  initialPush:
+    | { ok: true; commitOid: string }
+    | { ok: true; skipped: true }
+    | { ok: false; error: string };
+};
+
+/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
+ * commit, and the head it replaced (null when the branch had no cached head). */
+export type GithubSyncResult = {
+  branch: string;
+  changed: boolean;
+  commitOid: string;
+  forced: boolean;
+  previousCommitOid: string | null;
+};
+
 /** Safe, discoverable metadata for one project-enrolled mobile installation. */
 export type DeviceDescription = {
   appVersion: string | null;
@@ -3277,25 +3317,6 @@ export type RepoCommitDetails = RepoLogCommit & {
   files: RepoCommitFileChange[];
 };
 
-/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
- * repository was created by this call, and the initial mirror push's outcome
- * (a failed initial push does not fail the link — it is journaled on the repo
- * stream and repaired by `pushToGithub()` or the next commit). */
-export type LinkGithubResult = GithubRepoLink & {
-  created: boolean;
-  initialPush: { ok: boolean; commitOid?: string; error?: string };
-};
-
-/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
- * commit, and the head it replaced (null when the branch had no cached head). */
-export type GithubSyncResult = {
-  branch: string;
-  changed: boolean;
-  commitOid: string;
-  forced: boolean;
-  previousCommitOid: string | null;
-};
-
 /** What `repo.resetFromGithub` returns after destructively replacing the
  * Artifacts repository with the linked GitHub repository's branch head. */
 export type GithubResetResult = {
@@ -3310,7 +3331,17 @@ export type GithubResetResult = {
  * `stateSchema` — the one definition of the shape.
  */
 export type RepoProcessorState = {
-  birthCertificate: { config: Record<string, never> } | null;
+  birthCertificate: {
+    config: {
+      github?:
+        | {
+            owner: string;
+            repo: string;
+            artifactImport?: { branch: string; depth: number } | undefined;
+          }
+        | undefined;
+    };
+  } | null;
   artifactName: string | null;
   ready: boolean;
   defaultBranch: string | null;
@@ -3566,6 +3597,20 @@ export type GmailRequestInput = {
  * slug `google`. */
 export type PublicBuiltinIntegrationSlug = "github" | "gmail" | "slack" | "telegram" | "waitrose";
 
+/**
+ * The GitHub repository a repo is linked to: the named GitHub connection (an
+ * App installation) whose token authenticates mirror pushes, its installation
+ * id, and the owner/repo coordinates on GitHub.
+ */
+export type GithubRepoLink = {
+  connection: string;
+  installationId: string;
+  owner: string;
+  repo: string;
+  /** GitHub's stable database identity for this repository. */
+  repositoryId: number;
+};
+
 /** Authenticated mobile enrollment metadata plus the write-only Expo push credential. */
 export type DeviceEnrollInput = {
   appVersion: string;
@@ -3733,20 +3778,6 @@ export type RepoCommitFileChange = {
   deletions: number;
   /** True when either side of the diff sniffs binary (NUL byte). */
   binary: boolean;
-};
-
-/**
- * The GitHub repository a repo is linked to: the named GitHub connection (an
- * App installation) whose token authenticates mirror pushes, its installation
- * id, and the owner/repo coordinates on GitHub.
- */
-export type GithubRepoLink = {
-  connection: string;
-  installationId: string;
-  owner: string;
-  repo: string;
-  /** GitHub's stable database identity for this repository. */
-  repositoryId: number;
 };
 
 /**

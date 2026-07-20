@@ -186,7 +186,7 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
     await h.stream.append(repoCreated);
     await h.deliverPending();
 
-    expect(createCalls).toEqual([{ path: HOME, projectId: PROJECT_ID }]);
+    expect(createCalls).toEqual([{ config: {}, path: HOME, projectId: PROJECT_ID }]);
     const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
     expect(ready).toHaveLength(1);
     expect(ready[0]).toMatchObject({
@@ -327,7 +327,7 @@ describe("eviction recovery end to end", () => {
     const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
     expect(ready).toHaveLength(1);
     expect(ready[0]!.idempotencyKey).toBe("repo/ready");
-    expect(createCalls).toEqual([{ path: HOME, projectId: PROJECT_ID }]);
+    expect(createCalls).toEqual([{ config: {}, path: HOME, projectId: PROJECT_ID }]);
 
     await h.deliverPending();
     expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });

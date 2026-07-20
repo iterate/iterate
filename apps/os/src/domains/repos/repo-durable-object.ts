@@ -53,7 +53,7 @@ import {
   isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract, type RepoBirthConfig } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import {
   decideHeadResolution,
@@ -67,6 +67,7 @@ import {
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth } from "./github-sync-utils.ts";
+import { importGithubArtifact } from "./artifact-import.ts";
 
 const REPO_DEFAULT_BRANCH = "main";
 
@@ -136,7 +137,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       // GitHub webhooks may arrive out of order, and adopting a newer head
       // also satisfies every older push delivery. syncFromGithub derives a
       // bounded depth that still retains the previous Artifacts head.
-      syncFromGithubPush: async () => await this.syncFromGithub(),
+      syncFromGithubPush: async () => await this.syncFromGithub({ depth: 1 }),
       observeArtifactPush: (input) =>
         this.#observeExternalPush(input.branch, {
           afterCommitOid: input.afterCommitOid,
@@ -1433,9 +1434,30 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  private async createArtifactRepo(_input: { path: string; projectId: string | null }) {
+  private async createArtifactRepo(input: {
+    config: RepoBirthConfig;
+    path: string;
+    projectId: string | null;
+  }) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
+    const githubImport = input.config.github?.artifactImport;
+    if (githubImport !== undefined) {
+      await timedStep("create-timing", timing, "artifact-import", async () => {
+        await importGithubArtifact(this.requireArtifacts(), {
+          branch: githubImport.branch,
+          depth: githubImport.depth,
+          name: artifactName,
+          owner: input.config.github!.owner,
+          repo: input.config.github!.repo,
+        });
+      });
+      return {
+        artifactName,
+        defaultBranch: REPO_DEFAULT_BRANCH,
+        remote: this.artifactRemote(artifactName),
+      };
+    }
     const { lastPushAt } = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
       this.getOrCreateArtifact(artifactName),
     );

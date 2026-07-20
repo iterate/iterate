@@ -31,7 +31,40 @@ const RepoCommitCompletedPayload = z.object({
   commitOid: z.string().trim().min(1),
 });
 
-const RepoBirthCertificate = z.strictObject({ config: z.strictObject({}) });
+export const RepoBirthConfig = z.strictObject({
+  github: z
+    .strictObject({
+      owner: z.string().trim().min(1),
+      repo: z.string().trim().min(1),
+      artifactImport: z
+        .strictObject({
+          branch: z.string().trim().min(1),
+          depth: z.number().int().positive(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
+export type RepoBirthConfig = z.infer<typeof RepoBirthConfig>;
+
+/** Repo creation is idempotent only when a retry names the same durable
+ * source. Connection names deliberately are not part of that identity: a
+ * different authorized installation may safely finish linking the same
+ * owner/repo after creation has committed. */
+export function sameRepoBirthConfig(left: RepoBirthConfig | undefined, right: RepoBirthConfig) {
+  if (left?.github === undefined || right.github === undefined) {
+    return left?.github === right.github;
+  }
+  return (
+    left.github.owner === right.github.owner &&
+    left.github.repo === right.github.repo &&
+    left.github.artifactImport?.branch === right.github.artifactImport?.branch &&
+    left.github.artifactImport?.depth === right.github.artifactImport?.depth
+  );
+}
+
+const RepoBirthCertificate = z.strictObject({ config: RepoBirthConfig });
 
 const GithubWebhookReceivedPayload = z
   .object({
@@ -50,7 +83,7 @@ const GithubWebhookReceivedPayload = z
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
     "Projects repo lifecycle, Git activity, task changes, and linked GitHub default-branch imports.",
   stateSchema: z.object({

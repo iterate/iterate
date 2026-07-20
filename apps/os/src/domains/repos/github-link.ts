@@ -86,6 +86,9 @@ export async function linkRepoToGithub(input: {
   projectId: string;
   repo: string;
   repoPath: string;
+  /** The Artifact was imported from this exact existing GitHub repository,
+   * so pushing it back would only clone the imported tree inside the Repo DO. */
+  skipInitialPush?: boolean;
 }): Promise<LinkGithubResult> {
   const repoPath = normalizePath(input.repoPath);
   // Trim at the boundary: a padded owner/repo would store a link (and a
@@ -248,14 +251,52 @@ export async function linkRepoToGithub(input: {
   // pre-existing GitHub repo with unrelated history is the expected case —
   // the caller then picks syncFromGithub() or pushToGithub({ force: true })).
   let initialPush: LinkGithubResult["initialPush"];
-  try {
-    const pushed = await repoStub.pushToGithub({});
-    initialPush = { commitOid: pushed.commitOid, ok: true };
-  } catch (error) {
-    initialPush = { error: String(error), ok: false };
+  if (input.skipInitialPush === true) {
+    initialPush = { ok: true, skipped: true };
+  } else {
+    try {
+      const pushed = await repoStub.pushToGithub({});
+      initialPush = { commitOid: pushed.commitOid, ok: true };
+    } catch (error) {
+      initialPush = { error: String(error), ok: false };
+    }
   }
 
   return { ...link, created, initialPush };
+}
+
+/** GitHub metadata needed before repo birth to decide whether Cloudflare can
+ * import the repository without credentials. The installation lookup is the
+ * authority; callers never trust browser-supplied visibility metadata. */
+export async function githubRepositoryImportCandidate(input: {
+  connection: string;
+  owner: string;
+  projectId: string;
+  repo: string;
+}): Promise<{ defaultBranch: string; importable: boolean }> {
+  const status = await getConnectionStatus({
+    connection: input.connection,
+    projectId: input.projectId,
+    provider: "github",
+  });
+  if (!status.connected || status.externalId === null) {
+    throw new Error(
+      `GitHub connection "${input.connection}" is not connected; use itx.integrations.list() to see connections.`,
+    );
+  }
+  const octokit = connectionOctokit({ connection: input.connection, projectId: input.projectId });
+  try {
+    const response = await octokit.rest.repos.get({ owner: input.owner, repo: input.repo });
+    return {
+      defaultBranch: response.data.default_branch,
+      importable:
+        response.data.private === false &&
+        response.data.default_branch === "main" &&
+        response.data.pushed_at !== null,
+    };
+  } catch (error) {
+    throw normalizeGithubError(error, input.connection);
+  }
 }
 
 export async function unlinkRepoFromGithub(input: {
