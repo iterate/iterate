@@ -2208,6 +2208,34 @@ describe("assignEnvironmentConfigLease", () => {
     );
   });
 
+  test("erases an adopted requested slot when it is not recorded by the PR", async () => {
+    const eraseSlotData = vi.fn(async () => {});
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ slug: "preview-17", data: { dopplerConfig: "preview_17" } }),
+      ),
+      list: vi.fn(async () => [leasedResource("preview-17", "pr-1600", "preview_17")]),
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      eraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: null,
+      semaphore,
+      wantedSlug: "preview-17",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "kept",
+      lease: { slug: "preview-17" },
+    });
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_17",
+      slug: "preview-17",
+    });
+  });
+
   test("moves to the requested slot and releases the previously held lease", async () => {
     const release = vi.fn(async () => ({ released: true }));
     const semaphore = fakeSemaphore({

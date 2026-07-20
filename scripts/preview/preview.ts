@@ -4316,6 +4316,14 @@ async function assignEnvironmentConfigLease(input: {
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
+      onAdopted: (lease) =>
+        lease.slug === input.recordedSlug
+          ? Promise.resolve(true)
+          : eraseAcquiredSlotOrGiveItBack({
+              eraseSlotData: input.eraseSlotData,
+              lease,
+              semaphore: input.semaphore,
+            }),
       preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
     })) ??
