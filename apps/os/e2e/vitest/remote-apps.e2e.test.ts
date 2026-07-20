@@ -197,12 +197,13 @@ test.skipIf(deployedBaseUrl() !== null)(
 
 // Deployed lane (preview/prd): the loopback server above is unreachable from
 // a real worker, so prove the remote-dial machinery against a public Cap'n
-// Web endpoint instead — the project's own seeded guestbook /api, which is an
-// EXTERNAL URL from the platform's point of view (ordinary ingress hostname,
-// anonymous dial, no placeholders).
+// Web endpoint instead — the deployment's own /api door, which is an EXTERNAL
+// URL from the egress lane's point of view (public hostname, anonymous dial,
+// no placeholders) and — unlike a fresh project's userspace app host — is
+// warm by construction: it's the very worker answering this test.
 test.skipIf(deployedBaseUrl() === null)(
   "remoteCapability dials a public Cap'n Web endpoint on a deployed stack",
-  { timeout: 240_000 },
+  { timeout: 120_000 },
   async () => {
     using session = withItxSession();
     using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -210,45 +211,42 @@ test.skipIf(deployedBaseUrl() === null)(
     using project = admin.projects.create({ slug, waitUntilReady: true });
     const projectId = await project.projectId;
 
-    const base = new URL(buildUrl({ path: "/" }));
-    const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
-    const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
-    const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
-    const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
-    const guestbookApi = `wss://guestbook--${slug}.${projectBase}/api`;
-
+    const base = new URL(buildUrl({ path: "/api" }));
+    base.protocol = "wss:";
     await project.capabilityHosts.get("/").provideCapability({
       type: "itx-expression",
-      path: ["remoteGuestbook"],
-      expression: ["remoteCapability", ["get", guestbookApi]],
+      path: ["remoteOs"],
+      expression: ["remoteCapability", ["get", base.toString()]],
     });
 
     using mountedProject = admin.projects.get(projectId);
     const dynamicProject = mountedProject as unknown as {
-      remoteGuestbook: { sign(name: string, message: string): Promise<void> };
+      remoteOs: { authenticate(credentials: unknown): Promise<unknown> };
     };
-    // The first dials may land on the app's cold build (503 from ingress);
-    // retry within the budget — the expression re-dials fresh per invoke.
-    const deadline = Date.now() + 180_000;
+    // The proof verb must actually cross the remote session (a `__describe`
+    // here would be answered by the capability host itself, describing the
+    // MOUNT). The unauthenticated door's one verb is authenticate; a bogus
+    // credential makes the door's own rejection round-trip through dial →
+    // remote Cap'n Web session → capability invoke → here. Short retries
+    // absorb ingress hiccups; every attempt is a fresh dial and every
+    // rejection is caught, never left dangling.
+    const deadline = Date.now() + 30_000;
+    let doorAnswer: string;
     for (;;) {
       try {
-        await dynamicProject.remoteGuestbook.sign("Remote Capability", "dialed from the platform");
-        break;
+        await dynamicProject.remoteOs.authenticate({ type: "bearer", token: "not-a-real-token" });
+        throw new Error("bogus credential unexpectedly authenticated");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (Date.now() > deadline || !/503|did not accept/.test(message)) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 3_000));
+        if (/missing or invalid auth/i.test(message)) {
+          doorAnswer = message;
+          break;
+        }
+        if (Date.now() > deadline || /unexpectedly authenticated/.test(message)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
       }
     }
-
-    // The signature took the ordinary guestbook path: entry event on the
-    // project's /guestbook stream.
-    using stream = project.streams.get("/guestbook");
-    const entry = await stream.waitForEvent({
-      eventTypes: ["events.iterate.com/guestbook/entry-signed"],
-      timeoutMs: 30_000,
-    });
-    expect(entry).toMatchObject({ payload: { name: "Remote Capability" } });
+    expect(doorAnswer).toMatch(/missing or invalid auth/i);
   },
 );
 
