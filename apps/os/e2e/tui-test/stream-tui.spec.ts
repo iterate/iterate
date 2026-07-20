@@ -8,6 +8,9 @@ import {
 // TUI Test 0.0.4 does not load the config-level expect timeout in its worker,
 // so cold-start assertions need the shared budget at each async matcher.
 const visible = { timeout: SPEC_EXPECT_TIMEOUT_MS };
+// Mounting includes the provider's bounded 25s connect-and-provide operation,
+// so this proof needs a separate budget above an ordinary TUI cold start.
+const computerMountVisible = { timeout: 30_000 };
 // The first render includes launching the built CLI and OpenTUI itself. Keep
 // that cold-start inside the test's bounded watchdog without pretending it is
 // an ordinary in-app assertion.
@@ -79,6 +82,21 @@ testWithProject("Agent chat TUI connects, renders the feed, and sends", async ({
   expect(view).toContain("Message the agent");
   expect(view).not.toContain("raw event");
 });
+
+testWithProject(
+  "starts the existing computer provider from /use-my-computer",
+  async ({ terminal }) => {
+    await expect(terminal.getByText("live", { strict: false })).toBeVisible(started);
+
+    terminal.submit("/use-my-computer");
+
+    await expect(terminal.getByText("shared itx.", { strict: false })).toBeVisible(
+      computerMountVisible,
+    );
+    const view = terminal.serialize().view;
+    expect(view).not.toContain("you › /use-my-computer");
+  },
+);
 
 snapshotTest("captures a manual aesthetic snapshot", async ({ terminal }) => {
   await expect(terminal.getByText("Message the agent", { strict: false })).toBeVisible(visible);

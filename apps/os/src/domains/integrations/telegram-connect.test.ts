@@ -6,7 +6,7 @@
 // in-memory itxEnv seam (src/test/fake-itx-env.ts).
 
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
@@ -607,9 +607,9 @@ async function startFakeTelegramApi(
       respond(404, { ok: false, description: "Not Found" });
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const port = await listenOnFetchSafePort(server);
   return {
-    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     requests,
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve, reject) => {
