@@ -17,7 +17,7 @@ type TodoApi = {
 };
 
 function useTodoApi() {
-  const [api, setApi] = useState(null as TodoApi | null);
+  const [api, setApi] = useState<TodoApi | null>(null);
 
   useEffect(() => {
     setApi(() => null);

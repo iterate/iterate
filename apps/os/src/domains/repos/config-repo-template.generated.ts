@@ -231,7 +231,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "};\n" +
       "\n" +
       "function useGuestbookApi() {\n" +
-      "  const [api, setApi] = useState(null as GuestbookApi | null);\n" +
+      "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so\n" +
@@ -829,7 +829,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "};\n" +
       "\n" +
       "function useTodoApi() {\n" +
-      "  const [api, setApi] = useState(null as TodoApi | null);\n" +
+      "  const [api, setApi] = useState<TodoApi | null>(null);\n" +
       "\n" +
       "  useEffect(() => {\n" +
       "    setApi(() => null);\n" +
@@ -1131,6 +1131,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n" +
       "\n" +
       "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
+      "  // Live-state wire protocol: a `set` patch replaces the whole subtree with\n" +
+      "  // the value the server serialized for this State. The channel is typed at\n" +
+      "  // subscribe time; TypeScript cannot thread State through the recursive\n" +
+      "  // patch tree without a cast at the boundary.\n" +
       "  if (\"set\" in patch) return patch.set as State;\n" +
       "  const base = isPlainObject(prev) ? prev : {};\n" +
       "  const next: Record<string, unknown> = { ...base };\n" +
@@ -1142,6 +1146,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  if (patch.drop) {\n" +
       "    for (const key of patch.drop) delete next[key];\n" +
       "  }\n" +
+      "  // Reconstructed object graph has the same shape as State because each\n" +
+      "  // field/drop was applied from a server patch for that State; the generic\n" +
+      "  // recursion cannot prove that without dependent types.\n" +
       "  return next as State;\n" +
       "}\n" +
       "\n" +
@@ -1166,6 +1173,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        resync();\n" +
       "        return;\n" +
       "      } else {\n" +
+      "        // Patch branches only run after a snapshot initialized `held.state`\n" +
+      "        // (revision starts at -1; snapshots set state). TypeScript cannot\n" +
+      "        // retain that control-flow narrowing across the held object.\n" +
       "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
       "      }\n" +
       "      notify();\n" +

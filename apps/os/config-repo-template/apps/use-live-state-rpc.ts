@@ -25,6 +25,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
+  // Live-state wire protocol: a `set` patch replaces the whole subtree with
+  // the value the server serialized for this State. The channel is typed at
+  // subscribe time; TypeScript cannot thread State through the recursive
+  // patch tree without a cast at the boundary.
   if ("set" in patch) return patch.set as State;
   const base = isPlainObject(prev) ? prev : {};
   const next: Record<string, unknown> = { ...base };
@@ -36,6 +40,9 @@ function applyPatch<State>(prev: State, patch: LiveStatePatch): State {
   if (patch.drop) {
     for (const key of patch.drop) delete next[key];
   }
+  // Reconstructed object graph has the same shape as State because each
+  // field/drop was applied from a server patch for that State; the generic
+  // recursion cannot prove that without dependent types.
   return next as State;
 }
 
@@ -60,6 +67,9 @@ function createLiveStateStore<State>() {
         resync();
         return;
       } else {
+        // Patch branches only run after a snapshot initialized `held.state`
+        // (revision starts at -1; snapshots set state). TypeScript cannot
+        // retain that control-flow narrowing across the held object.
         held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };
       }
       notify();

@@ -19,7 +19,7 @@ type GuestbookApi = {
 };
 
 function useGuestbookApi() {
-  const [api, setApi] = useState(null as GuestbookApi | null);
+  const [api, setApi] = useState<GuestbookApi | null>(null);
 
   useEffect(() => {
     // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so
