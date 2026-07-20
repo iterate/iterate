@@ -127,6 +127,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
         const lines = stderrBuffer.split("\n");
         stderrBuffer = lines.pop() || "";
         for (const line of lines.filter(Boolean)) {
+          exitIsExplained = true;
           publish({
             status: "error",
             notice: `could not share itx.${input.name}: ${line}`,
@@ -143,6 +144,7 @@ export function createChatComputerSharing(input: { launch: () => ProviderProcess
           }
           event = parsed as ProviderEvent;
         } catch {
+          exitIsExplained = true;
           publish({
             status: "error",
             notice: `itx.${input.name} emitted invalid status output`,

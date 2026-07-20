@@ -235,7 +235,7 @@ test("reports a provider crash even when the last machine call failed", async ()
   });
 });
 
-test("classifies non-event provider output as a visible failure", () => {
+test("keeps invalid provider output visible after the provider exits", async () => {
   const process = new FakeProviderProcess();
   const sharing = createChatComputerSharing({
     launch: () => process,
@@ -244,6 +244,8 @@ test("classifies non-event provider output as a visible failure", () => {
 
   sharing.start();
   process.stdout.write("null\n");
+  process.emit("exit", 1);
+  await endProviderStdout(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
@@ -285,7 +287,7 @@ test("reads a terminal provider status that drains after process exit", async ()
   });
 });
 
-test("surfaces provider diagnostics written to stderr", () => {
+test("keeps provider diagnostics visible after the provider exits", async () => {
   const process = new FakeProviderProcess();
   const sharing = createChatComputerSharing({
     launch: () => process,
@@ -294,6 +296,8 @@ test("surfaces provider diagnostics written to stderr", () => {
 
   sharing.start();
   process.stderr.write("capability types did not compile\n");
+  process.emit("exit", 1);
+  await endProviderStdout(process);
 
   expect(sharing.snapshot()).toMatchObject({
     status: "error",
