@@ -371,3 +371,6 @@ the recorded projection.
   without a preview label. The PR body separates completed non-production
   provisioning from the unapproved post-merge deploy and production lease
   phases.
+- 2026-07-20: The first CI lint/typecheck run found one dead export left by the
+  Artifacts subscription refactor. Removed `queueIdForWorkerEventQueue`; its 14
+  focused tests, full knip, and full typecheck pass locally before the retry.

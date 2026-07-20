@@ -114,13 +114,6 @@ export async function deleteArtifactEventSubscription(
   await artifactEventSubscriptionsApi(api, "DELETE", `/${subscriptionId}`);
 }
 
-export async function queueIdForWorkerEventQueue(
-  api: CloudflareAccountApi,
-  workerName: string,
-): Promise<string> {
-  return (await ensureWorkerEventQueue(api, workerName)).queue_id;
-}
-
 export function createCloudflareAccountApi(input: {
   accountId: string;
   apiToken: string;
