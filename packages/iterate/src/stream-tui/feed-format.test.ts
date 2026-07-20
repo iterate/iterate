@@ -39,9 +39,7 @@ describe("formatActivitySummary", () => {
             thinkingText: "",
             responseText: "",
             startedAtMs: 0,
-            durationMs: 1000,
-            outcome: "cancelled",
-            cancelReason: "durable-object-crashed",
+            outcome: "completed",
           },
           {
             kind: "llm",
@@ -51,12 +49,14 @@ describe("formatActivitySummary", () => {
             thinkingText: "",
             responseText: "",
             startedAtMs: 0,
-            outcome: "completed",
+            durationMs: 1000,
+            outcome: "cancelled",
+            cancelReason: "interrupted-by-user-input",
           },
         ],
       }),
     );
-    expect(summary).toBe("Ran code 1× · 1 request · 1 retry · recovered · 7.4 s");
+    expect(summary).toBe("Ran code 1× · 2 requests · interrupted · 7.4 s");
   });
 });
 
@@ -75,10 +75,62 @@ describe("formatStepLine", () => {
         outputTokens: 80,
         durationMs: 1234,
         startedAtMs: 0,
-        outcome: "cancelled",
-        cancelReason: "durable-object-crashed",
+        outcome: "completed",
       }),
-    ).toBe("Agent restarted · gpt-test · 1.2k → 80 tok · 1.2s");
+    ).toBe("gpt-test · 1.2k → 80 tok · 1.2s");
+  });
+
+  test("user-interrupted step keeps model and tokens behind its label", () => {
+    expect(
+      formatStepLine({
+        kind: "llm",
+        id: "l1",
+        llmRequestOffset: 1,
+        status: "done",
+        model: "gpt-test",
+        thinkingText: "",
+        responseText: "",
+        inputTokens: 1200,
+        outputTokens: 80,
+        durationMs: 1234,
+        startedAtMs: 0,
+        outcome: "cancelled",
+        cancelReason: "interrupted-by-user-input",
+      }),
+    ).toBe("Stopped for your new message · gpt-test · 1.2k → 80 tok · 1.2s");
+  });
+
+  test("expired step reads Request expired", () => {
+    expect(
+      formatStepLine({
+        kind: "llm",
+        id: "l1",
+        llmRequestOffset: 1,
+        status: "done",
+        model: "gpt-test",
+        thinkingText: "",
+        responseText: "",
+        startedAtMs: 0,
+        outcome: "cancelled",
+        cancelReason: "expired",
+      }),
+    ).toBe("Request expired · gpt-test");
+  });
+
+  test("cancelled without a recognized reason reads Request cancelled", () => {
+    expect(
+      formatStepLine({
+        kind: "llm",
+        id: "l1",
+        llmRequestOffset: 1,
+        status: "done",
+        thinkingText: "",
+        responseText: "",
+        durationMs: 500,
+        startedAtMs: 0,
+        outcome: "cancelled",
+      }),
+    ).toBe("Request cancelled · 0.5s");
   });
 
   test("running code step is labeled Running code", () => {
@@ -118,7 +170,7 @@ describe("formatLiveActivityLabel", () => {
     ).toBe("Thinking");
   });
 
-  test("Waiting for a response before tokens and restarting between phases", () => {
+  test("Waiting for a response before tokens and Working… between steps", () => {
     expect(
       formatLiveActivityLabel(
         activity({
@@ -151,13 +203,12 @@ describe("formatLiveActivityLabel", () => {
               responseText: "hi",
               startedAtMs: 0,
               durationMs: 1000,
-              outcome: "cancelled",
-              cancelReason: "durable-object-crashed",
+              outcome: "completed",
             },
           ],
         }),
       ),
-    ).toBe("Restarted — continuing…");
+    ).toBe("Working…");
   });
 
   test("Running code with one-decimal elapsed counter", () => {

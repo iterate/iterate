@@ -1,9 +1,6 @@
 import { z } from "zod";
 
-export const AgentLlmRequestCancelReason = z.enum([
-  "interrupted-by-user-input",
-  "durable-object-crashed",
-]);
+export const AgentLlmRequestCancelReason = z.enum(["interrupted-by-user-input", "expired"]);
 export type AgentLlmRequestCancelReason = z.infer<typeof AgentLlmRequestCancelReason>;
 
 export const AGENT_SUMMARY_UPDATED_EVENT_TYPE = "events.iterate.com/agent/summary-updated";

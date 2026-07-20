@@ -193,26 +193,23 @@ export function AgentPrettyState({ state }: { state: unknown }) {
     return <SerializedObjectCodeBlock className="max-h-[28rem]" data={state} />;
   }
 
-  const currentRequest =
-    agent.currentRequest != null && typeof agent.currentRequest === "object"
-      ? (agent.currentRequest as Record<string, unknown>)
+  const openRequest =
+    agent.openRequest != null && typeof agent.openRequest === "object"
+      ? (agent.openRequest as Record<string, unknown>)
       : null;
-  const phase =
-    currentRequest == null
-      ? "idle"
-      : currentRequest.phase === "scheduled"
-        ? "scheduled"
-        : "requested";
-  const context = readRuntimeRecord(agent.context);
+  const paused =
+    agent.paused != null && typeof agent.paused === "object"
+      ? (agent.paused as Record<string, unknown>)
+      : null;
+  const phase = paused != null ? "paused" : openRequest == null ? "idle" : "requested";
   const config = readRuntimeRecord(agent.config);
   const llm = readRuntimeRecord(config?.llm);
-  const system = Array.isArray(context?.system) ? context.system : [];
-  const history = Array.isArray(context?.history) ? context.history : [];
+  const contextItems = Array.isArray(agent.contextItems) ? agent.contextItems : [];
+  const isSystem = (item: unknown) => readItemPayload(item)?.role === "system";
+  const system = contextItems.filter(isSystem);
+  const history = contextItems.filter((item) => !isSystem(item));
   const lastMessage = history.length > 0 ? history[history.length - 1] : null;
-  const lastPreview =
-    lastMessage != null && typeof lastMessage === "object" && lastMessage !== null
-      ? previewChatMessage(lastMessage as Record<string, unknown>)
-      : null;
+  const lastPreview = lastMessage == null ? null : previewProjectedItem(lastMessage);
   const scripts = Array.isArray(agent.activeScriptExecutionIds)
     ? agent.activeScriptExecutionIds
     : [];
@@ -221,17 +218,28 @@ export function AgentPrettyState({ state }: { state: unknown }) {
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <RuntimeStateStat label="phase" value={phase} />
-        <RuntimeStateStat label="published" value={`#${String(context?.publishedThrough ?? 0)}`} />
+        <RuntimeStateStat label="published" value={`#${String(agent.lastLlmRequestOffset ?? 0)}`} />
         <RuntimeStateStat label="model" value={String(llm?.model ?? "—")} />
         <RuntimeStateStat label="failures" value={String(agent.consecutiveLlmFailures ?? 0)} />
       </div>
 
-      {currentRequest == null ? null : (
+      {openRequest == null ? null : (
         <div className="rounded-xl bg-muted/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-            Current request
+            Open request
           </div>
-          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(currentRequest)}</div>
+          <div className="mt-1 font-mono text-xs break-all">{JSON.stringify(openRequest)}</div>
+        </div>
+      )}
+
+      {paused == null ? null : (
+        <div className="rounded-xl bg-amber-500/10 px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wide text-amber-700/80 dark:text-amber-300/80">
+            Paused
+          </div>
+          <div className="mt-1 text-xs text-foreground/80">
+            {typeof paused.reason === "string" ? paused.reason : "Scheduling paused."}
+          </div>
         </div>
       )}
 
@@ -284,7 +292,7 @@ export function AgentPrettyState({ state }: { state: unknown }) {
 
       <div className="grid grid-cols-2 gap-2">
         <RuntimeStateStat label="autonomous turns" value={String(agent.autonomousTurnCount ?? 0)} />
-        <RuntimeStateStat label="request gen" value={String(agent.requestGeneration ?? 0)} />
+        <RuntimeStateStat label="pending scripts" value={String(scripts.length)} />
       </div>
     </div>
   );
@@ -293,23 +301,40 @@ export function AgentPrettyState({ state }: { state: unknown }) {
 function asAgentState(state: unknown): Record<string, unknown> | null {
   if (state == null || typeof state !== "object") return null;
   const record = state as Record<string, unknown>;
-  // Agent state is recognized by its provider-neutral context projection.
-  if (!("context" in record) || !("config" in record)) {
+  // Agent state is recognized by its provider-neutral context projection
+  // (`contextItems`) plus its config.
+  if (!("contextItems" in record) || !("config" in record)) {
     return null;
   }
   return record;
 }
 
+/** A projected context item is `{ offset, payload }`; the model-visible fields
+ * (role, content, key) live on the payload. */
+function readItemPayload(item: unknown): Record<string, unknown> | null {
+  if (item == null || typeof item !== "object") return null;
+  const payload = (item as Record<string, unknown>).payload;
+  return payload != null && typeof payload === "object"
+    ? (payload as Record<string, unknown>)
+    : null;
+}
+
 function renderProjectedContextItem(item: unknown): string {
   if (item == null || typeof item !== "object") return String(item);
   const record = item as Record<string, unknown>;
+  const payload = readItemPayload(item) ?? {};
   const fields = [
     typeof record.offset === "number" ? `@${record.offset}` : "@?",
-    typeof record.key === "string" ? `key=${JSON.stringify(record.key)}` : null,
+    typeof payload.key === "string" ? `key=${JSON.stringify(payload.key)}` : null,
     typeof record.updatesOffset === "number" ? `updates=@${record.updatesOffset}` : null,
-    typeof record.role === "string" ? `role=${record.role}` : null,
+    typeof payload.role === "string" ? `role=${payload.role}` : null,
   ].filter((field): field is string => field !== null);
-  return `${fields.join(" ")}\n${String(record.content ?? "")}`;
+  return `${fields.join(" ")}\n${String(payload.content ?? "")}`;
+}
+
+function previewProjectedItem(item: unknown): { role: string; text: string } | null {
+  const payload = readItemPayload(item);
+  return payload == null ? null : previewChatMessage(payload);
 }
 
 function previewChatMessage(message: Record<string, unknown>): { role: string; text: string } {

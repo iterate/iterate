@@ -476,8 +476,8 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     const agentProcessor = project.agents.get(agentPath).processor;
     await waitForCondition(
       async () =>
-        (await agentProcessor.snapshot()).state.context.system.some(
-          (item) => item.key === "agent/boot-context",
+        (await agentProcessor.snapshot()).state.contextItems.some(
+          (item) => item.payload.key === "agent/boot-context",
         ),
       {
         description: "agent boot context to fold into system context",
@@ -485,15 +485,15 @@ test("Project egress substitutes path-addressed secrets for explicit and project
       },
     );
     expect((await agentProcessor.snapshot()).state).toMatchObject({
-      context: {
-        system: expect.arrayContaining([
-          expect.objectContaining({
+      contextItems: expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
             role: "system",
             key: "agent/boot-context",
             content: expect.stringContaining(`Your agent stream path: ${agentPath}`),
           }),
-        ]),
-      },
+        }),
+      ]),
     });
     expect((await project.repo.processor.snapshot()).state).toMatchObject({
       birthCertificate: { request: { type: "empty" } },

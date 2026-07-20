@@ -146,35 +146,30 @@ test("the accumulated line does not claim that the active operation already fini
   expect(container.textContent).not.toContain("Ran code");
 });
 
-test("a recovered restart is calm, excludes the dead attempt, and explains the retry", () => {
+test("an expired request renders as a failed activity with its reason labeled", () => {
   const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
-  const recovered = activity({
-    startedAtMs,
-    endedAtMs: startedAtMs + 31_000,
-    steps: [
-      llmStep(1, startedAtMs, {
-        model: "openai/gpt-5.6-sol",
-        outcome: "cancelled",
-        cancelReason: "durable-object-crashed",
-        durationMs: 5_000,
-        responseText: "zombie partial",
-      }),
-      llmStep(2, startedAtMs + 6_000),
-      llmStep(3, startedAtMs + 20_000),
-    ],
-  });
-  const container = renderActivity(recovered);
-  const summary = container.querySelector('button[title^="Agent activity"]');
+  const expired = renderActivity(
+    activity({
+      startedAtMs,
+      endedAtMs: startedAtMs + 31_000,
+      steps: [
+        llmStep(1, startedAtMs, {
+          model: "openai/gpt-5.6-sol",
+          outcome: "cancelled",
+          cancelReason: "expired",
+          durationMs: 5_000,
+        }),
+      ],
+    }),
+  );
+  const summary = expired.querySelector('button[title^="Agent activity"]');
 
-  expect(summary?.textContent).toBe("2 requests · 1 retry · recovered · 31 s");
-  expect(summary?.querySelector("svg.lucide-refresh-cw")).not.toBeNull();
-  expect(summary?.querySelector("svg.lucide-ban")).toBeNull();
-  expect(container.textContent).toContain("Agent restartedopenai/gpt-5.6-sol · 5 s");
-  expect(container.textContent).toContain("Platform restarted this agent.");
-  expect(container.textContent).not.toContain("partial response");
+  expect(summary?.textContent).toBe("1 request · failed · 31 s");
+  expect(summary?.querySelector("svg.lucide-circle-alert")).not.toBeNull();
+  expect(expired.textContent).toContain("Request expiredopenai/gpt-5.6-sol · 5 s");
 });
 
-test("known and unknown cancellations stay visibly distinct from restart failure", () => {
+test("known and unknown cancellations render distinctly inside a failed activity", () => {
   const startedAtMs = Date.UTC(2026, 6, 16, 14, 41, 23);
   const interrupted = renderActivity(
     activity({
@@ -190,58 +185,16 @@ test("known and unknown cancellations stay visibly distinct from restart failure
       ],
     }),
   );
-  const restartFailed = renderActivity(
-    activity({
-      startedAtMs,
-      endedAtMs: startedAtMs + 5_000,
-      steps: [
-        llmStep(2, startedAtMs, {
-          outcome: "cancelled",
-          cancelReason: "durable-object-crashed",
-        }),
-      ],
-    }),
-  );
 
   expect(interrupted.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
     "2 requests · failed · 5 s",
   );
   expect(interrupted.querySelector("svg.lucide-ban")).not.toBeNull();
+  expect(interrupted.textContent).toContain("Stopped for your new message");
   expect(interrupted.textContent).toContain("Request cancelled");
-  expect(restartFailed.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
-    "0 requests · 1 retry · restart failed · 5 s",
-  );
-  expect(restartFailed.querySelector("svg.lucide-circle-alert")).not.toBeNull();
 });
 
-test("an earlier failure does not mask a pending crash recovery", () => {
-  vi.useFakeTimers();
-  const now = Date.UTC(2026, 6, 16, 14, 41, 28);
-  vi.setSystemTime(now);
-  const live = activity({
-    status: "running",
-    startedAtMs: now - 7_000,
-    steps: [
-      llmStep(0, now - 7_000, { outcome: "failed" }),
-      llmStep(1, now - 5_000, {
-        outcome: "cancelled",
-        cancelReason: "durable-object-crashed",
-        durationMs: 5_000,
-      }),
-    ],
-  });
-  const container = renderLiveActivity(live);
-
-  expect(container.querySelector('[data-testid="agent-live-summary"]')?.textContent).toContain(
-    "1 request · 1 retry · failed",
-  );
-  expect(container.querySelector('[data-testid="agent-live-status"]')?.textContent).toContain(
-    "Restarted — continuing… 0.0s",
-  );
-  expect(container.querySelector("svg.lucide-loader-circle")).not.toBeNull();
-});
-
-test("a resumed recovery phase shows its own status without linking to the crashed operation", () => {
+test("a pending request without a running step shows its own status, not a finished operation's", () => {
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);
   const live = activity({
     status: "running",
@@ -254,8 +207,7 @@ test("a resumed recovery phase shows its own status without linking to the crash
         status: "done",
         thinkingText: "",
         responseText: "done",
-        outcome: "cancelled",
-        cancelReason: "durable-object-crashed",
+        outcome: "completed",
         startedAtMs: now - 8_000,
         durationMs: 2_000,
       },

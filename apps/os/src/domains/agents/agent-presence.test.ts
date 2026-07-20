@@ -81,25 +81,25 @@ describe("agent summary", () => {
 });
 
 describe("agent runtime", () => {
-  it("derives every runtime count without double-counting requested work", () => {
+  it("derives every runtime count from the fold's single open-request slot", () => {
     expect(
       deriveAgentRuntime(
         {
           activeScriptExecutionIds: ["script-a", "script-b"],
-          context: { system: [{ key: "agent/system-prompt" }] },
-          currentRequest: { phase: "requested" },
-          llmRequests: {
-            "4": { status: "requested" },
-            "8": { status: "started" },
-            "9": { status: "started" },
-          },
-          pendingTriggerOffset: 12,
+          contextItems: [
+            { payload: { role: "system", key: "agent/system-prompt" } },
+            { payload: { role: "user" } },
+          ],
+          openRequest: { requestedAtOffset: 4 },
+          pendingLlmRequestTrigger: { offset: 12 },
         },
         "agent/system-prompt",
       ),
     ).toEqual({
       triggers: { pending: 1, runnable: 1 },
-      llmRequests: { scheduled: 0, requested: 1, started: 2 },
+      // No scheduled/started phases in the offset-identified request model:
+      // the one open request counts as requested, the rest pin to 0.
+      llmRequests: { scheduled: 0, requested: 1, started: 0 },
       runningScripts: 2,
     });
   });
@@ -109,10 +109,9 @@ describe("agent runtime", () => {
       deriveAgentRuntime(
         {
           activeScriptExecutionIds: [],
-          context: { system: [] },
-          currentRequest: null,
-          llmRequests: {},
-          pendingTriggerOffset: 2,
+          contextItems: [],
+          openRequest: null,
+          pendingLlmRequestTrigger: { offset: 2 },
         },
         "agent/system-prompt",
       ),
