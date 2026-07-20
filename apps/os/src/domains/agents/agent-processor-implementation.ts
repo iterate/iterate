@@ -180,7 +180,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       // The CAUGHT-UP lane runs AFTER this event's per-event work — so an
       // interrupt's scheduled-phase cancel (appended in the switch below) folds
       // BEFORE the reconcile's lost-debounce re-fire, and the cancel wins.
-      args.blockProcessorWhileCaughtUp(async () => {
+      args.blockProcessorWhile(async () => {
         await this.#reconcileLlmObligations(args);
         await this.#reconcileLlmScheduling(args);
       });

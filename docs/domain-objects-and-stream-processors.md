@@ -3,7 +3,7 @@
 Owner doctrine, updated 2026-07-15 after surveying every hosted stream
 processor. This is the convention for durable domain objects on this platform.
 
-For the practical half—side-effect guarantees, the obligation/reconciler
+For the practical half—side-effect guarantees, the obligation/drive
 pattern, eviction recovery, staleness policy, and the node test harness—see
 [Writing and testing stream processors](writing-stream-processors.md).
 
@@ -128,7 +128,7 @@ still sees exactly one birth. Reusing a key for a different type, payload,
 metadata, or durability is rejected rather than silently returning the first
 event. Reducer leniency must never hide two actual `*/created` records.
 
-`create` ensures existence; it does not reconcile later configuration or
+`create` ensures existence; it does not apply later configuration or
 context. Once a birth exists, a repeated call waits through the already
 observed creation boundary and returns without rebuilding mutable setup.
 Concurrent first creators may both observe `null`; their identical,

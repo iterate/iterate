@@ -117,7 +117,7 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
 
   protected override processEvent({
     append,
-    blockProcessorWhileCaughtUp,
+    blockProcessorWhile,
     delivery,
     state,
   }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["processEvent"]>[0]): undefined {
@@ -133,7 +133,7 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
     if (reached <= state.lastMilestone) return;
     const missed: number[] = [];
     for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);
-    blockProcessorWhileCaughtUp(async () => {
+    blockProcessorWhile(async () => {
       await append(
         ...missed.map((count) => ({
           type: "events.iterate.com/guestbook/milestone-reached" as const,

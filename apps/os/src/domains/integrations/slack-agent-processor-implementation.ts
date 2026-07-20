@@ -166,7 +166,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // while unexpected cosmetic failures are reported once and settled so
     // they cannot wedge the durable agent pipeline.
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhileCaughtUp(() => this.#reconcilePresence(args));
+      args.blockProcessorWhile(() => this.#reconcilePresence(args));
     }
     // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;

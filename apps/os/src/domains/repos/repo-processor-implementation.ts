@@ -133,7 +133,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // blocking closure so the create seed+append is awaited before this head
     // event's deferred commit; a mid-catch-up fold never reaches it.
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhileCaughtUp(() => this.#reconcileObligations(args));
+      args.blockProcessorWhile(() => this.#reconcileObligations(args));
     }
     // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
     if (event === null) return;
