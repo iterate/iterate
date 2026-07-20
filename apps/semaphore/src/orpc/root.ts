@@ -134,7 +134,7 @@ const acquireResourceProcedure = semaphore.resources.acquire
   .use(requireAuth)
   .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    const { type, leaseMs, waitMs = 0, holder } = input;
+    const { type, leaseMs, waitMs = 0, holder, allowedSlugs } = input;
     const hasInventory = await hasInventoryForType(env.DB, type);
     if (!hasInventory) {
       throw new ORPCError("NOT_FOUND", {
@@ -142,7 +142,13 @@ const acquireResourceProcedure = semaphore.resources.acquire
       });
     }
 
-    const lease = await getCoordinator(type).acquire({ type, leaseMs, waitMs, holder });
+    const lease = await getCoordinator(type).acquire({
+      type,
+      leaseMs,
+      waitMs,
+      holder,
+      allowedSlugs,
+    });
     if (!lease) {
       throw new ORPCError("CONFLICT", {
         message:
@@ -159,7 +165,7 @@ const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
   .use(requireAuth)
   .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    const { type, slug, leaseMs, holder, force } = input;
+    const { type, slug, leaseMs, holder, force, allowedSlugs } = input;
     const hasInventory = await hasInventoryForType(env.DB, type);
     if (!hasInventory) {
       throw new ORPCError("NOT_FOUND", {
@@ -167,7 +173,14 @@ const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
       });
     }
 
-    return await getCoordinator(type).acquireSpecific({ type, slug, leaseMs, holder, force });
+    return await getCoordinator(type).acquireSpecific({
+      type,
+      slug,
+      leaseMs,
+      holder,
+      force,
+      allowedSlugs,
+    });
   });
 
 const renewResourceLeaseProcedure = semaphore.resources.renew

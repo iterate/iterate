@@ -319,6 +319,32 @@ describe.sequential("live semaphore E2E", () => {
     expect(releasedList[0]).toMatchObject({ leaseState: "available", holder: null });
   }, 120_000);
 
+  test("specific acquisition stays inside the caller's allowed slugs", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    expect(
+      await semaphore.resources.acquireSpecific({
+        type,
+        slug: "beta",
+        leaseMs: 60_000,
+        allowedSlugs: ["alpha"],
+      }),
+    ).toBeNull();
+
+    const lease = await semaphore.resources.acquireSpecific({
+      type,
+      slug: "beta",
+      leaseMs: 60_000,
+      allowedSlugs: ["beta"],
+    });
+    expect(lease).not.toBeNull();
+    leasedResources.push({ type, slug: lease!.slug, leaseId: lease!.leaseId });
+  }, 120_000);
+
   test("hands out the least recently released resource first", async () => {
     const type = uniqueType();
     for (const slug of ["alpha", "beta"]) {
@@ -347,6 +373,23 @@ describe.sequential("live semaphore E2E", () => {
     const fourth = await semaphore.resources.acquire({ type, leaseMs: 60_000 });
     leasedResources.push({ type, slug: fourth.slug, leaseId: fourth.leaseId });
     expect(fourth.slug).toBe("beta");
+  }, 120_000);
+
+  test("acquires only from the caller's allowed slugs", async () => {
+    const type = uniqueType();
+    for (const slug of ["alpha", "beta", "gamma"]) {
+      await semaphore.resources.add({ type, slug, data: { token: `secret-${slug}` } });
+      createdResources.push({ type, slug });
+    }
+
+    const lease = await semaphore.resources.acquire({
+      type,
+      leaseMs: 60_000,
+      allowedSlugs: ["beta", "gamma"],
+    });
+    leasedResources.push({ type, slug: lease.slug, leaseId: lease.leaseId });
+
+    expect(lease.slug).toBe("beta");
   }, 120_000);
 
   test("supports the contract client against the live worker", async () => {
