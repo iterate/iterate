@@ -74,6 +74,10 @@ const semaphoreWaitMsSchema = z
   .int()
   .nonnegative()
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
+const allowedSlugsSchema = z
+  .array(semaphoreKeySchema)
+  .min(1)
+  .refine((slugs) => new Set(slugs).size === slugs.length, "allowedSlugs must be unique");
 
 export const SemaphoreResourceRecord = z.object({
   type: semaphoreKeySchema,
@@ -117,31 +121,47 @@ export const FindResourceInput = z.object({
   slug: semaphoreKeySchema,
 });
 
-export const AcquireResourceInput = z.object({
+const legacyPreviewAllowedSlugs = Array.from({ length: 9 }, (_, index) => `preview-${index + 1}`);
+
+function applyLegacyPreviewAllowedSlugs<T extends { type: string; allowedSlugs?: string[] }>(
+  input: T,
+): T {
+  if (input.type !== "environment-config-lease" || input.allowedSlugs) return input;
+  return { ...input, allowedSlugs: [...legacyPreviewAllowedSlugs] };
+}
+
+const AcquireResourceInputBase = z.object({
   type: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
   waitMs: semaphoreWaitMsSchema.optional(),
   holder: semaphoreHolderSchema.optional(),
+  allowedSlugs: allowedSlugsSchema.optional(),
 });
+export const AcquireResourceInput = AcquireResourceInputBase.transform(
+  applyLegacyPreviewAllowedSlugs,
+);
 
-export const AcquireSpecificResourceInput = z.object({
-  type: semaphoreKeySchema,
-  slug: semaphoreKeySchema,
-  leaseMs: semaphoreLeaseMsSchema,
-  holder: semaphoreHolderSchema.optional(),
-  /**
-   * Evict any active lease on the slug before acquiring. The eviction is
-   * recorded (event `evicted`, with the previous holder). Only pass this on an
-   * explicit human `--force`; automation must never steal a held resource.
-   */
-  force: z.boolean().optional(),
-});
+export const AcquireSpecificResourceInput = z
+  .object({
+    type: semaphoreKeySchema,
+    slug: semaphoreKeySchema,
+    leaseMs: semaphoreLeaseMsSchema,
+    holder: semaphoreHolderSchema.optional(),
+    allowedSlugs: allowedSlugsSchema.optional(),
+    /**
+     * Evict any active lease on the slug before acquiring. The eviction is
+     * recorded (event `evicted`, with the previous holder). Only pass this on an
+     * explicit human `--force`; automation must never steal a held resource.
+     */
+    force: z.boolean().optional(),
+  })
+  .transform(applyLegacyPreviewAllowedSlugs);
 
-const RenewResourceLeaseInput = z.object({
-  type: semaphoreKeySchema,
+export const RenewResourceLeaseInput = z.object({
+  type: AcquireResourceInputBase.shape.type,
   slug: semaphoreKeySchema,
   leaseId: z.uuid(),
-  leaseMs: semaphoreLeaseMsSchema,
+  leaseMs: AcquireResourceInputBase.shape.leaseMs,
 });
 
 export const ReleaseResourceInput = z
