@@ -1,6 +1,6 @@
 // Unit tests for linkRepoToGithub / unlinkRepoFromGithub — the itx-side flow
 // behind repo.linkGithub(). There is NO network: the connection stream, the
-// connection secret's fetch (which is how the wrapped Octokit reaches
+// project egress fetch (which is how the wrapped Octokit reaches
 // "GitHub"), and the Repo Durable Object are all in-memory fakes on the same
 // itxEnv seam the connect-flow tests use. The GitHub-touching push/sync
 // mechanics live on the Repo DO and are proven against real GitHub in
@@ -50,11 +50,10 @@ const network = await vi.hoisted(async () => {
       state.subscriptionRemoveAppendShouldFail = false;
     },
     state,
-    // The connection secret's fetch IS the fake GitHub API: the wrapped
-    // Octokit dispatches every request through it. (The shared seam's SECRET
-    // is a store of update()d records; this suite needs the other half of
-    // the Secret DO — its egress fetch — so it stays bespoke.)
-    SECRET: {
+    // Project egress IS the fake GitHub API: wrapped Octokit dispatches every
+    // placeholder-bearing request through this outer policy boundary. The
+    // shared seam's SECRET remains the connection-record store.
+    PROJECT: {
       getByName(_name: string) {
         return {
           async fetch(request: Request) {
@@ -151,6 +150,7 @@ vi.mock("../integrations/telegram-api.ts", () => ({
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {
+    PROJECT: network.PROJECT,
     REPO: network.REPO,
     SECRET: network.SECRET,
     STREAM: network.STREAM,
