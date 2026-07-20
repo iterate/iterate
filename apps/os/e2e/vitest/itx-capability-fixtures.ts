@@ -38,7 +38,11 @@ export async function startEgressEcho(): Promise<TunnelHandle> {
         headers[key] = value;
       });
       const body = await request.text();
-      return Response.json({ body: body ? JSON.parse(body) : null, headers });
+      const contentType = request.headers.get("content-type") || "";
+      return Response.json({
+        body: body && contentType.includes("json") ? JSON.parse(body) : body || null,
+        headers,
+      });
     },
   });
 }
