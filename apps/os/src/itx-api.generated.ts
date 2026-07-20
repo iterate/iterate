@@ -3402,7 +3402,7 @@ export type RepoProcessorState = {
   remote: string | null;
 };
 
-/** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
+/** Worker reference accepted by `workers.get` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
 /**

@@ -1752,8 +1752,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerRef",
     kind: "typeAlias",
     sourceText:
-      "/** Worker recipe accepted by `workers.get` and worker-backed capabilities. */\nexport type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;",
-    summary: "Worker recipe accepted by `workers.get` and worker-backed capabilities.",
+      "/** Worker reference accepted by `workers.get` and worker-backed capabilities. */\nexport type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;",
+    summary: "Worker reference accepted by `workers.get` and worker-backed capabilities.",
     memberSummaries: {},
     referencedTypeNames: ["StatelessDynamicWorkerRef", "StatefulDynamicWorkerRef"],
   },

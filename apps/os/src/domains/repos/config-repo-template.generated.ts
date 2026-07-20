@@ -301,8 +301,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        <section aria-label=\"Guestbook entries\">\n" +
       "          {entries.map((entry) => (\n" +
       "            <article key={entry.id}>\n" +
-      "              <strong>{entry.name}</strong>{\" \"}\n" +
-      "              <time dateTime={entry.signedAt}>{entry.signedAt}</time>\n" +
+      "              <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>\n" +
       "              <p>{entry.message}</p>\n" +
       "            </article>\n" +
       "          ))}\n" +
