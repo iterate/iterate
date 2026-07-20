@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import { makeProcessorHarness, type HarnessSubstrate } from "iterate/processors/testing";
-import { AgentNextProcessorContract, type AgentNextState } from "./agent-processor-contract.ts";
+import {
+  AgentNextProcessorContract,
+  type AgentNextContextAddedPayload,
+} from "./agent-processor-contract.ts";
 import {
   AgentNextProcessor,
   buildLlmMessages,
@@ -153,7 +156,8 @@ describe("AgentNextProcessor turn lifecycle", () => {
     // The prompt: system slot, the user message, timestamp last.
     const call = h.llm.calls[0]!;
     expect(call.model).toBe("test-model");
-    expect(call.messages[0]).toEqual({ role: "system", content: "You are a helpful test agent." });
+    expect(call.messages[0]!.role).toBe("system");
+    expect(call.messages[0]!.content).toContain("You are a helpful test agent.");
     expect(call.messages.at(-2)?.content).toContain("Hello there");
     expect(call.messages.at(-1)?.content).toMatch(/current time/);
 
@@ -168,7 +172,7 @@ describe("AgentNextProcessor turn lifecycle", () => {
         },
       },
     ]);
-    expect(h.state().context.history.at(-1)).toMatchObject({
+    expect(h.state().contextItems.at(-1)).toMatchObject({
       payload: { role: "assistant", content: "Hi!", llmRequestOffset: requested.offset },
     });
   });
@@ -221,15 +225,13 @@ describe("AgentNextProcessor turn lifecycle", () => {
     // even a raced completion loses on the shared settle key.
     await h.play(() => h.llm.respond("too late"));
     expect(h.events(SETTLED)).toHaveLength(1);
-    expect(h.state().context.history.some((item) => item.payload.content === "too late")).toBe(
-      false,
-    );
+    expect(h.state().contextItems.some((item) => item.payload.content === "too late")).toBe(false);
 
     // The streamed partial is preserved as model-visible history WITHOUT an
     // llmRequestOffset, so script extraction can never run on a half response.
     const partialItem = h
       .state()
-      .context.history.find((item) => item.payload.content.includes("partial output follows"));
+      .contextItems.find((item) => item.payload.content.includes("partial output follows"));
     expect(partialItem).toMatchObject({ payload: { role: "assistant" } });
     expect(partialItem!.payload).not.toHaveProperty("llmRequestOffset");
     expect(partialItem!.payload.content).toContain("Hello");
@@ -303,9 +305,7 @@ describe("AgentNextProcessor recovery", () => {
     await h.play(() => h.llm.calls[0]!.resolve({ text: "from-zombie" }));
 
     expect(h.events(SETTLED)).toHaveLength(1);
-    const assistants = h
-      .state()
-      .context.history.filter((item) => item.payload.role === "assistant");
+    const assistants = h.state().contextItems.filter((item) => item.payload.role === "assistant");
     expect(assistants).toMatchObject([{ payload: { content: "from-successor" } }]);
   });
 
@@ -357,7 +357,7 @@ describe("AgentNextProcessor recovery", () => {
       { payload: { message: expect.stringContaining("expired") } },
     ]);
     expect(
-      h.state().context.history.find((item) => item.payload.content.includes("expired")),
+      h.state().contextItems.find((item) => item.payload.content.includes("expired")),
     ).toMatchObject({ payload: { role: "developer", actor: { type: "integration" } } });
   });
 });
@@ -399,7 +399,7 @@ describe("AgentNextProcessor failure policy", () => {
     ]);
     const transcripts = h
       .state()
-      .context.history.filter((item) => item.payload.content.startsWith("Error on stream:"));
+      .contextItems.filter((item) => item.payload.content.startsWith("Error on stream:"));
     expect(transcripts).toHaveLength(2);
 
     // The retry-policy patch merged into the config without disturbing the
@@ -510,18 +510,67 @@ describe("AgentNextProcessor stream facts", () => {
       },
     ]);
 
-    expect(h.state().context.history).toMatchObject([
-      {
-        payload: {
-          role: "developer",
-          content: expect.stringContaining("skipped poison"),
-          actor: { type: "integration", name: "stream-error" },
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
-        },
+    expect(h.state().contextItems.at(-1)).toMatchObject({
+      payload: {
+        role: "developer",
+        content: expect.stringContaining("skipped poison"),
+        actor: { type: "integration", name: "stream-error" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
-    ]);
+    });
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
     expect(h.llm.calls).toHaveLength(0);
+  });
+
+  it("a pause landing after an external message does NOT swallow it: the trigger survives and resumes the loop", async () => {
+    // The breaker's paused append is background work: an external message can
+    // land between the pause being decided and the paused event committing.
+    // The fold only clears SELF-DRIVEN triggers on pause; the raced external
+    // trigger survives, resumes the loop, and gets its turn.
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("am I still here?")],
+      [
+        "append",
+        { type: "events.iterate.com/agent/paused", payload: { reason: "breaker raced the user" } },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.events("events.iterate.com/agent/resumed")).toHaveLength(1);
+    expect(h.state().paused).toBeNull();
+    expect(h.llm.calls).toHaveLength(1);
+    expect(h.llm.calls[0]!.messages.map((m) => m.content).join("\n")).toContain("am I still here?");
+  });
+
+  it("re-scheduling the same trigger produces an identical intent body that dedupes on the key", async () => {
+    // Every at-head delivery while the debounce window is open schedules
+    // another sleep-then-append for the SAME trigger. The body is
+    // deterministic (expiresAt anchors to the trigger, never `now`), so the
+    // duplicates dedupe on the idempotency key instead of the journal
+    // rejecting a same-key-different-body append.
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("hello")],
+      // A non-trigger delivery inside the window: the at-head pass runs again
+      // over the same pending trigger and parks a second intent append.
+      [
+        "append",
+        {
+          type: "events.iterate.com/agents/context-added",
+          payload: { role: "system", content: "another system item" },
+        },
+      ],
+      ["advanceTime", 10_000], // both parked appends fire
+    );
+
+    expect(h.events(REQUESTED)).toHaveLength(1);
+    expect(h.llm.calls).toHaveLength(1);
+    const requested = h.events(REQUESTED)[0]!;
+    const trigger = h.events("events.iterate.com/agents/context-added")[1]!; // the user message
+    expect((requested.payload as { expiresAt: number }).expiresAt).toBe(
+      Date.parse(trigger.createdAt) + h.state().config.llmRequestExpiryMs,
+    );
   });
 
   it("agent/configured merges partial patches; omitted keys keep their values", async () => {
@@ -570,46 +619,62 @@ describe("AgentNextProcessor stream facts", () => {
 // =============================================================================
 
 describe("context projection", () => {
-  const empty = { system: [], history: [], publishedThrough: 0 };
   const systemItem = (offset: number, content: string) => ({
     offset,
-    payload: { role: "system" as const, key: "agent/system-prompt", content },
+    payload: {
+      role: "system",
+      key: "agent/system-prompt",
+      content,
+      llmRequestPolicy: { behaviour: "after-current-request" },
+    } as AgentNextContextAddedPayload,
   });
 
-  it("a keyed item replaces its unpublished slot in place; once published it appends with a back-reference", () => {
-    const first = projectContextAdded(empty, systemItem(1, "v1"));
-    const replaced = projectContextAdded(first, systemItem(2, "v2"));
-    expect(replaced.system).toMatchObject([{ offset: 2, payload: { content: "v2" } }]);
-    expect(replaced.system).toHaveLength(1);
+  it("a keyed item no request has seen is replaced in place; a covered one appends a new occurrence", () => {
+    const first = projectContextAdded({
+      items: [],
+      lastLlmRequestOffset: 0,
+      item: systemItem(1, "v1"),
+    });
+    const replaced = projectContextAdded({
+      items: first,
+      lastLlmRequestOffset: 0,
+      item: systemItem(2, "v2"),
+    });
+    expect(replaced).toMatchObject([{ offset: 2, payload: { content: "v2" } }]);
 
-    const published = { ...replaced, publishedThrough: 5 };
-    const updated = projectContextAdded(published, systemItem(6, "v3"));
-    expect(updated.system.map((item) => item.offset)).toEqual([2, 6]);
-    expect(updated.system[1]!.updatesOffset).toBe(2);
+    // A request at offset 5 has now covered the item — the next keyed update
+    // appends instead of rewriting covered history.
+    const updated = projectContextAdded({
+      items: replaced,
+      lastLlmRequestOffset: 5,
+      item: systemItem(6, "v3"),
+    });
+    expect(updated.map((item) => item.offset)).toEqual([2, 6]);
   });
 
-  it("buildLlmMessages pins to the request offset and demotes non-agent developer items to user role", () => {
-    const context = {
-      system: [systemItem(1, "prompt")],
-      history: [
-        {
-          offset: 2,
-          payload: {
-            role: "developer" as const,
-            content: "from an integration",
-            actor: { type: "integration" as const, name: "slack" },
-            llmRequestPolicy: { behaviour: "after-current-request" as const },
-          },
-        },
-        {
-          offset: 9,
-          payload: { role: "user" as const, content: "arrived after the request" },
-        },
-      ],
-      publishedThrough: 4,
-    };
+  it("buildLlmMessages pins to the request offset, keeps system items in place, demotes non-agent developer items", () => {
+    const contextItems = [
+      systemItem(1, "prompt"),
+      {
+        offset: 2,
+        payload: {
+          role: "developer",
+          content: "from an integration",
+          actor: { type: "integration", name: "slack" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        } as AgentNextContextAddedPayload,
+      },
+      {
+        offset: 9,
+        payload: {
+          role: "user",
+          content: "arrived after the request",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        } as AgentNextContextAddedPayload,
+      },
+    ];
     const messages = buildLlmMessages({
-      context: context as AgentNextState["context"],
+      contextItems,
       requestedAtOffset: 4,
       nowIso: "2026-07-20T12:00:00.000Z",
     });

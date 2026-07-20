@@ -1,7 +1,6 @@
 import { mergeProcessorConfig, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import {
-  AgentNextConfig,
   AgentNextProcessorContract,
   type AgentNextContextAddedPayload,
   type AgentNextState,
@@ -14,14 +13,14 @@ import {
  *
  * Context events arrive on the agent's stream (`agents/context-added`: user
  * messages, developer notes, script results, assistant output). The pure
- * `reduce` fold projects them into `state.context` and records the newest
- * turn-worthy one as `state.pendingLlmRequestTrigger`. When `processEvent`
- * runs at the head of the stream with a trigger pending and no request open,
- * it waits out a short debounce window (plus failure backoff) and then
- * journals the INTENT to run one turn: an `agent/llm-request-requested`
- * event. That event's own journal offset IS the request's identity — there
- * are no synthetic ids anywhere; every related idempotency key derives from
- * an offset.
+ * `reduce` fold projects them into `state.contextItems` — ONE ordered list;
+ * system items sit in place — and records the newest turn-worthy one as
+ * `state.pendingLlmRequestTrigger`. When `processEvent` runs at the head of
+ * the stream with a trigger pending and no request open, it waits out a
+ * short debounce window (plus failure backoff) and then journals the INTENT
+ * to run one turn: an `agent/llm-request-requested` event. That event's own
+ * journal offset IS the request's identity — there are no synthetic ids
+ * anywhere; every related idempotency key derives from an offset.
  *
  * The requested event comes back through the processor's own subscription;
  * the fold opens `state.openRequest`, and the at-head pass finds an open
@@ -49,7 +48,7 @@ import {
  * Concurrency belongs to subagents (separate streams), not to parallel turns
  * over one conversation fold. Runaway self-driven chains hit the
  * `maxAutonomousTurns` breaker, which journals `agent/paused` (mirroring
- * stream/paused); the next user message journals `agent/resumed`.
+ * stream/paused); the next external message journals `agent/resumed`.
  *
  * All tuning (model, debounce, expiry, retry policy, breaker threshold)
  * lives in `state.config` with schema defaults; `agent/configured` merges
@@ -96,11 +95,11 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // and settle the open request as cancelled, carrying the streamed
         // partial text. A zombie's success settlement racing this loses on
         // the shared settle key; whichever append lands second is dropped.
-        const policy =
-          payload.role === "user" || payload.role === "developer"
-            ? payload.llmRequestPolicy
-            : undefined;
-        if (policy?.behaviour === "interrupt-current-request" && state.openRequest !== null) {
+        if (
+          payload.llmRequestPolicy.behaviour === "interrupt-current-request" &&
+          (payload.role === "user" || payload.role === "developer") &&
+          state.openRequest !== null
+        ) {
           const open = state.openRequest;
           this.#inFlightLlmCall?.controller.abort();
           const partialText =
@@ -113,12 +112,11 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             appends.push({
               type: "events.iterate.com/agents/context-added",
               payload: {
-                // The streamed partial stays model-visible as history — the
-                // next turn must know what the user already watched stream,
-                // or the model repeats or contradicts it. No
-                // `llmRequestOffset`: this is a record of an interruption,
-                // not parseable output (script extraction must never run on
-                // a half response).
+                // The streamed partial stays model-visible — the next turn
+                // must know what the user already watched stream, or the
+                // model repeats or contradicts it. No `llmRequestOffset`:
+                // this is a record of an interruption, not parseable output
+                // (script extraction must never run on a half response).
                 role: "assistant",
                 content: `[Response interrupted by the user's next message; partial output follows]\n${partialText}`,
               },
@@ -144,7 +142,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           // after the cursor passed this event would leave the open request
           // uncancelled — and the next at-head pass would ADOPT and run the
           // very request the user tried to stop.
-          blockProcessorWhile(() => this.#appendUnlessSettleRaceLost(append, appends));
+          blockProcessorWhile(() => this.#appendUnlessLostIdempotencyRace(append, appends));
           // STOP: nothing below may act this frame. The at-head code would
           // otherwise re-run the very request the queued settlement is about
           // to cancel (it reads the pre-cancel fold — the eviction-window
@@ -236,15 +234,15 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
     if (!delivery.caughtUp) return;
     if (state.birthCertificate === null) return;
 
-    // Paused: turns stay parked until fresh USER input journals the resume
-    // (self-driven triggers are exactly what the breaker paused).
+    // Paused: turns stay parked until fresh EXTERNAL input journals the
+    // resume (self-driven triggers are exactly what the breaker paused).
     if (state.paused !== null) {
       const trigger = state.pendingLlmRequestTrigger;
-      if (trigger?.source === "user") {
+      if (trigger?.source === "external") {
         runInBackground(() =>
           append({
             type: "events.iterate.com/agent/resumed",
-            payload: { reason: "user input" },
+            payload: { reason: "external input" },
             idempotencyKey: this.idempotencyKey(`resume/${trigger.offset}`),
           }),
         );
@@ -266,7 +264,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           append({
             type: "events.iterate.com/agent/paused",
             payload: {
-              reason: `autonomous turn limit reached (${maxAutonomousTurns} consecutive turns without user input)`,
+              reason: `autonomous turn limit reached (${maxAutonomousTurns} consecutive turns without external input)`,
             },
             idempotencyKey: this.idempotencyKey(`pause/${trigger.offset}`),
           }),
@@ -280,20 +278,28 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
       // into a harmless journal fact. A droppable attempt: dying mid-window
       // means the revival turn re-runs this code with the window long closed
       // and appends immediately.
+      //
+      // Every delivery at head while the window is open schedules ANOTHER
+      // sleep-then-append for the same trigger, so the intent body must be
+      // DETERMINISTIC from trigger + config (expiresAt anchors to the
+      // trigger's time, never `now`): identical bodies dedupe on the key. A
+      // config change between schedulings makes the late body differ — the
+      // race-tolerant append lets the first-committed intent stand.
       const windowMs = state.config.llmRequestDebounceMs + retryBackoffMs(state);
       const windowClosesInMs = trigger.atMs + windowMs - this.#now();
+      const intent: EmittedInput<AgentNextProcessorContract> = {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: {
+          model: state.config.llm.model,
+          expiresAt: trigger.atMs + state.config.llmRequestExpiryMs,
+        },
+        // Dedupe fence only, keyed on the trigger's coordinates — the
+        // request's IDENTITY is the offset the journal assigns on commit.
+        idempotencyKey: this.idempotencyKey(`request/${trigger.offset}`),
+      };
       runInBackground(async () => {
         if (windowClosesInMs > 0) await this.#sleep(windowClosesInMs);
-        await append({
-          type: "events.iterate.com/agent/llm-request-requested",
-          payload: {
-            model: state.config.llm.model,
-            expiresAt: this.#now() + state.config.llmRequestExpiryMs,
-          },
-          // Dedupe fence only, keyed on the trigger's coordinates — the
-          // request's IDENTITY is the offset the journal assigns on commit.
-          idempotencyKey: this.idempotencyKey(`request/${trigger.offset}`),
-        });
+        await this.#appendUnlessLostIdempotencyRace(append, [intent]);
       });
       return;
     }
@@ -308,7 +314,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
     if (open !== null && this.#inFlightLlmCall?.requestOffset !== open.requestedAtOffset) {
       if (this.#now() >= open.expiresAt) {
         runInBackground(() =>
-          this.#appendUnlessSettleRaceLost(append, [
+          this.#appendUnlessLostIdempotencyRace(append, [
             {
               type: "events.iterate.com/agent/llm-request-settled",
               payload: {
@@ -353,7 +359,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         const response = await this.deps.callLlm({
           model: open.model,
           messages: buildLlmMessages({
-            context: args.state.context,
+            contextItems: args.state.contextItems,
             requestedAtOffset: requestOffset,
             nowIso: new Date(this.#now()).toISOString(),
           }),
@@ -367,12 +373,11 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
               .append({
                 type: "events.iterate.com/agent/llm-response-chunk",
                 payload: { requestOffset, sequence, text },
-                ephemeral: true,
               })
               .catch(() => undefined);
           },
         });
-        await this.#appendUnlessSettleRaceLost(args.append, [
+        await this.#appendUnlessLostIdempotencyRace(args.append, [
           {
             type: "events.iterate.com/agents/context-added",
             payload: {
@@ -407,7 +412,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // context so the next turn sees what happened.
         const attempt = args.state.consecutiveLlmFailures + 1;
         const { maxAttempts } = args.state.config.llmRequestRetryPolicy;
-        await this.#appendUnlessSettleRaceLost(args.append, [
+        await this.#appendUnlessLostIdempotencyRace(args.append, [
           {
             type: "events.iterate.com/agent/llm-request-settled",
             payload: {
@@ -437,13 +442,15 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
   }
 
   /**
-   * Append a settlement batch, tolerating the loss of a settle race: every
+   * Append a batch whose idempotency keys may race concurrent writers: every
    * writer of `settle/<offset>` (success, failure, interrupt, expiry) races
-   * every other, the journal rejects a same-key append with a different body,
-   * and the FIRST writer's story stands. Losing that race is success — the
-   * request is settled; the fold sorts out whose settlement counts.
+   * every other, and two debounce schedulings of one trigger race on
+   * `request/<offset>` when config changed between them. The journal rejects
+   * a same-key append with a different body; the FIRST writer's story stands
+   * and losing the race is success — the obligation is settled/journaled, and
+   * the fold sorts out whose fact counts.
    */
-  async #appendUnlessSettleRaceLost(
+  async #appendUnlessLostIdempotencyRace(
     append: ProcessEventArgs<AgentNextProcessorContract>["append"],
     events: EmittedInput<AgentNextProcessorContract>[],
   ): Promise<void> {
@@ -468,7 +475,9 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // standard config recipe (mergeProcessorConfig).
         return {
           ...state,
-          config: AgentNextConfig.parse(mergeProcessorConfig(state.config, event.payload.config)),
+          config: this.contract.stateSchema.shape.config.parse(
+            mergeProcessorConfig(state.config, event.payload.config),
+          ),
         };
       case "events.iterate.com/agent/llm-request-requested": {
         // Fold-guard: a late debounced intent — trigger interrupted away, a
@@ -491,8 +500,8 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             model: event.payload.model,
           },
           // The turn covers everything folded so far: keyed context updates
-          // after this point append occurrences instead of replacing slots.
-          context: { ...state.context, publishedThrough: event.offset },
+          // after this point append occurrences instead of replacing in place.
+          lastLlmRequestOffset: event.offset,
           autonomousTurnCount:
             state.pendingLlmRequestTrigger.source === "agent-loop"
               ? state.autonomousTurnCount + 1
@@ -513,9 +522,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           consecutiveLlmFailures: failures,
           // Under the retry cap the failure itself is the next trigger — the
           // retry is pure fold arithmetic, no wake event, no rendered nudge.
-          // At the cap (or when newer input is already pending, which this
-          // deliberately overwrites only under the cap) the conversation
-          // waits for fresh input.
+          // At the cap the conversation waits for fresh input.
           ...(failures < state.config.llmRequestRetryPolicy.maxAttempts
             ? {
                 pendingLlmRequestTrigger: {
@@ -528,15 +535,21 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         };
       }
       case "events.iterate.com/agent/paused":
-        // The breaker (or an operator) parked the loop; the pending
-        // self-driven trigger dies with it.
+        // The breaker (or an operator) parked the loop. Only a SELF-DRIVEN
+        // pending trigger dies with it: an external trigger that raced the
+        // pause append survives, so the paused branch of the at-head pass
+        // immediately journals the resume — a user message can never be
+        // swallowed by a pause it crossed in flight.
         return {
           ...state,
           paused: {
             ...(event.payload.reason === undefined ? {} : { reason: event.payload.reason }),
             atOffset: event.offset,
           },
-          pendingLlmRequestTrigger: null,
+          pendingLlmRequestTrigger:
+            state.pendingLlmRequestTrigger?.source === "agent-loop"
+              ? null
+              : state.pendingLlmRequestTrigger,
         };
       case "events.iterate.com/agent/resumed":
         return { ...state, paused: null, autonomousTurnCount: 0 };
@@ -565,12 +578,16 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         ) {
           return state;
         }
-        const context = projectContextAdded(state.context, { offset: event.offset, payload });
+        const contextItems = projectContextAdded({
+          items: state.contextItems,
+          lastLlmRequestOffset: state.lastLlmRequestOffset,
+          item: { offset: event.offset, payload },
+        });
         const trigger = contextTriggerSource(payload);
-        if (trigger === null) return { ...state, context };
+        if (trigger === null) return { ...state, contextItems };
         return {
           ...state,
-          context,
+          contextItems,
           // Every trigger moves the pending slot — newest wins; the debounce
           // window and the intent idempotency key anchor to these coordinates.
           pendingLlmRequestTrigger: {
@@ -578,9 +595,9 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             atMs: Date.parse(event.createdAt),
             source: trigger,
           },
-          // Fresh user input is a fresh start: the autonomous-turn budget and
-          // the failure streak both reset.
-          ...(trigger === "user" ? { autonomousTurnCount: 0, consecutiveLlmFailures: 0 } : {}),
+          // Fresh external input is a fresh start: the autonomous-turn budget
+          // and the failure streak both reset.
+          ...(trigger === "external" ? { autonomousTurnCount: 0, consecutiveLlmFailures: 0 } : {}),
         };
       }
       default:
@@ -644,49 +661,39 @@ export type AgentNextDeps = {
  * scheduling input. */
 export function contextTriggerSource(
   payload: AgentNextContextAddedPayload,
-): "user" | "agent-loop" | null {
+): "external" | "agent-loop" | null {
   if (payload.role === "system" || payload.role === "assistant") return null;
   if (payload.llmRequestPolicy.behaviour === "dont-trigger-request") return null;
-  if (payload.role === "user") return "user";
+  if (payload.role === "user") return "external";
   const actorType = payload.actor?.type;
   // The agent's own notes and its scripts drive the autonomous loop; every
-  // other developer-lane author counts as an external (user-like) trigger.
-  return actorType === "agent" || actorType === "script" ? "agent-loop" : "user";
+  // other developer-lane author (integration, webhook, human tooling) is an
+  // external trigger.
+  return actorType === "agent" || actorType === "script" ? "agent-loop" : "external";
 }
 
-/** Fold one context item into the projection. A keyed item replaces its
- * UNPUBLISHED slot in place; once published, an update appends a new
- * occurrence back-referencing the one it supersedes (append-only history). */
-export function projectContextAdded(
-  context: AgentNextState["context"],
-  item: { offset: number; payload: AgentNextContextAddedPayload },
-): AgentNextState["context"] {
-  const lane = item.payload.role === "system" ? "system" : "history";
-  const items = context[lane];
-  const key = item.payload.key;
+/**
+ * Fold one context item into the list. The rule, in one sentence: if no LLM
+ * request has seen the keyed item yet, an update with the same key replaces
+ * it in place; once a request has seen it, the update appends a new
+ * occurrence (append-only history — every covered prompt stays
+ * reconstructible).
+ */
+export function projectContextAdded(args: {
+  items: AgentNextState["contextItems"];
+  lastLlmRequestOffset: number;
+  item: AgentNextState["contextItems"][number];
+}): AgentNextState["contextItems"] {
+  const key = args.item.payload.key;
   if (key !== undefined) {
-    const slotIndex = items.findLastIndex((existing) => existing.payload.key === key);
-    if (slotIndex >= 0) {
-      const slot = items[slotIndex]!;
-      if (slot.offset > context.publishedThrough) {
-        const replaced = [...items];
-        replaced[slotIndex] = {
-          offset: item.offset,
-          ...(slot.updatesOffset === undefined ? {} : { updatesOffset: slot.updatesOffset }),
-          payload: item.payload,
-        };
-        return { ...context, [lane]: replaced };
-      }
-      return {
-        ...context,
-        [lane]: [
-          ...items,
-          { offset: item.offset, updatesOffset: slot.offset, payload: item.payload },
-        ],
-      };
+    const slotIndex = args.items.findLastIndex((existing) => existing.payload.key === key);
+    if (slotIndex >= 0 && args.items[slotIndex]!.offset > args.lastLlmRequestOffset) {
+      const replaced = [...args.items];
+      replaced[slotIndex] = args.item;
+      return replaced;
     }
   }
-  return { ...context, [lane]: [...items, { offset: item.offset, payload: item.payload }] };
+  return [...args.items, args.item];
 }
 
 /** Exponential failure backoff folded into the debounce window: doubling from
@@ -699,32 +706,26 @@ export function retryBackoffMs(
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
-/** Build the model-facing message array from the fold. The CONTENT is pinned
- * to the request's offset, so an adopting incarnation reproduces the covered
- * context exactly; the trailing timestamp deliberately is NOT pinned — it
- * reports the actual attempt time (a late adoption honestly says so), and it
- * sits last so the provider's prompt-cache prefix is unaffected either way.
- * System items dedupe by key (latest wins); developer items from anyone but
- * the agent or its scripts are DEMOTED to user role (trust boundary). */
+/** Build the model-facing message array from the fold: the covered items in
+ * journal order (system items sit in place — providers accept system content
+ * mid-history), then the timestamp. The CONTENT is pinned to the request's
+ * offset, so an adopting incarnation reproduces the covered context exactly;
+ * the trailing timestamp deliberately is NOT pinned — it reports the actual
+ * attempt time (a late adoption honestly says so), and it sits last so the
+ * provider's prompt-cache prefix is unaffected either way. Developer items
+ * from anyone but the agent or its scripts are DEMOTED to user role (trust
+ * boundary). */
 export function buildLlmMessages(args: {
-  context: AgentNextState["context"];
+  contextItems: AgentNextState["contextItems"];
   requestedAtOffset: number;
   nowIso: string;
 }): AgentLlmMessage[] {
-  const covered = (item: { offset: number }) => item.offset <= args.requestedAtOffset;
-  const systemByKey = new Map<string, string>();
-  const systemUnkeyed: string[] = [];
-  for (const item of args.context.system.filter(covered)) {
-    if (item.payload.key === undefined) systemUnkeyed.push(item.payload.content);
-    else systemByKey.set(item.payload.key, item.payload.content);
-  }
   const messages: AgentLlmMessage[] = [];
-  const systemContent = [...systemByKey.values(), ...systemUnkeyed].join("\n\n");
-  if (systemContent.length > 0) messages.push({ role: "system", content: systemContent });
-  for (const item of args.context.history.filter(covered)) {
+  for (const item of args.contextItems) {
+    if (item.offset > args.requestedAtOffset) continue;
     // Trust demotion: developer items from anyone but the agent or its own
     // scripts read as user content, never as instructions.
-    const actorType = item.payload.role === "developer" ? item.payload.actor?.type : undefined;
+    const actorType = item.payload.actor?.type;
     const role =
       item.payload.role !== "developer"
         ? item.payload.role
@@ -737,14 +738,9 @@ export function buildLlmMessages(args: {
   return messages;
 }
 
-function renderContextItem(item: {
-  offset: number;
-  updatesOffset?: number;
-  payload: AgentNextContextAddedPayload;
-}): string {
+function renderContextItem(item: AgentNextState["contextItems"][number]): string {
   const headerParts = [`@${item.offset}`];
   if (item.payload.key !== undefined) headerParts.push(`key=${item.payload.key}`);
-  if (item.updatesOffset !== undefined) headerParts.push(`updates=@${item.updatesOffset}`);
   const fileHints = (item.payload.files ?? []).map(
     (file) =>
       `\n[file: ${file.filename} (${file.contentType}, ${file.size} bytes) at ${file.path}]`,
