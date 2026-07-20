@@ -25,7 +25,7 @@ const ProjectAppSessionClaims = z
   })
   .loose();
 
-export type ProjectAppSessionClaims = z.infer<typeof ProjectAppSessionClaims>;
+type ProjectAppSessionClaims = z.infer<typeof ProjectAppSessionClaims>;
 
 /**
  * The auth worker's `validateProjectAppSession` shape, satisfied locally:
