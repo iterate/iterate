@@ -341,8 +341,11 @@ export type ProcessorHarness<Contract extends StreamProcessorContract> = {
 };
 
 /** In-memory {@link ProcessorProgressStore} with the DO store's fencing check,
- * so progress survives `crash()` into the successor incarnation. */
-function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
+ * so progress survives `crash()` into the successor incarnation. Exported so
+ * suites can hand a harness a FRESH store over an existing journal — a full
+ * replay from offset zero, which is both the refold recipe and the harshest
+ * at-least-once redelivery test (every per-event append re-runs). */
+export function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
   let record: ProcessorProgress<unknown> | undefined;
   return {
     read: () => (record === undefined ? undefined : structuredClone(record)),

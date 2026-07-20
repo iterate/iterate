@@ -8,7 +8,11 @@
 
 import { describe, expect, it } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
-import { makeProcessorHarness, type HarnessSubstrate } from "iterate/processors/testing";
+import {
+  makeMemoryProgressStore,
+  makeProcessorHarness,
+  type HarnessSubstrate,
+} from "iterate/processors/testing";
 import {
   AgentNextProcessorContract,
   type AgentNextContextAddedPayload,
@@ -495,6 +499,49 @@ describe("AgentNextProcessor script execution", () => {
     const prompt = h.llm.calls[1]!.messages.map((message) => message.content).join("\n");
     expect(prompt).toContain("unreadCount");
     expect(prompt).toContain("3");
+  });
+
+  it("a full replay (fresh cursor over the same journal) redelivers every event without wedging on per-event appends", async () => {
+    // The harshest at-least-once redelivery: a fresh progress store over the
+    // SAME journal replays every event, so every per-event blocked append
+    // (script request, settlement render, error transcription) re-runs long
+    // after the clock moved. Each must produce a body IDENTICAL to the
+    // committed one (dedupe) or tolerate losing the race — a now()-stamped
+    // field would be a same-key conflict that wedges the frame forever.
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", ...NEW_AGENT_EVENTS, userMessage("How many unread emails?")],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("Checking.\n```ts\nasync (itx) => itx.email.unreadCount()\n```"),
+    );
+    const executionId = (
+      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
+        executionId: string;
+      }
+    ).executionId;
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: { executionId, settlement: { status: "succeeded", result: { unreadCount: 3 } } },
+        },
+      ],
+      ["advanceTime", 10_000], // the clock is now well past every original append
+    );
+    const journalledOffsets = h.events().map((row) => row.offset);
+
+    const replay = makeAgentHarness({
+      clock: h.clock,
+      stream: h.stream,
+      progress: makeMemoryProgressStore(),
+    });
+    await replay.settle(); // replays the whole journal; a wedge would throw here
+
+    // Every re-appended per-event consequence deduped: the journal is
+    // byte-identical, and the replayed fold reaches the same head state.
+    expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
+    expect(replay.state().activeScriptExecutionIds).toEqual([]);
   });
 });
 

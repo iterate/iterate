@@ -162,15 +162,23 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           const code = extractAgentScript(payload.content);
           if (code !== null) {
             blockProcessorWhile(() =>
-              append({
-                type: "events.iterate.com/capability-host/script-run-requested",
-                payload: {
-                  code,
-                  executionId: `agent-output:${event.offset}`,
-                  expiresAt: this.#now() + state.config.llmRequestExpiryMs,
+              // Deterministic body (expiresAt anchors to the assistant event,
+              // never `now`): an at-least-once redelivery of this event
+              // re-appends the identical request and dedupes on the key —
+              // a `now`-stamped expiry would make the re-append a same-key
+              // CONFLICT and wedge the frame forever. The race-tolerant
+              // append covers a config change between deliveries.
+              this.#appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/capability-host/script-run-requested",
+                  payload: {
+                    code,
+                    executionId: `agent-output:${event.offset}`,
+                    expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+                  },
+                  idempotencyKey: this.idempotencyKey(`script-run-requested@${event.offset}`),
                 },
-                idempotencyKey: this.idempotencyKey(`script-run-requested@${event.offset}`),
-              }),
+              ]),
             );
           }
         }
@@ -181,22 +189,25 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         if (!executionId.startsWith("agent-output:")) break;
         // Per-event render (blocked): the settlement is delivered once, and a
         // lost render would silently drop the script's result from the
-        // conversation.
+        // conversation. Race-tolerant: a truncation-limit config change
+        // between redeliveries alters the rendered body under the same key.
         blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agents/context-added",
-            payload: {
-              role: "developer",
-              content: renderScriptSettlement(
-                executionId,
-                settlement,
-                state.config.scriptResultHistoryLimit,
-              ),
-              actor: { type: "script", executionId },
-              llmRequestPolicy: { behaviour: "after-current-request" },
+          this.#appendUnlessLostIdempotencyRace(append, [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                role: "developer",
+                content: renderScriptSettlement(
+                  executionId,
+                  settlement,
+                  state.config.scriptResultHistoryLimit,
+                ),
+                actor: { type: "script", executionId },
+                llmRequestPolicy: { behaviour: "after-current-request" },
+              },
+              idempotencyKey: this.idempotencyKey(`render-script-result@${event.offset}`),
             },
-            idempotencyKey: this.idempotencyKey(`render-script-result@${event.offset}`),
-          }),
+          ]),
         );
         break;
       }
