@@ -111,7 +111,11 @@ import {
   SandboxProcessorContract,
   type SandboxProcessorState,
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
-import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
+import {
+  canImportGithubRepoPublicly,
+  linkRepoToGithub,
+  unlinkRepoFromGithub,
+} from "./domains/repos/github-link.ts";
 import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
@@ -1153,6 +1157,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         commitFiles:
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create: "Create the repo if it does not exist yet.",
+        createFromGithub:
+          "Create a new repo from a GitHub repository, using a service-side depth-1 import for a non-empty public main branch.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
@@ -1204,6 +1210,57 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       path: this.props.path,
       projectId: this.props.projectId,
     });
+  }
+
+  /**
+   * Create a new repo from GitHub. Public, non-empty repositories whose
+   * default branch is main are imported by Cloudflare Artifacts at depth 1,
+   * so their git objects never inflate inside the Repo Durable Object.
+   * Other repositories keep the authenticated create/link/depth-1-sync path.
+   */
+  async createFromGithub(input: { connection: string; owner: string; repo: string }): Promise<{
+    importedByArtifacts: boolean;
+    link: LinkGithubResult;
+    sync: GithubSyncResult | null;
+    syncError: string | null;
+  }> {
+    const projectId = this.#requireProjectId();
+    const importPublicly = await canImportGithubRepoPublicly({ ...input, projectId });
+    if (importPublicly) {
+      await this.#durableObjectStub.importPublicGithubSnapshot({
+        branch: "main",
+        depth: 1,
+        owner: input.owner,
+        repo: input.repo,
+      });
+    }
+
+    await requestRepoCreate({
+      auth: this.props.auth,
+      path: this.props.path,
+      projectId,
+    });
+    const link = await linkRepoToGithub({
+      ...input,
+      projectId,
+      repoPath: this.props.path,
+      skipInitialPush: importPublicly,
+    });
+    if (importPublicly) {
+      return { importedByArtifacts: true, link, sync: null, syncError: null };
+    }
+
+    try {
+      const sync = await this.#durableObjectStub.syncFromGithub({ force: true, depth: 1 });
+      return { importedByArtifacts: false, link, sync, syncError: null };
+    } catch (error) {
+      return {
+        importedByArtifacts: false,
+        link,
+        sync: null,
+        syncError: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /** Repo identity string (debug). */

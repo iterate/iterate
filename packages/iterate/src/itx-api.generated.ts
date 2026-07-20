@@ -1176,6 +1176,18 @@ export interface Repo {
   __describe(): Promise<Description>;
   /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
   create(): Promise<Repo>;
+  /**
+   * Create a new repo from GitHub. Public, non-empty repositories whose
+   * default branch is main are imported by Cloudflare Artifacts at depth 1,
+   * so their git objects never inflate inside the Repo Durable Object.
+   * Other repositories keep the authenticated create/link/depth-1-sync path.
+   */
+  createFromGithub(input: { connection: string; owner: string; repo: string }): Promise<{
+    importedByArtifacts: boolean;
+    link: LinkGithubResult;
+    sync: GithubSyncResult | null;
+    syncError: string | null;
+  }>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
   /** Restart the repo's server-side object; the next request boots it fresh. */
@@ -3358,6 +3370,25 @@ export type CollectSecretLink = {
   url: string;
 };
 
+/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
+ * repository was created by this call, and the initial mirror push's outcome
+ * (a failed initial push does not fail the link — it is journaled on the repo
+ * stream and repaired by `pushToGithub()` or the next commit). */
+export type LinkGithubResult = GithubRepoLink & {
+  created: boolean;
+  initialPush: { ok: boolean; commitOid?: string; error?: string };
+};
+
+/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
+ * commit, and the head it replaced (null when the branch had no cached head). */
+export type GithubSyncResult = {
+  branch: string;
+  changed: boolean;
+  commitOid: string;
+  forced: boolean;
+  previousCommitOid: string | null;
+};
+
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
   author?: { email: string; name: string };
@@ -3403,25 +3434,6 @@ export type RepoCommitDetails = RepoLogCommit & {
   /** First parent oid — the diff baseline; null for the root commit. */
   parentOid: string | null;
   files: RepoCommitFileChange[];
-};
-
-/** What `repo.linkGithub` returns: the recorded link, whether the GitHub
- * repository was created by this call, and the initial mirror push's outcome
- * (a failed initial push does not fail the link — it is journaled on the repo
- * stream and repaired by `pushToGithub()` or the next commit). */
-export type LinkGithubResult = GithubRepoLink & {
-  created: boolean;
-  initialPush: { ok: boolean; commitOid?: string; error?: string };
-};
-
-/** What `repo.syncFromGithub` returns: whether the head moved, the adopted
- * commit, and the head it replaced (null when the branch had no cached head). */
-export type GithubSyncResult = {
-  branch: string;
-  changed: boolean;
-  commitOid: string;
-  forced: boolean;
-  previousCommitOid: string | null;
 };
 
 /** What `repo.resetFromGithub` returns after destructively replacing the
@@ -3846,6 +3858,20 @@ export type SecretUpdateInput =
     };
 
 /**
+ * The GitHub repository a repo is linked to: the named GitHub connection (an
+ * App installation) whose token authenticates mirror pushes, its installation
+ * id, and the owner/repo coordinates on GitHub.
+ */
+export type GithubRepoLink = {
+  connection: string;
+  installationId: string;
+  owner: string;
+  repo: string;
+  /** GitHub's stable database identity for this repository. */
+  repositoryId: number;
+};
+
+/**
  * One repo file mutation.
  *
  * Kept named because public `Repo.commitFiles`, input parsing, and artifact
@@ -3889,20 +3915,6 @@ export type RepoCommitFileChange = {
   deletions: number;
   /** True when either side of the diff sniffs binary (NUL byte). */
   binary: boolean;
-};
-
-/**
- * The GitHub repository a repo is linked to: the named GitHub connection (an
- * App installation) whose token authenticates mirror pushes, its installation
- * id, and the owner/repo coordinates on GitHub.
- */
-export type GithubRepoLink = {
-  connection: string;
-  installationId: string;
-  owner: string;
-  repo: string;
-  /** GitHub's stable database identity for this repository. */
-  repositoryId: number;
 };
 
 /**
