@@ -1,23 +1,13 @@
 import { workerEventsQueueName } from "../../queue-names.ts";
 
 /**
- * Cloudflare Artifacts event subscriptions expose account-level repo lifecycle
- * events and exact-repo Git activity events. The `artifacts.repo` source needs
- * the concrete artifact repo name, so we backfill existing repos at deploy time
- * and add repo subscriptions when account-level create/import/fork events land.
+ * An Artifacts account permits only one account-level `artifacts` source, so
+ * OS deployments subscribe each concrete repository directly. Deploy-time
+ * setup backfills existing repos; the repo Durable Object installs the same
+ * exact-repo subscription whenever it creates or replaces one.
  *
  * https://developers.cloudflare.com/queues/event-subscriptions/events-schemas/#artifacts
  */
-export function desiredArtifactAccountEventSubscription(
-  workerName: string,
-): DesiredArtifactEventSubscription {
-  return {
-    name: `${workerName}-artifact-account-events`,
-    source: { type: "artifacts" },
-    events: ["repo.created", "repo.deleted", "repo.forked", "repo.imported"],
-  };
-}
-
 export async function desiredArtifactRepoEventSubscription(input: {
   repoName: string;
   workerName: string;
@@ -44,6 +34,22 @@ async function artifactRepoEventSubscriptionName(workerName: string, repoName: s
 
 export async function ensureWorkerEventQueue(api: CloudflareAccountApi, workerName: string) {
   return await ensureQueue(api, workerEventsQueueName(workerName));
+}
+
+export async function ensureArtifactRepoEventSubscriptionForWorker(
+  api: CloudflareAccountApi,
+  input: { repoName: string; workerName: string },
+): Promise<"created" | "recreated" | "unchanged"> {
+  const [queue, existing, desired] = await Promise.all([
+    ensureWorkerEventQueue(api, input.workerName),
+    listArtifactEventSubscriptions(api),
+    desiredArtifactRepoEventSubscription(input),
+  ]);
+  return await ensureArtifactEventSubscription(api, {
+    desired,
+    existing,
+    queueId: queue.queue_id,
+  });
 }
 
 export async function listArtifactRepos(

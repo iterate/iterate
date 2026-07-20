@@ -21,6 +21,10 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
+  /** Present only in generated deployed env blocks; absent in local dev. */
+  DEPLOYMENT_ENV?: string;
+  /** Required in deployed config; optional in the local runtime binding shape. */
+  APP_CONFIG_CLOUDFLARE__API_TOKEN?: string;
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;

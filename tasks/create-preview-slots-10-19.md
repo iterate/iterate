@@ -13,8 +13,11 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 Read-only planning is complete and the exact non-production batch was approved
 on 2026-07-20. The repository map, all fifty Doppler configs, and all ten
 GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
-has started with preview-10 Auth and Semaphore resources. Production deployment
-and Semaphore lease publication remain later, separate approval boundaries.
+has started with preview-10 Auth, Semaphore, Dummy Petshop, and partial OS
+resources. A Cloudflare account-subscription cardinality defect discovered by
+the OS ensure is fixed and tested locally; the live preview-10 retry is next.
+Production deployment and Semaphore lease publication remain later, separate
+approval boundaries.
 
 ## Goal
 
@@ -312,3 +315,18 @@ the recorded projection.
   `A0BJK11HY1G`, `A0BJCPH0RMZ`, `A0BJFNL8WRK`, `A0BJFNV85LM`, `A0BJFP3960M`,
   `A0BJ3M8628P`, `A0BJM0DSH0R`, and `A0BJCR32X3M`. The clipboard and temporary
   helpers/copies were removed; the token expires within twelve hours.
+- 2026-07-20: Preview-10 provisioning created Auth D1
+  `7f7562b4-f76a-4c4d-a51e-003e6995f591`, Semaphore D1
+  `384502bd-21e2-47df-88dd-b1b76c8ccb40`, their DNS, Dummy Petshop DNS, two OS
+  KV namespaces, two R2 buckets, and queue `os-preview-10-events`. The OS ensure
+  then stopped on Cloudflare's 405: only one account-level `artifacts` source
+  is allowed, while the old reconciler attempted one per worker.
+- 2026-07-20: Reproduced and fixed that defect test-first. Deploy setup now
+  backfills only exact-repo subscriptions; deployed repo creation/replacement
+  synchronously ensures the exact subscription before a push. The Cloudflare
+  token is now a required deployment secret (present in production and all 19
+  preview configs), and an explicit deployment marker prevents local dev from
+  mutating account subscriptions. The 36 focused tests and changed-file lint
+  pass. OS typecheck reaches an unrelated existing duplicate-React-types error
+  in `packages/ui` (`message.tsx` and `spinner.tsx`) and reports no changed-file
+  errors.

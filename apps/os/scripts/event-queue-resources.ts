@@ -1,6 +1,5 @@
 import {
   deleteArtifactEventSubscription,
-  desiredArtifactAccountEventSubscription,
   desiredArtifactRepoEventSubscription,
   ensureArtifactEventSubscription,
   ensureWorkerEventQueue,
@@ -47,15 +46,6 @@ async function ensureArtifactEventSubscriptions(
     console.log(`Artifact event subscription ${legacyWildcard.name} deleted`);
   }
 
-  logEnsure(
-    await ensureArtifactEventSubscription(ctx.cf, {
-      desired: desiredArtifactAccountEventSubscription(input.workerName),
-      existing,
-      queueId: input.queueId,
-    }),
-    `${input.workerName}-artifact-account-events`,
-  );
-
   const namespace = `${input.workerName}-repos`;
   const repos = await listArtifactRepos(ctx.cf, namespace);
   for (const repo of repos) {
@@ -63,17 +53,11 @@ async function ensureArtifactEventSubscriptions(
       repoName: repo.name,
       workerName: input.workerName,
     });
-    logEnsure(
-      await ensureArtifactEventSubscription(ctx.cf, {
-        desired,
-        existing,
-        queueId: input.queueId,
-      }),
-      desired.name,
-    );
+    const result = await ensureArtifactEventSubscription(ctx.cf, {
+      desired,
+      existing,
+      queueId: input.queueId,
+    });
+    console.log(`Artifact event subscription ${desired.name} ${result}`);
   }
-}
-
-function logEnsure(result: "created" | "recreated" | "unchanged", subscriptionName: string) {
-  console.log(`Artifact event subscription ${subscriptionName} ${result}`);
 }

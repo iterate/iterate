@@ -5,10 +5,7 @@ import { RepoArtifactNameCodec } from "../repos/utils.ts";
 import { workerEventsQueueName } from "../../queue-names.ts";
 import {
   createCloudflareAccountApi,
-  desiredArtifactRepoEventSubscription,
-  ensureArtifactEventSubscription,
-  listArtifactEventSubscriptions,
-  queueIdForWorkerEventQueue,
+  ensureArtifactRepoEventSubscriptionForWorker,
 } from "./cloudflare-event-subscriptions.ts";
 
 export const GLOBAL_CLOUDFLARE_EVENTS_STREAM_PATH = "/cloudflare/events";
@@ -18,10 +15,12 @@ export const REPO_CLOUDFLARE_ARTIFACT_EVENT_RECEIVED_TYPE =
 
 type EventQueueEnv = Pick<
   Env,
-  "ARTIFACTS_ACCOUNT_ID" | "ARTIFACTS_NAMESPACE" | "STREAM" | "WORKER_SELF"
-> & {
-  APP_CONFIG_CLOUDFLARE__API_TOKEN?: string;
-};
+  | "APP_CONFIG_CLOUDFLARE__API_TOKEN"
+  | "ARTIFACTS_ACCOUNT_ID"
+  | "ARTIFACTS_NAMESPACE"
+  | "STREAM"
+  | "WORKER_SELF"
+>;
 
 export function isWorkerEventsQueue(queue: string, env: Pick<Env, "WORKER_SELF">): boolean {
   return queue === workerEventsQueueName(env.WORKER_SELF);
@@ -144,22 +143,16 @@ async function ensureRepoEventSubscriptionIfConfigured(input: {
     console.warn("[event-queue] Cloudflare API token unavailable; cannot subscribe repo events");
     return;
   }
-
   const api = createCloudflareAccountApi({
     accountId: input.env.ARTIFACTS_ACCOUNT_ID,
     apiToken,
   });
-  const [queueId, existing, desired] = await Promise.all([
-    queueIdForWorkerEventQueue(api, input.env.WORKER_SELF),
-    listArtifactEventSubscriptions(api),
-    desiredArtifactRepoEventSubscription({
-      repoName: input.repoName,
-      workerName: input.env.WORKER_SELF,
-    }),
-  ]);
-  const result = await ensureArtifactEventSubscription(api, { desired, existing, queueId });
+  const result = await ensureArtifactRepoEventSubscriptionForWorker(api, {
+    repoName: input.repoName,
+    workerName: input.env.WORKER_SELF,
+  });
   if (result !== "unchanged") {
-    console.log(`[event-queue] artifact repo subscription ${desired.name} ${result}`);
+    console.log(`[event-queue] artifact repo subscription for ${input.repoName} ${result}`);
   }
 }
 
