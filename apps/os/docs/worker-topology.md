@@ -2,7 +2,7 @@
 
 OS deploys as **one Cloudflare Worker per environment** (`os-prd`,
 `os-preview-N`): the TanStack Start dashboard, the capnweb itx API, ingress
-routing, and **all eight Durable Object classes** live in a single script.
+routing, and all OS Durable Object classes live in a single script.
 
 The entry is [`src/worker.ts`](../src/worker.ts). Its fetch handler makes the
 one hostname/path routing decision (shared logic in `src/ingress.ts`):
@@ -15,9 +15,10 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 
 Durable Object classes (all same-script bindings — declared by class name in
 wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
-CapabilityHost, Project, Repo, Secret, Stream, StatefulWorker, and the
-container-backed CloudflareSandbox (`sandbox/Dockerfile`, built by
-`wrangler deploy`).
+AgentCollection, CapabilityHost, Device, Project, Repo, Scheduler, Secret,
+Stream, StatefulWorker, WorkspaceV2, and one container-backed CloudflareSandbox
+class per supported instance size (`sandbox/Dockerfile`, built by `wrangler
+deploy`).
 
 ## The typechecker sidecar (the "+1")
 
@@ -31,14 +32,13 @@ service binding; deploy.ts deploys it first (a name binding to a missing
 script fails the deploy). Local dev runs it as a vite `auxiliaryWorkers`
 entry in the same workerd.
 
-Dynamic worker BUILDS carry no sidecar at all: on artifact-cache misses the
-os worker drives the project's builder sandbox — real `npm install` plus
-pinned wrangler inside an ordinary project container
-(`src/domains/workers/build-backend.ts`); local dev runs the identical
-recipe on the host toolchain via the dev server's `/__dev/worker-build`
-endpoint. The retired `os-<env>-builder` workers (the old esbuild-wasm
-bundler) still exist on Cloudflare — workers are never deleted — but nothing
-binds them.
+Dynamic worker builds carry no sidecar or container. On an artifact-cache
+miss, the OS worker calls `@cloudflare/worker-bundler` directly inside
+workerd (`src/domains/workers/build-backend.ts`). `createWorker` produces
+loader modules; the deliberately basic browser-app path uses `createApp` and
+keeps its client output as a host-served asset rather than putting it in the
+dynamic isolate. The one-file server is transformed, not bundled. Local
+development and deployed environments run the same code path.
 
 ## Why one worker
 

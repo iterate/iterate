@@ -120,12 +120,12 @@ answer a cache miss with the previous artifact immediately:
 - New commit, build in flight → serve the previous build, dispatch the real
   build in the background (deduped per isolate + the in-flight marker).
 - Build failed (recorded per build key, short TTL) → keep serving the
-  previous build, with the builder's error attached.
+  previous build, with the bundler's error attached.
 - Nothing ever built → the building page; first-ever build failed → the
   build-failed page (`workerBuildFailedResponse`, marked
   `x-iterate-worker-build-failed`). Both poll their own URL and self-heal.
 - Blocking (RPC) callers never see stale code: they wait for the build, and a
-  failure is the named `WorkerBuildFailedError` with the builder's message.
+  failure is the named `WorkerBuildFailedError` with the bundler's message.
 
 What served rides on every fetch-lane response as `x-iterate-worker-serve` —
 platform-authored (the runner deletes whatever user code set, then stamps;

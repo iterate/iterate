@@ -22,6 +22,7 @@ import {
   type ServedWorkerSource,
   type WorkerBindings,
 } from "./worker-loader.ts";
+import { workerAssetResponse } from "./worker-assets.ts";
 
 export type DynamicWorkerTraceRole = "project_config" | "run_script" | "scheduler_action";
 
@@ -126,6 +127,23 @@ export class DynamicWorkerRunner {
     return resolved.cacheKey;
   }
 
+  /** Resolve and serve a host-side browser asset without creating a dynamic
+   * Worker isolate. StatefulWorkerDurableObject calls this only for the
+   * configured client bundle pathname. */
+  async resolveAsset(
+    ref: DynamicWorkerRef,
+    request: Request,
+    buildBudgetMs?: number,
+  ): Promise<Response | null> {
+    const resolved = await resolveWorkerSource({
+      buildBudgetMs,
+      projectId: this.#projectId,
+      source: ref.source,
+      waitUntil: this.#waitUntil,
+    });
+    return workerAssetResponse(request, resolved.assets);
+  }
+
   /**
    * A stateful class from a previously built artifact, by exact cache key —
    * never triggers a build (see resolveCachedArtifact). Null when the
@@ -189,13 +207,23 @@ export class DynamicWorkerRunner {
           ).fetch(withWorkerFetchDispatchHeader(request, { buildBudgetMs, ref })),
         );
       } else {
-        const { resolved, worker } = await this.#load(ref, buildBudgetMs);
-        const entrypoint = worker.getEntrypoint(ref.entrypoint, {
-          props: ref.props ?? {},
-        }) as Fetcher;
+        const resolved = await resolveWorkerSource({
+          buildBudgetMs,
+          projectId: this.#projectId,
+          source: ref.source,
+          waitUntil: this.#waitUntil,
+        });
+        const asset = workerAssetResponse(request, resolved.assets);
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
-        response = withWorkerServeInfo(await entrypoint.fetch(request), resolved.serveInfo);
+        if (asset !== null) {
+          response = withWorkerServeInfo(asset, resolved.serveInfo);
+        } else {
+          const entrypoint = this.#loadResolved(ref, resolved).getEntrypoint(ref.entrypoint, {
+            props: ref.props ?? {},
+          }) as Fetcher;
+          response = withWorkerServeInfo(await entrypoint.fetch(request), resolved.serveInfo);
+        }
       }
       span.setAttribute("http.response.status_code", response.status);
       return response;

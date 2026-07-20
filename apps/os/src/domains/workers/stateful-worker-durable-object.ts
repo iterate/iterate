@@ -8,6 +8,7 @@ import {
   replayPath,
 } from "../capability-host/live-capability.ts";
 import { takeWorkerFetchDispatch, workerBuildStatus } from "./worker-fetch-dispatch.ts";
+import { isWorkerClientAssetRequest } from "./worker-assets.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { DynamicWorkerRunner } from "./worker-runner.ts";
 
@@ -110,6 +111,20 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     const ref = taken.dispatch.ref;
     if (ref.type !== "stateful") {
       throw new Error("StatefulWorkerDurableObject.fetch dispatched with a non-stateful ref.");
+    }
+    if (isWorkerClientAssetRequest(taken.request, ref.source.options)) {
+      try {
+        const asset = await this.#workerRunner.resolveAsset(
+          ref,
+          taken.request,
+          taken.dispatch.buildBudgetMs,
+        );
+        if (asset !== null) return asset;
+      } catch (error) {
+        const buildStatus = workerBuildStatus(error);
+        if (buildStatus !== null) return buildStatus.response;
+        throw error;
+      }
     }
     let facet: unknown;
     try {

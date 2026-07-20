@@ -291,14 +291,15 @@ optional `props`) or `stateful` (a DurableObject class export hosted by
 `StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
 orthogonal file source plus build options: files come `inline` or
 from a `repo` snapshot (branch late-bound or commit-pinned, masked by
-include/exclude globs), and the build pipeline — real `npm install` plus
-pinned wrangler, run in the project's builder sandbox (local dev: the same
-recipe on the host toolchain; `domains/workers/build-recipe.ts`) — bundles
-them, multi-file TypeScript and `package.json` npm dependencies included,
-into a KV-cached, loader-ready artifact keyed deterministically (see
-`docs/dynamic-worker-build-requirements.md`). Builds pass files by value and
-leave no events in the journal; build failures reach the
-caller as plain errors. Inside
+include/exclude globs), and `@cloudflare/worker-bundler` runs directly in
+workerd (`domains/workers/build-backend.ts`). `createWorker` bundles ordinary
+multi-file TypeScript and registry dependencies into loader-ready modules;
+the restricted `clientEntryPoint` path uses `createApp` to produce one
+separately served text browser asset while its single server file is
+transform-only. Browser URL imports such as `esm.sh` remain external.
+Artifacts are cached in KV under a deterministic key. Builds pass files by
+value and leave no events in the journal; build failures reach the caller as
+plain errors. Inside
 loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the
 default repo's `worker.ts`.

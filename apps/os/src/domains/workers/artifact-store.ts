@@ -8,10 +8,10 @@
  * key), and `expirationTtl` gives cache expiry without a cleanup worker.
  */
 
-// v2: the sandbox/host wrangler pipeline replaced the esbuild-wasm builder —
-// every v1 artifact is from the old toolchain and must be unreachable (the
-// version prefix below does that; KV TTLs clean the orphans up).
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 2;
+// v4 adds host-served browser assets for the two-file app shape. The version
+// prefix makes every older artifact layout unreachable; KV TTLs clean the
+// orphans up.
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 4;
 
 /** Cache lifetime for build artifacts. Expiry only costs a rebuild on next
  * use. ("Reproducible" is approximate: npm ranges re-resolve at build time,
@@ -21,6 +21,7 @@ const WORKER_BUILD_ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const KV_PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;
 
 export type WorkerBuildArtifact = {
+  assets: Record<string, string>;
   buildKey: string;
   mainModule: string;
   modules: Record<string, string>;
@@ -32,6 +33,9 @@ export type WorkerBuildArtifact = {
  * listing stays a diagnostics/recovery tool, never the hot path.
  */
 type WorkerBuildArtifactManifest = {
+  assetNames: string[];
+  /** Diagnostics only — never read back. */
+  assetSizes: Record<string, number>;
   buildKey: string;
   createdAt: string;
   mainModule: string;
@@ -49,12 +53,14 @@ function moduleKey(buildKey: string, moduleName: string) {
   return `${KV_PREFIX}/${buildKey}/modules/${encodeURIComponent(moduleName)}`;
 }
 
-/** How long an in-flight marker suppresses duplicate budgeted builds. Must
- * cover the recipe's whole per-build ceiling (install + bundle timeouts plus
- * container-boot slack — see build-recipe.ts), or duplicate builds pile on
- * exactly when a build is slowest; short enough that a crashed builder only
- * delays budgeted callers, never blocks them forever (the artifact write
- * always wins over the marker). */
+function assetKey(buildKey: string, pathname: string) {
+  return `${KV_PREFIX}/${buildKey}/assets/${encodeURIComponent(pathname)}`;
+}
+
+/** How long an in-flight marker suppresses duplicate budgeted builds. Long
+ * enough to cover dependency installation and bundling, but short enough
+ * that a crashed build only delays budgeted callers rather than blocking
+ * them forever (the artifact write always wins over the marker). */
 const BUILD_IN_FLIGHT_TTL_SECONDS = 360;
 
 function inFlightKey(buildKey: string) {
@@ -68,12 +74,9 @@ function inFlightKey(buildKey: string) {
  * commits a NEW key — the TTL exists only so a transient failure mislabelled
  * as genuine (npm weather during install) heals on its own. It must be LONG:
  * abandoned projects with broken heads retry delivery forever, and each TTL
- * expiry costs a real builder-container rebuild whose exec resets the
- * container's idle timer. At 120s that loop kept one warm container per
- * broken-head project indefinitely — an e2e run leaves several, which pinned
- * the basic instance fleet at its cap and starved every other placement
- * (observed live on preview, 2026-07-18). At 15 minutes the same loop is a
- * ~3% duty cycle and the fleet drains.
+ * expiry costs another full dependency install and bundle. Fifteen minutes
+ * bounds that retry load while still letting a transient registry failure
+ * heal without a source change.
  */
 const BUILD_FAILURE_TTL_SECONDS = 15 * 60;
 
@@ -92,12 +95,12 @@ export type WorkerBuildFailure = {
 
 /**
  * The build genuinely ran and failed — the message is the bundler's own
- * error (compile errors, unresolvable dependencies). The builder wraps ONLY
- * real bundler failures in this name; transport/cancellation errors stay
- * unwrapped so callers retry them instead of recording a failure. Name-based
+ * error (validation, compile errors, unresolvable dependencies). The direct
+ * build backend applies this name only around the worker-bundler operation;
+ * repo, cache, and host-operation errors remain outside it. Name-based
  * matching because the error crosses Workers RPC (which preserves
  * `error.name` but not class identity). Lives here (not worker-loader.ts)
- * because the builder worker throws it and must not import the loader's env.
+ * because this module must not import the loader's env.
  */
 export class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";
@@ -140,7 +143,7 @@ function lastGoodKey(workerKey: string) {
 }
 
 /** `get` returns null on any incomplete artifact (no manifest, or a listed
- * module missing): both are cache misses that a rebuild from the
+ * module/asset missing): both are cache misses that a rebuild from the
  * deterministic input repairs. */
 export class KvWorkerBuildArtifactStore {
   constructor(
@@ -173,7 +176,7 @@ export class KvWorkerBuildArtifactStore {
   /** The marker means "a build is actually running": a failed build clears it
    * so budgeted callers retry (or serve the recorded failure) instead of
    * waiting out a marker TTL that outlives the shorter-lived failure record.
-   * Best-effort — the TTL remains the backstop for a crashed builder. */
+   * Best-effort — the TTL remains the backstop for a crashed build. */
   async clearBuildInFlight(buildKey: string): Promise<void> {
     await this.kv.delete(inFlightKey(buildKey));
   }
@@ -208,32 +211,51 @@ export class KvWorkerBuildArtifactStore {
     const manifest = await this.kv.get<WorkerBuildArtifactManifest>(manifestKey(buildKey), "json");
     if (manifest === null) return null;
 
-    const moduleEntries = await Promise.all(
-      manifest.moduleNames.map(
-        async (name) => [name, await this.kv.get(moduleKey(buildKey, name), "text")] as const,
+    const [moduleEntries, assetEntries] = await Promise.all([
+      Promise.all(
+        manifest.moduleNames.map(
+          async (name) => [name, await this.kv.get(moduleKey(buildKey, name), "text")] as const,
+        ),
       ),
-    );
+      Promise.all(
+        manifest.assetNames.map(
+          async (name) => [name, await this.kv.get(assetKey(buildKey, name), "text")] as const,
+        ),
+      ),
+    ]);
     const modules: Record<string, string> = {};
     for (const [name, content] of moduleEntries) {
       if (content === null) return null;
       modules[name] = content;
     }
+    const assets: Record<string, string> = {};
+    for (const [name, content] of assetEntries) {
+      if (content === null) return null;
+      assets[name] = content;
+    }
 
-    return { buildKey, mainModule: manifest.mainModule, modules };
+    return { assets, buildKey, mainModule: manifest.mainModule, modules };
   }
 
   async put(artifact: WorkerBuildArtifact): Promise<void> {
     const expirationTtl = this.options.expirationTtlSeconds ?? WORKER_BUILD_ARTIFACT_TTL_SECONDS;
 
-    // Module keys first, manifest last: a reader that finds the manifest may
-    // rely on every listed module having been written before it.
-    await Promise.all(
-      Object.entries(artifact.modules).map(([name, content]) =>
+    // Content keys first, manifest last: a reader that finds the manifest may
+    // rely on every listed module and asset having been written before it.
+    await Promise.all([
+      ...Object.entries(artifact.modules).map(([name, content]) =>
         this.kv.put(moduleKey(artifact.buildKey, name), content, { expirationTtl }),
       ),
-    );
+      ...Object.entries(artifact.assets).map(([name, content]) =>
+        this.kv.put(assetKey(artifact.buildKey, name), content, { expirationTtl }),
+      ),
+    ]);
 
     const manifest: WorkerBuildArtifactManifest = {
+      assetNames: Object.keys(artifact.assets).sort(),
+      assetSizes: Object.fromEntries(
+        Object.entries(artifact.assets).map(([name, content]) => [name, content.length]),
+      ),
       buildKey: artifact.buildKey,
       createdAt: new Date().toISOString(),
       mainModule: artifact.mainModule,

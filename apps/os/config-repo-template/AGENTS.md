@@ -22,20 +22,20 @@ installed at build time. The platform's capability types and worker base
 classes come from the `iterate` package — `import { IterateWorkerEntrypoint,
 IterateDurableObject, type StreamEvent } from "iterate/sdk"`. It's a
 devDependency here: the platform supplies the runtime `iterate/*` subpaths to
-every worker build as virtual modules, so the build never installs them; run
+ordinary worker builds as virtual modules, so the build never installs them; run
 `npm install` to get typechecking and editor support. Shared external runtimes
 used by those modules, such as `@iterate-com/capnweb`, remain ordinary
 dependencies so app code and the platform module share one implementation.
 
-Every worker class — the root project worker AND the apps — extends one of
-the two sdk base classes: `IterateWorkerEntrypoint` (stateless) or
+The root project worker and its in-file examples extend one of the two SDK
+base classes: `IterateWorkerEntrypoint` (stateless) or
 `IterateDurableObject` (stateful). Both carry the same platform surface:
 `processEventBatch` unpacks delivered event batches into overrideable
 `processEvent(event)` calls, `invokeCapability` dispatches flattened
 `itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP
 into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
-The example apps are named exports of the same `worker.ts`, routed by the
+The in-file example apps are named exports of the same `worker.ts`, routed by the
 default export's `fetch`: `HelloApp` (stateless, extends
 `IterateWorkerEntrypoint`), `InternalApp` (stateless, with authenticated HTML
 and a Cap'n Web API), and `CounterApp` (stateful, extends
@@ -61,6 +61,13 @@ results are serialized copies, so it can serve data but never a socket.
 shape for anything real-time. Method calls on apps
 (`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP
 rides the fetch lane.
+
+`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app
+shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per
+app. The client entry is served separately and imports React directly from
+`esm.sh`; those browser dependencies are not copied into the Worker bundle.
+Keep this path dependency-light. It is not a hidden Vite or full-stack
+framework pipeline.
 
 `InternalApp` is the canonical authenticated userspace-app shape: partial-fetch
 HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an

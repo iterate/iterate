@@ -7,6 +7,12 @@ pipeline bundles it — together with any files it imports and the npm
 dependencies in `package.json` — into a loader-ready worker on first use, so
 committing a change here changes the running worker on its next use.
 
+`apps/todo` and `apps/guestbook` are deliberately basic browser examples.
+Each contains only `server.tsx` and `client.tsx`: the server is a Durable
+Object, and the client is a separately served browser bundle whose React
+imports remain direct `esm.sh` URL imports. There is no app-local npm install,
+Vite config, router generator, or full-stack framework adapter.
+
 ## Authenticated web apps
 
 `InternalApp` in `worker.ts` is a complete project-member-only app. Its normal

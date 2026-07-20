@@ -32,6 +32,7 @@ class FakeKv {
 }
 
 const artifact: WorkerBuildArtifact = {
+  assets: { "/client.js": "console.log('browser');" },
   buildKey: "abc123",
   mainModule: "worker.js",
   modules: {
@@ -55,6 +56,7 @@ describe("KvWorkerBuildArtifactStore", () => {
       expect.arrayContaining([
         `${PREFIX}/abc123/modules/worker.js`,
         `${PREFIX}/abc123/modules/${encodeURIComponent("lib/helper.js")}`,
+        `${PREFIX}/abc123/assets/${encodeURIComponent("/client.js")}`,
       ]),
     );
 
@@ -62,7 +64,7 @@ describe("KvWorkerBuildArtifactStore", () => {
 
     // Expiry is the only cleanup mechanism the cache has — every write must
     // carry it or an artifact lives forever.
-    expect(kv.putTtls).toHaveLength(3);
+    expect(kv.putTtls).toHaveLength(4);
     for (const ttl of kv.putTtls) expect(ttl).toBeGreaterThan(0);
   });
 
@@ -76,6 +78,13 @@ describe("KvWorkerBuildArtifactStore", () => {
     const kv = new FakeKv();
     await store(kv).put(artifact);
     kv.data.delete(`${PREFIX}/abc123/modules/${encodeURIComponent("lib/helper.js")}`);
+    expect(await store(kv).get("abc123")).toBeNull();
+  });
+
+  it("treats a manifest with a missing browser asset as a cache miss", async () => {
+    const kv = new FakeKv();
+    await store(kv).put(artifact);
+    kv.data.delete(`${PREFIX}/abc123/assets/${encodeURIComponent("/client.js")}`);
     expect(await store(kv).get("abc123")).toBeNull();
   });
 
@@ -103,9 +112,9 @@ describe("KvWorkerBuildArtifactStore", () => {
     expect(await store(kv).getBuildFailure("abc123")).toBeNull();
     await store(kv).putBuildFailure("abc123", failure);
     expect(await store(kv).getBuildFailure("abc123")).toEqual(failure);
-    // Long enough that broken-head retry loops replay instead of rebuilding
-    // (container churn), short enough that a mislabelled transient failure
-    // (npm weather) heals within the hour.
+    // Long enough that broken-head retry loops replay instead of rebuilding,
+    // short enough that a mislabelled transient registry failure heals within
+    // the hour.
     expect(kv.putTtls[0]).toBeLessThanOrEqual(60 * 60);
     expect(kv.putTtls[0]).toBeGreaterThanOrEqual(10 * 60);
   });

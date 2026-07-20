@@ -4,8 +4,7 @@ const path = require("node:path");
  * Lint-codegen preset (see iterate-processors-virtual-module.generated.ts):
  * bundles packages/iterate/src/processors/index.ts — the stream-processor
  * machinery, its in-package imports (live-state engine, rpc retention), and
- * capnweb (a GitHub-tarball dependency the worker build pipeline's
- * registry-semver-only npm installer cannot fetch) — into ONE plain-JS
+ * capnweb (kept embedded rather than fetched by worker-bundler) — into ONE plain-JS
  * module, embedded as the string worker-loader.ts injects into every dynamic
  * worker build as `virtualModules["iterate/processors"]`. Unlike the sdk
  * embed (a single dependency-free file, transform only), this is a real

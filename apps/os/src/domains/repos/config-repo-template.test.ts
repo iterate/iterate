@@ -6,40 +6,26 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
-import {
-  guestbookAppRef,
-  guestbookCreationEvents,
-  guestbookPageSource,
-  guestbookSubscriptionConfigVersion,
-} from "../../../config-repo-template/apps/guestbook/src/guestbook-ref.ts";
-import {
-  tanstackPageSource,
-  tanstackTodosRef,
-} from "../../../config-repo-template/apps/tanstack/src/todos-ref.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template ships policy only — no seeded apps, integrations, or sdk snapshot", () => {
+test("template ships only the two deliberately basic app pairs", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
   // itx.integrations.<slug>), projects grow their own apps/ and
   // integrations/ by editing their repo, and the complete GitHub review
   // workflow is userspace code in worker.ts.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  // The seeded apps: the TanStack Start todo app at apps/tanstack and the
-  // guestbook at apps/guestbook (each its own package.json/vite build — the
-  // platform's "vite" worker pipeline). Everything else under apps/ is still
-  // the project's to grow.
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
-  expect(appPaths.length).toBeGreaterThan(0);
-  expect(
-    appPaths.every(
-      (path) => path.startsWith("apps/tanstack/") || path.startsWith("apps/guestbook/"),
-    ),
-  ).toBe(true);
+  expect(appPaths).toEqual([
+    "apps/guestbook/client.tsx",
+    "apps/guestbook/server.tsx",
+    "apps/todo/client.tsx",
+    "apps/todo/server.tsx",
+  ]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
   expect(paths).not.toContain("github-reviews.ts");
@@ -47,62 +33,26 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
   };
-  // The platform-injected modules deliberately leave their real shared
-  // runtimes external: iterate/live-state and the user's RpcTargets share
-  // one Cap'n Web runtime, so the root worker build installs it. Everything
-  // the seeded apps need (react, tanstack, zod for the guestbook's processor
-  // contract) lives in THEIR manifests — each app's vite build installs its
-  // own tree.
+  // The root project worker still uses Cap'n Web. Neither basic app has a
+  // package manifest or an npm dependency tree of its own.
   expect(templatePackageJson.dependencies).toEqual({
     "@iterate-com/capnweb": expect.any(String),
   });
 });
 
-test("TanStack pages and stateful APIs have independent worker entries", () => {
-  const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
-  expect(paths).toEqual(
-    expect.arrayContaining([
-      "apps/guestbook/src/guestbook-app.ts",
-      "apps/tanstack/src/todos-app.ts",
-    ]),
-  );
-
-  for (const [pageSource, statefulRef] of [
-    [guestbookPageSource, guestbookAppRef],
-    [tanstackPageSource, tanstackTodosRef],
-  ] as const) {
-    expect(pageSource.options.pipeline).toBe("vite");
-    expect(statefulRef.source.options).not.toHaveProperty("pipeline");
-    expect(statefulRef.source.options.entryPoint).not.toBe("worker.ts");
-    expect(statefulRef.source.options.minify).toBe(true);
-    expect(statefulRef.updatePolicy).toBe("stale-while-rebuild");
+test("basic apps use one server entry, one client entry, and external browser imports", () => {
+  for (const app of ["guestbook", "todo"]) {
+    expect(templateFile(`apps/${app}/server.tsx`)).toContain('from "cloudflare:workers"');
+    const client = templateFile(`apps/${app}/client.tsx`);
+    expect(client).toContain('from "https://esm.sh/react@19.2.4"');
+    expect(client).toContain('from "https://esm.sh/react-dom@19.2.4/client"');
   }
-});
 
-test("guestbook wake delivery replaces the legacy Vite-backed subscription", () => {
-  const subscription = guestbookCreationEvents()[1];
-
-  // The legacy wake recipe can be retried after the repository has already
-  // moved GuestbookApp out of its Vite build. It must not be able to poison
-  // the new app's host facet under the old durable identity.
-  expect(guestbookAppRef.durableWorkerKey).not.toBe("app-guestbook");
-  expect(subscription).toMatchObject({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      subscriptionKey: "app-guestbook#guestbook",
-      delivery: {
-        mode: "wake",
-        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
-      },
-    },
-  });
-  // The pre-split template committed the same subscription identity with
-  // this append idempotency key. A distinct event must reach the stream's
-  // replacement reducer while preserving its delivery cursor.
-  expect(subscription?.idempotencyKey).not.toBe("guestbook/subscription");
-  expect(subscription?.idempotencyKey).toBe(
-    `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,
-  );
+  const worker = templateFile("worker.ts");
+  expect(worker.match(/clientEntryPoint: "client\.tsx"/g)).toHaveLength(2);
+  expect(worker.match(/entryPoint: "server\.tsx"/g)).toHaveLength(2);
+  expect(worker).not.toContain("pipeline:");
+  expect(worker).not.toContain("tanstack");
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {

@@ -69,7 +69,6 @@ export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
-export { WorkerBuilderDurableObject } from "./domains/workers/builder-pool-sandbox.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
@@ -246,8 +245,8 @@ async function apiFetch(
       return applyProjectWorkerOverlay(request, response);
     } catch (error) {
       // A first-ever build shows the polling "building" page rather than
-      // hanging the request (the build keeps running in the builder worker);
-      // a failed first-ever build shows the builder's error. Both self-heal —
+      // hanging the request (the in-workerd build keeps running);
+      // a failed first-ever build shows the bundler's error. Both self-heal —
       // once a good build exists, the runner serves it stale instead of
       // landing here.
       const buildStatus = workerBuildStatus(error);

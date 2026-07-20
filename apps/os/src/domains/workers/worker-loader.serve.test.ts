@@ -27,12 +27,12 @@ const h = vi.hoisted(() => {
     // stampede-guard tests hold a build "in flight" deterministically.
     buildGate: undefined as Promise<void> | undefined,
     failBuilds: false,
-    failTransport: false,
+    failRuntime: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
   };
-  const executeWorkerBuild = async (input: { buildKey: string; files: Record<string, string> }) => {
-    state.buildCalls.push(input.buildKey);
+  const executeWorkerBuild = async (input: { files: Record<string, string> }) => {
+    state.buildCalls.push(input.files["worker.ts"] ?? "unknown source");
     if (state.buildGate !== undefined) await state.buildGate;
     if (state.failBuilds) {
       // Mirror the real backend's classification contract: genuine build
@@ -42,8 +42,9 @@ const h = vi.hoisted(() => {
       failure.name = "WorkerBuildFailedError";
       throw failure;
     }
-    if (state.failTransport) throw new Error("container transport disconnected");
+    if (state.failRuntime) throw new Error("build runtime interrupted");
     return {
+      assets: {},
       mainModule: "worker.js",
       modules: { "worker.js": `// build of ${input.files["worker.ts"]}` },
     };
@@ -63,7 +64,19 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock("../../env.ts", () => ({ itxEnv: h.itxEnv }));
-vi.mock("./build-backend.ts", () => ({ executeWorkerBuild: h.executeWorkerBuild }));
+vi.mock("./build-backend.ts", () => ({
+  WORKER_BUNDLER_VERSION: "0.2.1",
+  WORKER_COMPATIBILITY_DATE: "2026-05-01",
+  WORKER_COMPATIBILITY_FLAGS: ["nodejs_compat"],
+  canonicalWorkerBuildOptions: (options: Record<string, unknown>) => ({
+    ...options,
+    entryPoint: options.entryPoint ?? "worker.ts",
+    ...(options.clientEntryPoint === undefined
+      ? { virtualModules: options.virtualModules ?? {} }
+      : { bundle: options.bundle === true ? true : false }),
+  }),
+  executeWorkerBuild: h.executeWorkerBuild,
+}));
 
 const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
 const { resolveWorkerSource } = await import("./worker-loader.ts");
@@ -143,7 +156,7 @@ describe("resolveWorkerSource serve matrix", () => {
     h.state.failBuilds = true;
     try {
       // Blocking callers keep commit-then-call-sees-new-code: they get the
-      // builder's own message under the named error, never stale code.
+      // bundler's own message under the named error, never stale code.
       const blocking = resolveWorkerSource({
         projectId: "prj_c",
         source: repoSource("/repos/c"),
@@ -199,9 +212,9 @@ describe("resolveWorkerSource serve matrix", () => {
     }
   });
 
-  test("a transport error is never recorded as a build failure — the next caller retries the build", async () => {
+  test("an unclassified runtime error is never recorded as a build failure — the next caller retries", async () => {
     setCommit("c1", "repo-f-v1", "F1");
-    h.state.failTransport = true;
+    h.state.failRuntime = true;
     try {
       // The blocking caller sees the raw infra error, not a named build
       // failure...
@@ -210,10 +223,10 @@ describe("resolveWorkerSource serve matrix", () => {
         source: repoSource("/repos/f"),
         waitUntil,
       });
-      await expect(blocking).rejects.toThrow("container transport disconnected");
+      await expect(blocking).rejects.toThrow("build runtime interrupted");
       await expect(blocking).rejects.not.toSatisfy(isWorkerBuildFailedError);
     } finally {
-      h.state.failTransport = false;
+      h.state.failRuntime = false;
     }
 
     // ...and no failure marker was written, so the next (budgeted) caller
@@ -231,8 +244,7 @@ describe("resolveWorkerSource serve matrix", () => {
 
   test("a blocking same-key retry replays the recorded failure without a rebuild", async () => {
     // The at-least-once delivery loop retries blocked builds indefinitely; a
-    // deterministically broken source must not boot a builder container per
-    // attempt (that churn starved preview's whole container capacity). Within
+    // deterministically broken source must not be rebuilt per attempt. Within
     // the failure record's TTL the retry replays it; a fix commits a new head
     // and therefore a new key.
     setCommit("c1", "repo-i-v1", "I1");
@@ -262,8 +274,7 @@ describe("resolveWorkerSource serve matrix", () => {
   test("a bare repo ref and the canonical default-masked ref share one build key", async () => {
     // The template's app refs omit exclude masks while defaultProjectWorkerRef
     // spells them out — resolveFileSource canonicalizes the default so both
-    // hash to one key, or the deploy-time template seed would never match the
-    // apps and every fresh project's first app click would pay a cold build.
+    // hash to one project-scoped artifact.
     setCommit("c1", "repo-h-v1", "H1");
     await resolveWorkerSource({
       projectId: "prj_h",
@@ -294,9 +305,9 @@ describe("resolveWorkerSource serve matrix", () => {
     await resolveWorkerSource({ projectId: "prj_g1", source: repoSource("/repos/g"), waitUntil });
     const callsAfterFirst = h.state.buildCalls.length;
 
-    // Identical source + options, different project: a project-trusted
-    // principal can influence its own builder sandbox's output, so the cache
-    // must NOT answer across projects — prj_g2 pays its own build.
+    // Identical source + options, different project: dependency ranges resolve
+    // at build time, so the cache must NOT answer across projects — prj_g2
+    // pays its own build.
     const other = await resolveWorkerSource({
       projectId: "prj_g2",
       source: repoSource("/repos/g"),
@@ -322,8 +333,7 @@ describe("resolveWorkerSource serve matrix", () => {
   // A project worker is loaded independently by every stream delivering to
   // it, so one commit fans out into many concurrent cold resolves of ONE
   // build key. The stampede guard makes the followers wait on the first
-  // resolve's build instead of each launching a duplicate (observed live:
-  // 100 pool builds for 27 distinct keys drowned the builder pool).
+  // resolve's build instead of each launching a duplicate.
   test("concurrent same-key blocking resolves share one build", async () => {
     setCommit("c1", "repo-sg-v1", "SG1");
     const callsBefore = h.state.buildCalls.length;

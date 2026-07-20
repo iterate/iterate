@@ -5,13 +5,44 @@ import {
   type Project,
   type ProjectAuthActor,
   type ProjectAuthCredentials,
+  type StatefulDynamicWorkerRef,
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
-import { guestbookAppRef, guestbookPageSource } from "./apps/guestbook/src/guestbook-ref.ts";
-import { tanstackPageSource, tanstackTodosRef } from "./apps/tanstack/src/todos-ref.ts";
+
+const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
+const todoAppRef = {
+  className: "TodoApp",
+  durableWorkerKey: "app-todo",
+  path: "/",
+  source: {
+    files: repoFiles,
+    options: {
+      clientEntryPoint: "client.tsx",
+      entryPoint: "server.tsx",
+      minify: true,
+      rootDir: "apps/todo",
+    },
+  },
+  type: "stateful",
+} satisfies StatefulDynamicWorkerRef;
+const guestbookAppRef = {
+  className: "GuestbookApp",
+  durableWorkerKey: "app-guestbook",
+  path: "/",
+  source: {
+    files: repoFiles,
+    options: {
+      clientEntryPoint: "client.tsx",
+      entryPoint: "server.tsx",
+      minify: true,
+      rootDir: "apps/guestbook",
+    },
+  },
+  type: "stateful",
+} satisfies StatefulDynamicWorkerRef;
 
 // This is ordinary project policy. Every GitHub-linked project repository is
 // in scope; no platform GitHub code knows that pull-request agents exist.
@@ -69,10 +100,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         break;
       }
       default:
-        // The guestbook needs no lane here: its events reach GuestbookApp
-        // through the durable WAKE subscription its creation batch configures
-        // (guestbookCreationEvents in apps/guestbook/src/guestbook.ts) — the
-        // stream spine dials the app directly.
         break;
     }
   }
@@ -101,26 +128,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         },
       });
     }
-    if (app === "tanstack") {
-      // A real TanStack Start app living at apps/tanstack in this repo: the
-      // platform's "vite" pipeline runs ITS OWN `npm run build` and serves
-      // the built pages + client assets; its /api rides into the app's
-      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state
-      // over Cap'n Web). Pages are gated to project members HERE; /api is
-      // the unauthenticated Cap'n Web root that authenticates in-band from
-      // the app cookie, exactly like the internal app.
-      const url = new URL(req.url);
-      if (url.pathname === "/api") {
-        return this.fetchDynamicWorker(req, tanstackTodosRef);
-      }
+    if (app === "todo") {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      return this.fetchDynamicWorker(req, {
-        type: "stateless",
-        path: "/",
-        source: tanstackPageSource,
-      });
+      return this.fetchDynamicWorker(req, todoAppRef);
     }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
@@ -135,23 +147,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
-      // A second TanStack Start app at apps/guestbook, and a second SHAPE of
-      // state: where the tanstack todo app keeps rows in its Durable Object's
-      // SQLite, the guestbook's state is a stream-processor FOLD of durable
-      // events at /guestbook. The imported ref is the ONE identity the wake
-      // subscription persists too (guestbook-ref.ts), so ingress and the
-      // stream spine always dial the same Durable Object and the same build.
-      // The guestbook is deliberately public: anyone can read and sign, so
-      // no auth partial gates the pages and /api needs no authenticate step.
-      const url = new URL(req.url);
-      if (url.pathname === "/api") {
-        return this.fetchDynamicWorker(req, guestbookAppRef);
-      }
-      return this.fetchDynamicWorker(req, {
-        type: "stateless",
-        path: "/",
-        source: guestbookPageSource,
-      });
+      return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
@@ -168,9 +164,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
-                <li><a href="${appUrl("tanstack")}">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>
+                <li><a href="${appUrl("todo")}">todo</a> (basic React + SQLite Durable Object, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
-                <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor + TanStack Start, public)</li>
+                <li><a href="${appUrl("guestbook")}">guestbook</a> (basic React + SQLite Durable Object, public)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>

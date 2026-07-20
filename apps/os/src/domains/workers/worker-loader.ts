@@ -15,12 +15,12 @@ import {
   workerBuildKey,
   type ResolvedWorkerFileSource,
 } from "./build-key.ts";
-import { executeWorkerBuild } from "./build-backend.ts";
 import {
   WORKER_COMPATIBILITY_DATE,
   WORKER_COMPATIBILITY_FLAGS,
   canonicalWorkerBuildOptions,
-} from "./build-recipe.ts";
+  executeWorkerBuild,
+} from "./build-backend.ts";
 import type { WorkerServeInfo } from "./worker-serve-info.ts";
 import { stableSha256 } from "./utils.ts";
 
@@ -48,6 +48,8 @@ export function isWorkerBuildInProgressError(error: unknown): boolean {
  * itx paths without leaking bindings or entrypoint props across scopes.
  */
 export type ResolvedWorkerSource = {
+  /** Browser assets stay in the host and are never passed to Worker Loader. */
+  assets: Record<string, string>;
   cacheKey: string;
   mainModule: string;
   modules: Record<string, string>;
@@ -99,7 +101,7 @@ export async function resolveWorkerSource({
   // included — so a browser-facing caller's bound is a real bound, not just a
   // bound on the bundler.
   return await withBuildBudget(
-    resolveThroughBuilder({
+    resolveThroughBuild({
       budgeted: buildBudgetMs !== undefined,
       options,
       projectId,
@@ -155,7 +157,7 @@ type ResolveContext = {
 // callers instead WAIT by polling the artifact cache with their own request's
 // I/O (waitForBuildElsewhere) and fall back to a duplicate build — which is
 // harmless (content-addressed, idempotent artifact writes), just redundant.
-async function resolveThroughBuilder(input: {
+async function resolveThroughBuild(input: {
   /** Whether the caller runs under a build budget — the fetch lane. Budgeted
    * callers prefer availability (previous good build now, fresh build in the
    * background); blocking callers keep commit-then-call-sees-new-code. */
@@ -167,25 +169,17 @@ async function resolveThroughBuilder(input: {
 }): Promise<ServedWorkerSource> {
   const options = canonicalWorkerBuildOptions(input.options);
   const resolved = await resolveFileSource({ projectId: input.projectId, source: input.source });
-  const sharedKey = await workerBuildKey({
+  const contentKey = await workerBuildKey({
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     options,
     source: resolved,
   });
-  // Runtime builds live under the project-scoped key (a project can influence
-  // its own builder sandbox's output, so runtime artifacts are never shared);
-  // the content-only key is the TRUSTED read-first tier, written exclusively
-  // by the deploy-time template seeder — see build-key.ts.
-  const buildKey = await projectWorkerBuildKey(input.projectId, sharedKey);
+  const buildKey = await projectWorkerBuildKey(input.projectId, contentKey);
   const context: ResolveContext = { options, projectId: input.projectId, resolved };
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
 
-  const [trustedHit, projectHit] = await Promise.all([
-    resolveCachedArtifact(sharedKey),
-    resolveCachedArtifact(buildKey),
-  ]);
-  const hit = trustedHit ?? projectHit;
+  const hit = await resolveCachedArtifact(buildKey);
   if (hit !== null) {
     input.waitUntil(noteLastGoodBuild(store, context, hit.cacheKey));
     return freshServe(hit, resolved);
@@ -216,21 +210,18 @@ async function resolveThroughBuilder(input: {
   } else {
     // Blocking callers REPLAY a recorded failure within its TTL instead of
     // re-running the build. Same-key retries — the at-least-once event
-    // delivery loop above all — would otherwise boot a builder container per
-    // attempt for a deterministically broken source, and enough broken-head
-    // projects churning that way starves the deployment's whole container
-    // capacity (observed live on preview e2e). A fix always commits a NEW
-    // head → new key, so healing is never gated on the TTL.
+    // delivery loop above all — would otherwise rebuild per attempt for a
+    // deterministically broken source. A fix always commits a
+    // NEW head → new key, so healing is never gated on the TTL.
     const recorded = await store.getBuildFailure(buildKey);
     if (recorded !== null) throw new WorkerBuildFailedError(recorded.message);
 
     // Stampede guard: a project worker is loaded independently by every
     // stream delivering to it, so one commit can fan out into DOZENS of
-    // concurrent cold resolves of ONE key (observed live: 100 pool builds
-    // for 27 distinct keys in one e2e run, top key built 24×, drowning the
-    // builder pool). When THIS ISOLATE is already building the key, wait for
-    // its artifact instead of piling on. Never worse than building: the wait
-    // is bounded and falls back to a duplicate build.
+    // concurrent cold resolves of ONE key. When THIS ISOLATE is already
+    // building the key, wait for its artifact instead of piling on. Never
+    // worse than building: the wait is bounded and falls back to a duplicate
+    // build.
     const built = await waitForBuildElsewhere(store, buildKey);
     if (built !== null) {
       input.waitUntil(noteLastGoodBuild(store, context, buildKey));
@@ -242,18 +233,16 @@ async function resolveThroughBuilder(input: {
 }
 
 /**
- * One build-run through the build backend (the project's builder sandbox, or
- * local dev's host-toolchain endpoint — build-backend.ts). The file snapshot
- * is resolved HERE and passed by value (this worker owns the REPO binding),
- * sized by the ref's source masks; the artifact is written to the cache by
- * THIS side (the container never holds KV credentials) and returned by value,
+ * One in-workerd build through Cloudflare's worker-bundler. The file snapshot
+ * is resolved here and passed by value, sized by the ref's source masks; the
+ * artifact is written to the cache and returned by value,
  * so nothing waits on KV write propagation. A GENUINE build failure (the
  * backend's named error) is recorded so the fetch lane can fall back without
  * re-running it — and clears the in-flight marker, so budgeted callers are
- * never held in "building" by a build that already died; transport and
- * cancellation errors pass through unrecorded and stay retryable.
+ * never held in "building" by a build that already died. Repo, cache, and
+ * host-operation failures happen outside the backend and remain retryable.
  *
- * Concurrent cold builds of one key are NOT deduped across isolates: they
+ * Concurrent cold builds of one key are not deduped across isolates: they
  * converge on one content-addressed, idempotent artifact write — redundant
  * work, never wrong output.
  */
@@ -284,11 +273,8 @@ const BUILD_WAIT_POLL_MS = 1_000;
  * OTHER isolates' builds via the KV in-flight marker, polling the artifact
  * key — but KV negative-caches a missing key per colo (~60s), so waiters
  * could not see the leader's write promptly and every cross-isolate cold
- * resolve stalled toward the cap (observed live: an entire e2e lane ran
- * ~90-160s per spec with first-attempt failures across the board, while the
- * pool sat nearly idle at 30 builds). Cross-isolate duplicates are the
- * cheaper poison: bounded by isolate count, idempotent, and the builder pool
- * absorbs them.
+ * resolve stalled toward the cap. Cross-isolate duplicates are cheaper:
+ * bounded by isolate count and idempotent.
  */
 async function waitForBuildElsewhere(
   store: KvWorkerBuildArtifactStore,
@@ -325,11 +311,11 @@ async function runBuild(
       () => {},
     );
     const built = await executeWorkerBuild({
-      buildKey,
       files,
       options: context.options,
     });
     const artifact: WorkerBuildArtifact = {
+      assets: built.assets,
       buildKey,
       mainModule: built.mainModule,
       modules: built.modules,
@@ -346,7 +332,8 @@ async function runBuild(
     // failed attempt clearing while a sibling still runs remains possible —
     // that costs duplicate (idempotent) builds, deliberately preferred over
     // the TTL-long wedge a stranded marker causes. Only GENUINE failures are
-    // additionally recorded; transport errors stay retryable.
+    // additionally recorded; unclassified runtime and cache errors stay
+    // retryable.
     const bookkeeping = marked ? [store.clearBuildInFlight(buildKey).catch(() => {})] : [];
     if (isWorkerBuildFailedError(error)) {
       bookkeeping.push(recordBuildFailure(store, buildKey, context.resolved, error));
@@ -465,7 +452,7 @@ async function recordBuildFailure(
   await store
     .putBuildFailure(buildKey, {
       at: new Date().toISOString(),
-      // Already bounded by the builder's named wrap; message extraction here
+      // Already bounded by the backend's named wrap; message extraction here
       // keeps locally-thrown failures (none today) equally safe.
       message: error instanceof Error ? error.message : String(error),
       ...(commitOid !== undefined ? { commitOid } : {}),
@@ -490,14 +477,14 @@ function dispatchBackgroundBuild(input: {
   input.waitUntil(
     (async () => {
       try {
-        // Another isolate's builder run marked in-flight; its artifact write
-        // will land — do not pile a duplicate npm build on top.
+        // Another isolate's build marked in-flight; its artifact write will
+        // land — do not pile a duplicate build on top.
         if (await store.isBuildInFlight(buildKey)) return;
         await runBuild(store, context, buildKey);
       } catch (error) {
         // Genuine build failures were recorded inside runBuild; anything
-        // else (transport, cancellation) just ends this attempt — the next
-        // request redispatches.
+        // else (runtime interruption, repo/cache failure, cancellation) just
+        // ends this attempt — the next request redispatches.
         if (!isWorkerBuildFailedError(error)) {
           console.warn(
             `background worker build attempt failed for ${buildKey.slice(0, 12)}`,
@@ -549,6 +536,7 @@ export async function resolveCachedArtifact(
 
 function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
   const resolved: ResolvedWorkerSource = {
+    assets: artifact.assets,
     cacheKey: artifact.buildKey,
     mainModule: artifact.mainModule,
     modules: artifact.modules,
@@ -574,6 +562,7 @@ async function loaderReadyInlineSource(
   if (!fileNames.includes(options.entryPoint)) return null;
   if (!fileNames.every((name) => name.endsWith(".js") || name.endsWith(".mjs"))) return null;
   return {
+    assets: {},
     cacheKey: await stableSha256({
       entryPoint: options.entryPoint,
       files: source.files.files,
@@ -588,8 +577,8 @@ async function loaderReadyInlineSource(
  * and artifact are immutable and auditable. Repo sources that omit `exclude`
  * get the canonical default masks HERE — before the key is computed — so a
  * bare `{ type: "repo", repoPath }` ref (the template's app refs, most
- * userland refs) and defaultProjectWorkerRef hash to the same build key and
- * share one artifact, the deploy-time template seed included. */
+ * userland refs) and defaultProjectWorkerRef hash to the same project-scoped
+ * artifact. */
 async function resolveFileSource({
   projectId,
   source,

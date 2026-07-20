@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { projectWorkerBuildKey, workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
-import { WRANGLER_VERSION } from "./build-recipe.ts";
+import { WORKER_BUNDLER_VERSION } from "./build-backend.ts";
 
 const baseInput: WorkerBuildInput = {
   compatibilityDate: "2026-05-01",
@@ -59,8 +59,8 @@ describe("workerBuildKey", () => {
       ...baseInput,
       source: { commitOid, contentHash, repoPath: "/", type: "repo" },
     });
-    // Same content under different commits (e.g. two freshly seeded project
-    // repos) must converge on one artifact...
+    // Same content under different commits converges on one content key. The
+    // project wrapper below still prevents cross-project artifact sharing.
     expect(await workerBuildKey(withContent("a".repeat(40), "content-1"))).toBe(
       await workerBuildKey(withContent("b".repeat(40), "content-1")),
     );
@@ -81,27 +81,20 @@ describe("workerBuildKey", () => {
   });
 
   it("scopes the project tier by project without losing determinism", async () => {
-    const sharedKey = await workerBuildKey(baseInput);
-    const projectKey = await projectWorkerBuildKey("prj_one", sharedKey);
+    const contentKey = await workerBuildKey(baseInput);
+    const projectKey = await projectWorkerBuildKey("prj_one", contentKey);
     expect(projectKey).toMatch(/^[a-f0-9]{64}$/);
-    expect(await projectWorkerBuildKey("prj_one", sharedKey)).toBe(projectKey);
-    // A project-trusted principal can influence its own builder sandbox's
-    // output — runtime artifacts must never be shared across projects.
-    expect(await projectWorkerBuildKey("prj_two", sharedKey)).not.toBe(projectKey);
-    expect(projectKey).not.toBe(sharedKey);
+    expect(await projectWorkerBuildKey("prj_one", contentKey)).toBe(projectKey);
+    // Dependency ranges resolve at build time, so runtime artifacts stay
+    // project-scoped even when two projects begin with identical source.
+    expect(await projectWorkerBuildKey("prj_two", contentKey)).not.toBe(projectKey);
+    expect(projectKey).not.toBe(contentKey);
   });
 
-  it("pins the wrangler toolchain constant to the repo's own wrangler pin", () => {
-    // The toolchain version participates in every build key; the constant and
-    // the workspace override backing apps/os's wrangler devDependency (what
-    // the host/dev runner and the deploy seeder execute) must agree or two
-    // runners build different bytes under one key. The container lane needs
-    // no third pin: build-backend.ts installs wrangler@WRANGLER_VERSION from
-    // this same constant.
-    const workspaceYaml = readFileSync(
-      new URL("../../../../../pnpm-workspace.yaml", import.meta.url),
-      "utf8",
-    );
-    expect(workspaceYaml).toMatch(new RegExp(`^  wrangler: ${WRANGLER_VERSION}$`, "m"));
+  it("pins the build-key version to the worker-bundler dependency", () => {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { dependencies: Record<string, string> };
+    expect(packageJson.dependencies["@cloudflare/worker-bundler"]).toBe(WORKER_BUNDLER_VERSION);
   });
 });

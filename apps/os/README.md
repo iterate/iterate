@@ -19,8 +19,8 @@ It combines:
   KV cache in front. All other durable state lives in Durable Object SQLite.
 - **One deployed worker** (plus the typechecker sidecar) — dashboard, itx
   API, and every Durable Object class in a single script. Dynamic workers
-  build in the deployment's builder pool of sandbox containers
-  (`src/domains/workers/builder-pool-sandbox.ts`). See
+  build directly inside workerd with `@cloudflare/worker-bundler`; no build
+  service or build container is involved. See
   [docs/worker-topology.md](./docs/worker-topology.md).
 
 Integrations are connections at fully qualified paths

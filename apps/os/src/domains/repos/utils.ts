@@ -27,9 +27,8 @@ const PROJECT_WORKER_ENTRY_POINT = "worker.ts";
  * Applied by the resolver whenever a repo source omits `exclude`
  * (worker-loader.ts resolveFileSource), so a bare `{ type: "repo", repoPath }`
  * ref — the template's app refs, most userland refs — and the canonical
- * {@link defaultProjectWorkerRef} hash to the SAME build key and share one
- * artifact (the deploy-time template seed included). A ref that genuinely
- * wants those directories passes `exclude: []`.
+ * {@link defaultProjectWorkerRef} hash to the same project-scoped artifact.
+ * A ref that genuinely wants those directories passes `exclude: []`.
  */
 export const DEFAULT_REPO_WORKER_SOURCE_EXCLUDE = [
   ".git/**",

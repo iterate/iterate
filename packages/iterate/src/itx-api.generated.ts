@@ -4291,35 +4291,30 @@ export type WorkerFileSource =
 /**
  * Build options for a dynamic worker.
  *
- * Deliberately small: exactly what the build recipe (build-recipe.ts — real
- * `npm install` plus wrangler's canonical bundling pipeline) expresses.
- * When the file map has a `package.json`, dependencies are installed from
- * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
+ * Deliberately small: OS passes these options directly to Cloudflare's
+ * in-workerd worker bundler. A package.json may contain ordinary registry
+ * dependencies; lifecycle scripts and devDependencies are not installed.
  */
 export type WorkerBuildOptions = {
   /** Entry point file path relative to the source root. Default: "worker.ts". */
   entryPoint?: string;
+  /** Opt into the deliberately basic two-file browser app shape. The only
+   * supported client entry is `client.tsx`, paired with `server.tsx`; it is
+   * compiled to a separately served asset while esm.sh URL imports remain
+   * external. No other files or custom virtual modules are accepted. */
+  clientEntryPoint?: "client.tsx";
   /** Bundle to loader-ready output (default: true). `bundle: false` is the
    * run-script fast path: inline JavaScript that is ALREADY loader-ready
-   * skips the build pipeline entirely. */
+   * skips the build pipeline entirely. The basic browser-app path always
+   * transforms its single server file without bundling it. */
   bundle?: boolean;
   minify?: boolean;
-  /**
-   * Which build pipeline turns the source into loader-ready modules.
-   * "wrangler" (default): the platform's own bundle — npm install + wrangler
-   * dry-run, source code is PARSED but never executed. "vite": the source's
-   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes
-   * devDependencies and the build EXECUTES project code in the builder, so
-   * runtime artifacts stay project-scoped and the output is collected from
-   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
-   * dist/client assets, served by a generated wrapper entry).
-   */
-  pipeline?: "wrangler" | "vite";
   /** Build from this subdirectory of the resolved source: files outside it
    * are dropped and paths are re-rooted, so a repo can host an app at e.g.
-   * `apps/tanstack/` with its own package.json and config. */
+   * `apps/todo/` with its own entries. */
   rootDir?: string;
   /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
-   * runtime rides in this way). A source's own entry wins over the platform's. */
+   * runtime rides in this way). A source's own entry wins over the platform's.
+   * Not available to the two-file browser app path. */
   virtualModules?: Record<string, string>;
 };

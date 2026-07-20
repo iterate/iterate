@@ -3,8 +3,8 @@
 // in-package imports, and capnweb, with zod and cloudflare:workers external —
 // and embedded as a string. worker-loader.ts injects it into every bundled
 // dynamic worker build as `virtualModules["iterate/processors"]`, so worker
-// code can host stream processors (see the config-repo template's guestbook)
-// without the bundler npm-installing the package. Worker package.json
+// code can host stream processors without the bundler npm-installing the
+// package. Worker package.json
 // declares zod; the build pipeline installs it, so worker-authored contract
 // schemas and this machinery share ONE zod. Edit the package, then
 // `pnpm lint:fix` regenerates this file; drift is a lint error. This file is

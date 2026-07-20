@@ -3,10 +3,10 @@ import { startMockSlackApi } from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 // The worker build pipeline end-to-end: multi-file TypeScript sources built
-// by the builder worker into the KV artifact cache, then userland npm
+// directly by worker-bundler into the KV artifact cache, then userland npm
 // dependencies committed to a project repo. Split from the itx monolith:
-// these tests pay a cold bundler run (npm installs included), so they earn
-// their own file-level parallelism.
+// these tests pay a cold in-workerd bundler run, so they earn their own
+// file-level parallelism.
 test("Worker build pipeline bundles multi-file TypeScript inline sources", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
@@ -54,8 +54,8 @@ test("Worker build pipeline bundles multi-file TypeScript inline sources", async
     sum: 42,
   });
 
-  // Builds do not touch the journal (coordination is a direct RPC to the
-  // builder worker) — in particular, no journal event may ever carry the
+  // Builds do not touch the journal (coordination is a direct build call) —
+  // in particular, no journal event may ever carry the
   // worker's source or built modules.
   const events = await project.streams.get("/").getEvents();
   expect(JSON.stringify(events)).not.toContain("hello from bundled typescript");

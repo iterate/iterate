@@ -123,11 +123,19 @@ test("routes seeded apps by host: stateless hello and stateful counter", async (
   expect(workerSource?.content).toContain("export default class ProjectWorker");
   const tree = await project.repo.listFiles();
   expect(tree).toMatchObject({
-    paths: expect.arrayContaining(["worker.ts", "package.json", "AGENTS.md"]),
+    paths: expect.arrayContaining([
+      "AGENTS.md",
+      "apps/guestbook/client.tsx",
+      "apps/guestbook/server.tsx",
+      "apps/todo/client.tsx",
+      "apps/todo/server.tsx",
+      "package.json",
+      "worker.ts",
+    ]),
   });
-  // The hello/counter examples are named exports; TanStack is a real app tree.
+  // The hello/counter examples are named exports; the basic browser apps each
+  // have one server and one client entry.
   expect(tree.paths).not.toContain("sdk.ts");
-  expect(tree.paths).toContain("apps/tanstack/package.json");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
   // Unknown apps 404 in the router itself.

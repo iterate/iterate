@@ -100,7 +100,7 @@ export function workerBuildingPageHtml(buildingHeader: string): string {
 
 /**
  * The terminal case: the build failed and there is no previous good build to
- * fall back on. Shows the builder's error and polls its own URL — a fixed
+ * fall back on. Shows the bundler's error and polls its own URL — a fixed
  * commit is a new build key, so the page self-heals the same way the building
  * page does.
  */

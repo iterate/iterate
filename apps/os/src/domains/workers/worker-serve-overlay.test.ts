@@ -118,7 +118,7 @@ describe("workerOverlayHtml", () => {
 });
 
 describe("workerBuildFailedResponse", () => {
-  test("marked 500 with the builder's error, HTML-escaped, overlay-exempt", async () => {
+  test("marked 500 with the bundler's error, HTML-escaped, overlay-exempt", async () => {
     const response = workerBuildFailedResponse(new Error('Could not resolve "<b>zod</b>"'));
     expect(response.status).toBe(500);
     expect(response.headers.get(WORKER_BUILD_FAILED_HEADER)).toBe("1");

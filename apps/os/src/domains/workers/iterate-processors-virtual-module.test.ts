@@ -18,9 +18,9 @@ test("the embedded iterate/processors runtime is loader-ready plain JavaScript",
     esbuild.transform(ITERATE_PROCESSORS_VIRTUAL_MODULE, { format: "esm", loader: "js" }),
   ).resolves.toBeDefined();
 
-  // The PURE machinery a worker-authored processor needs (see the config-repo
-  // template's guestbook). The hosting layer (registry + DO durability) is
-  // deliberately absent — it ships as iterate/processors/cloudflare below.
+  // The PURE machinery a worker-authored processor needs. The hosting layer
+  // (registry + DO durability) is deliberately absent — it ships as
+  // iterate/processors/cloudflare below.
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).toContain("defineProcessorContract");
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).toContain("StreamProcessor");
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).not.toContain("createStreamProcessorRegistry");

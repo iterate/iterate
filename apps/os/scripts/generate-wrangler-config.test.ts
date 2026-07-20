@@ -64,35 +64,35 @@ it("binds the os worker to its own env's typechecker sidecar", () => {
   }
 });
 
-it("never binds the retired builder sidecar", () => {
-  // The esbuild-wasm builder is gone: dynamic workers build in the
-  // deployment's builder pool (deployed) or the dev server's host endpoint
-  // (local).
-  for (const [envName, envBlock] of Object.entries(config.env)) {
-    expect(
-      envBlock.services.find((service) => service.binding === "BUILDER"),
-      envName,
-    ).toBeUndefined();
-  }
-});
+it("only retains the retired builder as a Durable Object tombstone", () => {
+  expect(config.exports.WorkerBuilderDurableObject).toEqual({
+    type: "durable-object",
+    state: "deleted",
+  });
 
-it("hosts a worker-builder pool app sized to the pool", async () => {
-  // The pool addresses exactly WORKER_BUILDER_POOL_SIZE member names, so the
-  // container app's max_instances must match — smaller would deny placements
-  // for members that exist, larger would reserve quota nothing can use.
-  const { WORKER_BUILDER_POOL_SIZE } = await import("../src/domains/workers/builder-pool.ts");
+  // Dynamic workers build in the OS worker itself. There is no service,
+  // Durable Object binding, or container left to run the old builder.
+  expect(config.services.map((service) => service.binding)).not.toContain("BUILDER");
+  expect(config.durable_objects.bindings.map((binding) => binding.class_name)).not.toContain(
+    "WorkerBuilderDurableObject",
+  );
+  expect(config.containers.map((container) => container.class_name)).not.toContain(
+    "WorkerBuilderDurableObject",
+  );
+
   for (const [envName, envBlock] of Object.entries(config.env)) {
-    const pool = (envBlock.containers ?? []).find(
-      (entry) => entry.class_name === "WorkerBuilderDurableObject",
-    );
-    expect(pool, envName).toBeDefined();
-    expect(pool?.max_instances, envName).toBe(WORKER_BUILDER_POOL_SIZE);
-    expect(pool?.instance_type, envName).toBe("standard-3");
     expect(
-      envBlock.durable_objects.bindings.find((b) => b.class_name === "WorkerBuilderDurableObject")
-        ?.name,
+      envBlock.services.map((service) => service.binding),
       envName,
-    ).toBe("WORKER_BUILDER");
+    ).not.toContain("BUILDER");
+    expect(
+      envBlock.durable_objects.bindings.map((binding) => binding.class_name),
+      envName,
+    ).not.toContain("WorkerBuilderDurableObject");
+    expect(
+      envBlock.containers.map((container) => container.class_name),
+      envName,
+    ).not.toContain("WorkerBuilderDurableObject");
   }
 });
 
@@ -240,17 +240,7 @@ it("keeps deployed sandbox capacity within account quota", () => {
     expect(
       containers.map((entry) => entry.instance_type),
       envName,
-      // The trailing standard-3 entry is the worker-builder pool's own app
-      // (npm + esbuild are CPU-bound; basic starved an e2e burst live).
-    ).toEqual([
-      "lite",
-      "basic",
-      "standard-1",
-      "standard-2",
-      "standard-3",
-      "standard-4",
-      "standard-3",
-    ]);
+    ).toEqual(["lite", "basic", "standard-1", "standard-2", "standard-3", "standard-4"]);
     for (const entry of containers) {
       expect(entry.max_instances, `${envName} ${entry.instance_type}`).toBeGreaterThan(0);
     }
