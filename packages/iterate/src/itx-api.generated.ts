@@ -305,7 +305,7 @@ export interface LiveDemo {
  * writes are visible immediately in the writing location and within ~60s
  * everywhere else — which is the right trade for knobs and exactly the
  * wrong one for data (streams), files (files), or credentials (secrets).
- * Values are JSON-serializable, ≤64KiB; keys ≤512 characters.
+ * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.
  */
 export interface Kv {
   /** The stored value, or null when the key is absent. */

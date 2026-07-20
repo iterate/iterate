@@ -6732,7 +6732,7 @@ class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
  * writes are visible immediately in the writing location and within ~60s
  * everywhere else — which is the right trade for knobs and exactly the
  * wrong one for data (streams), files (files), or credentials (secrets).
- * Values are JSON-serializable, ≤64KiB; keys ≤512 characters.
+ * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.
  */
 class KvRpcTarget extends IterateRpcTarget<"Kv"> {
   readonly #projectId: string;
@@ -6743,10 +6743,17 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
   }
 
   #key(key: string): string {
-    if (typeof key !== "string" || key.length === 0 || key.length > 512) {
-      throw new Error("kv keys are non-empty strings of at most 512 characters");
+    // 256 chars leaves comfortable headroom under Workers KV's 512-BYTE
+    // limit on the full stored key (prefix + project id included); the byte
+    // check catches multibyte keys the char count alone would let through.
+    if (typeof key !== "string" || key.length === 0 || key.length > 256) {
+      throw new Error("kv keys are non-empty strings of at most 256 characters");
     }
-    return `projectkv:${this.#projectId}:${key}`;
+    const stored = `projectkv:${this.#projectId}:${key}`;
+    if (new TextEncoder().encode(stored).length > 512) {
+      throw new Error("kv key too large once encoded (the full stored key must fit 512 bytes)");
+    }
+    return stored;
   }
 
   /** The stored value, or null when the key is absent. */
@@ -6760,7 +6767,11 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
       throw new Error("kv.set requires a value; use kv.delete to remove a key");
     }
     const serialized = JSON.stringify(value);
-    if (serialized === undefined) throw new Error("kv values must be JSON-serializable");
+    // NaN/Infinity stringify to the literal "null", which would make get()
+    // indistinguishable from an absent key while list() still shows it.
+    if (serialized === undefined || serialized === "null") {
+      throw new Error("kv values must be JSON-serializable (null, NaN, and Infinity are not)");
+    }
     if (serialized.length > 64 * 1024) {
       throw new Error(`kv value too large (${serialized.length} > 65536 JSON bytes)`);
     }

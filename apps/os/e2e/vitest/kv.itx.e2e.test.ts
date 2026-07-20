@@ -42,6 +42,13 @@ test("itx.kv round-trips small values, lists by prefix, and is project-scoped", 
     await project.kv.set("", "x");
   }).rejects.toThrow(/non-empty/);
   await expect(async () => {
+    await project.kv.set("k".repeat(257), "x");
+  }).rejects.toThrow(/256 characters/);
+  await expect(async () => {
     await project.kv.set("big", "x".repeat(70 * 1024));
   }).rejects.toThrow(/too large/);
+  // NaN would stringify to the literal "null" and masquerade as absence.
+  await expect(async () => {
+    await project.kv.set("nan", Number.NaN);
+  }).rejects.toThrow(/JSON-serializable/);
 });
