@@ -20,9 +20,11 @@ export function formatStepLine(step: AgentUiStep): string {
       ? "Ran code"
       : step.cancelReason === "interrupted-by-user-input"
         ? "Stopped for your new message"
-        : step.outcome === "cancelled"
-          ? "Request cancelled"
-          : (step.model ?? "LLM request");
+        : step.cancelReason === "expired"
+          ? "Request expired"
+          : step.outcome === "cancelled"
+            ? "Request cancelled"
+            : (step.model ?? "LLM request");
   const parts: string[] = [label];
   if (step.kind === "llm") {
     if (step.outcome === "cancelled" && step.model != null) parts.push(step.model);

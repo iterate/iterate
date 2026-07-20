@@ -98,9 +98,11 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
     ...(step.outcome === "failed" ? ["failed"] : []),
     ...(step.cancelReason === "interrupted-by-user-input"
       ? ["stopped for your new message"]
-      : step.outcome === "cancelled"
-        ? ["cancelled"]
-        : []),
+      : step.cancelReason === "expired"
+        ? ["expired"]
+        : step.outcome === "cancelled"
+          ? ["cancelled"]
+          : []),
   ];
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }

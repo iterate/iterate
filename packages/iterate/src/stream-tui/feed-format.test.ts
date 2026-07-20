@@ -100,6 +100,23 @@ describe("formatStepLine", () => {
     ).toBe("Stopped for your new message · gpt-test · 1.2k → 80 tok · 1.2s");
   });
 
+  test("expired step reads Request expired", () => {
+    expect(
+      formatStepLine({
+        kind: "llm",
+        id: "l1",
+        llmRequestOffset: 1,
+        status: "done",
+        model: "gpt-test",
+        thinkingText: "",
+        responseText: "",
+        startedAtMs: 0,
+        outcome: "cancelled",
+        cancelReason: "expired",
+      }),
+    ).toBe("Request expired · gpt-test");
+  });
+
   test("cancelled without a recognized reason reads Request cancelled", () => {
     expect(
       formatStepLine({
