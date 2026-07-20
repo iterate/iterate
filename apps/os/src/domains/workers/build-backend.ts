@@ -279,23 +279,56 @@ function nodeRequirePrelude(): string {
     `${JSON.stringify(name)}: __iterate_node_${name}`,
     `${JSON.stringify(`node:${name}`)}: __iterate_node_${name}`,
   ]).join(",\n  ");
+  // Primary CJS export names for builtins that workerd exposes only as named
+  // ESM exports (no .default). require("events") === EventEmitter in Node.
+  const primaryExports: Record<string, string> = {
+    events: "EventEmitter",
+    stream: "Stream",
+    domain: "Domain",
+    string_decoder: "StringDecoder",
+  };
+  const primaryEntries = Object.entries(primaryExports)
+    .flatMap(([name, exportName]) => [
+      `${JSON.stringify(name)}: ${JSON.stringify(exportName)}`,
+      `${JSON.stringify(`node:${name}`)}: ${JSON.stringify(exportName)}`,
+    ])
+    .join(",\n  ");
   return `${imports}
 const __iterateNodeBuiltins = {
   ${entries}
 };
+const __iterateNodePrimary = {
+  ${primaryEntries}
+};
+function __iterateCjsInterop(ns, id) {
+  if (ns == null || typeof ns !== "object") return ns;
+  // Prefer default (matches Node ESM→CJS interop for dual packages).
+  let main = ns.default;
+  // workerd often omits .default on node:* namespaces — fall back to the
+  // historical CJS main export (EventEmitter, Stream, …).
+  if (main == null) {
+    const primary = __iterateNodePrimary[id];
+    if (primary !== undefined && typeof ns[primary] === "function") main = ns[primary];
+  }
+  if (main == null) return ns;
+  // Copy named exports onto the main export so require("events").EventEmitter
+  // and require("stream").Readable keep working after interop.
+  if (typeof main === "function" || typeof main === "object") {
+    for (const key of Object.keys(ns)) {
+      if (key === "default") continue;
+      if (!(key in main)) {
+        try { main[key] = ns[key]; } catch { /* read-only */ }
+      }
+    }
+  }
+  return main;
+}
 function __iterateNodeRequire(id) {
   const mod = __iterateNodeBuiltins[id];
   if (mod === undefined) {
     throw Error('Dynamic require of "' + id + '" is not supported');
   }
-  // CJS interop: require("events") is the EventEmitter constructor, not the
-  // ESM namespace object. Prefer default when present so \`class X extends
-  // require("events")\` works (otherwise: "Class extends value #<Object> is
-  // not a constructor").
-  if (mod != null && typeof mod === "object" && "default" in mod && mod.default != null) {
-    return mod.default;
-  }
-  return mod;
+  return __iterateCjsInterop(mod, id);
 }
 `;
 }
