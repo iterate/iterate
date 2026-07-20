@@ -298,8 +298,8 @@ paths to the named library function. App layouts and entry points are not
 fixed, and worker-bundler may install root `package.json` dependencies.
 Project build commands do not run. One JSON artifact record is
 cached in KV under a deterministic key shared by identical inputs. Builds pass
-inert source text by value and leave no events in the journal; deterministic
-source/compiler errors are cached briefly, while sidecar/KV/repo errors remain
+inert source text by value and leave no events in the journal; errors returned
+by worker-bundler are cached briefly, while sidecar/KV/repo errors remain
 retryable. Inside
 loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the

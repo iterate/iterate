@@ -6,7 +6,7 @@ import { normalizePath } from "../durable-object-names.ts";
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
 // -----------------------------------------------------------------------------
-// Dynamic worker recipe types.
+// Dynamic worker source and reference types.
 //
 // These hand-authored shapes ARE the public itx contract for dynamic workers
 // (docstrings included) and each is pinned to its zod schema below via
@@ -164,7 +164,7 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   durableWorkerKey: string;
 };
 
-/** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
+/** Worker reference accepted by `workers.get` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
 /**

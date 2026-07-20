@@ -8,7 +8,7 @@ path.
 
 ## Thin worker-bundler adapter
 
-A recipe contains exactly one property named after the upstream function:
+A dynamic-worker source contains exactly one property named after the upstream function:
 `createWorker` or `createApp`. Its value has the same shape as that function's
 options. The one substitution is `files`: it may point at an inline map or a
 project repo snapshot because a custom worker-bundler `FileSystem` object
@@ -16,7 +16,7 @@ cannot cross the service-binding boundary.
 
 On a cache miss OS resolves that descriptor to `Record<string, string>` and
 puts the map back into the same options object. Paths are not rewritten. OS
-then makes exactly the call the recipe names:
+then makes exactly the call the source names:
 
 - `createWorker({ ...source.createWorker, files: resolvedFiles })`; or
 - `createApp({ ...source.createApp, files: resolvedFiles })`.
@@ -83,10 +83,10 @@ range, the first successful registry resolution becomes that key's cached
 artifact until expiry.
 
 KV stores one JSON record per key: either the complete modules/assets (30-day
-TTL) or a bounded deterministic build error (15-minute TTL). Infrastructure
-errors from repo reads, KV, the service binding, or the sidecar runtime are not
-classified as source failures and are never written to the failure cache.
-Duplicate cold builds are permitted and converge on the same record.
+TTL) or a bounded error returned by the worker-bundler call (15-minute TTL).
+Errors before that call (repo reads) and failures reaching or writing KV are
+not cached. Duplicate cold builds are permitted and converge on the same
+record.
 
 Browser fetches may stop waiting at a small budget while the same promise
 continues under `waitUntil`; callers see the self-refreshing building page.

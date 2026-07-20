@@ -56,7 +56,7 @@ export type WorkerBuildFailure = {
 
 export type WorkerBuildRecord = WorkerBuildArtifact | WorkerBuildFailure;
 
-/** A genuine source/compiler failure. Name-based because it crosses Workers
+/** An error returned by the worker-bundler call. Name-based because it crosses Workers
  * RPC; repo, KV, and sidecar transport errors deliberately keep other names. */
 export class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";

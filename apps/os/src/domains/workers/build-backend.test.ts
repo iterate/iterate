@@ -114,7 +114,7 @@ describe("executeWorkerBuild", () => {
     expect(createWorker).toHaveBeenCalledOnce();
   });
 
-  it("classifies only named sidecar build errors as deterministic failures", async () => {
+  it("classifies only named sidecar build errors as cacheable failures", async () => {
     const buildFailure = new Error("Could not resolve package");
     buildFailure.name = "WorkerBundlerBuildError";
     createWorker.mockRejectedValueOnce(buildFailure);

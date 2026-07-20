@@ -243,7 +243,7 @@ export class DynamicWorkerRunner {
         // target has produced opaque internal RPC failures; keeping the replay at
         // the owning DO boundary also keeps storage affinity explicit. Stateful
         // refs are also deliberately lazy: mounting a worker capability only
-        // commits the recipe to the stream, while this first real invocation is the
+        // commits the ref to the stream, while this first real invocation is the
         // point where source loading, version-marker writes, and facet restarts are
         // allowed to mutate durable runtime state.
         return await this.#statefulWorker(ref).invokeCapability({

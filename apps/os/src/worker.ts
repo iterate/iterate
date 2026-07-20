@@ -245,7 +245,7 @@ async function apiFetch(
       return applyProjectWorkerOverlay(request, response);
     } catch (error) {
       // A cold build shows the polling "building" page rather than hanging
-      // the request (the in-workerd build keeps running). A source failure
+      // the request (the in-workerd build keeps running). A build failure
       // shows the bundler's error; the next good commit heals it.
       const buildStatus = workerBuildStatus(error);
       if (buildStatus !== null) {

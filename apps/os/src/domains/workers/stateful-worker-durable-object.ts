@@ -15,7 +15,7 @@ import { DynamicWorkerRunner } from "./worker-runner.ts";
 const FACET_NAME = "target";
 const VERSION_STORAGE_KEY = "workers:stateful-worker-version";
 
-/** The worker recipe to boot when an alarm fires on a cold outer DO — the
+/** The worker ref to boot when an alarm fires on a cold outer DO — the
  * same late-bound resolution every invocation does. Every arm rewrites it
  * with the caller's current ref, so fires converge on current source. */
 const ALARM_REF_STORAGE_KEY = "workers:stateful-worker-alarm-ref";
@@ -120,11 +120,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }) {
     // This method is intentionally the only public runtime entrypoint for the
     // hosted facet. We do not expose `validate(ref)` or `get(ref)`: validation at
-    // provide-time made "store this worker recipe" mutate facet storage before
+    // provide-time made "store this worker ref" mutate facet storage before
     // the stream commit, and returning facet stubs across this extra DO boundary
     // was the source of opaque RPC failures. Keeping invocation here makes the
     // ownership boundary boring: the outer DO receives a call, resolves the
-    // current recipe, restarts the facet if the source changed, and performs the
+    // current ref, restarts the facet if the source changed, and performs the
     // method replay without leaking the inner facet reference.
     const { target } = await this.#facet(ref, buildBudgetMs);
     return flattenNestedPath
@@ -138,7 +138,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    * yet implemented for SQLite-backed Durable Objects"; workerd#6810). This
    * outer DO is a root actor, so its real platform alarm IS the facet's
    * alarm — these verbs guard it, and the only extra state is the worker
-   * recipe to boot when a fire lands cold. Everything behavioral is the
+   * ref to boot when a fire lands cold. Everything behavioral is the
    * native runtime's, inherited rather than reimplemented: consume on
    * success, retry with backoff on a throwing handler (this handler
    * rethrows), and getAlarm()'s during-a-fire view. `iterate/sdk`'s
@@ -166,7 +166,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     const ref = this.ctx.storage.kv.get<StatefulDynamicWorkerRef>(ALARM_REF_STORAGE_KEY);
-    // No armed recipe (disarmed after the fire was scheduled) — a stray
+    // No armed ref (disarmed after the fire was scheduled) — a stray
     // platform fire is a no-op.
     if (ref === undefined) return;
     // Plain copy: AlarmInvocationInfo is a host object and does not
@@ -206,7 +206,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   /** The (build version, ref) whose identity this incarnation already
-   * delivered — re-delivered when either changes, so a stashed inline recipe
+   * delivered — re-delivered when either changes, so stashed inline source
    * converges on current source and a rebuilt class that newly accepts
    * identity gets it without waiting for an eviction. */
   #identityDelivered: string | undefined;

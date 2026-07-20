@@ -36,7 +36,7 @@ entry in the same workerd.
 Dynamic worker builds run in the equally small
 `os-<env>-worker-bundler` sidecar (`src/worker-bundler.ts`, generated config
 `wrangler.worker-bundler.jsonc`). It accepts inert source strings over a
-service binding and makes the recipe's direct `createWorker` or `createApp`
+service binding and makes the source's direct `createWorker` or `createApp`
 call. It has no state, project authority, filesystem checkout, shell, or
 container. App assets stay in OS's artifact cache and asset requests re-enter
 the sidecar so worker-bundler's own `handleAssetRequest` owns their routing;

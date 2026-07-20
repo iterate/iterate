@@ -14,8 +14,8 @@ import {
  *   (HTMLRewriter, before `</body>`): a floating Iterate mark in the corner.
  * - The building page body (served by workerBuildingResponse in
  *   worker-fetch-dispatch.ts) and the build-failed page — the two terminal
- *   states of the lane: nothing built yet to fall back on, so a page stands
- *   in for the worker. Both poll their own URL and self-heal.
+ *   states of the lane: nothing built yet, so a page stands in for the worker.
+ *   Both poll their own URL and self-heal.
  */
 
 /** The iterate mark — the letter i from the product logo. */
@@ -96,10 +96,9 @@ export function workerBuildingPageHtml(buildingHeader: string): string {
 }
 
 /**
- * The terminal case: the build failed and there is no previous good build to
- * fall back on. Shows the bundler's error and polls its own URL — a fixed
- * commit is a new build key, so the page self-heals the same way the building
- * page does.
+ * The terminal case: the build failed. Shows the bundler's error and polls its
+ * own URL — a fixed commit is a new build key, so the page self-heals the same
+ * way the building page does.
  */
 export function workerBuildFailedResponse(error: unknown): Response {
   return new Response(

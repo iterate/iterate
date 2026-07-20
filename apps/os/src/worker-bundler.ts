@@ -37,7 +37,7 @@ export type WorkerBundlerCreateAppResult = WorkerBundlerCreateWorkerResult & {
   assets: Record<string, string>;
 };
 
-/** Name preserved across Workers RPC so OS caches genuine compiler failures,
+/** Name preserved across Workers RPC so OS caches errors from the bundler call,
  * while raw service-binding failures remain retryable. */
 export class WorkerBundlerBuildError extends Error {
   override readonly name = "WorkerBundlerBuildError";

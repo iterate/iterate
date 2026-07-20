@@ -70,7 +70,7 @@ export async function executeWorkerBuild(input: {
   } catch (error) {
     // The sidecar names errors thrown by the build operation. Service-binding
     // transport/runtime errors keep their original identity and remain
-    // retryable instead of poisoning the deterministic failure cache.
+    // retryable instead of poisoning the bundler-error cache.
     if ((error as { name?: string } | null)?.name !== "WorkerBundlerBuildError") throw error;
     throw new WorkerBuildFailedError(buildFailureMessageFromError(error), { cause: error });
   }

@@ -113,7 +113,7 @@ request":
 
 A cold browser request waits only for its configured build budget. If the
 build is still running it receives `workerBuildingResponse()`: a 503 that
-polls itself and is marked `x-iterate-worker-building`. A deterministic build
+polls itself and is marked `x-iterate-worker-building`. A build
 failure receives the similarly self-healing build-failed page. RPC calls wait
 for the build and receive the named error instead. There is no stale artifact,
 last-good pointer, distributed build lock, or background refresh policy.
