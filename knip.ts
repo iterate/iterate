@@ -197,6 +197,12 @@ const config: KnipConfig = {
     "!packages/iterate",
   ],
   ignoreIssues: {
+    // The clean-room agent processor (tasks/simplify-stream-processor-contract.md)
+    // is deliberately UNWIRED while it runs parallel to the production agent:
+    // the contract owns every nested shape (consumers reach into it once the
+    // DO wiring lands) and the pure helpers are the implementation's testable
+    // surface. Drop this entry when the processor is wired into a host.
+    "apps/os/src/domains/agents/next/**": ["exports", "types"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
     // Example-matrix harness modules export helpers consumed across the

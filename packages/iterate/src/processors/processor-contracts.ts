@@ -67,6 +67,14 @@ export type EventExample = {
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
+  /**
+   * FORCIBLY ephemeral: every append/parse lane built from this definition
+   * defaults the envelope's `ephemeral` flag to `true` and REJECTS an explicit
+   * `ephemeral: false`. For events that must never become durable journal
+   * facts (streaming chunks) — declaring it here makes forgetting the flag at
+   * an append site impossible instead of a silent storage leak.
+   */
+  ephemeral?: true;
   examples?: readonly EventExample[];
 };
 
@@ -402,6 +410,7 @@ type ProcessorContractParseConsumedInput<
 function getEventSchema<const Type extends string, const PayloadSchema extends z.ZodType>(args: {
   type: Type;
   payloadSchema: PayloadSchema;
+  ephemeral?: boolean;
 }): z.ZodType<
   TypedStreamEvent<Type, z.output<PayloadSchema>>,
   TypedStreamEvent<Type, z.input<PayloadSchema>>
@@ -412,7 +421,7 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
     metadata: StreamEventSchema.shape.metadata,
     source: StreamEventSchema.shape.source,
     idempotencyKey: StreamEventSchema.shape.idempotencyKey,
-    ephemeral: StreamEventSchema.shape.ephemeral,
+    ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
     offset: StreamEventSchema.shape.offset,
     createdAt: StreamEventSchema.shape.createdAt,
     path: StreamEventSchema.shape.path,
@@ -420,6 +429,14 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
     TypedStreamEvent<Type, z.output<PayloadSchema>>,
     TypedStreamEvent<Type, z.input<PayloadSchema>>
   >;
+}
+
+/** The envelope `ephemeral` slot: for a definition marked `ephemeral: true`,
+ * absent defaults to `true` and an explicit `false` FAILS the parse — the
+ * contract, not the append site, decides that the event never becomes a
+ * durable journal fact. */
+function ephemeralEnvelopeSchema(forced: boolean | undefined, standard: z.ZodType): z.ZodType {
+  return forced === true ? z.literal(true).default(true) : standard;
 }
 
 /**
@@ -434,6 +451,7 @@ export function getEventInputSchema<
 >(args: {
   type: Type;
   payloadSchema: PayloadSchema;
+  ephemeral?: boolean;
 }): z.ZodType<
   TypedStreamEventInput<Type, z.output<PayloadSchema>>,
   TypedStreamEventInput<Type, z.input<PayloadSchema>>
@@ -445,7 +463,7 @@ export function getEventInputSchema<
       metadata: StreamEventInputSchema.shape.metadata,
       source: StreamEventInputSchema.shape.source,
       idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
-      ephemeral: StreamEventInputSchema.shape.ephemeral,
+      ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventInputSchema.shape.ephemeral),
     })
     .strict() as unknown as z.ZodType<
     TypedStreamEventInput<Type, z.output<PayloadSchema>>,
@@ -476,8 +494,8 @@ const eventSchemaCache = new WeakMap<z.ZodType, Map<string, z.ZodType>>();
 
 function cachedSchema(
   cache: WeakMap<z.ZodType, Map<string, z.ZodType>>,
-  build: (args: { type: string; payloadSchema: z.ZodType }) => z.ZodType,
-  args: { type: string; payloadSchema: z.ZodType },
+  build: (args: { type: string; payloadSchema: z.ZodType; ephemeral?: boolean }) => z.ZodType,
+  args: { type: string; payloadSchema: z.ZodType; ephemeral?: boolean },
 ): z.ZodType {
   let byType = cache.get(args.payloadSchema);
   if (byType === undefined) {
@@ -493,7 +511,11 @@ function cachedSchema(
 }
 
 /** Memoized {@link getEventSchema} (see {@link eventSchemaCache}). */
-export function cachedEventSchema(args: { type: string; payloadSchema: z.ZodType }): z.ZodType {
+export function cachedEventSchema(args: {
+  type: string;
+  payloadSchema: z.ZodType;
+  ephemeral?: boolean;
+}): z.ZodType {
   return cachedSchema(eventSchemaCache, getEventSchema, args);
 }
 
@@ -516,6 +538,7 @@ export function buildEvent<
   return getEventInputSchema({
     type: args.event.type,
     payloadSchema: eventDefinition.payloadSchema,
+    ephemeral: eventDefinition.ephemeral,
   }).parse(args.event) as unknown as Event;
 }
 
@@ -644,6 +667,7 @@ function makeContractConsumedInputParser(contract: {
       schema = getEventInputSchema({
         type: event.type,
         payloadSchema: eventDefinition.payloadSchema,
+        ephemeral: eventDefinition.ephemeral,
       });
       parserCache.set(event.type, schema);
     }
@@ -660,7 +684,7 @@ function makeContractConsumedInputParser(contract: {
 function makeContractEventParser(
   contract: { events: EventCatalog; processorDeps?: readonly unknown[] },
   name: "parseEvent" | "parseEventInput",
-  schemaFor: (args: { type: string; payloadSchema: z.ZodType }) => {
+  schemaFor: (args: { type: string; payloadSchema: z.ZodType; ephemeral?: boolean }) => {
     parse(value: unknown): unknown;
   },
 ) {
@@ -682,7 +706,11 @@ function makeContractEventParser(
     // measurable.
     let schema = parserCache.get(eventType);
     if (schema === undefined) {
-      schema = schemaFor({ type: eventType, payloadSchema: eventDefinition.payloadSchema });
+      schema = schemaFor({
+        type: eventType,
+        payloadSchema: eventDefinition.payloadSchema,
+        ephemeral: eventDefinition.ephemeral,
+      });
       parserCache.set(eventType, schema);
     }
     return schema.parse(event);

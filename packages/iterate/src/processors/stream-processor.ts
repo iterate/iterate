@@ -62,9 +62,10 @@ export type StreamProcessorBaseDeps = {
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
 };
 
-// These arg shapes are intentionally not exported: subclass overrides annotate
-// their args as `Parameters<StreamProcessor<Contract>["method"]>[0]` so there
-// is exactly one spelling.
+// `ReduceArgs` / `ProcessEventArgs` are exported as the one sanctioned
+// spelling for subclass hook annotations: the hooks are `protected`, so
+// `Parameters<StreamProcessor<Contract>["method"]>[0]` is not writable from
+// outside a subclass body.
 //
 // State and events are passed by reference. Hooks must treat them as immutable:
 // `reduce` returns a new state object instead of mutating its input.
@@ -82,7 +83,7 @@ type ReducedEvent<Contract> = {
 type ConsumedEventParseFailure = { parseError: z.ZodError };
 
 /** What `reduce` receives: one consumed event and the state to fold it into. */
-type ReduceArgs<Contract> = {
+export type ReduceArgs<Contract> = {
   event: ConsumedEvent<Contract>;
   state: ProcessorState<Contract>;
 };
@@ -124,7 +125,7 @@ type SideEffectHelpers = {
 };
 
 /** What `processEvent` receives: one reduction result plus delivery context and helpers. */
-type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
+export type ProcessEventArgs<Contract> = Omit<ReducedEvent<Contract>, "event"> &
   SideEffectHelpers & {
     /**
      * The consumed event being processed — or `null` for the EVENT-LESS at-head
@@ -380,6 +381,7 @@ export abstract class StreamProcessor<
     return getEventInputSchema({
       type: event.type,
       payloadSchema: eventDefinition.payloadSchema,
+      ephemeral: eventDefinition.ephemeral,
     }).parse(event) as EmittedInput<Contract>;
   }
 
@@ -432,6 +434,7 @@ export abstract class StreamProcessor<
     const parsed = cachedEventSchema({
       type: event.type,
       payloadSchema: eventDefinition.payloadSchema,
+      ephemeral: eventDefinition.ephemeral,
     }).safeParse(event);
     if (!parsed.success) return { ok: false, error: parsed.error };
     return { ok: true, event: parsed.data as ConsumedEvent<Contract> };
