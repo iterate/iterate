@@ -1,11 +1,17 @@
 import { StreamProcessor } from "iterate/processors";
-import type { ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import { RepoProcessorContract, type RepoProcessorState } from "./repo-processor-contract.ts";
+import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
+import {
+  RepoProcessorContract,
+  type RepoCreateRequest,
+  type RepoProcessorState,
+} from "./repo-processor-contract.ts";
+import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
   type RepoCommittedFileChange,
 } from "./repo-task-events.ts";
+import { isRepoNotSeededError } from "./utils.ts";
 
 /**
  * The repo processor: one stream per repo, projecting its lifecycle and Git
@@ -13,19 +19,21 @@ import {
  *
  * HOW IT WORKS, end to end:
  *
- * A repo is born by `repo/created`. Its one per-event consequence is a
- * catalog cross-post: the created fact is re-appended onto the project root
- * stream "/" so the project processor can list the repo. The backing
- * Cloudflare Artifacts repository is NOT created per-event: "this repo's
- * artifact should exist" is a state-derived obligation. Whenever a delivery
- * reaches head with the repo born but not `ready`, the at-head pass seeds the
- * artifact and appends `repo/ready` under the offset-free idempotency key
- * `repo/ready` — so a redelivery or revival cannot rotate the key and re-seed,
- * and a stream that already contains `repo/ready` provably never re-creates
- * (the at-head state has absorbed it, even during a full replay). The seed is
- * deliberately BLOCKING: a transient failure must hold the cursor so the
- * frame is redelivered and retried — backgrounded, the failure would be acked
- * away and a quiet stream would strand the repo unborn forever.
+ * A repo begins as a CREATION SAGA. `repos/create-requested` is the durable
+ * intent (empty starter seed, a private GitHub pull at depth one, or a public
+ * GitHub import performed by Cloudflare Artifacts outside the Worker);
+ * `repos/created` or `repos/create-failed` is its terminal fact. The vendor
+ * work is a state-derived obligation: whenever a delivery reaches head with
+ * the request open (no terminal fact) and no attempt live in THIS
+ * incarnation, the at-head pass drives it in the background — a slow public
+ * import must not hold the stream cursor. The terminal certificate's
+ * idempotency keys are offset-free (`created` / `create-failed`), so a
+ * redelivery or revival cannot rotate them and double-birth. A vendor error
+ * settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed repo's
+ * stream never reacts to anything again. The one exception is a
+ * still-materializing Artifact (RepoNotSeededError): no terminal fact is
+ * journaled, the obligation stays open, and the revival pass re-drives the
+ * idempotent creation.
  *
  * Commit facts come from ONE source: the Cloudflare Artifacts event queue.
  * Each `repo/cloudflare-artifact-event-received` push on the default branch
@@ -38,6 +46,9 @@ import {
  * the same coordinates plus the path — all per-event `blockProcessorWhile`
  * work: each fact derives from an event that is delivered once, so a dropped
  * append would lose it forever, and the stable keys collapse redeliveries.
+ * The default branch is known from the moment create-requested reduces
+ * (every creation mode targets main), so a push racing the terminal
+ * certificate still lands its facts.
  *
  * GitHub is an ingress lane, not a second source of commit facts. A
  * cross-posted `github/webhook-received` push delivery — provenance-checked
@@ -59,20 +70,27 @@ import {
  * RECOVERY is the same code path as normal operation: an incarnation that
  * dies owing work gets the keepalive's `stream/processor-revived` fact
  * appended, whose ordinary delivery lands at head and re-runs the at-head
- * pass — an unseeded artifact is created, an import with no live driver
- * (fresh incarnations have an empty `#liveGithubImports`) is re-driven under
- * the same request identity, so a zombie attempt racing the successor
- * collapses on the shared idempotency keys.
+ * pass — an open creation request with no live attempt is re-driven, an
+ * import with no live driver (fresh incarnations have empty runtime sets) is
+ * re-driven under the same request identity, so a zombie attempt racing the
+ * successor collapses on the shared idempotency keys.
  */
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
   readonly contract = RepoProcessorContract;
 
   /**
+   * RUNTIME state: whether THIS incarnation already launched a creation
+   * attempt. In-memory, dies with the isolate, never persisted — the stream
+   * (the request and its terminal fact), not this flag, is what survives an
+   * eviction. A fresh incarnation finds the open request in state, sees no
+   * attempt here, and drives it again.
+   */
+  #creationAttemptedThisIncarnation = false;
+
+  /**
    * RUNTIME state: request ids of GitHub imports THIS incarnation is driving.
-   * In-memory, dies with the isolate, never persisted — the stream (the
-   * requested/started facts), not this set, is what survives an eviction. A
-   * fresh incarnation finds the open obligation in state, sees nobody here
-   * driving it, and drives it again.
+   * Same lifecycle as the creation flag — the requested/started facts on the
+   * stream are the durable truth.
    */
   readonly #liveGithubImports = new Set<string>();
 
@@ -80,37 +98,25 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   // Synchronous. The side-effect lanes are chosen HERE, at the dispatch site,
   // never inside helpers:
   //
-  // - PER-EVENT consequences (the catalog cross-post, commit/task facts, the
-  //   import request) use `blockProcessorWhile`: each derives from an event
-  //   delivered once, so a dropped append loses the fact forever.
-  // - STATE-DERIVED consequences run after the switch, at head only. The
-  //   GitHub import is `runInBackground` (any later at-head pass re-derives
-  //   an undriven obligation from state); the artifact seed deliberately
-  //   BLOCKS — see the class docstring.
+  // - PER-EVENT consequences (commit/task facts, the import request) use
+  //   `blockProcessorWhile`: each derives from an event delivered once, so a
+  //   dropped append loses the fact forever.
+  // - STATE-DERIVED consequences run after the switch, at head only, in
+  //   `runInBackground`: any later at-head pass re-derives an undriven
+  //   obligation from state, and slow vendor work (a full public import, a
+  //   Git transfer) must not hold the stream cursor.
   protected override processEvent(args: ProcessEventArgs<RepoProcessorContract>): undefined {
-    const { event, state, delivery, append, appendTo, blockProcessorWhile, runInBackground } = args;
+    const { event, state, delivery, append, blockProcessorWhile, runInBackground } = args;
+
+    // Nothing reacts before the creation request exists, and NOTHING ever
+    // reacts after a terminal creation failure — fail-closed.
+    if (state.createRequest === null && state.birthCertificate === null) return;
+    if (state.createFailure !== null) return;
 
     switch (event?.type) {
-      case "events.iterate.com/repo/created": {
-        blockProcessorWhile(
-          "the catalog cross-post rides this one created event; a dropped append would leave the repo missing from the root catalog",
-          () =>
-            appendTo("/", {
-              type: "events.iterate.com/repo/created",
-              idempotencyKey: this.idempotencyKey("catalog-created", event),
-              payload: event.payload,
-            }),
-        );
-        break;
-      }
       case "events.iterate.com/repo/cloudflare-artifact-event-received": {
         const push = repoArtifactPushFromEventPayload(event.payload);
-        if (
-          state.birthCertificate === null ||
-          push === null ||
-          state.defaultBranch === null ||
-          push.branch !== state.defaultBranch
-        ) {
+        if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
           break;
         }
         // Head-cache projection is unconditional: every parsed default-branch
@@ -142,13 +148,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         break;
       }
       case "events.iterate.com/repo/commit-completed": {
-        if (
-          state.birthCertificate === null ||
-          state.defaultBranch === null ||
-          event.payload.branch !== state.defaultBranch
-        ) {
-          break;
-        }
+        if (state.defaultBranch === null || event.payload.branch !== state.defaultBranch) break;
         blockProcessorWhile(
           "task facts derive from this one commit event; a dropped append would silently lose the commit's task changes",
           async () => {
@@ -184,7 +184,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         const push = repoGithubPushFromWebhookPayload(event.payload);
         const origin = event.source?.crossPostedFrom?.at(-1);
         if (
-          state.birthCertificate === null ||
           push === null ||
           state.github === null ||
           state.defaultBranch === null ||
@@ -217,59 +216,97 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         );
         break;
       }
-      // ready / github-link-configured / github-unlinked / mirror-push
-      // outcomes / import lifecycle / stream lifecycle: no per-event effect —
-      // they matter through the reduced state below.
+      // create-requested / created / create-failed / github-link lifecycle /
+      // mirror-push outcomes / import lifecycle / stream lifecycle: no
+      // per-event effect — they matter through the reduced state below.
     }
 
     // ---------------------------------------- state-derived side effects
-    // At head only: behind it the reduced state is partial — an outcome
-    // (repo/ready, an import settlement) may sit in stream pages not yet
-    // replayed, and acting on that would re-run completed obligations.
+    // At head only: behind it the reduced state is partial — an outcome (the
+    // terminal certificate, an import settlement) may sit in stream pages not
+    // yet replayed, and acting on that would re-run completed obligations.
     if (!delivery.caughtUp) return;
-    if (state.birthCertificate === null) return;
 
-    // The artifact seed. BLOCKING on purpose (the exception to
-    // state-derived-work-goes-background): a transiently failed seed must
-    // hold the cursor so the frame is redelivered and retried — backgrounded,
-    // the failure would be acked away and a quiet stream would strand the
-    // repo unborn forever. The `ready` idempotency key binds NO event offset,
-    // so a redelivery/revival cannot rotate it and re-seed; the seed
-    // implementation leaves any existing branch untouched, gives concurrent
-    // first seeds the same commit oid, and serializes creation with branch
-    // mutation, so a create-succeeded/append-failed retry is safe. No expiry
-    // on purpose: "this repo should exist" does not go stale.
-    if (!state.ready) {
-      blockProcessorWhile(
-        "a failed artifact seed must hold the cursor for redelivery — acked away, a quiet stream would strand the repo unborn forever",
-        async () => {
-          const artifact = await this.deps.createRepoArtifact({
-            path: this.path,
-            projectId: this.projectId,
-          });
-          await append({
-            type: "events.iterate.com/repo/ready",
-            idempotencyKey: this.idempotencyKey("ready"),
-            payload: { ...artifact, path: this.path, projectId: this.projectId },
-          });
-        },
-      );
-      // The import (if any) waits for the ready fact's own delivery — the
-      // next at-head pass drives it over a state that includes the seed.
-      return;
+    // The creation saga: drive the open request when THIS incarnation has no
+    // attempt live (normal start and post-eviction recovery are the same
+    // branch on purpose). Background work — the vendor side can be a full
+    // public GitHub import — and offset-free terminal idempotency keys, so a
+    // re-driven attempt collapses onto the first terminal fact.
+    const createRequest = state.createRequest;
+    if (
+      createRequest !== null &&
+      state.birthCertificate === null &&
+      !this.#creationAttemptedThisIncarnation
+    ) {
+      this.#creationAttemptedThisIncarnation = true;
+      runInBackground(async () => {
+        try {
+          await append(await this.#createRepoTerminal(createRequest));
+        } catch (error) {
+          // No terminal fact landed, so a later at-head/revival pass in this
+          // incarnation must be allowed to re-drive the obligation.
+          this.#creationAttemptedThisIncarnation = false;
+          throw error;
+        }
+      });
     }
 
     // The GitHub import obligation: start it when nobody in THIS incarnation
-    // is driving it (normal start and post-eviction recovery are the same
-    // branch on purpose). Background work — a dropped attempt is re-derived
-    // from state by any later at-head pass, and the revival fact guarantees
-    // one. The live-set entry is taken synchronously, before any await, so
-    // this same pass never classifies its own attempt as undriven.
+    // is driving it. Background work — a dropped attempt is re-derived from
+    // state by any later at-head pass, and the revival fact guarantees one.
+    // The live-set entry is taken synchronously, before any await, so this
+    // same pass never classifies its own attempt as undriven.
     const githubImport = state.githubImport;
     if (githubImport !== null && !this.#liveGithubImports.has(githubImport.requestId)) {
       this.#liveGithubImports.add(githubImport.requestId);
       runInBackground(() => this.#runGithubImport(args, githubImport));
     }
+  }
+
+  /**
+   * One creation attempt, returning the saga's terminal fact. An empty repo
+   * seeds a starter Artifact; a public GitHub repo is imported by Cloudflare
+   * Artifacts directly (no transfer through the Worker) and then linked; a
+   * private GitHub repo starts from an empty Artifact, links, and pulls the
+   * default branch through the Worker at depth one. Any vendor error settles
+   * the saga as `repos/create-failed` — EXCEPT a still-materializing Artifact
+   * (RepoNotSeededError), which keeps the obligation open so the recovery
+   * alarm re-drives the idempotent creation instead of failing a repo that is
+   * merely slow.
+   */
+  async #createRepoTerminal(
+    request: RepoCreateRequest,
+  ): Promise<EmittedInput<RepoProcessorContract>> {
+    try {
+      const artifact = await this.#createRepo(request);
+      return {
+        type: "events.iterate.com/repos/created",
+        idempotencyKey: this.idempotencyKey("created"),
+        payload: { ...artifact, request },
+      };
+    } catch (error) {
+      if (isRepoNotSeededError(error)) throw error;
+      return {
+        type: "events.iterate.com/repos/create-failed",
+        idempotencyKey: this.idempotencyKey("create-failed"),
+        payload: {
+          error: error instanceof Error ? error.message : String(error),
+          request,
+        },
+      };
+    }
+  }
+
+  async #createRepo(request: RepoCreateRequest) {
+    if (request.type === "empty") return await this.deps.createEmptyArtifact();
+
+    const artifact =
+      request.type === "github-public"
+        ? await this.deps.importPublicGithubArtifact(request)
+        : await this.deps.createEmptyArtifact();
+    await this.deps.linkGithub(request);
+    if (request.type === "github-private") await this.deps.syncPrivateGithub();
+    return artifact;
   }
 
   /**
@@ -328,20 +365,31 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   // Pure projection, one switch, cases inline.
   protected override reduce({ event, state }: ReduceArgs<RepoProcessorContract>) {
     switch (event.type) {
-      case "events.iterate.com/repo/created":
-        // The first created event wins; a duplicate is a no-op (explicit
-        // creation rejects conflicting births at the append door — a throwing
+      case "events.iterate.com/repos/create-requested":
+        // The first request wins; a duplicate is a no-op (explicit creation
+        // rejects conflicting requests at the append door — a throwing
         // reducer would only wedge the frame).
-        if (state.birthCertificate !== null) return state;
-        return { ...state, birthCertificate: event.payload };
-      case "events.iterate.com/repo/ready":
+        if (state.createRequest !== null) return state;
         return {
           ...state,
+          createRequest: event.payload,
+          // Every creation mode targets main. Record that invariant with the
+          // intent so an Artifact push racing the terminal certificate is
+          // still normalized into durable commit/task facts.
+          defaultBranch: REPO_DEFAULT_BRANCH,
+        };
+      case "events.iterate.com/repos/created":
+        // The first certificate wins — same no-op rule as the request.
+        if (state.birthCertificate !== null) return state;
+        return {
+          ...state,
+          birthCertificate: event.payload,
           artifactName: event.payload.artifactName,
-          ready: true,
           defaultBranch: event.payload.defaultBranch,
           remote: event.payload.remote,
         };
+      case "events.iterate.com/repos/create-failed":
+        return { ...state, createFailure: event.payload };
       case "events.iterate.com/repo/github-link-configured":
         // A (re)link is a fresh start: any open import obligation belonged to
         // the previous link, and the mirror status board is blank again.
@@ -411,14 +459,28 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 // -----------------------------------------------------------------------------
 
 type RepoProcessorDeps = {
-  /** Seed the backing Cloudflare Artifacts repository. Idempotent: leaves an
-   * existing branch untouched and gives concurrent first seeds the same
-   * commit oid. */
-  createRepoArtifact(input: { path: string; projectId: string | null }): Promise<{
+  /** Seed the backing Cloudflare Artifacts repository with the starter files.
+   * Idempotent: leaves an existing branch untouched and gives concurrent
+   * first seeds the same commit oid. */
+  createEmptyArtifact(): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;
   }>;
+  /** Have Cloudflare Artifacts clone a public GitHub repository directly —
+   * the history never transfers through the Worker. Throws RepoNotSeededError
+   * while the import is still materializing. */
+  importPublicGithubArtifact(input: { depth?: number; owner: string; repo: string }): Promise<{
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
+  }>;
+  /** Link the repo to the GitHub repository (configure the link, arm webhook
+   * cross-posting) without pushing starter history first. */
+  linkGithub(input: { connection: string; owner: string; repo: string }): Promise<void>;
+  /** Pull the linked private repository's default branch through the Worker
+   * at depth one, overwriting the empty Artifact seed. */
+  syncPrivateGithub(): Promise<void>;
   /** Feed a queue-observed push into the branch-head cache authority —
    * INCLUDING ref deletions (`afterCommitOid: null`), which produce no
    * commit facts but must still evict a warm head/tree. The before oid lets

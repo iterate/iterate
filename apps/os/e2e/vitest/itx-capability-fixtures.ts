@@ -1,33 +1,9 @@
 import { createWebSocketResponse, isWebSocketUpgradeRequest, WebSocketPair } from "captun";
-import { mockSlackResponseBody } from "../test-support/mock-slack-api.ts";
 import { withTunnel, type TunnelHandle } from "../test-support/tunnel.ts";
 
 type CapabilityFixtureInput = {
   expectedAuthorization?: string;
 };
-
-/**
- * Slack Web API stand-in for the WORKER-side WebClient (the seeded project
- * worker's `slack` surface): local runs use loopback; deployed runs expose the
- * same local fixture through the apps/tunnels captun gateway.
- */
-export async function startMockSlackApi(): Promise<TunnelHandle & { calls: string[] }> {
-  const calls: string[] = [];
-  const server = await withTunnel({
-    path: "/",
-    async fetch(request) {
-      const method = new URL(request.url).pathname.replace(/^\//, "");
-      calls.push(method);
-      const body = await request.text();
-      const contentType = request.headers.get("content-type") ?? "";
-      const payload: Record<string, unknown> = contentType.includes("application/json")
-        ? (JSON.parse(body || "{}") as Record<string, unknown>)
-        : Object.fromEntries(new URLSearchParams(body));
-      return Response.json(mockSlackResponseBody(method, payload));
-    },
-  });
-  return { ...server, calls };
-}
 
 export async function startEgressEcho(): Promise<TunnelHandle> {
   return await withTunnel({

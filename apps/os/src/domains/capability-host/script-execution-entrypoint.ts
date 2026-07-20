@@ -211,20 +211,23 @@ export function scriptWorkerRef(input: {
   // runScript is deliberately expressed as a stateless inline DynamicWorkerRef.
   // That keeps script execution on the same DynamicWorkerRunner dispatch path as
   // project workers and provided stateless capabilities; itx adds only the
-  // journal events. `bundle: false` over plain JavaScript is the loader-ready
-  // fast path in resolveWorkerSource: scripts run on every agent turn and must
-  // not pay a build round trip.
+  // journal events. `bundle: false` asks worker-bundler for its transform-only
+  // path, avoiding an esbuild bundle while retaining the same cached build
+  // contract as every other dynamic Worker.
   return {
     path: input.scopePath,
     source: {
-      files: {
-        files:
-          scriptModule === undefined
-            ? { "main.js": source }
-            : { "main.js": source, "script.js": scriptModule },
-        type: "inline",
+      createWorker: {
+        bundle: false,
+        entryPoint: "main.js",
+        files: {
+          files:
+            scriptModule === undefined
+              ? { "main.js": source }
+              : { "main.js": source, "script.js": scriptModule },
+          type: "inline",
+        },
       },
-      options: { bundle: false, entryPoint: "main.js" },
     },
     entrypoint: "ScriptEntrypoint",
     type: "stateless",

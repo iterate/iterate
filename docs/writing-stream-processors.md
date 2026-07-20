@@ -229,8 +229,9 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
    committed completion:
    requested-and-completed pairs cancel out _before_ `processEvent` acts.
    The `delivery.caughtUp` branch in `RepoProcessor.processEvent` is the
-   minimal creation example—reduce `birthCertificate` and `repo/ready`, then
-   provision only when the at-head state is born but not ready.
+   minimal creation example—reduce `createRequest` and `birthCertificate`,
+   then provision only when the at-head state has an open request and no
+   terminal certificate.
 3. **An acknowledgement/cosmetic lane gated on FRESHNESS** — compare
    `event.createdAt` against an injected `now`. Acks mean "your message was
    just picked up"; they are only meaningful near arrival, so stale replays

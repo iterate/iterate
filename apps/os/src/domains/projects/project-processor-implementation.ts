@@ -3,14 +3,11 @@ import type { ProcessEventArgs, ReduceArgs, StreamEvent, StreamListItem } from "
 import { timedStep } from "../../lib/step-timing.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
-import { RepoProcessorContract } from "../repos/repo-processor-contract.ts";
+import { repoCreationEvents } from "../repos/repo-defaults.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  CapabilityHostProcessorContract,
-  capabilityFallbackForScope,
-} from "../capability-host/capability-host-processor-contract.ts";
+import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { EmailProcessorContract } from "../email/email-processor-contract.ts";
@@ -41,20 +38,21 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 60_000;
  * BOOTSTRAP. `project/created` is the birth certificate. Its one blocking
  * reaction creates every sibling processor a project is born with — the root
  * capability host on `/`, the primary scheduler on `/scheduler/primary`, the
- * config repo on `/repos/config` (whose birth batch also arms the
- * `cross-post:/` rule that copies later config-repo events back onto `/`),
- * and the email router on `/integrations/email` (seeded with the creator's
- * email as the first sender-allowlist entry). Every appended event carries a
- * deterministic idempotency key, so a redelivered birth frame dedupes instead
- * of double-creating. The frame then WAITS (bounded by
+ * config repo on `/repos/config` (its `repos/create-requested` batch also
+ * arms the `cross-post:/` rule that copies later config-repo events back
+ * onto `/`), and the email router on `/integrations/email` (seeded with the
+ * creator's email as the first sender-allowlist entry). Every appended event
+ * carries a deterministic idempotency key, so a redelivered birth frame
+ * dedupes instead of double-creating. The frame then WAITS (bounded by
  * SIBLING_BIRTH_BARRIER_TIMEOUT_MS) for each sibling to reduce its own birth
  * batch: `projects.create()` blocks on this Project frame, and the boundary
  * must not race the capabilities it promises.
  *
- * READY. The config repo commits `repo/ready` on its own stream; the
- * cross-post rule copies it here. The reaction probes the default project
- * worker (each probe attempt blocks on the worker's cold build) and then
- * appends `project/ready` — the fact `projects.create()` callers poll.
+ * READY. The config repo's creation saga commits its terminal
+ * `repos/created` certificate on its own stream; the cross-post rule copies
+ * it here. The reaction probes the default project worker (each probe
+ * attempt blocks on the worker's cold build) and then appends
+ * `project/ready` — the fact `projects.create()` callers poll.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -110,19 +108,22 @@ export class ProjectProcessor extends StreamProcessor<
         );
         break;
       }
-      case "events.iterate.com/repo/ready": {
-        // Arrives as a cross-posted copy: the config repo commits its facts
-        // on its own stream, and the `cross-post:/` rule armed at create
-        // copies them here — this saga only ever reacts to events ON `/`.
+      case "events.iterate.com/repos/created": {
+        // Arrives as a cross-posted copy: the config repo commits its
+        // terminal certificate on its own stream, and the `cross-post:/`
+        // rule armed at create copies it here — this saga only ever reacts
+        // to events ON `/`. The certificate payload carries no path, so the
+        // config repo is recognized by cross-post provenance.
+        const origin = event.source?.crossPostedFrom?.at(-1);
         if (
-          event.payload.projectId !== this.deps.itx.projectId ||
-          event.payload.path !== CONFIG_REPO_PATH ||
+          origin?.projectId !== this.deps.itx.projectId ||
+          origin.path !== CONFIG_REPO_PATH ||
           state.ready
         ) {
           break;
         }
         blockProcessorWhile(
-          "the ready fact is a per-event consequence of the config repo's ready; a dropped append would leave the project never marked ready",
+          "the ready fact is a per-event consequence of the config repo's created certificate; a dropped append would leave the project never marked ready",
           async () => {
             const timing = { projectId: this.deps.itx.projectId };
             await timedStep("create-timing", timing, "worker-probe", () =>
@@ -265,21 +266,12 @@ export class ProjectProcessor extends StreamProcessor<
     const siblingBirths = Promise.all([
       timedStep("create-timing", timing, "root-saga-append", () =>
         append(
-          {
-            type: "events.iterate.com/capability-host/created",
-            idempotencyKey: `capability-host/created:${this.deps.itx.projectId}:/`,
-            // The root host ends capability resolution: no fallback.
-            payload: { config: {}, fallback: capabilityFallbackForScope("/") },
-          },
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: this.deps.itx.projectId,
-              path: "/",
-            }),
-            idempotencyKey: `capability-host-subscription:${this.deps.itx.projectId}:/`,
-            processor: ["capabilityHosts", ["get", "/"], "processor"],
-            processorSlug: CapabilityHostProcessorContract.slug,
-          }),
+          // The shared birth batch: the root host's created certificate (its
+          // default payload ends capability resolution at "/") plus the
+          // subscription arming its processor — the same events an explicit
+          // capabilityHosts.get("/").create() would append, so the keys
+          // collide by design.
+          ...capabilityHostCreationEvents({ path: "/", projectId: this.deps.itx.projectId }),
           {
             type: "events.iterate.com/notification/created",
             idempotencyKey: `notification-created:${this.deps.itx.projectId}`,
@@ -315,28 +307,19 @@ export class ProjectProcessor extends StreamProcessor<
           }),
         ),
       ),
-      // The config repo is an ordinary repo on its own stream. Its birth
-      // batch contains the birth certificate, repo processor subscription,
-      // and the cross-post rule that copies subsequent config-repo events
-      // onto the project stream `/`. The repo processor cross-posts its own
-      // birth certificate for the project catalog, so replaying the setup
-      // batch here would duplicate it.
+      // The config repo is an ordinary repo on its own stream. Its request
+      // batch contains the creation intent (`repos/create-requested`, empty
+      // starter seed), the repo processor subscription, and the cross-post
+      // rule that copies subsequent config-repo events onto the project
+      // stream `/` — including the saga's terminal `repos/created`
+      // certificate, which is what marks the project ready and catalogs the
+      // repo (so no dedicated catalog subscription here).
       timedStep("create-timing", timing, "config-repo-append", () =>
         appendTo(
           CONFIG_REPO_PATH,
-          {
-            type: "events.iterate.com/repo/created",
-            idempotencyKey: `repo-created:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
-            payload: { config: {} },
-          },
-          buildDurableObjectProcessorSubscriptionConfiguredEvent({
-            durableObjectName: DurableObjectNameCodec.stringify({
-              projectId: this.deps.itx.projectId,
-              path: CONFIG_REPO_PATH,
-            }),
-            idempotencyKey: `repo-processor-subscription:${this.deps.itx.projectId}:${CONFIG_REPO_PATH}`,
-            processor: ["repos", ["get", CONFIG_REPO_PATH], "processor"],
-            processorSlug: RepoProcessorContract.slug,
+          ...repoCreationEvents({
+            path: CONFIG_REPO_PATH,
+            projectId: this.deps.itx.projectId,
           }),
           {
             type: "events.iterate.com/stream/subscription-configured",
@@ -550,7 +533,7 @@ export class ProjectProcessor extends StreamProcessor<
         };
       case "events.iterate.com/device/created":
         return recordDomainObject(state, "devices", event);
-      case "events.iterate.com/repo/created":
+      case "events.iterate.com/repos/created":
         return recordDomainObject(state, "repos", event);
       case "events.iterate.com/secret/created":
         return recordDomainObject(state, "secrets", event);
@@ -647,9 +630,9 @@ export class ProjectProcessor extends StreamProcessor<
           ),
         };
       default:
-        // repo/ready, the approval lifecycle events, and everything else the
-        // wildcard delivers: consumed for their delivery turn (or by the DO's
-        // own readers), no state change here.
+        // The approval lifecycle events and everything else the wildcard
+        // delivers: consumed for their delivery turn (or by the DO's own
+        // readers), no state change here.
         return state;
     }
   }

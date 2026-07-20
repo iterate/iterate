@@ -93,8 +93,10 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
   using explicitWorker = project.workers.get({
     path: "/",
     source: {
-      files: { repoPath: "/repos/config", type: "repo" },
-      options: { entryPoint: "worker.ts" },
+      createWorker: {
+        entryPoint: "worker.ts",
+        files: { repoPath: "/repos/config", type: "repo" },
+      },
     },
     type: "stateless",
   }) as unknown as {
@@ -110,8 +112,10 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     durableWorkerKey: `direct-db-${crypto.randomUUID()}`,
     path: "/",
     source: {
-      files: { repoPath: "/repos/config", type: "repo" },
-      options: { entryPoint: "worker.ts" },
+      createWorker: {
+        entryPoint: "worker.ts",
+        files: { repoPath: "/repos/config", type: "repo" },
+      },
     },
     type: "stateful",
   }) as unknown as {
@@ -163,8 +167,10 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
         {
           path: "/",
           source: {
-            files: { repoPath: "/repos/config", type: "repo" },
-            options: { entryPoint: "worker.ts" },
+            createWorker: {
+              entryPoint: "worker.ts",
+              files: { repoPath: "/repos/config", type: "repo" },
+            },
           },
           type: "stateless",
         },
@@ -189,8 +195,10 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
           durableWorkerKey: `counter-facet-${crypto.randomUUID()}`,
           path: "/",
           source: {
-            files: { repoPath: "/repos/config", type: "repo" },
-            options: { entryPoint: "worker.ts" },
+            createWorker: {
+              entryPoint: "worker.ts",
+              files: { repoPath: "/repos/config", type: "repo" },
+            },
           },
           type: "stateful",
         },
@@ -214,8 +222,10 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
           durableWorkerKey: `mounted-db-${crypto.randomUUID()}`,
           path: "/",
           source: {
-            files: { repoPath: "/repos/config", type: "repo" },
-            options: { entryPoint: "worker.ts" },
+            createWorker: {
+              entryPoint: "worker.ts",
+              files: { repoPath: "/repos/config", type: "repo" },
+            },
           },
           type: "stateful",
         },
@@ -265,10 +275,13 @@ test("Worker expression capabilities dispatch nested RpcTarget paths", async () 
   using project = itx.projects.create({ slug: `worker-flatten-${marker}` });
 
   const source = {
-    files: {
-      type: "inline",
+    createWorker: {
+      bundle: false,
+      entryPoint: "router.js",
       files: {
-        "router.js": `
+        type: "inline",
+        files: {
+          "router.js": `
           import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
           class ToolsTarget extends RpcTarget {
@@ -308,9 +321,9 @@ test("Worker expression capabilities dispatch nested RpcTarget paths", async () 
             }
           }
         `,
+        },
       },
     },
-    options: { bundle: false, entryPoint: "router.js" },
   } as const;
 
   using _statelessRouterProvision = await project.provideCapability({
@@ -388,10 +401,13 @@ test("Dynamic workers can return RpcTarget capabilities that keep chaining", asy
   };
 
   const source = {
-    files: {
-      type: "inline",
+    createWorker: {
+      bundle: false,
+      entryPoint: "returned-rpc-target.js",
       files: {
-        "returned-rpc-target.js": `
+        type: "inline",
+        files: {
+          "returned-rpc-target.js": `
           import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
           class ChildTarget extends RpcTarget {
@@ -440,9 +456,9 @@ test("Dynamic workers can return RpcTarget capabilities that keep chaining", asy
             }
           }
         `,
+        },
       },
     },
-    options: { bundle: false, entryPoint: "returned-rpc-target.js" },
   } as const;
 
   using statelessWorker = project.workers.get({
@@ -563,8 +579,10 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
   });
 
   const repoWorkerSource = {
-    files: { repoPath: "/repos/config", type: "repo" },
-    options: { entryPoint: "worker.ts" },
+    createWorker: {
+      entryPoint: "worker.ts",
+      files: { repoPath: "/repos/config", type: "repo" },
+    },
   } as const;
   const inlineProjectStateless: DynamicWorkerRef = {
     entrypoint: "InlineProjectEntrypoint",

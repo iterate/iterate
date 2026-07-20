@@ -56,7 +56,6 @@ import {
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
-import { seedTemplateWorkerArtifacts } from "./lib/seed-template-worker-artifact.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
@@ -224,43 +223,19 @@ export default async function deploy(
       // here avoids racing that write with the sidecar's Wrangler process.
       writeWranglerConfig();
     },
-    // Deploy the typechecker sidecar and prebuild the deterministic project
-    // template artifacts while the OS Vite build runs. Both are independent
-    // prerequisites, and deployApp joins every lane before uploading the main
-    // Worker: its TYPECHECKER binding can never target a missing script, and
-    // fresh projects can never observe a version before its artifacts exist.
-    concurrentBuildWork: async (ctx, secretValues, credentials) => {
-      const results = await Promise.allSettled([
-        runAsync(
-          "pnpm",
-          [
-            "exec",
-            "wrangler",
-            "deploy",
-            "--config",
-            "wrangler.typechecker.jsonc",
-            "--env",
-            ctx.name,
-          ],
-          {
-            cwd: fileURLToPath(new URL("..", import.meta.url)),
+    // Deploy both compiler sidecars while the OS Vite build runs. deployApp
+    // joins this lane before uploading the main Worker, so neither service
+    // binding can target a missing script.
+    concurrentBuildWork: async (ctx, _secretValues, credentials) => {
+      const cwd = fileURLToPath(new URL("..", import.meta.url));
+      await Promise.all(
+        ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"].map((config) =>
+          runAsync("pnpm", ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name], {
+            cwd,
             env: credentials,
-          },
+          }),
         ),
-        seedTemplateWorkerArtifacts({
-          accountId: ctx.env.cloudflareAccountId,
-          apiToken: credentials.CLOUDFLARE_API_TOKEN!,
-          iterateSdkPackageSpec: secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC,
-          kvNamespaceId: ctx.env.resources.workerBuildCacheKvId,
-        }),
-      ]);
-      const failures = results
-        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-        .map((result) => result.reason);
-      if (failures.length === 1) throw failures[0];
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Typechecker deploy and template seeding both failed");
-      }
+      );
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {

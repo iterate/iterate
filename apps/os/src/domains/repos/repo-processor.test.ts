@@ -2,11 +2,10 @@
 // harness (makeProcessorHarness from iterate/processors/testing): the REAL
 // StreamProcessorRunner over the shared MemoryStream (production idempotency
 // semantics: a same-key append with a different body is REJECTED), virtual
-// time, and eviction-faithful crash(). The home stream lives inside a
-// MemoryStreamNetwork so the catalog cross-post onto the project root stream
-// "/" is observable. The four vendor deps (artifact seed, GitHub sync, task
-// diff, branch-head cache) are scriptable fakes wired in createProcessor —
-// swap `impl` mid-scenario or across crashes; `calls` records every dial.
+// time, and eviction-faithful crash(). The vendor deps (artifact seed, public
+// import, GitHub link/sync, task diff, branch-head cache) are scriptable
+// fakes wired in createProcessor — swap `impl` mid-scenario or across
+// crashes; `calls` records every dial.
 //
 // The registry-level recovery suite (fake DurableObjectState, REAL registry +
 // keepalive alarm) lives in repo-recovery.test.ts.
@@ -16,7 +15,6 @@ import type { ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
-  MemoryStreamNetwork,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
 import type { RepoCommittedFileChange } from "./repo-task-events.ts";
@@ -36,9 +34,16 @@ const SEEDED_ARTIFACT = {
   remote: "https://example.artifacts.cloudflare.net/git/ns/proj_harness--L3JlcG9zL2NvbmZpZw.git",
 };
 
-const REPO_CREATED = {
-  type: "events.iterate.com/repo/created",
-  payload: { config: {} },
+const CREATE_REQUESTED = {
+  type: "events.iterate.com/repos/create-requested",
+  payload: { type: "empty" },
+} satisfies RepoEventInput;
+
+/** The saga's terminal certificate, appended manually by scenarios that start
+ * from an ALREADY-CREATED repo (the seed fake then never dials). */
+const CREATED = {
+  type: "events.iterate.com/repos/created",
+  payload: { ...SEEDED_ARTIFACT, request: { type: "empty" } },
 } satisfies RepoEventInput;
 
 const GITHUB_LINK_CONFIGURED = {
@@ -119,19 +124,24 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
   };
 }
 
-/** The generic harness over a MemoryStreamNetwork (so the catalog cross-post
- * to "/" lands somewhere observable) plus the repo's scriptable vendor fakes.
- * Pass another harness's substrate for a replay incarnation over the SAME
- * stream. */
+/** The generic harness plus the repo's scriptable vendor fakes. Pass another
+ * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
-  if (substrate === undefined) {
-    const clock = { now: Date.parse("2026-07-20T12:00:00Z") };
-    const network = new MemoryStreamNetwork(() => clock.now);
-    substrate = { clock, stream: network.get(REPO_PATH), progress: makeMemoryProgressStore() };
-  }
-  const artifactSeed = {
-    calls: [] as { path: string; projectId: string | null }[],
+  const createEmpty = {
+    calls: 0,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
+  };
+  const importPublic = {
+    calls: [] as { depth?: number; owner: string; repo: string }[],
+    impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
+  };
+  const link = {
+    calls: [] as { connection: string; owner: string; repo: string }[],
+    impl: async (): Promise<void> => {},
+  };
+  const syncPrivate = {
+    calls: 0,
+    impl: async (): Promise<void> => {},
   };
   const githubSync = {
     calls: [] as { afterCommitOid: string; branch: string }[],
@@ -158,9 +168,21 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
-        createRepoArtifact: (input) => {
-          artifactSeed.calls.push(input);
-          return artifactSeed.impl();
+        createEmptyArtifact: () => {
+          createEmpty.calls += 1;
+          return createEmpty.impl();
+        },
+        importPublicGithubArtifact: (input) => {
+          importPublic.calls.push(input);
+          return importPublic.impl();
+        },
+        linkGithub: (input) => {
+          link.calls.push(input);
+          return link.impl();
+        },
+        syncPrivateGithub: () => {
+          syncPrivate.calls += 1;
+          return syncPrivate.impl();
         },
         syncFromGithubPush: (input) => {
           githubSync.calls.push(input);
@@ -172,68 +194,181 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         },
         observeArtifactPush: (input) => void headCache.observed.push(input),
       }),
+    path: REPO_PATH,
     substrate,
   });
-  const network = harness.stream.network!;
   return {
     ...harness,
-    network,
-    artifactSeed,
+    createEmpty,
+    importPublic,
+    link,
+    syncPrivate,
     githubSync,
     taskDiff,
     headCache,
-    catalog: () => network.eventsAt("/"),
   };
 }
 
 // =============================================================================
-// Birth: the artifact-seed obligation and the catalog cross-post
+// The creation saga: create-requested → created | create-failed
 // =============================================================================
 
-describe("RepoProcessor birth", () => {
-  it("seeds the backing artifact once at head, records repo/ready under the offset-free key, and cross-posts the created fact to the root catalog", async () => {
+describe("RepoProcessor creation saga", () => {
+  it("seeds an empty Artifact once at head and appends the terminal certificate under the offset-free key", async () => {
     const h = makeRepoHarness();
-    await h.play(["append", REPO_CREATED]);
+    await h.play(["append", CREATE_REQUESTED]);
 
-    // The seed ran exactly once even though later deliveries (the ready event
-    // itself) re-ran the at-head pass over a state where ready already holds.
-    expect(h.artifactSeed.calls).toEqual([{ path: REPO_PATH, projectId: PROJECT_ID }]);
-    expect(h.events("events.iterate.com/repo/ready")).toMatchObject([
+    // The seed ran exactly once even though later deliveries (the terminal
+    // certificate itself) re-ran the at-head pass over a state where the
+    // birth certificate already holds.
+    expect(h.createEmpty.calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
       {
         // NO event offset in the key: a redelivery/revival cannot rotate it
-        // and re-seed.
-        idempotencyKey: "repo/ready",
-        payload: { ...SEEDED_ARTIFACT, path: REPO_PATH, projectId: PROJECT_ID },
+        // and double-birth.
+        idempotencyKey: "repo/created",
+        payload: { ...SEEDED_ARTIFACT, request: { type: "empty" } },
       },
     ]);
     expect(h.state()).toMatchObject({
-      birthCertificate: { config: {} },
-      ready: true,
+      createRequest: { type: "empty" },
+      createFailure: null,
+      birthCertificate: { request: { type: "empty" } },
       defaultBranch: "main",
       artifactName: SEEDED_ARTIFACT.artifactName,
       remote: SEEDED_ARTIFACT.remote,
     });
+  });
 
-    // The per-event consequence: the created fact re-appended onto "/", keyed
-    // on the consumed event's coordinates so a redelivered frame dedupes.
-    expect(h.catalog()).toMatchObject([
+  it("imports a public GitHub repo through Artifacts, then links it", async () => {
+    const h = makeRepoHarness();
+    await h.play([
+      "append",
       {
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo/catalog-created@${REPO_PATH}:1`,
-        payload: { config: {} },
+        type: "events.iterate.com/repos/create-requested",
+        payload: {
+          type: "github-public",
+          connection: "install-789",
+          depth: 1,
+          owner: "acme",
+          repo: "widgets",
+        },
       },
+    ]);
+
+    expect(h.importPublic.calls).toMatchObject([{ depth: 1, owner: "acme", repo: "widgets" }]);
+    expect(h.link.calls).toMatchObject([
+      { connection: "install-789", owner: "acme", repo: "widgets" },
+    ]);
+    expect(h.createEmpty.calls).toBe(0);
+    expect(h.syncPrivate.calls).toBe(0);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
+  it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {
+    const h = makeRepoHarness();
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/repos/create-requested",
+        payload: {
+          type: "github-private",
+          connection: "install-789",
+          owner: "acme",
+          repo: "widgets",
+        },
+      },
+    ]);
+
+    expect(h.createEmpty.calls).toBe(1);
+    expect(h.link.calls).toMatchObject([
+      { connection: "install-789", owner: "acme", repo: "widgets" },
+    ]);
+    expect(h.syncPrivate.calls).toBe(1);
+    expect(h.importPublic.calls).toEqual([]);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
+  it("settles a vendor failure as create-failed instead of claiming the repo was created", async () => {
+    const h = makeRepoHarness();
+    h.importPublic.impl = async () => {
+      throw new Error("Cloudflare Artifacts 10400: An internal error occurred");
+    };
+    const request = {
+      type: "github-public" as const,
+      connection: "install-789",
+      owner: "acme",
+      repo: "widgets",
+    };
+    await h.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(0);
+    expect(h.events("events.iterate.com/repos/create-failed")).toMatchObject([
+      {
+        idempotencyKey: "repo/create-failed",
+        payload: { error: "Cloudflare Artifacts 10400: An internal error occurred", request },
+      },
+    ]);
+    expect(h.state()).toMatchObject({ createFailure: { request }, birthCertificate: null });
+  });
+
+  it("is fail-closed: after a terminal failure nothing reacts — no head-cache poke, no commit facts, no import", async () => {
+    const h = makeRepoHarness();
+    await h.play([
+      "append",
+      CREATE_REQUESTED,
+      {
+        type: "events.iterate.com/repos/create-failed",
+        payload: { error: "boom", request: CREATE_REQUESTED.payload },
+      },
+      artifactPush("main"),
+      GITHUB_LINK_CONFIGURED,
+      githubPush(),
+    ]);
+
+    expect(h.headCache.observed).toEqual([]);
+    expect(h.taskDiff.calls).toEqual([]);
+    expect(h.githubSync.calls).toEqual([]);
+    expect(h.events("events.iterate.com/repo/commit-completed")).toHaveLength(0);
+    expect(h.events("events.iterate.com/repo/github-import-requested")).toHaveLength(0);
+  });
+
+  it("preserves a creation push that arrives before the terminal certificate", async () => {
+    // The default branch is known the moment create-requested reduces, so an
+    // Artifacts push racing the certificate still lands its commit fact.
+    const h = makeRepoHarness();
+    await h.play(["append", CREATE_REQUESTED, artifactPush("main")]);
+
+    expect(h.events("events.iterate.com/repo/commit-completed")).toMatchObject([
+      { payload: { beforeCommitOid: "before123", branch: "main", commitOid: "after456" } },
+    ]);
+    expect(h.taskDiff.calls).toEqual([
+      { afterCommitOid: "after456", beforeCommitOid: "before123", branch: "main" },
     ]);
   });
 
-  it("a second created event is a no-op: the first birth certificate wins", async () => {
+  it("a duplicate request and a duplicate certificate both reduce to a no-op: the first ones win", async () => {
     const h = makeRepoHarness();
-    await h.play(["append", REPO_CREATED]);
+    await h.play(["append", CREATE_REQUESTED]);
     const before = h.state();
-    // Conflicting births are rejected at the create() door (same-key-
-    // different-body); a duplicate that still reaches reduce must not wedge
-    // the frame, and must not re-birth.
-    await h.append(REPO_CREATED);
+
+    // Conflicting requests are rejected at the create() door (the committed-
+    // payload comparison); duplicates that still reach reduce must not wedge
+    // the frame, must not re-birth, and must not clobber the first story.
+    await h.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: { type: "github-public", connection: "install-x", owner: "a", repo: "b" },
+    });
+    await h.append({
+      type: "events.iterate.com/repos/created",
+      payload: { ...SEEDED_ARTIFACT, artifactName: "impostor", request: { type: "empty" } },
+    });
+
     expect(h.state()).toEqual(before);
+    expect(h.createEmpty.calls).toBe(1);
   });
 });
 
@@ -249,7 +384,7 @@ describe("RepoProcessor commit facts", () => {
       { kind: "updated", path: "apps/os/tasks/board.markdown" },
       { kind: "deleted", path: "packages/ui/tasks/old.md" },
     ];
-    await h.play(["append", REPO_CREATED], ["append", artifactPush("main")]);
+    await h.play(["append", CREATE_REQUESTED, CREATED], ["append", artifactPush("main")]);
 
     expect(
       h
@@ -281,11 +416,13 @@ describe("RepoProcessor commit facts", () => {
     expect(h.taskDiff.calls).toEqual([
       { afterCommitOid: "after456", beforeCommitOid: "before123", branch: "main" },
     ]);
+    // The certificate was appended manually — the seed never dialed.
+    expect(h.createEmpty.calls).toBe(0);
   });
 
   it("ignores pushes to non-default branches: no head-cache poke, no commit fact, no tree diff", async () => {
     const h = makeRepoHarness();
-    await h.play(["append", REPO_CREATED], ["append", artifactPush("feature")]);
+    await h.play(["append", CREATE_REQUESTED, CREATED], ["append", artifactPush("feature")]);
 
     expect(h.headCache.observed).toEqual([]);
     expect(h.taskDiff.calls).toEqual([]);
@@ -296,7 +433,7 @@ describe("RepoProcessor commit facts", () => {
     const h = makeRepoHarness();
     const zeroOid = "0".repeat(40);
     await h.play(
-      ["append", REPO_CREATED],
+      ["append", CREATE_REQUESTED, CREATED],
       [
         "append",
         artifactPush("main"),
@@ -320,7 +457,10 @@ describe("RepoProcessor commit facts", () => {
 describe("RepoProcessor GitHub imports", () => {
   it("imports a linked default-branch push: webhook → requested → started → sync → completed; Artifacts stays the only source of commit facts", async () => {
     const h = makeRepoHarness();
-    await h.play(["append", REPO_CREATED], ["append", GITHUB_LINK_CONFIGURED, githubPush()]);
+    await h.play(
+      ["append", CREATE_REQUESTED, CREATED],
+      ["append", GITHUB_LINK_CONFIGURED, githubPush()],
+    );
 
     // The full obligation story is on the stream, in order.
     expect(h.events("events.iterate.com/repo/github-import-requested")).toMatchObject([
@@ -354,7 +494,7 @@ describe("RepoProcessor GitHub imports", () => {
   ])("does not import %s", async (_case, webhookInput) => {
     const h = makeRepoHarness();
     await h.play(
-      ["append", REPO_CREATED],
+      ["append", CREATE_REQUESTED, CREATED],
       ["append", GITHUB_LINK_CONFIGURED, githubPush(webhookInput)],
     );
 
@@ -367,7 +507,10 @@ describe("RepoProcessor GitHub imports", () => {
     h.githubSync.impl = async () => {
       throw new Error("GitHub and Artifacts diverged");
     };
-    await h.play(["append", REPO_CREATED], ["append", GITHUB_LINK_CONFIGURED, githubPush()]);
+    await h.play(
+      ["append", CREATE_REQUESTED, CREATED],
+      ["append", GITHUB_LINK_CONFIGURED, githubPush()],
+    );
 
     expect(h.events("events.iterate.com/repo/github-import-failed")).toMatchObject([
       { payload: { error: expect.stringContaining("diverged"), branch: "main" } },
@@ -388,7 +531,10 @@ describe("RepoProcessor GitHub imports", () => {
     // Incarnation 1's sync HANGS: the started fact is journaled, the attempt
     // parks forever.
     h.githubSync.impl = () => new Promise<never>(() => {});
-    await h.play(["append", REPO_CREATED], ["append", GITHUB_LINK_CONFIGURED, githubPush()]);
+    await h.play(
+      ["append", CREATE_REQUESTED, CREATED],
+      ["append", GITHUB_LINK_CONFIGURED, githubPush()],
+    );
     expect(h.events("events.iterate.com/repo/github-import-started")).toHaveLength(1);
     expect(h.events("events.iterate.com/repo/github-import-completed")).toHaveLength(0);
     expect(h.githubSync.calls).toHaveLength(1);
@@ -422,7 +568,7 @@ describe("RepoProcessor GitHub imports", () => {
 describe("RepoProcessor reduced state", () => {
   it("mirrors the link lifecycle and the NEWEST mirror-push outcome; unlink clears the board", async () => {
     const h = makeRepoHarness();
-    await h.play(["append", REPO_CREATED], ["append", GITHUB_LINK_CONFIGURED]);
+    await h.play(["append", CREATE_REQUESTED, CREATED], ["append", GITHUB_LINK_CONFIGURED]);
     expect(h.state().github).toEqual({
       connection: "install-789",
       installationId: "789",
@@ -488,18 +634,58 @@ describe("RepoProcessor reduced state", () => {
 });
 
 // =============================================================================
+// The creation request schema — the create() door's vocabulary
+// =============================================================================
+
+describe("repos/create-requested payload schema", () => {
+  const requestSchema =
+    RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema;
+
+  it.each([
+    { type: "empty" },
+    { type: "github-private", connection: "install-1", owner: "acme", repo: "private" },
+    { type: "github-public", connection: "install-1", owner: "acme", repo: "public" },
+    { type: "github-public", connection: "install-1", depth: 1, owner: "acme", repo: "public" },
+  ])("accepts $type", (request) => {
+    expect(requestSchema.parse(request)).toEqual(request);
+  });
+
+  it("rejects source fields on an empty repo request", () => {
+    expect(() => requestSchema.parse({ type: "empty", owner: "acme" })).toThrow();
+  });
+
+  it("requires GitHub coordinates for both GitHub modes", () => {
+    expect(() => requestSchema.parse({ type: "github-public", owner: "acme" })).toThrow();
+    expect(() => requestSchema.parse({ type: "github-private", repo: "private" })).toThrow();
+  });
+
+  it("requires a positive public import depth", () => {
+    expect(() =>
+      requestSchema.parse({
+        type: "github-public",
+        connection: "install-1",
+        depth: 0,
+        owner: "acme",
+        repo: "public",
+      }),
+    ).toThrow();
+  });
+});
+
+// =============================================================================
 // Full replay — the harshest at-least-once redelivery
 // =============================================================================
 
 describe("RepoProcessor full replay", () => {
   it("a fresh cursor over the same stream re-executes no vendor work, appends nothing new, and reaches the same state", async () => {
-    // Live flow first: birth (artifact seeded), link, a webhook import that
-    // completes, then an Artifacts push whose commit carries task changes.
+    // Live flow first: the creation saga (artifact seeded, certificate
+    // appended), link, a webhook import that completes, then an Artifacts
+    // push whose commit carries task changes.
     const h = makeRepoHarness();
     const taskChanges: RepoCommittedFileChange[] = [{ kind: "created", path: "tasks/new-task.md" }];
     h.taskDiff.impl = async () => taskChanges;
     await h.play(
-      ["append", REPO_CREATED],
+      ["append", CREATE_REQUESTED],
       ["append", GITHUB_LINK_CONFIGURED, githubPush()],
       ["append", artifactPush("main")],
       // The clock moves well past every original append: replayed per-event
@@ -510,8 +696,8 @@ describe("RepoProcessor full replay", () => {
     );
     const headState = h.state();
     const committedOffsets = h.events().map((row) => row.offset);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
     expect(h.events("events.iterate.com/repo/task-created")).toHaveLength(1);
-    expect(h.catalog()).toHaveLength(1);
 
     // A SECOND harness over the SAME stream and clock with a FRESH progress
     // store: replays every event from offset 0. Completed obligations must
@@ -523,7 +709,7 @@ describe("RepoProcessor full replay", () => {
       stream: h.stream,
       progress: makeMemoryProgressStore(),
     });
-    replay.artifactSeed.impl = () => {
+    replay.createEmpty.impl = () => {
       throw new Error("replay must not re-create an existing repo");
     };
     replay.githubSync.impl = () => {
@@ -534,9 +720,7 @@ describe("RepoProcessor full replay", () => {
 
     expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
     expect(replay.state()).toEqual(headState);
+    expect(replay.events("events.iterate.com/repos/created")).toHaveLength(1);
     expect(replay.events("events.iterate.com/repo/task-created")).toHaveLength(1);
-    // The replayed catalog cross-post deduped on its key instead of
-    // double-cataloging.
-    expect(replay.catalog()).toHaveLength(1);
   });
 });

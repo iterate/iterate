@@ -338,7 +338,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     const repoPath = `/repos/list-proof/${crypto.randomUUID()}`;
     await Promise.all([
       project.agents.get(agentPath).create(),
-      project.repos.get(repoPath).create(),
+      project.repos.get(repoPath).create({ type: "empty" }),
     ]);
     await waitForCondition(
       async () => (await project.secrets.list()).some((item) => item.path === secretPath),
@@ -468,7 +468,7 @@ test("Project egress substitutes path-addressed secrets for explicit and project
       true,
     );
     expect((await project.repos.list()).some((item) => item.path === "/repos/config")).toBe(true);
-    expect((await project.repos.list()).some((item) => item.path.startsWith("/repos/"))).toBe(true);
+    expect((await project.repos.list()).some((item) => item.path === repoPath)).toBe(true);
     // Birth seeds keyed boot context in the system lane (platform context:
     // project id, agent path, repo layout), so no LLM turn runs. Ingest is
     // async: wait for the processor to fold the birth events before asserting
@@ -496,8 +496,8 @@ test("Project egress substitutes path-addressed secrets for explicit and project
       },
     });
     expect((await project.repo.processor.snapshot()).state).toMatchObject({
-      birthCertificate: { config: {} },
-      ready: true,
+      birthCertificate: { request: { type: "empty" } },
+      initialized: true,
     });
     // oxlint-disable-next-line iterate/prefer-object-property-match -- toEqual pins the exact egress config; a subset match would tolerate extra keys
     expect((await secret.processor.snapshot()).state.egress).toEqual({ urls: [echo.url] });

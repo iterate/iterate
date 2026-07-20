@@ -342,7 +342,10 @@ test("itx expression replacement records the recipe without evaluating it", asyn
   });
 
   using _replacement = await project.provideCapability({
-    expression: ["workers", ["get", { source: { files: { type: "inline" } }, type: "stateless" }]],
+    expression: [
+      "workers",
+      ["get", { source: { createWorker: { files: { type: "inline" } } }, type: "stateless" }],
+    ],
     path: ["replaceProbe"],
     type: "itx-expression",
   });

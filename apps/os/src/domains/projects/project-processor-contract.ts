@@ -72,8 +72,8 @@ export const ProjectProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "Catalog of repo streams, recorded from cross-posted repo/created facts; what the " +
-          "repos collection's list() reads.",
+          "Catalog of repo streams, recorded from cross-posted repos/created certificates; " +
+          "what the repos collection's list() reads.",
       }),
     secrets: z
       .array(StreamListItem)
@@ -568,8 +568,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/ready",
     "events.iterate.com/device/created",
-    "events.iterate.com/repo/created",
-    "events.iterate.com/repo/ready",
+    "events.iterate.com/repos/created",
     "events.iterate.com/secret/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
@@ -596,7 +595,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-removed",
     "events.iterate.com/project/ready",
-    "events.iterate.com/repo/created",
+    "events.iterate.com/repos/create-requested",
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/notification/created",
   ],

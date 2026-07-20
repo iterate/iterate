@@ -69,13 +69,12 @@ function ProjectRepoDetailContent() {
       />
     ) : (
       // data-spinner: this panel is live bootstrap progress (the processor
-      // pushes each step in), and right after repos.create it can also show a
+      // pushes each step in), and right after repo creation it can also show a
       // momentarily-stale checkpoint on a repo that IS already initialized —
       // waits must keep extending until the live push replaces it.
       <div className="overflow-y-auto p-4" data-spinner="true">
         <div className="mx-auto w-full max-w-2xl rounded-lg border bg-card">
           <InfoRow label="Created" value={state.birthCertificate !== null ? "yes" : "not yet"} />
-          <InfoRow label="Ready" value={state.ready ? "yes" : "not yet"} />
           <InfoRow label="Initialized" value={state.initialized ? "yes" : "not yet"} />
           <InfoRow label="Default branch" value={state.defaultBranch ?? "(none)"} />
           <InfoRow

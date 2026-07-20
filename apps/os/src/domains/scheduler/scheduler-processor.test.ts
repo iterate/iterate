@@ -400,9 +400,11 @@ describe("triggering", () => {
     expect(call.path).toEqual(["run"]);
     expect(call.traceRole).toBe("scheduler_action");
     expect(
-      (call.ref as { source: { files: { files: Record<string, string> } } }).source.files.files[
-        "main.js"
-      ],
+      (
+        call.ref as {
+          source: { createWorker: { files: { files: Record<string, string> } } };
+        }
+      ).source.createWorker.files.files["main.js"],
     ).toContain("async (itx, schedule, trigger) => 42");
     const [scheduleArg, triggerArg] = call.args as [
       Record<string, unknown>,
@@ -513,9 +515,11 @@ describe("triggering", () => {
 
     const call = vi.mocked(h.invokeCapability).mock.calls[0]![0];
     expect(
-      (call.ref as { source: { files: { files: Record<string, string> } } }).source.files.files[
-        "main.js"
-      ],
+      (
+        call.ref as {
+          source: { createWorker: { files: { files: Record<string, string> } } };
+        }
+      ).source.createWorker.files.files["main.js"],
     ).toContain("'v2'");
     expect(h.events(COMPLETED)[0]!.payload).toMatchObject({
       definedAtOffset: reset!.offset,

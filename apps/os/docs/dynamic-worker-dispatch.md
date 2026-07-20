@@ -109,35 +109,25 @@ request":
   callers of `workers.get` still get the named `WorkerBuildInProgressError`
   instead.
 
-## The serve-side status surface (stale serving + the overlay)
+## The serve-side status surface and overlay
 
-The fetch lane prefers availability; RPC keeps commit-then-call-sees-new-code.
-Once a repo-backed worker has built successfully, its **last-good pointer**
-(`worker-last-good/…` in the artifact KV, per worker identity = everything in
-the build key except source content) lets budgeted callers — the fetch lane —
-answer a cache miss with the previous artifact immediately:
+A cold browser request waits only for its configured build budget. If the
+build is still running it receives `workerBuildingResponse()`: a 503 that
+polls itself and is marked `x-iterate-worker-building`. A build
+failure receives a terminal build-failed page; it is not cached, so a reload or
+later request tries the build again without turning a transient bundler outage
+into a persisted source failure. RPC calls wait for the build and receive the
+named error instead. There is no stale artifact, last-good pointer, distributed
+build lock, or background refresh policy.
 
-- New commit, build in flight → serve the previous build, dispatch the real
-  build in the background (deduped per isolate + the in-flight marker).
-- Build failed (recorded per build key, short TTL) → keep serving the
-  previous build, with the builder's error attached.
-- Nothing ever built → the building page; first-ever build failed → the
-  build-failed page (`workerBuildFailedResponse`, marked
-  `x-iterate-worker-build-failed`). Both poll their own URL and self-heal.
-- Blocking (RPC) callers never see stale code: they wait for the build, and a
-  failure is the named `WorkerBuildFailedError` with the builder's message.
-
-What served rides on every fetch-lane response as `x-iterate-worker-serve` —
-platform-authored (the runner deletes whatever user code set, then stamps;
-stateful hops only strip, the facet's build is the outer DO's concern) and
-deliberately public JSON: `{ status: "fresh" | "stale", commitOid?, reason?:
-"building" | "build-failed", failure? }`. Project ingress reads it to inject
-the **@iterate overlay** into HTML documents (HTMLRewriter, appended before
-`</body>`; skipped for non-documents, CSP pages, and anything answering
-`x-iterate-overlay`): the floating iterate mark that shows build state, the
-failure message when there is one, and — while a rebuild runs — polls the
-serve header and reloads when the fresh build lands. See
-`worker-serve-overlay.ts`; `worker-stale-serve.e2e.test.ts` proves the loop.
+Successful repo-backed fetches carry platform-authored
+`x-iterate-worker-serve: <commit oid>`. The platform
+removes any value user code tried to spoof before stamping this header.
+Project ingress uses it to inject the small **Iterate overlay** into HTML
+documents (HTMLRewriter, appended before `</body>`). Injection is skipped for
+non-documents, encoded bodies, responses with CSP, and responses opting out
+through `x-iterate-overlay`; the seeded basic apps intentionally omit CSP so
+the floating corner mark remains visible. See `worker-serve-overlay.ts`.
 
 ## Live capabilities and WebSockets: the specification, and today's boundary
 

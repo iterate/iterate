@@ -65,7 +65,7 @@ async function seedRepoWithMarkdown(
 ) {
   const admin = await connectAdminItx(baseUrl);
   const repo = admin.projects.get(projectId).repos.get("/repos/demo");
-  await repo.create();
+  await repo.create({ type: "empty" });
   await repo.commitFiles({
     message: "seed markdown fixture",
     changes: Object.entries(files).map(([path, content]) => ({ path, content })),

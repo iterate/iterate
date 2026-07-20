@@ -37,15 +37,14 @@ const PROJECT_CREATED = {
   },
 } satisfies ProjectEventInput;
 
-/** The cross-posted copy of the config repo's ready fact, as the
- * `cross-post:/` rule lands it on the project root. */
+/** The cross-posted copy of the config repo's terminal creation certificate,
+ * as the `cross-post:/` rule lands it on the project root. */
 const CONFIG_REPO_READY = {
-  type: "events.iterate.com/repo/ready",
+  type: "events.iterate.com/repos/created",
   payload: {
+    request: { type: "empty" },
     artifactName: "prj_test--L3JlcG9zL2NvbmZpZw",
     defaultBranch: "main",
-    path: "/repos/config",
-    projectId: "prj_test",
     remote: "https://example.artifacts.cloudflare.net/git/ns/x.git",
   },
   source: {
@@ -56,7 +55,7 @@ const CONFIG_REPO_READY = {
         offset: 4,
         path: "/repos/config",
         projectId: "prj_test",
-        type: "events.iterate.com/repo/ready",
+        type: "events.iterate.com/repos/created",
       },
     ],
   },
@@ -204,7 +203,7 @@ describe("ProjectProcessor bootstrap", () => {
       "events.iterate.com/stream/subscription-configured",
     ]);
     expect(h.network.eventsAt("/repos/config").map((event) => event.type)).toEqual([
-      "events.iterate.com/repo/created",
+      "events.iterate.com/repos/create-requested",
       "events.iterate.com/stream/subscription-configured",
       "events.iterate.com/stream/subscription-configured",
     ]);
@@ -323,17 +322,22 @@ describe("ProjectProcessor catalogs", () => {
           },
         },
         {
-          type: "events.iterate.com/repo/created",
-          payload: { config: {} },
+          type: "events.iterate.com/repos/created",
+          payload: {
+            request: { type: "empty" },
+            artifactName: "prj_test--L3JlcG9zL3NpZGUtcmVwbw",
+            defaultBranch: "main",
+            remote: "https://example.artifacts.cloudflare.net/git/ns/side.git",
+          },
           source: {
             crossPostedFrom: [
               {
-                subscriptionKey: "cross-post:/",
+                subscriptionKey: "repo-catalog",
                 createdAt: new Date(4).toISOString(),
                 offset: 1,
                 path: "/repos/side-repo",
                 projectId: "prj_test",
-                type: "events.iterate.com/repo/created",
+                type: "events.iterate.com/repos/created",
               },
             ],
           },

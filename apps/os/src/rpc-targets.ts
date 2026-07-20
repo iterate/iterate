@@ -44,7 +44,7 @@ import type {
   StreamSubscriptionHandle,
   WakeableStreamProcessorRpc,
 } from "iterate/processors";
-import { StreamReceiverUnavailableError } from "iterate/processors";
+import { jsonValuesEqual, StreamReceiverUnavailableError } from "iterate/processors";
 import {
   disposeIgnoredRpcResult,
   LiveState,
@@ -95,6 +95,7 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
+import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
 import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
@@ -1085,7 +1086,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         commitFiles:
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
         create:
-          "Create the repo (optional payload = the repo/created birth certificate) and wait until repo/ready; returns this same repo handle.",
+          "Request the repo creation saga (optional payload = the repos/create-requested source: empty seed by default, or a GitHub import) and wait for its terminal repos/created certificate; returns this same repo handle, or throws the recorded repos/create-failed error.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
@@ -1131,14 +1132,25 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /**
-   * Create this repo and wait until it is usable: appends the atomic birth
-   * batch (`repo/created` + the repo processor subscription), waits for the
-   * processor to consume it, then for `repo/ready` (the backing Artifacts
-   * repository exists). Resolves with this same handle, so create chains.
-   * Identical-payload retries dedupe on the birth idempotency keys; a create
-   * over an existing repo with a different payload fails loudly.
+   * Request creation and wait for the repo creation saga's terminal fact.
+   * The request chooses an empty starter seed (the default), a private
+   * GitHub pull at depth one, or a public import performed by Cloudflare
+   * Artifacts outside the Worker isolate (full history unless `depth` is
+   * provided). Appends the atomic request batch (`repos/create-requested` +
+   * the repo processor subscription, plus the catalog cross-post rule that
+   * copies the terminal certificate onto `/`), then waits for
+   * `repos/created` and resolves with this same handle, so create chains —
+   * or throws the saga's recorded error when creation fails. An
+   * identical-payload retry dedupes on the request idempotency keys and
+   * resumes the same saga; a create over an existing repo with a different
+   * payload fails loudly.
    */
   async create(payload?: RepoCreateInput): Promise<RepoRpcTarget> {
+    const requestSchema =
+      RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema;
+    const failureSchema =
+      RepoProcessorContract.events["events.iterate.com/repos/create-failed"].payloadSchema;
+    const request = requestSchema.parse(payload ?? { type: "empty" });
     const path = normalizePath(this.props.path);
     const stream = new StreamRpcTarget({
       auth: this.props.auth,
@@ -1146,36 +1158,52 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       projectId: this.props.projectId,
     });
     const timing = { projectId: this.props.projectId, path };
-    const committed = await timedStep("create-timing", timing, "repo-append", () =>
+    const committed = await timedStep("create-timing", timing, "repo-request-append", () =>
       stream.append(
-        ...repoCreationEvents({
-          path,
-          projectId: this.props.projectId,
-          ...(payload === undefined ? {} : { payload }),
-        }),
+        ...repoCreationEvents({ path, projectId: this.props.projectId, payload: request }),
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: `repo-catalog-subscription:${this.props.projectId}:${path}`,
+          payload: {
+            subscriptionKey: "repo-catalog",
+            description: "Copy the repo's terminal creation certificate to the project catalog.",
+            selector: { eventTypes: ["events.iterate.com/repos/created"] },
+            delivery: {
+              mode: "push",
+              expression: ["streams", ["get", "/"], "acceptCrossPost"],
+            },
+            deliver: "new",
+          },
+        },
       ),
     );
-    // append() preserves INPUT order, including idempotency hits at their old
-    // offsets — the create boundary is the maximum offset across the batch.
-    const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-    if (createOffset === 0) throw new Error("repo create committed no events");
-    await this.processor.waitUntilProcessed({
-      offset: createOffset,
-      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-    });
-
-    await timedStep("create-timing", timing, "wait-repo-ready", () =>
+    // An idempotency hit returns the FIRST request at its old offset — the
+    // loud duplicate-create failure is this comparison, not the stream.
+    const recordedRequest = requestSchema.parse(committed[0]?.payload);
+    if (!jsonValuesEqual(recordedRequest, request)) {
+      throw new Error(`${path} was already requested with a different creation source.`);
+    }
+    const terminal = await timedStep("create-timing", timing, "wait-repo-created", () =>
       stream.waitForEvent({
         afterOffset: committed[0]!.offset - 1,
-        eventTypes: ["events.iterate.com/repo/ready"],
-        predicate: (event) =>
-          event.payload?.projectId === this.props.projectId && event.payload?.path === path,
-        // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
-        // for the cold-slot outliers). Preview CI warms slots before the suites.
-        timeoutMs: 60_000,
+        eventTypes: ["events.iterate.com/repos/created", "events.iterate.com/repos/create-failed"],
+        predicate: (event) => {
+          const terminalRequest =
+            event.type === "events.iterate.com/repos/create-failed"
+              ? failureSchema.parse(event.payload).request
+              : requestSchema.parse(event.payload?.request);
+          return jsonValuesEqual(terminalRequest, recordedRequest);
+        },
+        // Generous on purpose: a public import materializes the full history
+        // inside Cloudflare Artifacts before the certificate lands.
+        timeoutMs: 300_000,
       }),
     );
-
+    if (terminal.type === "events.iterate.com/repos/create-failed") {
+      throw new Error(
+        `${path} could not be created: ${failureSchema.parse(terminal.payload).error}`,
+      );
+    }
     return this;
   }
 
@@ -1348,7 +1376,8 @@ class RepoCollectionRpcTarget<
 > extends IterateRpcTarget<Name> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: "Repo catalog: get(path); get(path).create() births a new repo at that path.",
+      instructions:
+        "Repo catalog: get(path); get(path).create() runs the repo creation saga at that path (empty seed by default, or a GitHub import).",
       children: { get: "The repo at a path." },
     });
   }
@@ -1372,6 +1401,16 @@ class RepoCollectionRpcTarget<
 class ProjectRepoCollectionRpcTarget extends RepoCollectionRpcTarget<"ProjectRepoCollection"> {
   constructor(readonly projectProps: { auth: ItxAuth; projectId: string }) {
     super(projectProps);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: "Project repo catalog: list() or get(path); call create(...) on the repo.",
+      children: {
+        get: "The repo at a path.",
+        list: "Known project repos.",
+      },
+    });
   }
 
   /** Known repos, read from the project processor's reduced state. */
@@ -4283,21 +4322,24 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   // `invokeCapability({ path: ["__describe"] })` loads the worker and calls a
   // `__describe` the user code may export.
   async __describe() {
-    const source =
-      this.#ref.source.files.type === "inline"
+    const source = this.#ref.source;
+    const build = "createApp" in source ? source.createApp : source.createWorker;
+    const describedFiles =
+      build.files.type === "inline"
         ? {
-            ...this.#ref.source,
-            files: {
-              type: "inline" as const,
-              files: Object.fromEntries(
-                Object.entries(this.#ref.source.files.files).map(([name, text]) => [
-                  name,
-                  `${text.length} bytes`,
-                ]),
-              ),
-            },
+            files: Object.fromEntries(
+              Object.entries(build.files.files).map(([name, text]) => [
+                name,
+                `${text.length} bytes`,
+              ]),
+            ),
+            type: "inline" as const,
           }
-        : this.#ref.source;
+        : build.files;
+    const describedSource =
+      "createApp" in source
+        ? { createApp: { ...source.createApp, files: describedFiles } }
+        : { createWorker: { ...source.createWorker, files: describedFiles } };
     return describeNode({
       instructions:
         `A ${this.#ref.type} dynamic worker (described from its ref — the worker was NOT loaded). ` +
@@ -4317,7 +4359,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
           ? { entrypoint: this.#ref.entrypoint, propKeys: Object.keys(this.#ref.props ?? {}) }
           : { className: this.#ref.className, durableWorkerKey: this.#ref.durableWorkerKey }),
         path: this.#ref.path,
-        source,
+        source: describedSource,
         type: this.#ref.type,
       },
     });

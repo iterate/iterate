@@ -1,15 +1,18 @@
 // The repo processor CONTRACT. Self-contained: state schema, events,
 // consumes/emits, deps — schemas are spelled INLINE in the contract; the
-// schemas it genuinely uses twice (the birth certificate, the GitHub link,
-// the task-change payload, the import-request coordinates) are hoisted
-// functions defined below the contract, so the contract still opens the file.
+// schemas it genuinely uses twice (the creation request, the birth
+// certificate, the creation failure, the GitHub link, the task-change
+// payload, the import-request coordinates) are hoisted functions defined
+// below the contract, so the contract still opens the file.
 //
 // One stream per repo (`/repos/<name>`). The events tell the repo's whole
-// story: birth (`repo/created`), the backing Cloudflare Artifacts repository
-// coming up (`repo/ready`), Git pushes observed through the Artifacts event
-// queue (`repo/cloudflare-artifact-event-received` → `repo/commit-completed`
-// → `repo/task-*` facts), and the optional GitHub mirror: link lifecycle,
-// mirror-push outcomes, and the durable default-branch import obligation
+// story: the creation saga (`repos/create-requested` → `repos/created` |
+// `repos/create-failed` — the terminal certificate carries the backing
+// Cloudflare Artifacts coordinates), Git pushes observed through the
+// Artifacts event queue (`repo/cloudflare-artifact-event-received` →
+// `repo/commit-completed` → `repo/task-*` facts), and the optional GitHub
+// mirror: link lifecycle, mirror-push outcomes, and the durable
+// default-branch import obligation
 // (`github-import-requested/started/completed/failed`) opened by cross-posted
 // GitHub push webhooks.
 
@@ -19,25 +22,43 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.3.0",
+  version: "0.5.0",
   description:
     "Projects repo lifecycle, Git activity, task changes, and linked GitHub default-branch imports.",
   stateSchema: z.object({
-    birthCertificate: repoBirthCertificateSchema().nullable().default(null).meta({
+    createRequest: repoCreateRequestSchema().nullable().default(null).meta({
       description:
-        "Existence marker: null until repo/created reduces; then the exact created payload.",
+        "The durable creation intent, from repos/create-requested; null until the saga opens.",
     }),
+    createFailure: repoCreateFailureSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The terminal creation failure, from repos/create-failed; a failed repo is closed for " +
+          "good (fail-closed) — nothing else ever reacts on its stream.",
+      }),
+    birthCertificate: repoBirthCertificateSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Existence marker: null until repos/created reduces; then the exact terminal " +
+          "certificate — the creation request plus the backing Artifacts coordinates.",
+      }),
     artifactName: z.string().nullable().default(null).meta({
-      description: "The backing Cloudflare Artifacts repository name, recorded by repo/ready.",
+      description: "The backing Cloudflare Artifacts repository name, recorded by repos/created.",
     }),
-    ready: z.boolean().default(false).meta({
-      description:
-        "True once repo/ready reduced: the backing artifact exists and the repo can serve Git.",
-    }),
-    defaultBranch: z.string().nullable().default(null).meta({
-      description:
-        "The branch whose pushes produce commit-completed and task facts (from repo/ready).",
-    }),
+    defaultBranch: z
+      .string()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The branch whose pushes produce commit-completed and task facts. Set to main the " +
+          "moment create-requested reduces (every creation mode targets main), confirmed by " +
+          "repos/created.",
+      }),
     github: githubLinkSchema()
       .nullable()
       .default(null)
@@ -99,45 +120,73 @@ export const RepoProcessorContract = defineProcessorContract({
           "cleared when the link changes.",
       }),
     remote: z.string().nullable().default(null).meta({
-      description: "The backing artifact's Git remote URL, recorded by repo/ready.",
+      description: "The backing artifact's Git remote URL, recorded by repos/created.",
     }),
   }),
   events: {
-    "events.iterate.com/repo/created": {
-      description: "Creates a repo processor on this stream.",
-      payloadSchema: repoBirthCertificateSchema(),
+    "events.iterate.com/repos/create-requested": {
+      description:
+        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set). Terminates in repos/created or repos/create-failed.",
+      payloadSchema: repoCreateRequestSchema(),
       examples: [
         {
-          description: "A repo is born; its backing artifact is established asynchronously.",
-          payload: { config: {} },
+          description: "Create a repo containing Iterate's starter files.",
+          payload: { type: "empty" },
+        },
+        {
+          description: "Pull a private GitHub repository through the Worker at depth one.",
+          payload: {
+            type: "github-private",
+            connection: "install-87654321",
+            owner: "acme-inc",
+            repo: "private-app",
+          },
+        },
+        {
+          description:
+            "Ask Cloudflare Artifacts to import a public GitHub repository directly with full history. Set depth to request a shallow import instead.",
+          payload: {
+            type: "github-public",
+            connection: "install-87654321",
+            owner: "acme-inc",
+            repo: "public-app",
+          },
         },
       ],
     },
-    "events.iterate.com/repo/ready": {
-      description: "The repo's backing artifact is ready.",
-      payloadSchema: z.object({
-        artifactName: z.string().meta({ description: "The Cloudflare Artifacts repository name." }),
-        defaultBranch: z
-          .string()
-          .meta({ description: "The branch commit and task facts derive from." }),
-        path: z.string().meta({ description: "The repo's stream path." }),
-        projectId: z
-          .string()
-          .nullable()
-          .meta({ description: "Owning project, or null on a deployment-root repo." }),
-        remote: z.string().meta({ description: "The artifact's Git remote URL." }),
-      }),
+    "events.iterate.com/repos/created": {
+      description:
+        "The repo creation saga completed and its backing Artifact is ready — the repo's birth certificate.",
+      payloadSchema: repoBirthCertificateSchema(),
       examples: [
         {
           description:
             "The project's config repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
           payload: {
+            request: { type: "empty" },
             artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
             defaultBranch: "main",
-            path: "/repos/config",
-            projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha",
             remote:
               "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
+          },
+        },
+      ],
+    },
+    "events.iterate.com/repos/create-failed": {
+      description:
+        "The repo creation saga reached a terminal failure and did not declare the repo created. Fail-closed: nothing else ever reacts on a failed repo's stream.",
+      payloadSchema: repoCreateFailureSchema(),
+      examples: [
+        {
+          description: "Cloudflare Artifacts rejected a public repository import.",
+          payload: {
+            error: "Cloudflare Artifacts 10400: An internal error occurred",
+            request: {
+              type: "github-public",
+              connection: "install-87654321",
+              owner: "acme-inc",
+              repo: "public-app",
+            },
           },
         },
       ],
@@ -551,8 +600,9 @@ export const RepoProcessorContract = defineProcessorContract({
   },
   processorDeps: [CoreProcessorContract],
   consumes: [
-    "events.iterate.com/repo/created",
-    "events.iterate.com/repo/ready",
+    "events.iterate.com/repos/create-requested",
+    "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/cloudflare-artifact-event-received",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/github-link-configured",
@@ -578,14 +628,14 @@ export const RepoProcessorContract = defineProcessorContract({
     // The platform revival fact (core-owned). MUST be consumed (the runner
     // throws at construction otherwise): its ordinary delivery is the
     // guaranteed at-head turn where `processEvent` under `delivery.caughtUp`
-    // re-drives the open obligations — an unseeded artifact is created, an
-    // orphaned GitHub import is re-driven (the sync is an idempotent
-    // current-head fast-forward).
+    // re-drives the open obligations — an undriven creation request is
+    // re-attempted, an orphaned GitHub import is re-driven (the sync is an
+    // idempotent current-head fast-forward).
     "events.iterate.com/stream/processor-revived",
   ],
   emits: [
-    "events.iterate.com/repo/created",
-    "events.iterate.com/repo/ready",
+    "events.iterate.com/repos/created",
+    "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/commit-completed",
     "events.iterate.com/repo/task-created",
     "events.iterate.com/repo/task-updated",
@@ -611,15 +661,101 @@ export type RepoProcessorContract = typeof RepoProcessorContract;
 export type RepoProcessorState = ProcessorState<RepoProcessorContract>;
 
 /**
- * The immutable birth certificate — used twice (the repo/created payload and
- * the reduced state's birthCertificate slot). The nested config is reserved:
- * every existing stream carries `{}`.
+ * The creation request's TYPE, derived from the contract. The runtime schema
+ * is reached through the contract:
+ * `RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema`.
+ */
+export type RepoCreateRequest = z.output<
+  RepoProcessorContract["events"]["events.iterate.com/repos/create-requested"]["payloadSchema"]
+>;
+
+/**
+ * The creation request — the whole saga's durable intent. Used four times:
+ * the create-requested payload, inside the birth certificate and the failure
+ * record, and the reduced state's createRequest slot.
+ */
+function repoCreateRequestSchema() {
+  return z.discriminatedUnion("type", [
+    z
+      .strictObject({
+        type: z.literal("empty"),
+      })
+      .meta({ description: "Seed a fresh repo with Iterate's starter files." }),
+    z
+      .strictObject({
+        type: z.literal("github-private"),
+        connection: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Seed an empty Artifact, link the GitHub repository, then pull its default branch " +
+          "through the Worker at depth one.",
+      }),
+    z
+      .strictObject({
+        type: z.literal("github-public"),
+        connection: z
+          .string()
+          .trim()
+          .min(1)
+          .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+        depth: z.number().int().positive().optional().meta({
+          description:
+            "Shallow-import depth; omit to let Cloudflare Artifacts import the full history.",
+        }),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Have Cloudflare Artifacts clone the public GitHub repository directly (no transfer " +
+          "through the Worker), then link it.",
+      }),
+  ]);
+}
+
+/**
+ * The terminal birth certificate — used twice (the repos/created payload and
+ * the reduced state's birthCertificate slot): the creation request plus the
+ * backing Cloudflare Artifacts coordinates the saga established.
  */
 function repoBirthCertificateSchema() {
   return z.strictObject({
-    config: z
-      .strictObject({})
-      .meta({ description: "Reserved for future repo configuration; always {} today." }),
+    request: repoCreateRequestSchema().meta({
+      description: "The creation request this certificate settles.",
+    }),
+    artifactName: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The Cloudflare Artifacts repository name." }),
+    defaultBranch: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "The branch commit and task facts derive from." }),
+    remote: z.string().url().meta({ description: "The artifact's Git remote URL." }),
+  });
+}
+
+/** The terminal creation failure — used twice (the repos/create-failed
+ * payload and the reduced state's createFailure slot). */
+function repoCreateFailureSchema() {
+  return z.strictObject({
+    error: z
+      .string()
+      .trim()
+      .min(1)
+      .meta({ description: "What the failed creation attempt reported." }),
+    request: repoCreateRequestSchema().meta({
+      description: "The creation request that failed.",
+    }),
   });
 }
 

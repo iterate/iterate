@@ -513,9 +513,10 @@ function scheduleViewFromState(
 }
 
 /**
- * Same stateless inline-worker shape as capability-host script execution
- * (`bundle: false` = the loader-ready fast path), with the scheduler's
- * three-argument call convention: `fn(itx, schedule, trigger)`.
+ * Same stateless inline-worker shape as capability-host script execution.
+ * `bundle: false` asks worker-bundler for its transform-only path; the
+ * scheduler supplies the three-argument call convention:
+ * `fn(itx, schedule, trigger)`.
  */
 function scheduleActionWorkerRef(script: string): StatelessDynamicWorkerRef {
   const source = `
@@ -532,8 +533,11 @@ function scheduleActionWorkerRef(script: string): StatelessDynamicWorkerRef {
     entrypoint: "ScheduleActionEntrypoint",
     path: "/",
     source: {
-      files: { files: { "main.js": source }, type: "inline" },
-      options: { bundle: false, entryPoint: "main.js" },
+      createWorker: {
+        bundle: false,
+        entryPoint: "main.js",
+        files: { files: { "main.js": source }, type: "inline" },
+      },
     },
     type: "stateless",
   };
