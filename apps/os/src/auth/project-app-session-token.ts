@@ -32,18 +32,60 @@ type ProjectAppSessionClaims = z.infer<typeof ProjectAppSessionClaims>;
  * signature + expiry + audience + project binding from the claims alone.
  * The live membership re-check the auth worker performs is deliberately
  * absent — that is the whole point of the local lane; the TTL bounds it.
+ *
+ * `fallback` (the auth worker's validate RPC) runs ONLY when the local check
+ * refuses: it accepts in-flight tokens signed under the previous secret
+ * during a rotation (auth validates new-then-legacy) without os ever holding
+ * the legacy key. Valid current tokens never leave the local path, so the
+ * hot-path property survives — only failures pay the hop, and only until the
+ * 15-minute TTL ages the old tokens out.
  */
-export function localProjectAppSessionValidator(secret: string) {
+export function localProjectAppSessionValidator(
+  secret: string,
+  fallback: (input: {
+    audience: string;
+    projectId: string;
+    token: string;
+  }) => Promise<{ expiresAt: number; userId: string } | null>,
+) {
   return async (input: {
     audience: string;
     projectId: string;
     token: string;
   }): Promise<{ expiresAt: number; userId: string } | null> => {
     const claims = await verifyProjectAppSessionToken(input.token, secret);
-    if (claims === null) return null;
+    if (claims === null) return await fallback(input);
     if (claims.audience !== input.audience || claims.projectId !== input.projectId) return null;
     return { expiresAt: claims.exp, userId: claims.userId };
   };
+}
+
+/**
+ * Claims WITHOUT signature verification — only for building a fallback
+ * validate-RPC call (which re-verifies everything, legacy secrets included).
+ * Never trust these on their own.
+ */
+export function decodeUnverifiedProjectAppSessionClaims(
+  token: string,
+): { audience: string; projectId: string; userId: string } | null {
+  const [, payloadSegment] = token.split(".");
+  if (!payloadSegment) return null;
+  const payloadBytes = decodeBase64Url(payloadSegment);
+  if (!payloadBytes) return null;
+  try {
+    const claims = ProjectAppSessionClaims.safeParse(
+      JSON.parse(new TextDecoder().decode(payloadBytes)),
+    );
+    return claims.success
+      ? {
+          audience: claims.data.audience,
+          projectId: claims.data.projectId,
+          userId: claims.data.userId,
+        }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 const encoder = new TextEncoder();
