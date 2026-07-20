@@ -15,6 +15,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
 import { DeviceProcessor, type DevicePushSender } from "./device-processor-implementation.ts";
 import { getExpoPushReceipt, sendExpoPushNotification } from "./expo-push-client.ts";
+import { appendAfterPushTokenSecretUpdate } from "./push-token-consistency.ts";
 import type { DeviceAppendInput, DeviceDescription, DeviceEnrollInput } from "./types.ts";
 import { PUBLIC_DEVICE_EVENT_TYPES } from "./types.ts";
 
@@ -47,14 +48,23 @@ export class DeviceDurableObject extends DurableObject<Env> {
         this.#serializeCredentialUpdate(() => this.#clearPushTokenSecret(input)),
       getReceipt: getExpoPushReceipt,
       repointReceiptAlarm: (atMs) => this.#registry.setAlarmSlice("device-receipts", atMs),
-      send: async ({ notification, pushTokenSecretPath }): ReturnType<DevicePushSender> => {
+      send: async ({
+        notification,
+        pushTokenSecretPath,
+        pushTokenSecretUpdatedOffset,
+      }): ReturnType<DevicePushSender> => {
         const state: ProcessorState<DeviceProcessorContract> = this.#reads.currentState;
-        if (state.pushTokenSecretPath !== pushTokenSecretPath) {
+        if (
+          state.pushTokenSecretPath !== pushTokenSecretPath ||
+          state.pushTokenSecretUpdatedOffset !== pushTokenSecretUpdatedOffset
+        ) {
           throw new Error("device push token changed before the attempt began");
         }
         const secret = this.#pushTokenSecret(pushTokenSecretPath);
         return await sendExpoPushNotification({ ...notification, pushTokenSecretPath }, (request) =>
-          secret.fetch(request),
+          secret.fetchAtUpdatedOffset(request, {
+            expectedUpdatedOffset: pushTokenSecretUpdatedOffset,
+          }),
         );
       },
     }),
@@ -110,7 +120,8 @@ export class DeviceDurableObject extends DurableObject<Env> {
         processor: ["devices", ["get", this.#deviceId], "processor"],
         processorSlug: DeviceProcessorContract.slug,
       });
-      const [created, configured] = await this.#stream.append(
+      const [created, configured] = await this.#appendAfterPushTokenSecretUpdate(
+        pushTokenSecretUpdatedOffset,
         {
           type: "events.iterate.com/device/created",
           idempotencyKey: `device/created:${this.#name.projectId}:${this.#deviceId}`,
@@ -131,8 +142,9 @@ export class DeviceDurableObject extends DurableObject<Env> {
       await this.#waitUntilProcessed(Math.max(created!.offset, configured!.offset));
       return describeDeviceState(this.#reads.currentState, this.#deviceId);
     }
-    const [updated] = await this.#stream.append({
+    const [updated] = await this.#appendAfterPushTokenSecretUpdate(pushTokenSecretUpdatedOffset, {
       type: "events.iterate.com/device/push-token-updated",
+      idempotencyKey: `device/push-token-updated:${pushTokenSecretUpdatedOffset}`,
       payload: {
         appVersion: input.appVersion,
         label: input.label,
@@ -144,6 +156,20 @@ export class DeviceDurableObject extends DurableObject<Env> {
     } as StreamEventInput);
     await this.#waitUntilProcessed(updated!.offset);
     return describeDeviceState(this.#reads.currentState, this.#deviceId);
+  }
+
+  async #appendAfterPushTokenSecretUpdate(
+    pushTokenSecretUpdatedOffset: number,
+    ...events: StreamEventInput[]
+  ) {
+    return await appendAfterPushTokenSecretUpdate({
+      append: () => this.#stream.append(...events),
+      clearUpdatedSecret: () =>
+        this.#clearPushTokenSecret({
+          pushTokenSecretPath: this.#pushTokenSecretPath,
+          pushTokenSecretUpdatedOffset,
+        }),
+    });
   }
 
   async append(...events: DeviceAppendInput[]) {
