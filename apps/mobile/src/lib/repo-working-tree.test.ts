@@ -48,3 +48,16 @@ test("starts Markdown files in preview without changing their source", () => {
   });
   expect(store.pendingChanges()).toEqual([]);
 });
+
+test("starts newly created Markdown files in preview", () => {
+  const store = repoWorkingTreeStore("working-tree-new-markdown");
+  store.setHead("head-1", []);
+  store.setNewPath("notes.md");
+
+  store.create();
+
+  expect(store.getSnapshot()).toMatchObject({
+    editorView: "preview",
+    selectedPath: "notes.md",
+  });
+});

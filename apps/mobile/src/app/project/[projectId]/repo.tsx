@@ -109,6 +109,20 @@ export default function RepoScreen() {
     },
   });
 
+  const reload = useMutation({
+    mutationFn: async () => {
+      const latest = await files.refetch();
+      if (latest.error) throw latest.error;
+      if (!latest.data) throw new Error("The repo did not return a HEAD.");
+      return latest.data;
+    },
+    onSuccess: (latest) => store.replaceHead(latest.commitOid, latest.textPaths),
+    onError: (error) => {
+      resetItxSession();
+      Alert.alert("Could not reload repo", error.message);
+    },
+  });
+
   const openPath = (path: string) => {
     store.closeDrawer();
     if (repoState.buffers[path]) store.select(path);
@@ -257,10 +271,7 @@ export default function RepoScreen() {
                     {
                       text: "Discard and reload",
                       style: "destructive",
-                      onPress: () => {
-                        if (files.data)
-                          store.replaceHead(files.data.commitOid, files.data.textPaths);
-                      },
+                      onPress: () => reload.mutate(),
                     },
                   ])
                 }
