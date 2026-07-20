@@ -38,12 +38,14 @@ function projectState(
   customDomains: CustomDomainReduceInput["state"]["customDomains"] = [],
 ): CustomDomainReduceInput["state"] {
   return {
+    devices: [],
     birthCertificate: { config: { slug: project.slug } },
     customDomains,
     egressRules: [],
     humanApprovalKeys: [],
     onboardingActive: false,
     onboardingCompletedAt: null,
+    notificationReady: true,
     repos: [],
     ready: true,
     secrets: [],

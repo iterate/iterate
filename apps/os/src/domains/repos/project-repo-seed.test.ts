@@ -12,12 +12,12 @@ test("an override re-points the iterate dependency in every manifest that carrie
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
   expect(packageJson).toMatchObject({ devDependencies: { iterate: spec } });
-  // The seeded tanstack app depends on iterate at RUNTIME (its vite build
-  // bundles the sdk), so preview projects must get the PR's build there too.
-  const appPackageJson = JSON.parse(
-    files.find((file) => file.path === "apps/tanstack/package.json")!.content,
-  );
-  expect(appPackageJson).toMatchObject({ dependencies: { iterate: spec } });
+  // The seeded apps depend on iterate at RUNTIME (their vite builds bundle
+  // the sdk), so preview projects must get the PR's build there too.
+  for (const appManifest of ["apps/tanstack/package.json", "apps/guestbook/package.json"]) {
+    const appPackageJson = JSON.parse(files.find((file) => file.path === appManifest)!.content);
+    expect(appPackageJson).toMatchObject({ dependencies: { iterate: spec } });
+  }
 
   // Every non-manifest file is untouched, and nothing still carries @main.
   const others = files.filter((file) => !file.path.endsWith("package.json"));

@@ -3,17 +3,37 @@ import type { Itx } from "../itx/itx-react.ts";
 
 const EVENT_PAGE_SIZE = 500;
 
+type AgentReadinessHandle = {
+  create(): PromiseLike<void>;
+  processor: {
+    snapshot(): PromiseLike<{ state: { birthCertificate: unknown | null } }>;
+  };
+};
+
+/** Birth a fresh generic agent before its history becomes the feed's durable seed. */
+export async function ensureAgentFeedReady(agent: AgentReadinessHandle): Promise<void> {
+  const snapshot = await agent.processor.snapshot();
+  if (snapshot.state.birthCertificate === null) await agent.create();
+}
+
 /**
  * Read the durable history that seeds the terminal feed's TanStack query.
  * All live events arrive through the ordered subscription opened after this
  * read; its replay cursor closes the durable race between the two operations.
  */
-export async function readAgentFeedHistory(itx: Itx, agentPath: string): Promise<StreamEvent[]> {
+export async function readAgentFeedHistory(
+  itx: Itx,
+  agentPath: string,
+  options: {
+    initialize?: (agent: ReturnType<Itx["agents"]["get"]>) => Promise<void>;
+  } = {},
+): Promise<StreamEvent[]> {
   const agent = itx.agents.get(agentPath);
   const events: StreamEvent[] = [];
   let afterOffset = 0;
 
   try {
+    await options.initialize?.(agent);
     for (;;) {
       const page = await agent.stream.getEvents({ afterOffset, limit: EVENT_PAGE_SIZE });
       events.push(...page);

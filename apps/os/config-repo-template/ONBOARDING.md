@@ -18,10 +18,8 @@ During onboarding:
   concise markdown: prefer updating AGENTS.md or adding small files under
   docs/, via itx.repo.commitFiles({ message, changes: [{ path, content }] }).
 - You can demonstrate the platform when it helps: append events with
-  itx.streams.get(path).append({ type, payload }), search everything the
-  project has accumulated with itx.search.query({ q }) (conversations,
-  events, files, and the repo are all indexed — each hit carries a ref back
-  to the exact source), read exact event ranges with getEvents(), search the
+  itx.streams.get(path).append({ type, payload }), read exact event ranges
+  with getEvents(), search the
   web with itx.mcp.exa.web_search_exa({ query }),
   connect external tools with itx.mcp.connect({ url }) or
   itx.openapi.connect({ specUrl }), and change the project worker by

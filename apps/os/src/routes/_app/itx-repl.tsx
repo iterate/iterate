@@ -15,7 +15,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import type { RpcStub } from "capnweb";
-import { useItx, useIterateSession } from "iterate/react";
+import { reportTransportSuspicion, useItx, useIterateSession } from "iterate/react";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -30,6 +30,12 @@ import { ItxRepl } from "~/components/itx-repl.tsx";
  * runner (`browser-repl.ts`) executes arbitrary code against `itx: unknown`, so
  * the honest handle type is the union, not a cast that erases the boundary. */
 type ReplHandle = RpcStub<Session> | RpcStub<Project>;
+
+// A REPL snippet can legitimately run for minutes, so this is a transport
+// health check rather than an operation timeout. If the socket still answers,
+// the verifier leaves the call alone; if it is half-open, two bounded probes
+// retire it and the pending entry resolves to an explicit transport error.
+const REPL_TRANSPORT_CHECK_MS = 15_000;
 
 export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
@@ -150,6 +156,7 @@ function ItxReplPage({
   const [status, setStatus] = useState("Ready");
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
+  const transportCheckRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Scope is fixed for this instance: ConnectedItxRepl keys by context, so a
   // project switch remounts (fresh scope), not a re-sync on render. Lazily
   // initialized so the scope isn't rebuilt (and discarded) on every render.
@@ -167,18 +174,32 @@ function ItxReplPage({
     };
   }, [itx]);
 
+  useEffect(
+    () => () => {
+      if (transportCheckRef.current !== undefined) clearTimeout(transportCheckRef.current);
+    },
+    [],
+  );
+
   async function run() {
     const trimmedCode = code.trim();
     if (trimmedCode === "") return;
     setStatus("Running...");
     setCode("");
-    const entry = await runBrowserReplEntry({
-      code: trimmedCode,
-      itx,
-      scope: replScope,
-    });
-    setEntries((current) => [...current, entry]);
-    setStatus("Ready");
+    const transportCheck = setTimeout(reportTransportSuspicion, REPL_TRANSPORT_CHECK_MS);
+    transportCheckRef.current = transportCheck;
+    try {
+      const entry = await runBrowserReplEntry({
+        code: trimmedCode,
+        itx,
+        scope: replScope,
+      });
+      setEntries((current) => [...current, entry]);
+      setStatus("Ready");
+    } finally {
+      clearTimeout(transportCheck);
+      if (transportCheckRef.current === transportCheck) transportCheckRef.current = undefined;
+    }
   }
 
   function selectExample(exampleCode: string) {

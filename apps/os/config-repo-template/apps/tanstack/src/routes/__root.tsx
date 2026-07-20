@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -8,6 +9,7 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "TanStack todos" },
     ],
+    links: [{ rel: "stylesheet", href: appCss }],
   }),
   component: RootComponent,
 });
@@ -26,14 +28,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
       <head>
         <HeadContent />
       </head>
-      <body
-        style={{
-          fontFamily: "system-ui",
-          maxWidth: "36rem",
-          margin: "2rem auto",
-          padding: "0 1rem",
-        }}
-      >
+      <body className="min-h-screen bg-slate-100 text-slate-900 antialiased">
         {children}
         <Scripts />
       </body>

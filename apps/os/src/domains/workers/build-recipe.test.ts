@@ -79,6 +79,12 @@ describe("workerBuildRecipe", () => {
     const collected = collectViteRecipeOutputs({
       "dist/server/index.js": "export default { fetch() {} }; export class TanstackTodos {}",
       "dist/server/assets/chunk-abc.js": "export {};",
+      "dist/server/assets/styles-server.css": "body { color: red; }",
+      // Vite may emit server-only support files that this text-module loader
+      // neither imports nor serves. They must retain the old skip behavior;
+      // trying to decode one as a browser text asset breaks otherwise-valid
+      // SSR builds.
+      "dist/server/assets/renderer.wasm": "\0asm-binary-placeholder",
       "dist/server/wrangler.json": "{}",
       "dist/client/assets/index-abc.js": "console.log(1)",
       "dist/client/.assetsignore": "",
@@ -96,6 +102,11 @@ describe("workerBuildRecipe", () => {
       'export * from "./dist/server/index.js"',
     );
     expect(collected.modules[".iterate-build.assets.js"]).toContain("/assets/index-abc.js");
+    // TanStack's SSR manifest can reference CSS emitted only under
+    // dist/server. It is still a browser asset and must be served at the
+    // URL embedded in the rendered document.
+    expect(collected.modules[".iterate-build.assets.js"]).toContain('"/assets/styles-server.css"');
+    expect(collected.modules[".iterate-build.assets.js"]).not.toContain("renderer.wasm");
 
     expect(() => collectViteRecipeOutputs({ "dist/server/other.js": "" })).toThrow(
       /did not produce "dist\/server\/index.js"/,

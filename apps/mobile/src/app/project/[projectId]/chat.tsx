@@ -25,7 +25,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
+  ActionSheetIOS,
   ActivityIndicator,
+  Alert,
+  Clipboard,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -51,11 +54,12 @@ import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
+import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
 import type { Agent, StreamEvent } from "../../../../../os/src/itx-api.generated.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatScreen() {
-  const { projectId, path } = useLocalSearchParams<{
+  const { projectId, slug, path } = useLocalSearchParams<{
     projectId: string;
     slug?: string;
     path: string;
@@ -128,6 +132,43 @@ export default function ChatScreen() {
 
   const feed = reduceFeed(path, events.data || []);
   const insets = useSafeAreaInsets();
+  const streamUrl =
+    baseUrl && slug ? buildStreamViewerUrl({ baseUrl, projectSlug: slug, streamPath: path }) : null;
+
+  const runStreamAction = (action: string) => {
+    if (action === "Show raw events") setViewMode("events");
+    if (action === "Show chat") setViewMode("chat");
+    if (action === "Copy stream URL" && streamUrl) {
+      Clipboard.setString(streamUrl);
+      Alert.alert("Stream URL copied");
+    }
+    if (action === "Open stream in browser" && streamUrl) {
+      void WebBrowser.openBrowserAsync(streamUrl);
+    }
+  };
+  const showStreamMenu = () => {
+    const options = [
+      viewMode === "chat" ? "Show raw events" : "Show chat",
+      ...(streamUrl ? ["Copy stream URL", "Open stream in browser"] : []),
+      "Cancel",
+    ];
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { cancelButtonIndex: options.length - 1, options, title: path },
+        (index) => runStreamAction(options[index] || "Cancel"),
+      );
+      return;
+    }
+    Alert.alert(
+      path,
+      undefined,
+      options.map((option) => ({
+        onPress: () => runStreamAction(option),
+        style: option === "Cancel" ? "cancel" : "default",
+        text: option,
+      })),
+    );
+  };
 
   return (
     <KeyboardAvoidingView
@@ -139,8 +180,13 @@ export default function ChatScreen() {
         options={{
           title: path.replace(/^\/agents\//, ""),
           headerRight: () => (
-            <Pressable onPress={() => setViewMode(viewMode === "chat" ? "events" : "chat")}>
-              <Text style={styles.modeToggle}>{viewMode === "chat" ? "raw" : "chat"}</Text>
+            <Pressable
+              accessibilityLabel="Stream actions"
+              accessibilityRole="button"
+              onPress={showStreamMenu}
+              style={styles.streamMenu}
+            >
+              <Text style={styles.modeToggle}>•••</Text>
             </Pressable>
           ),
         }}
@@ -356,7 +402,16 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     padding: spacing.lg,
   },
-  modeToggle: { color: colors.textMuted, fontSize: 14 },
+  streamMenu: {
+    alignItems: "center",
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: "center",
+    width: 46,
+  },
+  modeToggle: { color: colors.textMuted, fontSize: 16, letterSpacing: 1 },
   emptyFlip: { transform: [{ scaleY: -1 }], padding: spacing.lg },
   empty: { color: colors.textMuted, fontSize: 14, lineHeight: 20, textAlign: "center" },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },

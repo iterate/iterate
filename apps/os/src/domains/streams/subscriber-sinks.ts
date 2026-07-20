@@ -28,6 +28,7 @@
 // stream-wire.e2e.test.ts.
 
 import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/live-state";
+import { StreamReceiverUnavailableError } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
   ProcessEventBatch,
@@ -43,6 +44,38 @@ import type {
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import type { SubscriberDial } from "./stream-subscribers.ts";
+
+// workerd's public, documented verdict for an entrypoint whose response is
+// blocked on a promise the runtime can prove will never settle. Workers RPC
+// exposes no code/flag for this failure: it crosses the boundary as a plain
+// Error with this message (workerd's js-rpc-test.js asserts the same text).
+// Keep the match to the stable semantic sentence, not the trailing docs URL.
+const WORKERS_HUNG_ENTRYPOINT_MESSAGE =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response.";
+
+/** Whether a remote Worker entrypoint was canceled because it can never settle. */
+export function isWorkersHungEntrypointError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "Error" &&
+    error.message.startsWith(WORKERS_HUNG_ENTRYPOINT_MESSAGE)
+  );
+}
+
+/**
+ * Translate a transport-level receiver cancellation into the delivery
+ * spine's explicit availability contract. It says the receiver cannot ack;
+ * it is not evidence that any event in the batch is poison.
+ */
+function rethrowPushEvaluationError(error: unknown): never {
+  if (isWorkersHungEntrypointError(error)) {
+    throw new StreamReceiverUnavailableError(
+      `project worker receiver was canceled before acknowledgement: ${error.message}`,
+      { cause: error },
+    );
+  }
+  throw error;
+}
 
 /**
  * Per-call delivery options, consumed LOCALLY by the retained wrapper — never
@@ -122,14 +155,20 @@ export function retainProcessEventBatch(
         pendingDeliveries += 1;
         void Promise.resolve(result)
           .then(
-            () => opts?.onSettled?.("ok"),
+            () => {
+              pendingDeliveries -= 1;
+              opts?.onSettled?.("ok");
+            },
             (error: unknown) => {
-              onDeliveryError(error);
-              opts?.onSettled?.("error");
+              pendingDeliveries -= 1;
+              try {
+                onDeliveryError(error);
+              } finally {
+                opts?.onSettled?.("error");
+              }
             },
           )
           .finally(() => {
-            pendingDeliveries -= 1;
             disposeIgnoredRpcResult(result);
           });
         return;
@@ -351,10 +390,15 @@ export function createSubscriberDial(deps: {
      * the receiver selected by the expression crosses RPC.
      */
     async push(expression: ItxExpression, batch: StreamPushEventBatch) {
-      const { value } = await evaluateItxExpression(
-        deps.createAuthorityRoot(),
-        toInvocation(expression, batch),
-      );
+      let value: unknown;
+      try {
+        ({ value } = await evaluateItxExpression(
+          deps.createAuthorityRoot(),
+          toInvocation(expression, batch),
+        ));
+      } catch (error) {
+        rethrowPushEvaluationError(error);
+      }
       try {
         disposeIgnoredRpcResult(value);
       } catch (error) {

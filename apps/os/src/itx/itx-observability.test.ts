@@ -154,6 +154,37 @@ describe("ITX observability", () => {
     });
   });
 
+  it("classifies a modeled stream lifecycle loss as unavailable, not a server error", async () => {
+    const events: WideLogEvent[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((event) => void events.push(event as WideLogEvent));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const session = createItxRpcSessionOptions({
+      transport: "websocket",
+      sessionId: "itx_session_rollover",
+      parentLogId: "log_handshake",
+    });
+
+    const rejection = await session.onCall!({ path: ["waitForEvent"], target: {} }, async () => {
+      throw new Error("stream-unavailable: deployment reset");
+    }).catch((caught: unknown) => caught);
+
+    expect(log).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+    expect(events[0]).toMatchObject({
+      message: "itx_rpc",
+      outcome: "unavailable",
+      error: { name: "Error" },
+    });
+    expect(rejection).toMatchObject({
+      message: "stream-unavailable: deployment reset",
+    });
+    expect(recordedSpans[0]).toMatchObject({
+      attributes: { "itx.outcome": "unavailable" },
+    });
+  });
+
   it.each([
     {
       label: "a frozen pre-tagged Error",

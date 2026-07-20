@@ -8,10 +8,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
 import { newMobileAgentPath } from "../../../lib/chat.ts";
 import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
+import { enrollPushDevice } from "../../../lib/push-device.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatListScreen() {
@@ -32,6 +34,15 @@ export default function ChatListScreen() {
       }
     },
   });
+  const pushDevice = useQuery({
+    queryKey: ["push-device", projectId],
+    queryFn: async () => {
+      const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
+      return await enrollPushDevice(baseUrl, projectId);
+    },
+    retry: false,
+    refetchOnWindowFocus: "always",
+  });
 
   const openChat = (agentPath: string) =>
     router.push({
@@ -44,32 +55,21 @@ export default function ChatListScreen() {
       <Stack.Screen
         options={{
           title: slug || "Chats",
-          headerRight: () => (
-            <View style={styles.headerActions}>
-              <Pressable
-                onPress={() =>
-                  router.push({ pathname: "/project/[projectId]/examples", params: { projectId } })
-                }
-              >
-                <Text style={styles.switchProject}>Examples</Text>
-              </Pressable>
-              <Pressable
-                onPress={() =>
-                  router.push({ pathname: "/project/[projectId]/approvals", params: { projectId } })
-                }
-              >
-                <Text style={styles.switchProject}>Approvals</Text>
-              </Pressable>
-              <Pressable onPress={() => router.push("/projects")}>
-                <Text style={styles.switchProject}>Switch project</Text>
-              </Pressable>
-            </View>
+          headerLeft: () => (
+            <ProjectDrawerButton projectId={projectId} projectSlug={slug || "Chats"} />
           ),
         }}
       />
       <Pressable style={styles.newChat} onPress={() => openChat(newMobileAgentPath(new Date()))}>
         <Text style={styles.newChatText}>New chat</Text>
       </Pressable>
+      {pushDevice.isError ? (
+        <Text style={styles.pushStatus}>
+          Phone notifications unavailable: {pushDevice.error.message}
+        </Text>
+      ) : pushDevice.data ? (
+        <Text style={styles.pushStatus}>This phone is available to project scripts.</Text>
+      ) : null}
 
       {agents.isPending ? (
         <View style={styles.center}>
@@ -133,6 +133,12 @@ const styles = StyleSheet.create({
   path: { color: colors.text, fontSize: 14, fontFamily: "Menlo" },
   date: { color: colors.textMuted, fontSize: 12 },
   empty: { color: colors.textMuted, fontSize: 14 },
+  pushStatus: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
   retry: {
     borderColor: colors.border,
@@ -142,6 +148,4 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   retryText: { color: colors.text, fontSize: 14 },
-  headerActions: { flexDirection: "row", gap: spacing.md },
-  switchProject: { color: colors.textMuted, fontSize: 14 },
 });

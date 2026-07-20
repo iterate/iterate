@@ -10,7 +10,7 @@
 // implementation (@noble/curves) instead of WebCrypto, since Hermes has no
 // crypto.subtle. A phone key is therefore genuinely real and server-verified
 // exactly like a CI machine's — NOT hardware-isolated like the Secure Enclave
-// path, though. See tasks/mobile-approver-upgrades.md for that gap.
+// path, though. See tasks/mobile-native-capabilities.md for that gap.
 
 import { p256 } from "@noble/curves/nist.js";
 import { sha256 } from "@noble/hashes/sha2.js";

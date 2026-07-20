@@ -5,8 +5,8 @@ import {
   ensureR2ObjectExpiryLifecycle,
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
-  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
   removeWorkerSecrets,
+  runAsync,
   SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
   smokeResponse,
@@ -18,6 +18,20 @@ afterEach(() => vi.unstubAllGlobals());
 const workerName = "os-prd";
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 const listPath = `/workers/scripts/${workerName}/secrets`;
+
+describe("runAsync", () => {
+  it("resolves only after the child exits successfully", async () => {
+    await expect(
+      runAsync(process.execPath, ["--eval", "process.exit(0)"], { cwd: process.cwd() }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a nonzero child exit", async () => {
+    await expect(
+      runAsync(process.execPath, ["--eval", "process.exit(7)"], { cwd: process.cwd() }),
+    ).rejects.toThrow("exited with 7");
+  });
+});
 
 describe("assertWorkerSecretAbsent", () => {
   it("accepts a Worker without the forbidden binding", async () => {
@@ -185,13 +199,10 @@ describe("R2 object-expiry lifecycle", () => {
   });
 
   it("expires all preview disposable data 3h after write", () => {
-    // Guards against an accidental bump: erase-data relies on this expiring the
-    // corpus/files promptly so it can skip the per-object delete on previews,
-    // and the whole point is cost — abandoned data must not linger a full day.
+    // Guards against an accidental bump: erase-data relies on prompt expiry so
+    // it can skip per-object preview deletes.
     expect(PREVIEW_DISPOSABLE_TTL_SECONDS).toBe(3 * 60 * 60);
-    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
     expect(PREVIEW_FILES_OBJECT_EXPIRY.ttlSeconds).toBe(PREVIEW_DISPOSABLE_TTL_SECONDS);
-    expect(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY.ruleId).toBe("expire-preview-search-index");
     expect(PREVIEW_FILES_OBJECT_EXPIRY.ruleId).toBe("expire-preview-files");
   });
 
@@ -200,16 +211,16 @@ describe("R2 object-expiry lifecycle", () => {
 
     await ensureR2ObjectExpiryLifecycle(
       { cf, cfV4: vi.fn() } as never,
-      "os-preview-7-search-index",
-      PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
+      "os-preview-7-files",
+      PREVIEW_FILES_OBJECT_EXPIRY,
     );
 
     expect(cf).toHaveBeenCalledOnce();
     const [path, init] = cf.mock.calls[0] as unknown as [string, RequestInit];
-    expect(path).toBe("/r2/buckets/os-preview-7-search-index/lifecycle");
+    expect(path).toBe("/r2/buckets/os-preview-7-files/lifecycle");
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body as string)).toEqual({
-      rules: buildR2ObjectExpiryLifecycleRules(PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY),
+      rules: buildR2ObjectExpiryLifecycleRules(PREVIEW_FILES_OBJECT_EXPIRY),
     });
   });
 });

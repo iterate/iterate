@@ -75,7 +75,7 @@ function normalizeEventTimestamp(createdAt: string): string {
   return new Date(createdAt).toISOString();
 }
 
-function groupIdentifyEvents(args: {
+function projectBirthEvents(args: {
   batch: StreamPushEventBatch;
   distinctId: string;
   projectId: string;
@@ -126,6 +126,18 @@ function groupIdentifyEvents(args: {
         timestamp,
       ]),
     },
+    {
+      event: "$set",
+      properties: {
+        $geoip_disable: true,
+        $groups: { project: projectId },
+        $is_server: true,
+        $set: { name: `project:${project.config.slug}` },
+        distinct_id: distinctId,
+      },
+      timestamp,
+      uuid: posthogUuid(["project-person-v1", workerName, projectId]),
+    },
   ];
 }
 
@@ -146,7 +158,6 @@ function posthogEvents(args: {
     projectId,
   ])}`;
   const groups = { project: projectId };
-  const streamId = posthogUuid(["stream-v1", workerName, projectId, batch.path]);
   // Capture-side filter is deliberate defense in depth: subscriptions born
   // before includeEphemeral flipped to false may still deliver ephemeral rows.
   // Never index those in PostHog.
@@ -159,7 +170,7 @@ function posthogEvents(args: {
       offset: event.offset,
     });
     return {
-      event: "stream:append",
+      event: `append:${event.type}`,
       properties: {
         $geoip_disable: true,
         $groups: groups,
@@ -168,22 +179,14 @@ function posthogEvents(args: {
         // malformed event can receive HTTP 200 but still be rejected later by
         // asynchronous ingestion, so keep the wire shape exact.
         distinct_id: distinctId,
-        project_id: projectId,
-        stream_event_created_at: createdAt,
-        stream_event_ephemeral: event.ephemeral === true,
-        stream_event_offset: event.offset,
-        stream_event_type: event.type,
-        stream_event_uuid: eventUuid,
         // This first-party feed mirrors the committed event rather than an
         // allowlist. Only an event above the explicit JSON byte boundary is
         // deterministically chopped, with that loss indexed alongside it.
         stream_event: streamEvent.value,
         stream_event_original_json_bytes: streamEvent.originalBytes,
         stream_event_truncated: streamEvent.truncated,
-        stream_max_offset: batch.streamMaxOffset,
-        stream_id: streamId,
+        stream_event_type: event.type,
         stream_path: batch.path,
-        worker_name: workerName,
       },
       // Source commit time is part of the occurrence identity. Keeping it
       // stable across retries matters because PostHog's deduplication sort
@@ -192,7 +195,7 @@ function posthogEvents(args: {
       uuid: eventUuid,
     };
   });
-  return [...groupIdentifyEvents({ batch, distinctId, projectId, workerName }), ...occurrences];
+  return [...projectBirthEvents({ batch, distinctId, projectId, workerName }), ...occurrences];
 }
 
 /**
@@ -234,7 +237,7 @@ export async function capturePosthogStreamEventBatch(
     // keeping it observable prevents a future regression from appearing as
     // unexplained time in the parent Stream.append invocation.
     const events = posthogEvents(args);
-    const durableCount = events.filter((event) => event.event === "stream:append").length;
+    const durableCount = events.filter((event) => event.event.startsWith("append:")).length;
     span.setAttribute("iterate.stream.durable_event_count", durableCount);
     // An all-ephemeral delivery (or one that yields no PostHog rows) is a
     // successful no-op — do not fail the subscriber or call the capture API.

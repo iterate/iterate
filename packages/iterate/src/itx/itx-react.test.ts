@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// Control the mock capnweb session from tests: `hangAuthProbe` makes the
-// liveness/confirm probe (every authenticate() AFTER the first per socket) hang,
-// modelling a half-open transport whose root was already established.
+// Control the mock capnweb session from tests: `hangSessionProbe` makes the
+// liveness `Session.__describe()` call hang, modelling a half-open transport
+// whose root was already established.
 // `authError` makes the FIRST authenticate reject (a terminal handshake
 // failure); `lastRoot` is the resolved session the latest dial produced.
 const control = vi.hoisted(() => ({
-  hangAuthProbe: false,
+  hangSessionProbe: false,
   hangFirstAuth: false,
-  authProbeError: undefined as Error | undefined,
+  sessionProbeError: undefined as Error | undefined,
+  sessionProbeCalls: 0,
+  authenticateCalls: 0,
   authError: undefined as Error | undefined,
   lastRoot: undefined as unknown,
+  lastRpcRootDispose: undefined as ReturnType<typeof vi.fn> | undefined,
   lastCredentials: undefined as unknown,
 }));
 
@@ -21,24 +24,39 @@ const control = vi.hoisted(() => ({
 // per socket models the RpcPromise: a THENABLE whose resolution is the real
 // session handle — the code must await it and publish the RESOLVED identity
 // (resolving a native promise with the thenable itself would assimilate).
-// Later calls are the awaited liveness probe, which `hangAuthProbe` can wedge.
+// Liveness calls the resolved Session's __describe(), never authenticate again.
 vi.mock("capnweb", () => ({
   newWebSocketRpcSession: (ws: { url: string }) => {
-    let calls = 0;
+    const pendingCalls = new Set<PromiseWithResolvers<never>>();
+    const disposeRpcRoot = vi.fn(() => {
+      const error = new Error("RPC session was shut down by disposing the main stub");
+      for (const pending of pendingCalls) pending.reject(error);
+      pendingCalls.clear();
+    });
+    control.lastRpcRootDispose = disposeRpcRoot;
     return {
+      [Symbol.dispose]: disposeRpcRoot,
       authenticate: (credentials?: unknown) => {
-        calls += 1;
+        control.authenticateCalls += 1;
         control.lastCredentials = credentials;
-        if (calls > 1 && control.hangAuthProbe) return new Promise(() => {});
-        if (calls > 1 && control.authProbeError) return Promise.reject(control.authProbeError);
         const handleFor = (suffix: string) => ({
           url: suffix ? `${ws.url}/${suffix}` : ws.url,
           [Symbol.dispose]: vi.fn(),
         });
-        if (calls > 1) return handleFor("");
         if (control.hangFirstAuth) return new Promise(() => {});
         if (control.authError) return Promise.reject(control.authError);
         const root = Object.assign(handleFor(""), {
+          __describe: () => {
+            control.sessionProbeCalls += 1;
+            if (control.hangSessionProbe) return new Promise(() => {});
+            if (control.sessionProbeError) return Promise.reject(control.sessionProbeError);
+            return { principal: "test" };
+          },
+          hang: () => {
+            const pending = Promise.withResolvers<never>();
+            pendingCalls.add(pending);
+            return pending.promise;
+          },
           projects: { get: (slug: string) => handleFor(slug) },
         });
         control.lastRoot = root;
@@ -53,6 +71,7 @@ vi.mock("capnweb", () => ({
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   url: string;
+  closeEmitsEvent = true;
   private handlers: Record<string, Array<() => void>> = {};
   constructor(url: string | URL) {
     this.url = String(url);
@@ -62,7 +81,7 @@ class FakeWebSocket {
     (this.handlers[type] ??= []).push(cb);
   }
   close() {
-    this.fire("close");
+    if (this.closeEmitsEvent) this.fire("close");
   }
   fire(type: string) {
     for (const cb of this.handlers[type] ?? []) cb();
@@ -70,11 +89,14 @@ class FakeWebSocket {
 }
 
 beforeEach(() => {
-  control.hangAuthProbe = false;
+  control.hangSessionProbe = false;
   control.hangFirstAuth = false;
-  control.authProbeError = undefined;
+  control.sessionProbeError = undefined;
+  control.sessionProbeCalls = 0;
+  control.authenticateCalls = 0;
   control.authError = undefined;
   control.lastRoot = undefined;
+  control.lastRpcRootDispose = undefined;
   control.lastCredentials = undefined;
   FakeWebSocket.instances = [];
   vi.stubGlobal("WebSocket", FakeWebSocket);
@@ -166,8 +188,9 @@ describe("itx session socket", () => {
 
   test("a superseded generation's late open never publishes over the live one", async () => {
     const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.ts");
-    connectIterateSession();
+    const superseded = connectIterateSession();
     reconnectIterateSession(); // supersede the first dial before it ever opened
+    await expect(superseded).rejects.toThrow(/closed before connecting/);
     expect(FakeWebSocket.instances).toHaveLength(2);
     const second = connectIterateSession();
     // The stale first socket opens LATE: it must close itself, not publish.
@@ -183,7 +206,7 @@ describe("itx session socket", () => {
   });
 
   test("verifier: an application-error probe means the socket ANSWERED — no reconnect", async () => {
-    // The probe (authenticate) rejects with a non-transport error: the transport
+    // The probe rejects with a non-transport error: the transport
     // is alive, so two 10s windows must NOT retire the socket.
     vi.useFakeTimers();
     try {
@@ -193,7 +216,7 @@ describe("itx session socket", () => {
       await vi.advanceTimersByTimeAsync(0);
       await first;
 
-      control.authProbeError = new Error("permission denied"); // NOT a transport error
+      control.sessionProbeError = new Error("permission denied"); // NOT a transport error
       reportTransportSuspicion();
       await vi.advanceTimersByTimeAsync(20_000);
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -221,11 +244,14 @@ describe("itx session socket", () => {
     }
   });
 
-  test("isItxTransportError classifies exactly the three transport signatures", async () => {
+  test("isItxTransportError classifies exactly the four transport signatures", async () => {
     const { isItxTransportError } = await import("./itx-react.ts");
     expect(isItxTransportError(new Error("itx WebSocket closed before connecting"))).toBe(true);
     expect(isItxTransportError(new Error("Peer closed WebSocket: 1006 "))).toBe(true);
     expect(isItxTransportError(new Error("WebSocket connection failed."))).toBe(true);
+    expect(
+      isItxTransportError(new Error("RPC session was shut down by disposing the main stub")),
+    ).toBe(true);
     // An application error that merely MENTIONS WebSocket is not a transport close.
     expect(isItxTransportError(new Error("WebSocket subscriptions require admin"))).toBe(false);
     expect(isItxTransportError(new Error("permission denied"))).toBe(false);
@@ -233,9 +259,7 @@ describe("itx session socket", () => {
 
   test("configureIterateSession dials the configured deployment with the given credentials", async () => {
     // The non-browser lane (TUI, keeper-based scripts): an explicit base URL +
-    // credentials replace the window-derived /api + cookie default. The
-    // credentials ride BOTH authenticate calls — the handshake and the
-    // liveness probe.
+    // credentials replace the window-derived /api + cookie default.
     const { configureIterateSession, connectIterateSession } = await import("./itx-react.ts");
     configureIterateSession({
       baseUrl: "https://os.example.com/",
@@ -247,14 +271,16 @@ describe("itx session socket", () => {
     await openLatest();
     await first;
     expect(control.lastCredentials).toEqual({ type: "admin-secret", secret: "s3cr3t" });
+    expect(control.authenticateCalls).toBe(1);
 
-    // The liveness probe re-presents the SAME credentials (a cookie-less
-    // configured session must not probe with the browser default).
-    control.lastCredentials = undefined;
+    // Liveness probes the already-authorized Session capability. It must not
+    // present credentials (and hit auth) every 45 seconds merely to test the
+    // transport.
     reportTransportSuspicion();
     await vi.waitFor(() => {
-      expect(control.lastCredentials).toEqual({ type: "admin-secret", secret: "s3cr3t" });
+      expect(control.sessionProbeCalls).toBe(1);
     });
+    expect(control.authenticateCalls).toBe(1);
   });
 
   test("configureIterateSession after the first dial throws — the target is per-process", async () => {
@@ -331,7 +357,7 @@ describe("itx session socket", () => {
     container.remove();
   });
 
-  test("the dial timeout spans authenticate: a hung handshake closes and re-dials", async () => {
+  test("the dial timeout spans authenticate and re-dials without waiting for a close event", async () => {
     // A server that accepts the WebSocket but never answers authenticate must
     // be a FAILED dial (close → paced re-dial), not an infinite spinner.
     vi.useFakeTimers();
@@ -339,10 +365,12 @@ describe("itx session socket", () => {
       const { connectIterateSession } = await import("./itx-react.ts");
       control.hangFirstAuth = true;
       const first = connectIterateSession();
+      FakeWebSocket.instances[0]!.closeEmitsEvent = false;
       FakeWebSocket.instances[0]!.fire("open"); // opens, then authenticate hangs
       await vi.advanceTimersByTimeAsync(15_000); // DIAL_TIMEOUT_MS
       await expect(first).rejects.toThrow(/closed before connecting/);
-      // The timeout closed the wedged socket and a fresh dial replaced it.
+      // The timeout itself transferred ownership; the wedged socket never
+      // acknowledged close, so a close-handler-owned retry would hang here.
       expect(FakeWebSocket.instances).toHaveLength(2);
       control.hangFirstAuth = false;
       const second = connectIterateSession();
@@ -472,7 +500,7 @@ describe("itx session socket", () => {
     const first = connectIterateSession();
     await openLatest();
     await first;
-    // The auth probe answers immediately (alive), so two-strike verification
+    // The Session probe answers immediately (alive), so two-strike verification
     // keeps the socket: a busy-but-alive transport must not be torn down.
     reportTransportSuspicion();
     await vi.waitFor(() => {});
@@ -487,15 +515,24 @@ describe("itx session socket", () => {
       const first = connectIterateSession();
       FakeWebSocket.instances[0]!.fire("open");
       await vi.advanceTimersByTimeAsync(0);
-      await first;
+      const session = (await first) as unknown as { hang(): Promise<never> };
+      const pendingCall = session.hang();
+      const pendingRejection = expect(pendingCall).rejects.toThrow(
+        /RPC session was shut down by disposing the main stub/,
+      );
 
-      // The transport goes half-open: probes now hang. Two 10s strikes retire it.
-      control.hangAuthProbe = true;
+      // The transport goes half-open: probes and even WebSocket.close() now
+      // hang. Two 10s strikes must still abort capnweb (settling the in-flight
+      // call) and transfer ownership to a fresh generation.
+      FakeWebSocket.instances[0]!.closeEmitsEvent = false;
+      control.hangSessionProbe = true;
       reportTransportSuspicion();
       await vi.advanceTimersByTimeAsync(10_000); // strike one
       expect(FakeWebSocket.instances).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_000); // strike two → reconnect
       expect(FakeWebSocket.instances).toHaveLength(2);
+      expect(control.lastRpcRootDispose).toHaveBeenCalledTimes(1);
+      await pendingRejection;
       expect(connectIterateSession()).not.toBe(first);
     } finally {
       vi.useRealTimers();
@@ -829,6 +866,73 @@ describe("useItxSubscription liveness", () => {
     });
     expect(rendered()).toBe("beta");
     await act(async () => root.unmount());
+    container.remove();
+  });
+
+  test("useIterateSessionLiveState is inert while disabled and resets when its node changes", async () => {
+    const [{ useIterateSessionLiveState }, React, { createRoot }] = await Promise.all([
+      import("./itx-react.ts"),
+      import("react"),
+      import("react-dom/client"),
+    ]);
+    const { act, createElement } = React;
+    const sinks: Array<(update: unknown) => void> = [];
+    const unsubscribe = vi.fn();
+    const roots: unknown[] = [];
+    let enabled = false;
+    let node = "a";
+
+    function Harness() {
+      const { status, value } = useIterateSessionLiveState(
+        (session) => {
+          roots.push(session);
+          return {
+            subscribe: async (onUpdate: (update: unknown) => void) => {
+              sinks.push(onUpdate);
+              return { ping: () => true, unsubscribe };
+            },
+          } as never;
+        },
+        (state: { name: string }) => state.name,
+        [node],
+        { enabled },
+      );
+      return createElement("output", { "data-status": status }, value ?? "∅");
+    }
+
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const render = () => act(async () => root.render(createElement(Harness)));
+    const rendered = () => container.querySelector("output")?.textContent;
+
+    await render();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(rendered()).toBe("∅");
+
+    enabled = true;
+    await render();
+    await act(async () => FakeWebSocket.instances.at(-1)!.fire("open"));
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(roots).toEqual([control.lastRoot]);
+    expect(sinks).toHaveLength(1);
+    await act(async () => {
+      sinks[0]!({ type: "snapshot", revision: 0, state: { name: "alpha" } });
+    });
+    expect(rendered()).toBe("alpha");
+
+    node = "b";
+    await render();
+    expect(rendered()).toBe("∅");
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(sinks).toHaveLength(2);
+    await act(async () => {
+      sinks[1]!({ type: "snapshot", revision: 0, state: { name: "beta" } });
+    });
+    expect(rendered()).toBe("beta");
+
+    await act(async () => root.unmount());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
     container.remove();
   });
 

@@ -1,5 +1,6 @@
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+import { openRepoTreeFile } from "./test-support/repo-tree.ts";
 
 /**
  * SVG previews through the same sandboxed html iframe as html files (raw svg
@@ -31,7 +32,7 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Code view shows the svg source.
-  await page.locator('[data-item-path="icon.svg"]').click();
+  await openRepoTreeFile(page, "icon.svg");
   await page.locator(".cm-content").filter({ hasText: "<circle" }).waitFor();
 
   // Preview renders the svg in the sandboxed iframe (same srcdoc lane as html).
@@ -59,7 +60,7 @@ test("preview a staged snapshot from the readonly Index view", async ({
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
   // Edit the html and stage it, then open the readonly "(Index)" pseudo-file.
-  await page.locator('[data-item-path="page.html"]').click();
+  await openRepoTreeFile(page, "page.html");
   await page.locator(".cm-content").click();
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type("<h1>Staged edit</h1>");

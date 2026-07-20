@@ -32,7 +32,7 @@ bar is measured on Depot.
 ## Round 4 (2026-07-13/14, PR #1938)
 
 Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
-of heavy merging (subagents/unified messaging, itx.search, stream metrics,
+of heavy merging (subagents/unified messaging, stream metrics,
 MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
 (`preview-e2e-marathon.yml`) against this PR's leased slot, fail fast, root
 cause + fix every failure, merge main into this branch between marathons so
@@ -64,8 +64,8 @@ times across six merged main heads. Detailed per-run log in the PR comments.
 
 Cost (measured; full breakdown in the PR): ~$54 for 101 lane executions ≈
 $0.53/run — 92% LLM tokens (gpt-5.6-sol BYOK, $49.36 uncached), with the
-AIG response cache absorbing 46.4% of requests (~$42 saved); AI Search
-fixture indexing $0.31; Depot 8-core compute ~275 min ≈ $4.40.
+AIG response cache absorbing 46.4% of requests (~$42 saved); Depot 8-core
+compute ~275 min ≈ $4.40.
 
 Round-4 lessons (no test-failure fixes needed; the PR carries only the
 slot re-claim above plus a dead-code/doc-drift sweep from the round's

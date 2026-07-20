@@ -388,9 +388,18 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-edit-file": {
-    vars: ({ marker }) => ({
+    // The matrix runs its runtimes sequentially, and the example seeds the
+    // known draft contents before every edit. Share one repo within an
+    // attempt: the first runtime proves first-use creation, the rest prove
+    // create() is idempotent without paying three redundant repo births. A
+    // vitest retry still gets a fresh repo through attemptSalt. Each of the
+    // four runtimes deliberately performs two real Artifacts commits plus
+    // read-your-writes; preview measurements put that healthy serialized work
+    // at ~120s, so its case-specific budget leaves one commit of headroom.
+    completionTimeoutMs: 150_000,
+    vars: ({ attemptSalt }) => ({
       path: "notes/edit-example.md",
-      repoPath: `/examples/repo-edit-file-${marker}`,
+      repoPath: `/examples/repo-edit-file-${attemptSalt}`,
     }),
     assert: (result, _ctx, expect) => {
       expect(result).toEqual({

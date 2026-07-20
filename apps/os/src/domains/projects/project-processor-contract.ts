@@ -7,6 +7,8 @@ import { EmailProcessorContract } from "../email/email-processor-contract.ts";
 import { SecretProcessorContract } from "../secrets/secret-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
+import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
+import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import {
   EgressRule,
   HumanApprovalGrantedPayload,
@@ -81,6 +83,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     ready: z.boolean().default(false),
     onboardingActive: z.boolean().default(false),
     onboardingCompletedAt: z.string().nullable().default(null),
+    devices: z.array(StreamListItem).default([]),
     repos: z.array(StreamListItem).default([]),
     secrets: z.array(StreamListItem).default([]),
     streams: z.array(StreamListItem).default([]),
@@ -89,6 +92,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     egressRules: z.array(EgressRule).default([]),
     /** Enrolled human-approval public keys; once any is active, grants must be signed. */
     humanApprovalKeys: z.array(HumanApprovalKey).default([]),
+    notificationReady: z.boolean().default(false),
   }),
   events: {
     "events.iterate.com/project/created": {
@@ -427,6 +431,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/egress-rules-configured",
     "events.iterate.com/project/human-approval-key-added",
     "events.iterate.com/project/human-approval-key-revoked",
+    "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
     "events.iterate.com/project/custom-domain-provision-failed",
@@ -436,11 +441,13 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/onboarding-completed",
     "events.iterate.com/project/created",
     "events.iterate.com/project/ready",
+    "events.iterate.com/device/created",
     "events.iterate.com/repo/created",
     "events.iterate.com/repo/ready",
     "events.iterate.com/secret/created",
     "events.iterate.com/stream/created",
     "events.iterate.com/stream/child-stream-created",
+    "events.iterate.com/notification/created",
   ],
   processorDeps: [
     CoreProcessorContract,
@@ -449,6 +456,8 @@ export const ProjectProcessorContract = defineProcessorContract({
     SecretProcessorContract,
     CapabilityHostProcessorContract,
     SchedulerProcessorContract,
+    DeviceProcessorContract,
+    NotificationLifecycleContract,
   ],
   emits: [
     // Seeded onto /integrations/email at project birth (the creator's email
@@ -463,6 +472,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/ready",
     "events.iterate.com/repo/created",
     "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/notification/created",
   ],
 });
 

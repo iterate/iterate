@@ -8,8 +8,7 @@
 # steal a live tenant's slot), erases it, and releases it.
 #
 # Lease expiry is the only signal — no GitHub token needed. R2 data reaps itself
-# via lifecycle rules; this sweep's real job is the Durable Object / D1 / KV
-# wipe and the AI Search per-instance delete (which has no server-side expiry).
+# via lifecycle rules; this sweep's real job is the Durable Object / D1 / KV wipe.
 #
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.

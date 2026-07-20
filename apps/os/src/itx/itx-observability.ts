@@ -1,6 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import type { RpcSessionOptions } from "capnweb";
 import { ItxAuthenticationError } from "../auth.ts";
+import { isStreamUnavailableError } from "../domains/streams/stream-unavailable.ts";
 import { runWideLog, wideLogger } from "../observability/wide-log.ts";
 
 type RpcCallInfo = {
@@ -9,6 +10,7 @@ type RpcCallInfo = {
 };
 
 const itxOutcome = Symbol("itxOutcome");
+type ItxErrorOutcome = "client_error" | "error" | "unavailable";
 const spanNamePart = /^[a-zA-Z0-9_$:-]+$/;
 
 function safeNamePart(value: unknown, fallback: string) {
@@ -51,11 +53,7 @@ function methodName(target: unknown, path: RpcCallInfo["path"]): string {
   return "call";
 }
 
-function correlatedItxError(
-  error: unknown,
-  callId: string,
-  outcome: "client_error" | "error",
-): Error {
+function correlatedItxError(error: unknown, callId: string, outcome: ItxErrorOutcome): Error {
   let message = "ITX target threw a non-Error value";
   try {
     if (error instanceof Error && typeof error.message === "string") message = error.message;
@@ -67,15 +65,19 @@ function correlatedItxError(
   return correlated;
 }
 
-function itxErrorOutcome(error: unknown): "client_error" | "error" {
+function itxErrorOutcome(error: unknown): ItxErrorOutcome {
   try {
     if (error instanceof ItxAuthenticationError) return "client_error";
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      Reflect.get(error, itxOutcome) === "client_error"
-    ) {
-      return "client_error";
+    // Stream incarnation loss is an explicit, retryable availability outcome
+    // (deploy rollover, eviction, overload, or operator kill), not an
+    // application/server defect. Keep it observable without polluting the
+    // error signal that release gates audit.
+    if (isStreamUnavailableError(error)) return "unavailable";
+    if (typeof error === "object" && error !== null) {
+      const inheritedOutcome: unknown = Reflect.get(error, itxOutcome);
+      if (inheritedOutcome === "client_error" || inheritedOutcome === "unavailable") {
+        return inheritedOutcome;
+      }
     }
   } catch {
     // Hostile thrown values are server errors, but must not break normalization.

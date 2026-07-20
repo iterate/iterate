@@ -45,7 +45,6 @@ import type {
   WakeableStreamProcessorRpc,
 } from "iterate/processors";
 import { StreamReceiverUnavailableError } from "iterate/processors";
-import type { StreamThroughputMetrics } from "iterate/processors";
 import {
   disposeIgnoredRpcResult,
   LiveState,
@@ -90,6 +89,7 @@ import {
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
+import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
@@ -158,7 +158,6 @@ import {
 } from "./domains/integrations/waitrose-api.ts";
 import {
   deleteProjectFile,
-  listProjectFiles,
   mintProjectFileUrl,
   putProjectFile,
   readProjectFile,
@@ -182,6 +181,7 @@ import {
   isDurableObjectLifecycleError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
+  retryStreamUnavailableOnce,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -243,31 +243,6 @@ import type {
 import type { EmailAttachmentInput } from "./domains/email/utils.ts";
 import type { FileData } from "./domains/files/file-url-signing.ts";
 import type { ProjectFileMetadata } from "./domains/files/project-files.ts";
-import {
-  enqueueAutomaticStreamIndex,
-  ensureProjectSearchInstance,
-  indexDocument,
-  indexPinnedStreamEvent,
-  indexEntireStream,
-  indexStreamEventBatch,
-  mirrorFileToSearchIndex,
-  triggerProjectSearchSync,
-  triggerProjectSearchSyncDebounced,
-} from "./domains/search/search-index.ts";
-import {
-  extractMatchSnippet,
-  narrowStreamRefToChunk,
-  normalizeSearchExcludeKinds,
-  normalizeSearchSource,
-  projectSearchInstanceId,
-  searchFilters,
-} from "./domains/search/search-corpus.ts";
-import { ItxExpression } from "./itx/expression.ts";
-import type {
-  SearchAnswerResult,
-  SearchQueryResult,
-  SearchResultChunk,
-} from "./domains/search/search-corpus.ts";
 import {
   AgentProcessorContract,
   type AgentEventInput,
@@ -334,9 +309,11 @@ import type {
   SecretUpdateInput,
 } from "./domains/secrets/types.ts";
 import type {
-  ConnectionRuntimeState,
-  SubscriptionRuntimeState,
-} from "./domains/streams/stream-subscribers.ts";
+  DeviceAppendInput,
+  DeviceDescription,
+  DeviceEnrollInput,
+} from "./domains/devices/types.ts";
+import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -506,6 +483,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         kill: "Abort the current Durable Object incarnation; the next request boots it again.",
         readEvents: "Create a pager for bounded event pages.",
         removeCrossPost: "Remove a cross-post configured by crossPostTo.",
+        liveState: "Subscribe to the stream core and delivery-runtime debug state.",
         subscribe: "Ephemeral live event delivery; returns an unsubscribe handle.",
         waitForEvent: "Block until a matching event lands.",
       },
@@ -722,20 +700,19 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * been collecting); latency stats fields are absent until a real sample
    * exists — no value is ever synthesized. Calling this also requests a
    * throttled mutual-ping round over the live connections (observer-driven
-   * sampling), so a polling debug UI sees RTTs populate.
+   * sampling); live debug surfaces should subscribe through `liveState`.
    */
-  async runtimeState(): Promise<{
-    coreProcessorState: unknown;
-    runtime: {
-      connections: Record<string, ConnectionRuntimeState>;
-      subscriptions: Record<string, SubscriptionRuntimeState>;
-      metrics: StreamThroughputMetrics;
-      /** SQLite database size in bytes (event log + spine rows + chunks). */
-      storageSizeBytes: number;
-    };
-  }> {
+  async runtimeState(): Promise<StreamRuntimeDebugState> {
     const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
+    return new LiveStateRelayRpcTarget<StreamRuntimeDebugState>(
+      () =>
+        this.durableObjectStub as unknown as LiveStateDurableObjectStub<StreamRuntimeDebugState>,
+    );
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -2208,6 +2185,114 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   }
 }
 
+/** Enrolled mobile installations within one project. */
+class DeviceCollectionRpcTarget extends IterateRpcTarget<"DeviceCollection"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Enrolled phone devices: list() discovers safe metadata; get(deviceId) returns the durable device whose append() requests notifications.",
+      children: {
+        get: "Get one device by stable installation id.",
+        list: "List enrolled devices without exposing push credentials.",
+      },
+      parent: "a project itx (itx.devices)",
+    });
+  }
+
+  get(deviceId: string): DeviceRpcTarget {
+    assertDeviceId(deviceId);
+    return new DeviceRpcTarget({
+      auth: this.props.auth,
+      deviceId,
+      projectId: this.props.projectId,
+    });
+  }
+
+  async list(): Promise<DeviceDescription[]> {
+    const devices = (await projectProcessorState(this.props.projectId)).devices;
+    return await Promise.all(
+      devices.map((device) =>
+        this.get(device.path.replace(/^\/devices\//, "")).durableObjectStub.describe(),
+      ),
+    );
+  }
+}
+
+/** One enrolled installation. Push credentials enter only through enroll(). */
+class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
+  constructor(readonly props: { auth: ItxAuth; deviceId: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description & DeviceDescription> {
+    const state = await this.durableObjectStub.describe();
+    return describeNode({
+      instructions:
+        `Device ${this.props.deviceId}: append a device/notification-requested event to notify it. ` +
+        "enroll/revoke are authenticated phone lifecycle operations; no push credential is readable.",
+      children: {
+        append: "Append one or more typed notification request/opened facts.",
+        enroll: "Enroll or rotate this authenticated user's Expo push token.",
+        kill: "Restart the server-side device object.",
+        revoke: "Disable push for this authenticated user's installation.",
+      },
+      parent: "itx.devices.get(deviceId)",
+      ...state,
+    });
+  }
+
+  /** @internal */
+  get durableObjectStub() {
+    return env.DEVICE.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: this.props.projectId,
+        path: `/devices/${this.props.deviceId}`,
+      }),
+    );
+  }
+
+  enroll(input: DeviceEnrollInput): Promise<DeviceDescription> {
+    return this.durableObjectStub.enroll({ ...input, ownerId: this.props.auth.principal });
+  }
+
+  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]> {
+    return this.durableObjectStub.append(this.props.auth.principal, ...events);
+  }
+
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
+    return this.durableObjectStub.revoke(this.props.auth.principal, reason);
+  }
+
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
+  get processor(): WakeableStreamProcessorRpc<DeviceDescription> {
+    return new ProcessorRelayRpcTarget<DeviceDescription>({
+      auth: this.props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  get liveState(): LiveStateRpc<DeviceDescription> {
+    return new LiveStateRelayRpcTarget<DeviceDescription>(
+      () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<DeviceDescription>,
+    );
+  }
+}
+
+function assertDeviceId(deviceId: string): void {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(deviceId)) {
+    throw new Error("deviceId must contain 1-128 letters, digits, underscores, or hyphens");
+  }
+}
+
 type AiRunOptions = NonNullable<Parameters<Env["AI"]["run"]>[2]>;
 
 /** One project file, addressed by path. */
@@ -2294,590 +2379,6 @@ class FilesRpcTarget extends IterateRpcTarget<"Files"> {
       path: normalizePath(path),
       projectId: this.props.projectId,
     });
-  }
-}
-
-/** Parse a stored ref metadata value; malformed JSON/shape yields undefined, never a throw. */
-function parseStoredRef(serialized: string): ItxExpression | undefined {
-  try {
-    return ItxExpression.parse(JSON.parse(serialized));
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Snippet length per row and the default row count. Rows are deliberately
- * TINY (kind, date, context, ~2-sentence snippet, ref) so many matches fit
- * one glance — judge here, evaluate `ref` for the whole thing. 30 rows of
- * snippet+metadata ≈ 20k chars, safely inside the 30k inline script-result
- * cap; `limit` accepts up to the API's 50.
- */
-const SNIPPET_CHARS = 200;
-const DEFAULT_RESULT_ROWS = 30;
-
-/**
- * One result row per MATCH LOCATION — full-text-search semantics. The corpus
- * stores stream events in 100-offset SEGMENT documents, so ten different
- * pirate mentions in one segment are ten different chunks of ONE document:
- * deduping by document would collapse ten real matches to one. The identity
- * that matches user intuition is the chunk-narrowed ref window (the exact
- * events a chunk covers): distinct windows stay distinct rows; the SAME
- * window (context-expansion echoes, re-scored duplicates) collapses to its
- * best score. Non-stream documents (files, repo files, custom docs) narrow
- * to the whole-object ref, so their chunks collapse per document — which is
- * right: every chunk of one file leads to the same domain object.
- */
-function dedupeChunksByMatchLocation(
-  chunks: AiSearchSearchResponse["chunks"],
-): AiSearchSearchResponse["chunks"] {
-  const best = new Map<string, AiSearchSearchResponse["chunks"][number]>();
-  for (const chunk of chunks) {
-    const metadata = chunk.item.metadata ?? {};
-    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
-    const narrowed =
-      storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text);
-    // narrowStreamRefToChunk returns the stored ref UNCHANGED when the chunk
-    // text carries no offset headers (the continuation slice of one oversized
-    // event) — identical for every such chunk in the segment, though they are
-    // DISTINCT matches (possibly of different giant events). Give those their
-    // own identity via the chunk text: over-keeping beats collapsing real
-    // matches. Non-stream documents narrow to the whole-object ref by design
-    // and keep whole-document identity — every chunk of one file leads to the
-    // same domain object.
-    const narrowedToWindow = narrowed !== undefined && narrowed !== storedRef;
-    const isStreamDocument = metadata.kind === "streams";
-    const identity = narrowedToWindow
-      ? `${chunk.item.key}#${JSON.stringify(narrowed)}`
-      : isStreamDocument
-        ? `${chunk.item.key}#raw:${chunk.text.slice(0, 120)}`
-        : chunk.item.key;
-    const existing = best.get(identity);
-    if (existing === undefined || chunk.score > existing.score) best.set(identity, chunk);
-  }
-  return [...best.values()];
-}
-
-/**
- * Search everything this project has accumulated — every conversation (web
- * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
- * stream event, itx.files object, repo file, and custom document — with
- * semantic + keyword retrieval. Every hit carries a `ref` expression that
- * fetches the exact source back, so a result is never a dead end.
- *
- * Mechanics: one Cloudflare AI Search instance per project (born with the
- * project), indexing only that project's slice of the deployment's corpus
- * bucket — tenancy is structural, not a query filter.
- */
-class SearchRpcTarget extends IterateRpcTarget<"Search"> {
-  constructor(
-    readonly props: { auth: ItxAuth; projectId: string; capabilityHost: CapabilityHostRpcTarget },
-  ) {
-    super();
-    props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  async __describe(): Promise<Description> {
-    return describeNode({
-      instructions:
-        "Search the project's PAST: every conversation (web chat, Slack, email, Telegram), " +
-        "webhook (GitHub, Slack), stream event, file, and repo file is indexed — semantic + " +
-        "keyword, so ask a plain question. Two searches, one rule: itx.docs.search finds HOW " +
-        "(example code, types, capabilities); itx.search.query finds WHAT (this project's own " +
-        "content and history — the top docs hits federate in automatically; docs is not a " +
-        'source — use exclude: ["docs"] to drop them). query({ q }) returns ' +
-        "scored chunks; hits carry a `ref` — an itx EXPRESSION ARRAY leading back to the domain " +
-        'object: ["streams", ["get", path], ["getEvents", { afterOffset, beforeOffset }]] for ' +
-        'stream events, ["files", ["get", path]], ["repos", ["get", repoPath], ["readFile", ' +
-        '{ path }]], or ["docs", ["get", { name }]]. Evaluate a ref by walking it: let v = itx; ' +
-        "for (const step of ref) v = typeof step === 'string' ? v[step] : await v[step[0]]" +
-        "(...step.slice(1)); — plus `kind` and a human-readable `context` on every hit. " +
-        "answer({ q }) generates a cited answer. Narrow with source " +
-        '("streams" | "files" | "repos") or exclude kinds; options: limit (1–50), ' +
-        "scoreThreshold, rewriteQuery. indexEvent({ stream, offset, note? }) pins one event by " +
-        "coordinates; index({ kind, id, text, ref, title?, context? }) adds a standalone " +
-        "document (ref REQUIRED — the itx expression back to the source); " +
-        "indexStream/indexRepo/backfillFiles backfill one unit, reindex() sweeps the whole " +
-        "project (all streams + repos + files). Everything indexes automatically except " +
-        "ephemeral and stream-housekeeping events. Explicit index verbs are searchable in ~a " +
-        "minute; automatic mirroring can lag up to the hourly sync. Noisy first page? REFINE, " +
-        "don't abandon: drop filler words (slack/message/conversation match every webhook), " +
-        'quote exact tokens ("superfart"), add source/exclude — one refined query beats a ' +
-        "vendor-API detour.",
-      children: {
-        answer: "RAG answer over the project corpus + docs, with cited source chunks.",
-        backfillFiles: "Re-mirror every existing itx.files object into the search corpus.",
-        ensureIndex:
-          "Ensure the search instance exists — you normally never need this (created at project " +
-          "birth; query/index self-heal). To rebuild content, see reindex.",
-        index:
-          "Add/replace one standalone document ({ kind, id, text, ref, title?, context? }) — " +
-          "ref (itx expression) is required.",
-        indexEvent:
-          "Pin/annotate: make ONE stream event a first-class search document " +
-          "({ path, offset, note? }) — its hit's ref leads back to exactly it.",
-        indexRepo:
-          "Backfill/repair (rarely needed — indexing is automatic): snapshot one repo's HEAD now.",
-        indexStream:
-          "Backfill/repair (rarely needed — indexing is automatic): re-index one stream from offset 0.",
-        reindex:
-          "Backfill/repair the WHOLE project — every stream, repo, and file; idempotent, re-runnable.",
-        query:
-          "Retrieve scored, kind-tagged chunks matching a query (with source/exclude filters).",
-      },
-      parent: "a project itx (itx.search)",
-    });
-  }
-
-  get #instance(): AiSearchInstance {
-    return env.SEARCH_INSTANCES.get(projectSearchInstanceId(this.props.projectId));
-  }
-
-  #searchOptions(
-    input: {
-      limit?: number;
-      rewriteQuery?: boolean;
-      scoreThreshold?: number;
-      source?: string;
-      exclude?: readonly string[];
-    },
-    options?: { expandContext?: boolean },
-  ): AiSearchOptions {
-    return {
-      retrieval: {
-        filters: searchFilters({
-          projectId: this.props.projectId,
-          // Platform kinds pass through; custom kinds are re-normalized by
-          // the same rules index() wrote them under; "docs" throws (it is
-          // federated, never stored).
-          source: input.source === undefined ? undefined : normalizeSearchSource(input.source),
-          // "docs" is federated, never in the R2 corpus, so it can't be an R2
-          // filter; drop it here and let #federatedDocs honour the exclusion.
-          excludeKinds:
-            input.exclude === undefined
-              ? undefined
-              : normalizeSearchExcludeKinds(input.exclude).filter((kind) => kind !== "docs"),
-        }),
-        // Tuned for GENEROUS INCLUSION (Jonas, 2026-07-13): recall over
-        // precision — a downstream fast-LLM pass can always filter the result
-        // set in conversation context, but a hit that never surfaces is gone.
-        // Defaults beat the instance's (10 results, 0.4 threshold); explicit
-        // caller values still win.
-        max_num_results: input.limit ?? DEFAULT_RESULT_ROWS,
-        match_threshold: input.scoreThreshold ?? 0.2,
-        // OR-mode keyword matching: dogfooding showed the default AND-mode
-        // misses exact-token queries whose terms don't co-occur in one chunk;
-        // hybrid rrf fusion keeps precision.
-        keyword_match_mode: "or",
-        // Neighbor expansion triples every chunk's text. Worth it ONLY where
-        // a model reads the chunks server-side (answer's RAG generation);
-        // query() consumers judge relevance and follow `ref` for the full
-        // source, so expansion just bloats the wire (live: it pushed a
-        // default query to the spill edge).
-        context_expansion: options?.expandContext ? 1 : 0,
-      },
-      query_rewrite: input.rewriteQuery === undefined ? undefined : { enabled: input.rewriteQuery },
-    };
-  }
-
-  /** Map one AI Search chunk to a provenance-carrying result. */
-  #toChunk(chunk: AiSearchSearchResponse["chunks"][number], query: string): SearchResultChunk {
-    const metadata = chunk.item.metadata ?? {};
-    const storedRef = typeof metadata.ref === "string" ? parseStoredRef(metadata.ref) : undefined;
-    // Rows carry a short match snippet, never whole chunks (Jonas's design:
-    // "kind, metadata, matching couple of sentences, date" — the ref gets
-    // the whole thing). Chunk text stays server-side.
-    return {
-      filename: chunk.item.key,
-      score: chunk.score,
-      content: extractMatchSnippet(chunk.text, query, SNIPPET_CHARS),
-      date:
-        typeof chunk.item.timestamp === "number"
-          ? new Date(chunk.item.timestamp * (chunk.item.timestamp < 1e12 ? 1000 : 1)).toISOString()
-          : undefined,
-      kind: typeof metadata.kind === "string" ? metadata.kind : undefined,
-      context: typeof metadata.context === "string" ? metadata.context : undefined,
-      // Every corpus writer stores `ref` — the serialized itx expression back
-      // to the domain object. Parse defensively (a hit without one is still a
-      // valid result), then narrow stream refs to the exact events the chunk
-      // contains — the stored ref covers the whole storage segment.
-      ref: storedRef === undefined ? undefined : narrowStreamRefToChunk(storedRef, chunk.text),
-    };
-  }
-
-  /**
-   * Federated `docs` results: itx.docs is a static in-worker keyword index
-   * (examples + types + this scope's mounted capabilities), not part of the R2
-   * corpus, so query() merges it in unless docs are excluded / a different
-   * source is pinned. Docs scores are keyword-overlap counts, not comparable
-   * to the corpus's relevance scores — a descending band from 0.5 keeps
-   * strong corpus hits on top while docs still surface mid-list.
-   */
-  async #federatedDocs(input: {
-    query: string;
-    source?: string;
-    exclude?: readonly string[];
-    limit?: number;
-  }): Promise<SearchResultChunk[]> {
-    if (input.source !== undefined) return []; // a corpus source was pinned
-    if (
-      input.exclude !== undefined &&
-      normalizeSearchExcludeKinds(input.exclude).includes("docs")
-    ) {
-      return [];
-    }
-    const docs = new ItxDocsRpcTarget({ capabilityHost: this.props.capabilityHost });
-    const hits = await docs.search({ q: input.query });
-    return hits.slice(0, Math.min(input.limit ?? 5, 5)).map((hit, index) => ({
-      filename: hit.fetchCall,
-      score: 0.5 - index * 0.02,
-      content: hit.summary,
-      kind: "docs",
-      context: `${hit.kind}: ${hit.name} — fetch with ${hit.fetchCall}`,
-      ref: ["docs", ["get", { name: hit.name }]] as ItxExpression,
-    }));
-  }
-
-  /**
-   * A missing instance is the expected first-touch state: create it (its
-   * first sync then indexes the project's existing corpus slice) and tell the
-   * caller the index is warming instead of failing.
-   */
-  async #ensureInstanceAfterMiss(error: unknown): Promise<string> {
-    try {
-      const { created } = await ensureProjectSearchInstance(this.props.projectId);
-      return created
-        ? "Search instance created for this project; the first index is in progress — retry shortly."
-        : `AI Search request failed: ${String(error).slice(0, 200)}`;
-    } catch (provisionError) {
-      return `AI Search instance provisioning failed: ${String(provisionError).slice(0, 200)}`;
-    }
-  }
-
-  /**
-   * Ensure this project's search instance exists (idempotent). The project
-   * CREATE SAGA calls this so search is warm from birth; the lazy
-   * query/index paths remain as self-heal for projects that predate it.
-   * Safe to call any time — an existing instance is a no-op.
-   */
-  async ensureIndex(): Promise<{ created: boolean }> {
-    const { created } = await ensureProjectSearchInstance(this.props.projectId);
-    return { created };
-  }
-
-  /**
-   * Retrieve scored chunks matching a query, scoped to this project's own
-   * search instance. Merges the corpus (streams/files/repos/custom kinds)
-   * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. ONE row per MATCH — distinct event
-   * windows within one stream segment stay distinct rows (full-text-search
-   * semantics); only same-location re-scores collapse. Rows are TINY: kind,
-   * date, context, a ~2-sentence snippet around the match, and the ref that
-   * fetches the whole thing — so the default 30 rows read at a glance and a
-   * result set stays well inside one inline script return. Docs hits carry
-   * synthetic 0.5-band
-   * scores (not comparable to corpus relevance), ride on top of `limit`
-   * corpus chunks (their own cap: min(limit, 5)), and ignore
-   * `scoreThreshold`. On a
-   * project whose instance doesn't exist yet, the instance is created and
-   * docs results return with a `warning` — retry once its first index
-   * completes (typically a minute or two). A warning-free empty result means
-   * the index is live and simply has no match.
-   */
-  async query(input: {
-    q: string;
-    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */
-    limit?: number;
-    /** Rewrite the query for retrieval first (extra LLM call). */
-    rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
-    scoreThreshold?: number;
-    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
-    source?: string;
-    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
-    exclude?: readonly string[];
-  }): Promise<SearchQueryResult> {
-    const [corpus, docs] = await Promise.allSettled([
-      this.#instance.search({ query: input.q, ai_search_options: this.#searchOptions(input) }),
-      this.#federatedDocs({
-        query: input.q,
-        source: input.source,
-        exclude: input.exclude,
-        limit: input.limit,
-      }),
-    ]);
-    // Docs are in-worker and must not be lost to a corpus outage; the reverse
-    // (docs failing) is a real bug worth surfacing, so it still throws.
-    if (docs.status === "rejected") throw docs.reason;
-    if (corpus.status === "rejected") {
-      const warning = await this.#ensureInstanceAfterMiss(corpus.reason);
-      if (input.source !== undefined) return { searchQuery: input.q, results: [], warning };
-      return { searchQuery: input.q, results: docs.value, warning };
-    }
-    const deduped = dedupeChunksByMatchLocation(corpus.value.chunks);
-    const results = [...deduped.map((chunk) => this.#toChunk(chunk, input.q)), ...docs.value].sort(
-      (a, b) => b.score - a.score,
-    );
-    return { searchQuery: corpus.value.search_query, results };
-  }
-
-  /**
-   * Retrieve matching chunks AND generate an answer from them (RAG). Same
-   * first-touch grammar as `query`: on a project whose instance doesn't
-   * exist yet, the instance is created and an empty-response result returns
-   * with a `warning` — retry shortly. `searchQuery` echoes the input
-   * verbatim (never the rewritten query).
-   */
-  async answer(input: {
-    q: string;
-    limit?: number;
-    rewriteQuery?: boolean;
-    scoreThreshold?: number;
-    source?: string;
-    exclude?: readonly string[];
-    /** Optional system prompt for the answer generation. */
-    systemPrompt?: string;
-  }): Promise<SearchAnswerResult> {
-    // Validation (bad source/exclude) throws HERE, outside the degrade path:
-    // an invalid request is the caller's bug, never a warning — mirroring
-    // query(), whose #searchOptions also runs before any catch.
-    const searchOptions = this.#searchOptions(input, { expandContext: true });
-    let response: AiSearchChatCompletionsResponse;
-    try {
-      response = await this.#instance.chatCompletions({
-        messages: [
-          ...(input.systemPrompt === undefined
-            ? []
-            : [{ role: "system" as const, content: input.systemPrompt }]),
-          { role: "user" as const, content: input.q },
-        ],
-        ai_search_options: searchOptions,
-      });
-    } catch (error) {
-      // Degrade exactly like query(): one failure grammar for the whole door.
-      const warning = await this.#ensureInstanceAfterMiss(error);
-      return { response: "", searchQuery: input.q, results: [], warning };
-    }
-    return {
-      response: response.choices[0]?.message.content ?? "",
-      searchQuery: input.q,
-      results: response.chunks.map((chunk) => this.#toChunk(chunk, input.q)),
-    };
-  }
-
-  /**
-   * Add (or replace) one document in the search corpus — the general
-   * mechanism to make derived content (summaries, notes, digests) findable
-   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
-   * domain object the text derives from (e.g. `["streams", ["get", path],
-   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
-   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
-   * not be a reserved platform kind (streams/files/repos/docs); the
-   * serialized ref caps at 500 chars. `id` is stable within
-   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
-   * the one-line descriptor shown on every hit and to the answer model.
-   */
-  async index(input: {
-    kind: string;
-    id: string;
-    text: string;
-    /** The itx expression that leads back to the source domain object. */
-    ref: ItxExpression;
-    title?: string;
-    context?: string;
-  }): Promise<{ key: string }> {
-    const result = await indexDocument({ ...input, projectId: this.props.projectId });
-    // First index() bootstraps the project's instance; the sync trigger makes
-    // the document searchable in seconds instead of the hourly schedule.
-    await ensureProjectSearchInstance(this.props.projectId);
-    await triggerProjectSearchSync(this.props.projectId);
-    return result;
-  }
-
-  /**
-   * Pin one stream event into the search corpus by its coordinates — the
-   * domain-object way to make a specific moment findable. The event's content
-   * is read from the stream (never trusted from the caller) and indexed as a
-   * focused document together with the optional `note`; the search hit's
-   * `ref` is the itx expression fetching exactly that event. Idempotent per
-   * (stream, offset).
-   */
-  async indexEvent(
-    input: (
-      | {
-          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
-          path: string;
-          stream?: undefined;
-        }
-      | {
-          /** Alias for `path` (the original name of this parameter). */
-          stream: string;
-          path?: undefined;
-        }
-    ) & {
-      /** The event's offset on that stream. */
-      offset: number;
-      /** Optional annotation, indexed alongside the event ("decision made here"). */
-      note?: string;
-    },
-  ): Promise<{ key: string }> {
-    const streamPath = input.path ?? input.stream;
-    if (streamPath === undefined) {
-      // Unreachable for TS callers (the union requires one); itx callers are
-      // dynamic, so keep the runtime guard with a pointed message.
-      throw new Error("indexEvent needs the stream path: { path, offset }");
-    }
-    const path = normalizePath(streamPath);
-    const streamStub = env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: this.props.projectId, path },
-        { allowNullProjectId: true },
-      ),
-    );
-    const [event] = await streamStub.getEvents({
-      afterOffset: input.offset - 1,
-      beforeOffset: input.offset + 1,
-      limit: 1,
-    });
-    if (event === undefined) {
-      throw new Error(`no event at offset ${input.offset} on stream ${path}`);
-    }
-    const result = await indexPinnedStreamEvent({
-      projectId: this.props.projectId,
-      event,
-      note: input.note,
-    });
-    await ensureProjectSearchInstance(this.props.projectId);
-    await triggerProjectSearchSync(this.props.projectId);
-    return result;
-  }
-
-  /**
-   * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
-   */
-  async indexStream(input: { path: string }): Promise<{ segments: number }> {
-    const streamStub = env.STREAM.getByName(
-      DurableObjectNameCodec.stringify(
-        { projectId: this.props.projectId, path: normalizePath(input.path) },
-        { allowNullProjectId: true },
-      ),
-    );
-    const result = await indexEntireStream({
-      projectId: this.props.projectId,
-      path: normalizePath(input.path),
-      readEvents: (args) => streamStub.getEvents(args),
-    });
-    await ensureProjectSearchInstance(this.props.projectId);
-    await triggerProjectSearchSync(this.props.projectId);
-    return result;
-  }
-
-  /**
-   * Snapshot one repo's default-branch HEAD into the search corpus now — the
-   * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing. Returned
-   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
-   * files, and a nonzero `failed` means re-run.
-   */
-  async indexRepo(input: { path: string }): Promise<{
-    deleted: number;
-    indexed: number;
-    skipped: number;
-    failed: number;
-  }> {
-    const result = await env.REPO.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.props.projectId,
-        path: normalizePath(input.path),
-      }),
-    ).reindexSearch();
-    await ensureProjectSearchInstance(this.props.projectId);
-    await triggerProjectSearchSync(this.props.projectId);
-    return result;
-  }
-
-  /**
-   * Re-mirror every existing itx.files object into the search corpus — the
-   * backfill verb for files that predate search indexing (puts mirror
-   * incrementally from here on). Counts reflect the actual mirror outcome:
-   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
-   */
-  async backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }> {
-    const counts = { mirrored: 0, skipped: 0, failed: 0 };
-    for await (const file of listProjectFiles(this.props.projectId)) {
-      const outcome = await mirrorFileToSearchIndex({
-        ...file,
-        projectId: this.props.projectId,
-      });
-      counts[outcome] += 1;
-    }
-    await ensureProjectSearchInstance(this.props.projectId);
-    await triggerProjectSearchSync(this.props.projectId);
-    return counts;
-  }
-
-  /**
-   * Reindex the WHOLE project — every known stream, every repo's default
-   * branch, every itx.files object — in one crude, idempotent sweep. This is
-   * the backfill/repair verb for projects that predate search indexing (new
-   * writes index automatically); every unit overwrites its own corpus keys,
-   * so re-running (including after a timeout on a huge project) only fills
-   * gaps. Streams run a few at a time; expect minutes on large projects. Per
-   * unit failures are counted, never thrown — nonzero `failed` means re-run.
-   */
-  async reindex(): Promise<{
-    streams: { indexed: number; segments: number; failed: number };
-    repos: { indexed: number; failed: number };
-    files: { mirrored: number; skipped: number; failed: number };
-  }> {
-    const state = await projectProcessorState(this.props.projectId);
-    const streams = { indexed: 0, segments: 0, failed: 0 };
-    const queue = [...state.streams];
-    await Promise.all(
-      Array.from({ length: 5 }, async () => {
-        for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
-          const path = normalizePath(item.path);
-          try {
-            const streamStub = env.STREAM.getByName(
-              DurableObjectNameCodec.stringify(
-                { projectId: this.props.projectId, path },
-                { allowNullProjectId: true },
-              ),
-            );
-            const { segments } = await indexEntireStream({
-              projectId: this.props.projectId,
-              path,
-              readEvents: (args) => streamStub.getEvents(args),
-            });
-            streams.indexed += 1;
-            streams.segments += segments;
-          } catch (error) {
-            console.warn(`search reindex: stream ${path} failed: ${String(error)}`);
-            streams.failed += 1;
-          }
-        }
-      }),
-    );
-    const repos = { indexed: 0, failed: 0 };
-    for (const repo of state.repos) {
-      try {
-        await env.REPO.getByName(
-          DurableObjectNameCodec.stringify({
-            projectId: this.props.projectId,
-            path: normalizePath(repo.path),
-          }),
-        ).reindexSearch();
-        repos.indexed += 1;
-      } catch (error) {
-        console.warn(`search reindex: repo ${repo.path} failed: ${String(error)}`);
-        repos.failed += 1;
-      }
-    }
-    const files = await this.backfillFiles(); // also ensures the instance + triggers the sync
-    return { streams, repos, files };
   }
 }
 
@@ -4966,26 +4467,48 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
 
     const creatorEmail = userPrincipalOf(this.props.auth)?.email;
     const appendRootEvents = () =>
-      stream.append(
-        {
-          type: "events.iterate.com/project/created",
-          idempotencyKey: `project-created:${registered.projectId}`,
-          payload: {
-            config: {
-              onboardingActive: true,
-              slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+      retryStreamUnavailableOnce(
+        () =>
+          stream.append(
+            {
+              type: "events.iterate.com/project/created",
+              idempotencyKey: `project-created:${registered.projectId}`,
+              payload: {
+                config: {
+                  onboardingActive: true,
+                  slug: registered.slug,
+                  ...(creatorEmail === undefined ? {} : { creatorEmail }),
+                },
+              },
             },
-          },
-        },
-        buildDurableObjectProcessorSubscriptionConfiguredEvent({
-          durableObjectName: streamDurableObjectName({
+            NotificationProcessorContract.buildEvent({
+              type: "events.iterate.com/notification/created",
+              idempotencyKey: `notification-created:${registered.projectId}`,
+              payload: { config: {} },
+            }),
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: streamDurableObjectName({
+                projectId: registered.projectId,
+                path: "/",
+              }),
+              processor: ["processor"],
+              processorSlug: ProjectProcessorContract.slug,
+            }),
+            buildDurableObjectProcessorSubscriptionConfiguredEvent({
+              durableObjectName: streamDurableObjectName({
+                projectId: registered.projectId,
+                path: "/",
+              }),
+              processor: ["notificationProcessor"],
+              processorSlug: NotificationProcessorContract.slug,
+            }),
+          ),
+        (error) => {
+          console.info("project create: root stream lifecycle reset; replaying birth batch once", {
             projectId: registered.projectId,
-            path: "/",
-          }),
-          processor: ["processor"],
-          processorSlug: ProjectProcessorContract.slug,
-        }),
+            message: error instanceof Error ? error.message : String(error),
+          });
+        },
       );
     const [created, subscription] = await timedStep(
       "create-timing",
@@ -5433,10 +4956,12 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   capabilityHosts:
     'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
   debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
+  devices:
+    "Enrolled phone devices: list() discovers safe metadata; get(deviceId).append(...) requests a push notification.",
   egress: "Project-attributed outbound fetch (+ intercept).",
   email:
     "First-party email: send({ to, subject, text, html, attachments? }) from the project's own address (<slug>@<hostname base>); explicit `from` must match it. Attachments: project files by path or inline base64. Email thread agents (/agents/email/t<id>) reply with email.reply({ text, attachments? }).",
-  docs: 'Find working code + types (HOW — for project content/history see itx.search): search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
+  docs: 'Find working code + types: search({ q: "many related words" }) over the example-script catalogue, type declarations, and mounted capabilities; get({ name }) fetches one.',
   files:
     "Project file storage: files.get(path) → put({ data, contentType }), bytes(), url() (signed public link), delete(). Agent scopes: prefer itx.agent.addFiles to store AND attach in one call.",
   integrations:
@@ -5455,8 +4980,6 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   revokeCapability: "Shortcut: remove a mount from THIS scope.",
   sandboxes:
     "The project's sandboxes (pets): create({ name, instanceType }), get(path), list(); start/sleep/destroy live on the sandbox.",
-  search:
-    "Search the project's PAST — every conversation (chat/Slack/email/Telegram), webhook (GitHub/Slack), stream event, file, and repo file is indexed: query({ q }) returns scored chunks, each with a ref expression back to the exact source; answer({ q }) gives a cited answer. Search before paging streams with getEvents.",
   scheduler:
     'The default project Scheduler (= schedulers.get("/scheduler/primary")): set({ key, recurrence, script }) runs an itx script on a schedule; cancel(key), list(), trigger(key).',
   schedulers: "Scheduler catalog: get(path) for extra /scheduler/** instances.",
@@ -5504,6 +5027,7 @@ type ProjectRpcTargetProps = {
  */
 type ProjectDurableObjectRpc = {
   liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+  notificationProcessor: PromiseLike<StreamProcessorRpc>;
   incrementLiveDemo(): Promise<void>;
   indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
 };
@@ -5673,6 +5197,18 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** @internal Wake door for the notification-policy processor hosted beside
+   * the public project processor. Persisted stream delivery resolves this
+   * member through the project itx, but generated user APIs must not expose
+   * processor-host plumbing as a product capability. */
+  get notificationProcessor(): WakeableStreamProcessorRpc {
+    return new ProcessorRelayRpcTarget({
+      auth: this.#props.auth,
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+      processorFacade: (host) => (host as unknown as ProjectDurableObjectRpc).notificationProcessor,
+    });
+  }
+
   /** The project DO's methods this isolate reaches — typed once (see {@link ProjectDurableObjectRpc}). */
   get #projectDo(): ProjectDurableObjectRpc {
     return this.durableObjectStub as unknown as ProjectDurableObjectRpc;
@@ -5801,7 +5337,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** The docs door: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
-   * overlap. For project CONTENT and history, see itx.search. */
+   * overlap. */
   get docs(): ItxDocsRpcTarget {
     return new ItxDocsRpcTarget({ capabilityHost: this.#props.capabilityHost });
   }
@@ -5858,21 +5394,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
+  /** Enrolled phone installations and their durable notification journals. */
+  get devices(): DeviceCollectionRpcTarget {
+    return new DeviceCollectionRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#props.projectId,
+    });
+  }
+
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   get sandboxes(): SandboxCollectionRpcTarget {
     return new SandboxCollectionRpcTarget({
       auth: this.#props.auth,
       projectId: this.#props.projectId,
-    });
-  }
-
-  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
-  get search(): SearchRpcTarget {
-    return new SearchRpcTarget({
-      auth: this.#props.auth,
-      projectId: this.#props.projectId,
-      capabilityHost: this.#props.capabilityHost,
     });
   }
 
@@ -5935,26 +5470,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   // stream's subscription expression names `["processEventBatch"]` — the
   // INTENT, not the implementation — so envelope evolution happens here in
   // deployment code instead of by patching user repos, and first-party
-  // per-event work joins the same ordered, checkpointed delivery. Stream and
-  // stream-index writes are awaited: a failed write rejects into the spine
-  // and is retried rather than acknowledging stale live state. Same
-  // access model as worker.processEventBatch itself: any project principal.
+  // per-event work joins the same ordered, checkpointed delivery. Same access
+  // model as worker.processEventBatch itself: any project principal.
   async processEventBatch(batch: StreamPushEventBatch): Promise<void> {
     await this.#indexCommittedBatchFacts(batch);
-    // Search is a derived mirror, so schedule it independently of the user
-    // worker outcome: a batch that the delivery spine eventually poison-skips
-    // must still be searchable. waitUntil keeps it off the authoritative
-    // acknowledgement path, while the isolate-wide per-stream tail preserves
-    // ordering across cached project-target remints.
-    if (batch.projectId !== null) {
-      this.#props.ctx.waitUntil(
-        enqueueAutomaticStreamIndex({
-          projectId: batch.projectId,
-          path: batch.path,
-          run: () => this.#indexStreamSearch(batch),
-        }),
-      );
-    }
     try {
       await this.worker.processEventBatch(batch);
     } catch (error) {
@@ -5989,36 +5508,6 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         maxOffset: batch.streamMaxOffset,
       },
     });
-  }
-
-  /**
-   * SPIKE platform step: mirror the batch's stream events into the itx.search
-   * corpus (domains/search/search-index.ts) as fixed 100-offset segment
-   * documents. It is idempotent (segment docs are deterministic rewrites),
-   * queued in delivery order under waitUntil, and MUST NOT throw — only the
-   * worker delegation may reject into the spine's retry. Re-reading each
-   * touched segment's full range means a transient failure self-heals on the
-   * next batch in that segment (see indexStreamEventBatch).
-   */
-  async #indexStreamSearch(batch: StreamPushEventBatch): Promise<void> {
-    if (batch.projectId === null) return;
-    try {
-      const streamStub = env.STREAM.getByName(
-        DurableObjectNameCodec.stringify(
-          { projectId: batch.projectId, path: batch.path },
-          { allowNullProjectId: true },
-        ),
-      );
-      await indexStreamEventBatch({
-        batch,
-        readEvents: (args) => streamStub.getEvents(args),
-      });
-      // Freshness: nudge the project's instance (if one exists) so passive
-      // content is searchable in minutes, not on the hourly schedule.
-      await triggerProjectSearchSyncDebounced(batch.projectId);
-    } catch (error: unknown) {
-      console.warn("search index stream batch failed", { path: batch.path, error });
-    }
   }
 
   /**
@@ -6559,8 +6048,7 @@ const PROJECT_CONTEXT_EXAMPLES = ITX_EXAMPLES.filter((example) => example.contex
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
  * which is why every docstring here tells callers to pass MANY related words
- * — recall comes from the query, not the engine. (For semantic search over
- * the project's own content and history, see itx.search.)
+ * — recall comes from the query, not the engine.
  */
 class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
   readonly #capabilityHost: CapabilityHostRpcTarget;
@@ -6574,7 +6062,6 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     return describeNode({
       instructions:
         "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
-        "Two searches, one rule: THIS door finds HOW (code, types, capabilities); itx.search.query finds WHAT (the project's own content and history). " +
         'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
         "get({ name }) fetches what a hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
         "typecheck({ code }) compiles an `async (itx) => { … }` script against this scope's types without running it.",
@@ -6597,8 +6084,7 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
    * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc. (For the
-   * project's own content and history, see itx.search.)
+   * the ready-made docs.get call that fetches its full doc.
    */
   async search(input: { q: string }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];

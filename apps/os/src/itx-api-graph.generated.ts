@@ -38,7 +38,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. The composable partner of\n   * `projects.create({ waitUntilReady: false })`.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. For project CONTENT and history, see itx.search. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */\n  search: Search;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Resolve once the bootstrap saga has committed `project/ready`. Replays\n   * stream history first, so an already-ready project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. The composable partner of\n   * `projects.create({ waitUntilReady: false })`.\n   */\n  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with Iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — subscribe to a\n   * stream (or configure a subscription) instead.\n   */\n  processEventBatch(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -77,10 +77,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       openapi: "Ad-hoc OpenAPI clients: connect(spec).",
       parallel: "Parallel API, preconfigured with Iterate's platform API key.",
       repos: "Repo catalog by path.",
+      devices: "Enrolled phone installations and their durable notification journals.",
       sandboxes:
         "The project's sandboxes — explicitly created, sized Linux containers (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}.",
-      search:
-        "Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search).",
       scheduler:
         'The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`.',
       schedulers:
@@ -124,8 +123,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "OpenApiCollection",
       "OpenApiRpc",
       "ProjectRepoCollection",
+      "DeviceCollection",
       "SandboxCollection",
-      "Search",
       "Scheduler",
       "SchedulerCollection",
       "SecretCollection",
@@ -423,7 +422,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Docs",
     kind: "interface",
     sourceText:
-      '/**\n * The docs door: search + fetch over everything callable from this scope —\n * the platform\'s example scripts (most are proven: the test suite runs them\n * unattended against a live project on every change; the rest are marked\n * interactive), the public type surface (the Itx Type Graph), and the\n * capabilities reachable from the caller\'s scope. One door for "how do I\n * X?": search first, fetch what the hits name, adapt working code.\n *\n * The search mechanism is deliberately dumb (word matching, no embeddings),\n * which is why every docstring here tells callers to pass MANY related words\n * — recall comes from the query, not the engine. (For semantic search over\n * the project\'s own content and history, see itx.search.)\n */\nexport interface Docs {\n  __describe(): Promise<Description>;\n  /**\n   * Find examples, types, and mounted capabilities. Pass MANY related words —\n   * matching is dumb word overlap, so more synonyms means better recall:\n   * `search({ q: "file upload attachment bytes store image" })`, not\n   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as\n   * noise and a word matching a row\'s NAME counts double, so `"itx.docs"`,\n   * `"worker"`, or `"agents"` rank their subject first instead of every row\n   * that mentions the word. Example hits are working scripts — prefer copying\n   * them over writing calls from scratch. Each hit\'s `fetchCall` field holds\n   * the ready-made docs.get call that fetches its full doc. (For the\n   * project\'s own content and history, see itx.search.)\n   */\n  search(input: { q: string }): Promise<DocsSearchHit[]>;\n  /**\n   * Fetch one entry by the name a search hit gave you. An example name\n   * returns its full script, annotated with its provenance (most examples\n   * run unattended against a live project in the platform\'s test suite; the\n   * rest are marked interactive); a type declaration name returns its\n   * TypeScript source plus as much of its reference closure as fits\n   * `maxTokens` (default 1500), ending with a comment naming anything left\n   * out and how to fetch it; a mounted capability\'s dotted path (say\n   * "tools.weather") returns its instructions and types plus the platform\n   * declarations those types reference, same budget rules.\n   */\n  get(input: { name: string; maxTokens?: number }): Promise<string>;\n  /**\n   * Typecheck an `async (itx) => { … }` script against this scope\'s surface —\n   * the platform types plus every mounted capability\'s types (npm-backed\n   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a\n   * clean result does not promise the script works, but a typo like\n   * `itx.streams.gett(...)` comes back as a compiler error with a\n   * did-you-mean instead of costing a failed run.\n   */\n  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;\n}',
+      '/**\n * The docs door: search + fetch over everything callable from this scope —\n * the platform\'s example scripts (most are proven: the test suite runs them\n * unattended against a live project on every change; the rest are marked\n * interactive), the public type surface (the Itx Type Graph), and the\n * capabilities reachable from the caller\'s scope. One door for "how do I\n * X?": search first, fetch what the hits name, adapt working code.\n *\n * The search mechanism is deliberately dumb (word matching, no embeddings),\n * which is why every docstring here tells callers to pass MANY related words\n * — recall comes from the query, not the engine.\n */\nexport interface Docs {\n  __describe(): Promise<Description>;\n  /**\n   * Find examples, types, and mounted capabilities. Pass MANY related words —\n   * matching is dumb word overlap, so more synonyms means better recall:\n   * `search({ q: "file upload attachment bytes store image" })`, not\n   * `search({ q: "files" })`. API-name queries work too: "itx" is dropped as\n   * noise and a word matching a row\'s NAME counts double, so `"itx.docs"`,\n   * `"worker"`, or `"agents"` rank their subject first instead of every row\n   * that mentions the word. Example hits are working scripts — prefer copying\n   * them over writing calls from scratch. Each hit\'s `fetchCall` field holds\n   * the ready-made docs.get call that fetches its full doc.\n   */\n  search(input: { q: string }): Promise<DocsSearchHit[]>;\n  /**\n   * Fetch one entry by the name a search hit gave you. An example name\n   * returns its full script, annotated with its provenance (most examples\n   * run unattended against a live project in the platform\'s test suite; the\n   * rest are marked interactive); a type declaration name returns its\n   * TypeScript source plus as much of its reference closure as fits\n   * `maxTokens` (default 1500), ending with a comment naming anything left\n   * out and how to fetch it; a mounted capability\'s dotted path (say\n   * "tools.weather") returns its instructions and types plus the platform\n   * declarations those types reference, same budget rules.\n   */\n  get(input: { name: string; maxTokens?: number }): Promise<string>;\n  /**\n   * Typecheck an `async (itx) => { … }` script against this scope\'s surface —\n   * the platform types plus every mounted capability\'s types (npm-backed\n   * `import("pkg")` types resolve too) — WITHOUT running it. Advisory: a\n   * clean result does not promise the script works, but a typo like\n   * `itx.streams.gett(...)` comes back as a compiler error with a\n   * did-you-mean instead of costing a failed run.\n   */\n  typecheck(input: { code: string }): Promise<{ ok: boolean; problems: string[] }>;\n}',
     summary:
       "The docs door: search + fetch over everything callable from this scope — the platform's example scripts (most are proven: the test suite runs them unattended against a live project on every change; the rest are marked interactive), the public type surface (the Itx Type Graph), and the capabilities reachable from the caller's scope.",
     memberSummaries: {
@@ -532,6 +531,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["RepoCollection", "StreamListItem"],
   },
   {
+    name: "DeviceCollection",
+    kind: "interface",
+    sourceText:
+      "/** Enrolled mobile installations within one project. */\nexport interface DeviceCollection {\n  __describe(): Promise<Description>;\n  get(deviceId: string): Device;\n  list(): Promise<DeviceDescription[]>;\n}",
+    summary: "Enrolled mobile installations within one project.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description", "Device", "DeviceDescription"],
+  },
+  {
     name: "SandboxCollection",
     kind: "interface",
     sourceText:
@@ -554,38 +562,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "SandboxInstanceType",
       "CloudflareSandbox",
       "StreamListItem",
-    ],
-  },
-  {
-    name: "Search",
-    kind: "interface",
-    sourceText:
-      '/**\n * Search everything this project has accumulated — every conversation (web\n * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),\n * stream event, itx.files object, repo file, and custom document — with\n * semantic + keyword retrieval. Every hit carries a `ref` expression that\n * fetches the exact source back, so a result is never a dead end.\n *\n * Mechanics: one Cloudflare AI Search instance per project (born with the\n * project), indexing only that project\'s slice of the deployment\'s corpus\n * bucket — tenancy is structural, not a query filter.\n */\nexport interface Search {\n  __describe(): Promise<Description>;\n  /**\n   * Ensure this project\'s search instance exists (idempotent). The project\n   * CREATE SAGA calls this so search is warm from birth; the lazy\n   * query/index paths remain as self-heal for projects that predate it.\n   * Safe to call any time — an existing instance is a no-op.\n   */\n  ensureIndex(): Promise<{ created: boolean }>;\n  /**\n   * Retrieve scored chunks matching a query, scoped to this project\'s own\n   * search instance. Merges the corpus (streams/files/repos/custom kinds)\n   * with federated itx.docs, each result tagged with its `kind` and `context`\n   * so callers can contextualize a hit. ONE row per MATCH — distinct event\n   * windows within one stream segment stay distinct rows (full-text-search\n   * semantics); only same-location re-scores collapse. Rows are TINY: kind,\n   * date, context, a ~2-sentence snippet around the match, and the ref that\n   * fetches the whole thing — so the default 30 rows read at a glance and a\n   * result set stays well inside one inline script return. Docs hits carry\n   * synthetic 0.5-band\n   * scores (not comparable to corpus relevance), ride on top of `limit`\n   * corpus chunks (their own cap: min(limit, 5)), and ignore\n   * `scoreThreshold`. On a\n   * project whose instance doesn\'t exist yet, the instance is created and\n   * docs results return with a `warning` — retry once its first index\n   * completes (typically a minute or two). A warning-free empty result means\n   * the index is live and simply has no match.\n   */\n  query(input: {\n    q: string;\n    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */\n    limit?: number;\n    /** Rewrite the query for retrieval first (extra LLM call). */\n    rewriteQuery?: boolean;\n    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */\n    scoreThreshold?: number;\n    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */\n    source?: string;\n    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */\n    exclude?: readonly string[];\n  }): Promise<SearchQueryResult>;\n  /**\n   * Retrieve matching chunks AND generate an answer from them (RAG). Same\n   * first-touch grammar as `query`: on a project whose instance doesn\'t\n   * exist yet, the instance is created and an empty-response result returns\n   * with a `warning` — retry shortly. `searchQuery` echoes the input\n   * verbatim (never the rewritten query).\n   */\n  answer(input: {\n    q: string;\n    limit?: number;\n    rewriteQuery?: boolean;\n    scoreThreshold?: number;\n    source?: string;\n    exclude?: readonly string[];\n    /** Optional system prompt for the answer generation. */\n    systemPrompt?: string;\n  }): Promise<SearchAnswerResult>;\n  /**\n   * Add (or replace) one document in the search corpus — the general\n   * mechanism to make derived content (summaries, notes, digests) findable\n   * via `query`. `ref` is REQUIRED: the itx expression leading back to the\n   * domain object the text derives from (e.g. `["streams", ["get", path],\n   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so\n   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must\n   * not be a reserved platform kind (streams/files/repos/docs); the\n   * serialized ref caps at 500 chars. `id` is stable within\n   * `(project, kind)`, so re-indexing the same id overwrites. `context` is\n   * the one-line descriptor shown on every hit and to the answer model.\n   */\n  index(input: {\n    kind: string;\n    id: string;\n    text: string;\n    /** The itx expression that leads back to the source domain object. */\n    ref: ItxExpression;\n    title?: string;\n    context?: string;\n  }): Promise<{ key: string }>;\n  /**\n   * Pin one stream event into the search corpus by its coordinates — the\n   * domain-object way to make a specific moment findable. The event\'s content\n   * is read from the stream (never trusted from the caller) and indexed as a\n   * focused document together with the optional `note`; the search hit\'s\n   * `ref` is the itx expression fetching exactly that event. Idempotent per\n   * (stream, offset).\n   */\n  indexEvent(\n    input: (\n      | {\n          /** The stream path, e.g. "/agents/slack/T1/thr-9". */\n          path: string;\n          stream?: undefined;\n        }\n      | {\n          /** Alias for `path` (the original name of this parameter). */\n          stream: string;\n          path?: undefined;\n        }\n    ) & {\n      /** The event\'s offset on that stream. */\n      offset: number;\n      /** Optional annotation, indexed alongside the event ("decision made here"). */\n      note?: string;\n    },\n  ): Promise<{ key: string }>;\n  /**\n   * Re-index one stream from the beginning — the repair verb for streams that\n   * predate search indexing, or the rare tail gap a failed per-batch write can\n   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").\n   */\n  indexStream(input: { path: string }): Promise<{ segments: number }>;\n  /**\n   * Snapshot one repo\'s default-branch HEAD into the search corpus now — the\n   * backfill verb for repos that predate search indexing (writes index\n   * incrementally from here on). Runs on the repo Durable Object\'s own write\n   * chain so its stale-key sweep can\'t race post-commit indexing. Returned\n   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key\n   * files, and a nonzero `failed` means re-run.\n   */\n  indexRepo(input: { path: string }): Promise<{\n    deleted: number;\n    indexed: number;\n    skipped: number;\n    failed: number;\n  }>;\n  /**\n   * Re-mirror every existing itx.files object into the search corpus — the\n   * backfill verb for files that predate search indexing (puts mirror\n   * incrementally from here on). Counts reflect the actual mirror outcome:\n   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.\n   */\n  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;\n  /**\n   * Reindex the WHOLE project — every known stream, every repo\'s default\n   * branch, every itx.files object — in one crude, idempotent sweep. This is\n   * the backfill/repair verb for projects that predate search indexing (new\n   * writes index automatically); every unit overwrites its own corpus keys,\n   * so re-running (including after a timeout on a huge project) only fills\n   * gaps. Streams run a few at a time; expect minutes on large projects. Per\n   * unit failures are counted, never thrown — nonzero `failed` means re-run.\n   */\n  reindex(): Promise<{\n    streams: { indexed: number; segments: number; failed: number };\n    repos: { indexed: number; failed: number };\n    files: { mirrored: number; skipped: number; failed: number };\n  }>;\n}',
-    summary:
-      "Search everything this project has accumulated — every conversation (web chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack), stream event, itx.files object, repo file, and custom document — with semantic + keyword retrieval.",
-    memberSummaries: {
-      ensureIndex: "Ensure this project's search instance exists (idempotent).",
-      query:
-        "Retrieve scored chunks matching a query, scoped to this project's own search instance.",
-      answer: "Retrieve matching chunks AND generate an answer from them (RAG).",
-      index:
-        "Add (or replace) one document in the search corpus — the general mechanism to make derived content (summaries, notes, digests) findable via `query`.",
-      indexEvent:
-        "Pin one stream event into the search corpus by its coordinates — the domain-object way to make a specific moment findable.",
-      indexStream:
-        "Re-index one stream from the beginning — the repair verb for streams that predate search indexing, or the rare tail gap a failed per-batch write can leave (`path` is the stream path, e.g.",
-      indexRepo:
-        "Snapshot one repo's default-branch HEAD into the search corpus now — the backfill verb for repos that predate search indexing (writes index incrementally from here on).",
-      backfillFiles:
-        "Re-mirror every existing itx.files object into the search corpus — the backfill verb for files that predate search indexing (puts mirror incrementally from here on).",
-      reindex:
-        "Reindex the WHOLE project — every known stream, every repo's default branch, every itx.files object — in one crude, idempotent sweep.",
-    },
-    referencedTypeNames: [
-      "Description",
-      "SearchQueryResult",
-      "SearchAnswerResult",
-      "ItxExpression",
     ],
   },
   {
@@ -735,7 +711,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Stream",
     kind: "interface",
     sourceText:
-      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling), so a polling debug UI sees RTTs populate.\n   */\n  runtimeState(): Promise<{\n    coreProcessorState: unknown;\n    runtime: {\n      connections: Record<string, ConnectionRuntimeState>;\n      subscriptions: Record<string, SubscriptionRuntimeState>;\n      metrics: StreamThroughputMetrics;\n      /** SQLite database size in bytes (event log + spine rows + chunks). */\n      storageSizeBytes: number;\n    };\n  }>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
+      '/**\n * Durable event stream capability.\n *\n * Streams are the public coordination primitive, not an internal queue hidden\n * behind domain methods. Domain helpers can construct common event shapes, but\n * callers and processors still work with explicit events.\n */\nexport interface Stream {\n  __describe(): Promise<Description>;\n  /** Commit events; resolves with the same events carrying offsets and timestamps. */\n  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;\n  /** The stream at a sub-path, resolved relative to this stream\'s path. */\n  at(path: string): Stream;\n  /** One event by offset or idempotencyKey; undefined when it does not exist.\n   * Point reads return ephemeral rows too — but those rows are evictable, so\n   * an offset that once resolved may later read as undefined. */\n  getEvent(\n    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },\n  ): Promise<StreamEvent | undefined>;\n  /**\n   * Read one bounded page of committed events (default from the stream\'s\n   * start; filter with `eventTypes`, page forward with `afterOffset`). A full\n   * page (500 events) means MORE remain — page with\n   * `afterOffset: events.at(-1).offset`; reading a long stream without paging\n   * shows you the beginning, not the head.\n   */\n  getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]>;\n  /**\n   * A stateful pager over a read window: repeated `next()` calls walk forward\n   * through pages, `[]` means "caught up for now". Dispose it when finished\n   * (`using pager = stream.readEvents(...)`).\n   */\n  readEvents(args?: StreamEventReadInput): StreamEventPager;\n  /**\n   * Block until an event lands that is after `afterOffset`, matches\n   * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.\n   * Durable rows after `afterOffset` are replayed. It can also match an\n   * `ephemeral: true` event appended after this wait opens, but historical\n   * ephemeral rows are never replayed.\n   */\n  waitForEvent(args: {\n    afterOffset?: number;\n    eventTypes?: readonly string[];\n    predicate?: (event: StreamEvent) => boolean | Promise<boolean>;\n    timeoutMs: number;\n  }): Promise<StreamEvent>;\n  /** The reduced-state snapshot (plus runtime debug info) of one configured processor. */\n  getProcessorRuntimeState(args: {\n    subscriptionKey: string;\n  }): Promise<ProcessorRuntimeState | null>;\n  /**\n   * Live debug view of the stream Durable Object: core processor state, open\n   * connections with real delivery metrics (lag, bytes, commit→settled\n   * latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the\n   * stream\'s own throughput windows. All runtime metrics are in-memory and\n   * reset on eviction (`metrics.measuredSince` says how long the window has\n   * been collecting); latency stats fields are absent until a real sample\n   * exists — no value is ever synthesized. Calling this also requests a\n   * throttled mutual-ping round over the live connections (observer-driven\n   * sampling); live debug surfaces should subscribe through `liveState`.\n   */\n  runtimeState(): Promise<StreamRuntimeDebugState>;\n  /** Push-driven stream runtime state for polling-free debug surfaces. */\n  liveState: LiveStateRpc<StreamRuntimeDebugState>;\n  /** Abort the current Durable Object incarnation; the next request boots it again. */\n  kill(): Promise<void>;\n  /**\n   * Session-scoped live event delivery (the "ephemeral" subscription lane):\n   * `processEventBatch` first receives durable history after\n   * `replayAfterOffset`, then new commits. Ephemeral events are delivered only\n   * when appended after this exact subscription opens and are never replayed.\n   * Returns an unsubscribe handle.\n   * Forgotten on disconnect — durable delivery is configured as data instead,\n   * by appending a `subscription-configured` event (wake or push mode) to the\n   * stream.\n   */\n  subscribe(args: {\n    subscriptionKey?: string;\n    processEventBatch: ProcessEventBatch;\n    replayAfterOffset?: number;\n    /**\n     * Atomically bind this open to the stream identity observed during\n     * catch-up. `null` means the caller observed a stream with no committed\n     * creation fact yet. A mismatch rejects before replacing any connection.\n     */\n    expectedIncarnation?: string | null;\n    /**\n     * Atomically reject instead of opening when the current raw-log head is\n     * more than this many offsets beyond `replayAfterOffset`.\n     */\n    maxReplayOffsetGap?: number;\n    /** Sugar for `selector.eventTypes` — one filter shape across every lane. */\n    eventTypes?: readonly string[];\n    selector?: { eventTypes?: string[]; condition?: string };\n    events?: boolean;\n    subscriber?: unknown;\n    /** Optional live debug hook, retained for the subscription\'s lifetime. */\n    getRuntimeState?: GetProcessorRuntimeState;\n    /**\n     * Optional mutual-ping responder (see `StreamPingInput`/`StreamPingReply`\n     * in rpc-types.ts), retained for the subscription\'s lifetime. The stream\n     * pings it — throttled, and only while someone is watching runtimeState —\n     * to measure real transport RTT to this subscriber.\n     */\n    ping?: StreamSubscriberPing;\n  }): Promise<StreamSubscriptionHandle>;\n  /**\n   * Cross-post receiving end: an ordinary push SINK (`(batch) => void`) that\n   * appends the batch\'s events into THIS stream with provenance stamping,\n   * structural loop protection, and source-derived idempotency keys. A source\n   * stream cross-posts here by configuring\n   * `{ delivery: { mode: "push", expression: ["streams", ["get", path], "acceptCrossPost"] } }`.\n   */\n  acceptCrossPost(batch: StreamPushEventBatch): Promise<void>;\n  /**\n   * "When events matching this land HERE, post them onto stream `path`" — the\n   * cross-post verb. Pure sugar over appending a `subscription-configured`\n   * push subscription targeting the destination\'s `acceptCrossPost` sink; the appended\n   * event (returned) is the real interface and shows in the log like any\n   * other config. Same-`key` calls replace the previous cross-post; remove\n   * with `removeCrossPost`. Copies carry the full provenance chain\n   * (`source.crossPostedFrom`), multi-hop legal, loop-protected. `transform`\n   * is an optional JSONata expression CONSTRUCTING the copied event\'s body\n   * from the original (e.g. `{ "type": "myapp/pr", "payload": { "repo":\n   * payload.body.repository.full_name } }`); omitted fields copy verbatim.\n   */\n  crossPostTo(args: {\n    /** Destination stream path (this project). */\n    path: string;\n    /** Subscription identity; defaults to `cross-post:<destination path>`. */\n    key?: string;\n    /**\n     * Human-readable note for operators and the stream state panel (why this\n     * cross-post exists). Optional on the API; platform call sites always set it.\n     */\n    description?: string;\n    eventTypes?: string[];\n    /** JSONata filter; the event is copied only when it evaluates to exactly `true`. */\n    condition?: string;\n    /** JSONata constructor for the copied event\'s `{type?, payload?, metadata?}`. */\n    transform?: string;\n    /** Where to start: "new" (default, from now), "all" (full history), or an offset. */\n    deliver?: "all" | "new" | { afterOffset: number };\n  }): Promise<StreamEvent>;\n  /** Remove a cross-post configured by `crossPostTo` (by destination path or explicit key). */\n  removeCrossPost(args: { path?: string; key?: string }): Promise<StreamEvent>;\n}',
     summary: "Durable event stream capability.",
     memberSummaries: {
       append: "Commit events; resolves with the same events carrying offsets and timestamps.",
@@ -751,6 +727,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
         "The reduced-state snapshot (plus runtime debug info) of one configured processor.",
       runtimeState:
         "Live debug view of the stream Durable Object: core processor state, open connections with real delivery metrics (lag, bytes, commit→settled latency, mutual-ping RTT), per-subscription delivery cursors/lag, and the stream's own throughput windows.",
+      liveState: "Push-driven stream runtime state for polling-free debug surfaces.",
       kill: "Abort the current Durable Object incarnation; the next request boots it again.",
       subscribe:
         'Session-scoped live event delivery (the "ephemeral" subscription lane): `processEventBatch` first receives durable history after `replayAfterOffset`, then new commits.',
@@ -768,9 +745,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "StreamEventReadInput",
       "StreamEventPager",
       "ProcessorRuntimeState",
-      "ConnectionRuntimeState",
-      "SubscriptionRuntimeState",
-      "StreamThroughputMetrics",
+      "StreamRuntimeDebugState",
+      "LiveStateRpc",
       "ProcessEventBatch",
       "GetProcessorRuntimeState",
       "StreamSubscriberPing",
@@ -842,6 +818,23 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "CfBrowserCapability",
       "CfImagesCapability",
       "CfVideosCapability",
+    ],
+  },
+  {
+    name: "Device",
+    kind: "interface",
+    sourceText:
+      '/** One enrolled installation. Push credentials enter only through enroll(). */\nexport interface Device {\n  __describe(): Promise<Description & DeviceDescription>;\n  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;\n  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;\n  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;\n  kill(): Promise<void>;\n  processor: WakeableStreamProcessorRpc<DeviceDescription>;\n  liveState: LiveStateRpc<DeviceDescription>;\n}',
+    summary: "One enrolled installation.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "Description",
+      "DeviceDescription",
+      "DeviceEnrollInput",
+      "DeviceAppendInput",
+      "StreamEvent",
+      "WakeableStreamProcessorRpc",
+      "LiveStateRpc",
     ],
   },
   {
@@ -1038,7 +1031,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ProjectProcessorState",
     kind: "typeAlias",
     sourceText:
-      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `ready` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  birthCertificate: {\n    config: {\n      slug: string;\n      onboardingActive?: boolean | undefined;\n      creatorEmail?: string | undefined;\n    };\n  } | null;\n  ready: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n};',
+      '/**\n * The project processor\'s reduced state, inferred from the contract\'s\n * `stateSchema` — the one definition of the shape. `ready` flips when the\n * bootstrap saga lands; the list fields are what the collection `list()`\n * methods read.\n */\nexport type ProjectProcessorState = {\n  birthCertificate: {\n    config: {\n      slug: string;\n      onboardingActive?: boolean | undefined;\n      creatorEmail?: string | undefined;\n    };\n  } | null;\n  ready: boolean;\n  onboardingActive: boolean;\n  onboardingCompletedAt: string | null;\n  devices: { createdAt: string; path: string }[];\n  repos: { createdAt: string; path: string }[];\n  secrets: { createdAt: string; path: string }[];\n  streams: { createdAt: string; path: string }[];\n  customDomains: {\n    cloudflareHostnameId: string | null;\n    error: string | null;\n    hostname: string;\n    hostnameStatus: string | null;\n    ownershipVerification: { name: string; value: string } | null;\n    sslStatus: string | null;\n    status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";\n    validationRecords: { name: string; status: string | null; value: string }[];\n    wildcard: boolean;\n    createdAt: string;\n    updatedAt: string;\n  }[];\n  egressRules: {\n    ruleKey: string;\n    description: string;\n    match: {\n      hosts?: string[] | undefined;\n      methods?: string[] | undefined;\n      pathPrefix?: string | undefined;\n      secretPaths?: string[] | undefined;\n    };\n    verdict: "deny" | "hold";\n    approvalTimeoutMs: number;\n  }[];\n  humanApprovalKeys: {\n    keyId: string;\n    publicKey: string;\n    label: string;\n    addedAt: string;\n    revokedAt: string | null;\n  }[];\n  notificationReady: boolean;\n};',
     summary:
       "The project processor's reduced state, inferred from the contract's `stateSchema` — the one definition of the shape.",
     memberSummaries: {},
@@ -1548,6 +1541,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "DeviceDescription",
+    kind: "typeAlias",
+    sourceText:
+      '/** Safe, discoverable metadata for one project-enrolled mobile installation. */\nexport type DeviceDescription = {\n  appVersion: string | null;\n  created: boolean;\n  deviceId: string;\n  label: string | null;\n  lastNotificationOpenedAt: string | null;\n  notificationsStatus: "granted" | "revoked" | null;\n  ownerId: string | null;\n  platform: "ios" | "android" | null;\n  revokedAt: string | null;\n};',
+    summary: "Safe, discoverable metadata for one project-enrolled mobile installation.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "SandboxProcessorState",
     kind: "typeAlias",
     sourceText:
@@ -1585,24 +1587,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing wrapped on top.",
     memberSummaries: {},
     referencedTypeNames: [],
-  },
-  {
-    name: "SearchQueryResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */\nexport type SearchQueryResult = {\n  searchQuery: string;\n  results: SearchResultChunk[];\n  /**\n   * Present when the AI Search corpus was unreachable (e.g. the instance is\n   * not created yet) and only federated docs results are returned.\n   */\n  warning?: string;\n};",
-    summary: "What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks.",
-    memberSummaries: {},
-    referencedTypeNames: ["SearchResultChunk"],
-  },
-  {
-    name: "SearchAnswerResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */\nexport type SearchAnswerResult = SearchQueryResult & {\n  response: string;\n};",
-    summary: "What `itx.search.answer` returns: a generated answer plus the chunks it cited.",
-    memberSummaries: {},
-    referencedTypeNames: ["SearchQueryResult"],
   },
   {
     name: "SchedulerProcessorState",
@@ -1811,32 +1795,18 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ConnectionRuntimeState",
+    name: "StreamRuntimeDebugState",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
-    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
-    memberSummaries: {},
-    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
-  },
-  {
-    name: "SubscriptionRuntimeState",
-    kind: "typeAlias",
-    sourceText:
-      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
+      "/** Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`. */\nexport type StreamRuntimeDebugState = {\n  /** Kept opaque at the public stream boundary; consumers may inspect known fields defensively. */\n  coreProcessorState: unknown;\n  runtime: {\n    connections: Record<string, ConnectionRuntimeState>;\n    subscriptions: Record<string, SubscriptionRuntimeState>;\n    metrics: StreamThroughputMetrics;\n    /** SQLite database size in bytes (event log + spine rows + chunks). */\n    storageSizeBytes: number;\n  };\n};",
     summary:
-      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
+      "Serializable stream-core and delivery-runtime state exposed through `Stream.liveState`.",
     memberSummaries: {},
-    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
-  },
-  {
-    name: "StreamThroughputMetrics",
-    kind: "typeAlias",
-    sourceText:
-      "/** What `runtimeState()` reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
-    summary: "What `runtimeState()` reports for the stream's own throughput.",
-    memberSummaries: {},
-    referencedTypeNames: ["ThroughputReport"],
+    referencedTypeNames: [
+      "ConnectionRuntimeState",
+      "SubscriptionRuntimeState",
+      "StreamThroughputMetrics",
+    ],
   },
   {
     name: "ProcessEventBatch",
@@ -1971,13 +1941,23 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "SearchResultChunk",
+    name: "DeviceEnrollInput",
     kind: "typeAlias",
     sourceText:
-      '/** One retrieved chunk: the matched index document plus its scored text and provenance. */\nexport type SearchResultChunk = {\n  /**\n   * The internal corpus key this chunk came from (diagnostic; for federated\n   * docs hits it holds the docs.get fetchCall instead). Use `ref` — not this\n   * — to fetch the source.\n   */\n  filename: string;\n  /**\n   * Relevance in [0, 1] for corpus hits. `kind: "docs"` hits carry synthetic\n   * scores in a descending band from 0.5 — not comparable to corpus\n   * relevance.\n   */\n  score: number;\n  /**\n   * A SHORT snippet around the matching text (~2 sentences). Judge relevance\n   * here; evaluate `ref` for the whole thing.\n   */\n  content: string;\n  /** When the source object was last written (ISO), where the index knows. */\n  date?: string;\n  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */\n  kind?: string;\n  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */\n  context?: string;\n  /**\n   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors\n   * — evaluate it against the project itx to fetch the real thing instead of\n   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],\n   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream\n   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",\n   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a\n   * repo file, `["docs", ["get", { name }]]` for a docs entry.\n   */\n  ref?: ItxExpression;\n};',
-    summary: "One retrieved chunk: the matched index document plus its scored text and provenance.",
+      '/** Authenticated mobile enrollment metadata plus the write-only Expo push credential. */\nexport type DeviceEnrollInput = {\n  appVersion: string;\n  expoPushToken: string;\n  label: string;\n  notificationsStatus: "granted";\n  platform: "ios" | "android";\n};',
+    summary: "Authenticated mobile enrollment metadata plus the write-only Expo push credential.",
     memberSummaries: {},
-    referencedTypeNames: ["ItxExpression"],
+    referencedTypeNames: [],
+  },
+  {
+    name: "DeviceAppendInput",
+    kind: "typeAlias",
+    sourceText:
+      '/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */\nexport type DeviceAppendInput =\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-opened",\n      { openedAt: string; requestOffset: number }\n    >\n  | TypedConsumedEventInput<\n      "events.iterate.com/device/notification-requested",\n      {\n        body: string;\n        destination:\n          | { kind: "project" }\n          | { kind: "approvals"; approvalRequestEventOffset: number }\n          | { kind: "agent-chat"; path: string };\n        expiresAt: number;\n        title: string;\n      }\n    >;',
+    summary:
+      "Public journal vocabulary, mechanically retaining payloads from the processor contract.",
+    memberSummaries: {},
+    referencedTypeNames: ["TypedConsumedEventInput"],
   },
   {
     name: "SchedulerRecurrence",
@@ -2127,53 +2107,32 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "StreamSubscriptionType",
+    name: "ConnectionRuntimeState",
     kind: "typeAlias",
     sourceText:
-      '/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */\nexport type StreamSubscriptionType = "configured" | "ephemeral";',
-    summary:
-      "How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket.",
+      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
+    summary: "Serializable debug view of one live connection, for `runtimeState()`.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
   },
   {
-    name: "LatencyStats",
+    name: "SubscriptionRuntimeState",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */\nexport type LatencyStats = {\n  /** Most recent sample (ms). */\n  last: number;\n  p50: number;\n  p95: number;\n  /** Samples currently in the ring (caps at the ring size). */\n  samples: number;\n  /** Epoch ms of the most recent sample. */\n  lastAt: number;\n};",
-    summary: "Serializable summary of a {@link LatencyRing}; `null` until a sample exists.",
+      "/** Serializable debug view of one durable subscription's spine row, for `runtimeState()`. */\nexport type SubscriptionRuntimeState = {\n  mode: SubscriptionDelivery[\"mode\"];\n  /** Exclusive. Authoritative cursor (push) or observational watermark (wake). */\n  ackedOffset: number;\n  /** `maxOffset - ackedOffset` — the Kafka lag number, per subscriber. */\n  lag: number;\n  attempt: number;\n  nextAttemptAt: number | null;\n  lastError: string | null;\n  parkedAtOffset: number | null;\n  /** Whether a live delivery connection currently exists (wake mode). */\n  connected: boolean;\n  /** Serialized payload bytes delivered (push/webhook lanes; cumulative). */\n  bytesSent?: number;\n  /** Commit-to-acked latency (stream clock): newest event `createdAt` → awaited delivery resolved. */\n  settleLatencyMs?: LatencyStats;\n  /** Duration of the awaited delivery call itself — the push/webhook lane's transport latency. */\n  deliveryDurationMs?: LatencyStats;\n};",
+    summary:
+      "Serializable debug view of one durable subscription's spine row, for `runtimeState()`.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["SubscriptionDelivery", "LatencyStats"],
   },
   {
-    name: "StreamSubscriberDescriptor",
+    name: "StreamThroughputMetrics",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
-    summary:
-      "Serializable subscriber identity carried on presence facts and the runtime connection table.",
+      "/** What a stream runtime snapshot reports for the stream's own throughput. */\nexport type StreamThroughputMetrics = {\n  /** ISO timestamp when this incarnation started measuring (metrics reset on eviction). */\n  measuredSince: string;\n  /** ISO timestamp anchoring the trailing windows and final series bucket. */\n  reportedAt: string;\n  /** Appends committed (all producers). */\n  ingress: ThroughputReport;\n  /** Deliveries dispatched (all lanes, all subscribers). */\n  egress: ThroughputReport;\n};",
+    summary: "What a stream runtime snapshot reports for the stream's own throughput.",
     memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "SubscriptionDelivery",
-    kind: "typeAlias",
-    sourceText:
-      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression }\n  | { mode: "webhook"; url: string };',
-    summary:
-      "A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST).",
-    memberSummaries: {},
-    referencedTypeNames: ["ItxExpression"],
-  },
-  {
-    name: "ThroughputReport",
-    kind: "typeAlias",
-    sourceText:
-      "/**\n * One direction's throughput report: a responsive trailing-5s rate (the\n * number UIs show), the full-minute totals, and the raw 1s series for graphs.\n */\nexport type ThroughputReport = {\n  /** Events per second over the trailing 5 seconds. */\n  perSecond5s: number;\n  /** Payload bytes per second over the trailing 5 seconds. */\n  bytesPerSecond5s: number;\n  lastMinute: MinuteWindow;\n  series: ThroughputSeries;\n};",
-    summary:
-      "One direction's throughput report: a responsive trailing-5s rate (the number UIs show), the full-minute totals, and the raw 1s series for graphs.",
-    memberSummaries: {},
-    referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
+    referencedTypeNames: ["ThroughputReport"],
   },
   {
     name: "StreamEventBatch",
@@ -2300,22 +2259,53 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "MinuteWindow",
+    name: "StreamSubscriptionType",
     kind: "typeAlias",
     sourceText:
-      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
-    summary: "One rolling-minute throughput window.",
+      '/** How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket. */\nexport type StreamSubscriptionType = "configured" | "ephemeral";',
+    summary:
+      "How a subscriber is attached: `configured` = durable desired state; `ephemeral` = session-scoped live socket.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
   {
-    name: "ThroughputSeries",
+    name: "LatencyStats",
     kind: "typeAlias",
     sourceText:
-      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
-    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
+      "/** Serializable summary of a {@link LatencyRing}; `null` until a sample exists. */\nexport type LatencyStats = {\n  /** Most recent sample (ms). */\n  last: number;\n  p50: number;\n  p95: number;\n  /** Samples currently in the ring (caps at the ring size). */\n  samples: number;\n  /** Epoch ms of the most recent sample. */\n  lastAt: number;\n};",
+    summary: "Serializable summary of a {@link LatencyRing}; `null` until a sample exists.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "StreamSubscriberDescriptor",
+    kind: "typeAlias",
+    sourceText:
+      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
+    summary:
+      "Serializable subscriber identity carried on presence facts and the runtime connection table.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "SubscriptionDelivery",
+    kind: "typeAlias",
+    sourceText:
+      '/** A durable subscription\'s delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST). */\nexport type SubscriptionDelivery =\n  | { mode: "wake"; expression: ItxExpression; processorSlug?: string | undefined }\n  | { mode: "push"; expression: ItxExpression }\n  | { mode: "webhook"; url: string };',
+    summary:
+      "A durable subscription's delivery lane: wake (hosted processor poke), push (per-batch call), or webhook (per-event POST).",
+    memberSummaries: {},
+    referencedTypeNames: ["ItxExpression"],
+  },
+  {
+    name: "ThroughputReport",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * One direction's throughput report: a responsive trailing-5s rate (the\n * number UIs show), the full-minute totals, and the raw 1s series for graphs.\n */\nexport type ThroughputReport = {\n  /** Events per second over the trailing 5 seconds. */\n  perSecond5s: number;\n  /** Payload bytes per second over the trailing 5 seconds. */\n  bytesPerSecond5s: number;\n  lastMinute: MinuteWindow;\n  series: ThroughputSeries;\n};",
+    summary:
+      "One direction's throughput report: a responsive trailing-5s rate (the number UIs show), the full-minute totals, and the raw 1s series for graphs.",
+    memberSummaries: {},
+    referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
   },
   {
     name: "CfImageTransformOptions",
@@ -2393,6 +2383,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       '/**\n * One overlay change: a local file that shadows a mount file ("modified" —\n * shadowed, not content-diffed), one the mount does not have ("added"), or a\n * mount file hidden by a local delete ("deleted").\n */\nexport type WorkspaceChange = {\n  change: "added" | "deleted" | "modified";\n  path: string;\n};',
     summary:
       'One overlay change: a local file that shadows a mount file ("modified" — shadowed, not content-diffed), one the mount does not have ("added"), or a mount file hidden by a local delete ("deleted").',
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "MinuteWindow",
+    kind: "typeAlias",
+    sourceText:
+      '/** One rolling-minute throughput window. */\nexport type MinuteWindow = {\n  /** Events in the last 60 seconds. */\n  count: number;\n  /** Payload bytes in the last 60 seconds. */\n  bytes: number;\n  /** `count / 60` — the "events/s over the last minute" number. */\n  perSecond: number;\n};',
+    summary: "One rolling-minute throughput window.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ThroughputSeries",
+    kind: "typeAlias",
+    sourceText:
+      "/** Per-second buckets over the trailing minute, oldest→newest, length 60. */\nexport type ThroughputSeries = {\n  counts: number[];\n  bytes: number[];\n};",
+    summary: "Per-second buckets over the trailing minute, oldest→newest, length 60.",
     memberSummaries: {},
     referencedTypeNames: [],
   },

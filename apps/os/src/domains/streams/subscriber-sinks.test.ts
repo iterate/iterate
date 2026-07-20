@@ -13,7 +13,11 @@ const dialMocks = vi.hoisted(() => ({
 vi.mock("../../itx/expression.ts", () => ({
   evaluateItxExpression: dialMocks.evaluateItxExpression,
 }));
-const { createSubscriberDial, retainWakeHandshakeResponse } = await import("./subscriber-sinks.ts");
+const { createSubscriberDial, isWorkersHungEntrypointError, retainWakeHandshakeResponse } =
+  await import("./subscriber-sinks.ts");
+
+const WORKERS_HUNG_ENTRYPOINT_ERROR =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response. Refer to: https://developers.cloudflare.com/workers/observability/errors/";
 
 function remoteCallback<Arg, Result>(implementation: (arg: Arg) => Result) {
   const rawDispose = vi.fn();
@@ -95,6 +99,36 @@ describe("push delivery RPC ownership", () => {
     await expect(
       dial.push(["worker", "processEventBatch"], {} as StreamPushEventBatch),
     ).rejects.toBe(failure);
+  });
+
+  test("classifies a runtime-canceled receiver as unavailable, never as event poison", async () => {
+    const runtimeCancellation = new Error(WORKERS_HUNG_ENTRYPOINT_ERROR);
+    dialMocks.evaluateItxExpression.mockRejectedValue(runtimeCancellation);
+
+    const dial = createSubscriberDial({
+      projectId: "prj_test",
+      exports: {},
+      createAuthorityRoot: () => ({}),
+      onDurableDeliveryError: vi.fn(),
+    });
+
+    await expect(
+      dial.push(["worker", "processEventBatch"], {} as StreamPushEventBatch),
+    ).rejects.toMatchObject({
+      name: "StreamReceiverUnavailableError",
+      cause: runtimeCancellation,
+    });
+  });
+
+  test("does not mistake an ordinary receiver exception for runtime cancellation", () => {
+    expect(isWorkersHungEntrypointError(new Error("processor rejected the batch"))).toBe(false);
+    expect(
+      isWorkersHungEntrypointError(
+        new TypeError(
+          "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response.",
+        ),
+      ),
+    ).toBe(false);
   });
 
   test("does not retry an acknowledged batch when result disposal throws", async () => {
