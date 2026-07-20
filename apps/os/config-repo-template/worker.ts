@@ -153,6 +153,32 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (app === "guestbook") {
       return this.fetchDynamicWorker(req, guestbookAppRef);
     }
+    if (app === "tasks") {
+      // A collaborative Kanban board over this repo's tasks/ markdown
+      // (github.com/iterate/tasks): project-member gate, then a transparent
+      // reverse proxy — pages, assets, and WebSocket upgrades — to the
+      // deployed vessel. The ingress already stamps x-itx-project-id and the
+      // platform session cookie rides along, so the vessel authenticates
+      // every connection back to os.iterate.com as the visiting user; no
+      // secrets or state live in the vessel. The kv knob points the proxy at
+      // a dev tunnel while developing the tasks app itself (see its README);
+      // absent knob means the deployed vessel.
+      using itx = await this.env.ITX.get();
+      const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
+      if (denied) return denied;
+      const url = new URL(req.url);
+      url.protocol = "https:";
+      const origin = await itx.kv.get("tasks-app-origin");
+      url.host = typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
+      return fetch(
+        new Request(url, {
+          method: req.method,
+          headers: req.headers,
+          body: req.body,
+          redirect: "manual",
+        }),
+      );
+    }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });
 
     const url = new URL(req.url);
@@ -171,6 +197,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
                 <li><a href="${appUrl("todo")}">todo</a> (basic React + SQLite Durable Object, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (basic React + SQLite Durable Object, public)</li>
+                <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>
             </main>

@@ -848,6 +848,32 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (app === \"guestbook\") {\n" +
       "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "    }\n" +
+      "    if (app === \"tasks\") {\n" +
+      "      // A collaborative Kanban board over this repo's tasks/ markdown\n" +
+      "      // (github.com/iterate/tasks): project-member gate, then a transparent\n" +
+      "      // reverse proxy — pages, assets, and WebSocket upgrades — to the\n" +
+      "      // deployed vessel. The ingress already stamps x-itx-project-id and the\n" +
+      "      // platform session cookie rides along, so the vessel authenticates\n" +
+      "      // every connection back to os.iterate.com as the visiting user; no\n" +
+      "      // secrets or state live in the vessel. The kv knob points the proxy at\n" +
+      "      // a dev tunnel while developing the tasks app itself (see its README);\n" +
+      "      // absent knob means the deployed vessel.\n" +
+      "      using itx = await this.env.ITX.get();\n" +
+      "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
+      "      if (denied) return denied;\n" +
+      "      const url = new URL(req.url);\n" +
+      "      url.protocol = \"https:\";\n" +
+      "      const origin = await itx.kv.get(\"tasks-app-origin\");\n" +
+      "      url.host = typeof origin === \"string\" && origin !== \"\" ? origin : \"tasks.iterate.workers.dev\";\n" +
+      "      return fetch(\n" +
+      "        new Request(url, {\n" +
+      "          method: req.method,\n" +
+      "          headers: req.headers,\n" +
+      "          body: req.body,\n" +
+      "          redirect: \"manual\",\n" +
+      "        }),\n" +
+      "      );\n" +
+      "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +
       "\n" +
       "    const url = new URL(req.url);\n" +
@@ -866,6 +892,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (basic React + SQLite Durable Object, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (basic React + SQLite Durable Object, public)</li>\n" +
+      "                <li><a href=\"${appUrl(\"tasks\")}\">tasks</a> (collaborative task board over tasks/, project members only)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +
       "            </main>\n" +
