@@ -325,7 +325,7 @@ export class CapabilityHostProcessor extends StreamProcessor<CapabilityHostProce
     // deferred commit); a nested blockProcessorWhile would register after the
     // runner's per-event blocker snapshot and never be awaited.
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhileCaughtUp(() => this.#reconcileScriptObligations(args));
+      args.blockProcessorWhile(() => this.#reconcileScriptObligations(args));
     }
   }
 

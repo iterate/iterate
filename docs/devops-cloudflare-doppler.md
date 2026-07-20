@@ -36,8 +36,7 @@ the envs.ts entry, so a wrong-config wrap fails loudly. Destructive scripts
 ## Core Doppler model
 
 - Every independently deployable app has a Doppler project: `os`, `auth`,
-  `semaphore`, `tunnels`, `streams-example-app`, `dummy-petshop`,
-  `iterate-com`.
+  `semaphore`, `tunnels`, `streams-example-app`, `dummy-petshop`.
 - `doppler.yaml` maps directories to projects; the working directory picks
   the project unless a command passes `--project`.
 - `_shared` owns values inherited by apps, including the per-environment

@@ -125,6 +125,11 @@ iterate use-my-computer --project <id-or-slug>              # prompts for a name
 iterate use-my-computer --project <id-or-slug> --name jonasComputer
 ```
 
+From an active `iterate chat` session, type `/use-my-computer` instead. Chat
+uses the local OS username for the capability name: a user named `joebloggs`
+shares `itx.joebloggsComputer`. The provider stays project-wide and stops when
+chat exits.
+
 It's also built into the **menu-bar app** (`iterate approve --menubar`): flip
 **Use my computer** on to share, and the dropdown shows each call as it happens —
 a green dot appears in the menu bar while an agent is actively using your Mac.

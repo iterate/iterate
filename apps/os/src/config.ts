@@ -62,6 +62,15 @@ export const AppConfig = z.object({
     })
     .optional(),
   adminApiSecret: redacted(z.string().trim().min(1)).optional(),
+  /**
+   * Shared with the auth app (its mint side): verifies project-app-session
+   * tokens locally, so the per-request project-host gate and the /api
+   * `project-app-session` credential lane are pure HS256 checks with no
+   * auth-worker hop. Deliberately NOT the better-auth master secret — it
+   * grants only this token kind and rotates alone. Unset: both consumers
+   * fall back to the auth worker's validate RPC.
+   */
+  projectAppSessionSecret: redacted(z.string().trim().min(1)).optional(),
   iterateAuth: z
     .object({
       issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),

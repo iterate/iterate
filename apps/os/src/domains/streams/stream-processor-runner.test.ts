@@ -961,9 +961,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     const processPhases: string[] = [];
     const hooks: TaskHooks = {
       onProcess: (args) => {
-        processPhases.push(
-          `${args.event.offset}:${args.delivery.phase}:${args.delivery.eventsBehindObservedHead}`,
-        );
+        processPhases.push(`${args.event.offset}:${args.delivery.phase}`);
       },
       onHead: (args, stableKey) => {
         headCalls.push({ open: [...args.state.open], event: args.event?.offset ?? null });
@@ -985,7 +983,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // Frame 1: the requested event, delivered mid-catch-up (head is at 2). It
     // is behind head, so NOT caughtUp — nothing may act on a partial fold.
     await sink(deliveryFrame([requestedEvent!], 2));
-    expect(processPhases).toEqual(["1:catching-up:1"]);
+    expect(processPhases).toEqual(["1:catching-up"]);
     expect(headCalls).toEqual([]);
     expect(journal.rows(SIBLING)).toHaveLength(0);
 
@@ -1000,7 +998,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       scannedThroughOffset: 2,
       streamMaxOffset: 2,
     });
-    expect(processPhases).toEqual(["1:catching-up:1"]); // still no per-event processEvent
+    expect(processPhases).toEqual(["1:catching-up"]); // still no per-event processEvent
     expect(headCalls).toEqual([{ open: ["a"], event: null }]); // event-less pass drove it
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
       { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
@@ -1010,7 +1008,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // final fold; drive:a dedupes on its stable key, drive:b is new.
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 3: consumed, at head
     await sink(deliveryFrame([journal.rows()[2]!], 3));
-    expect(processPhases).toEqual(["1:catching-up:1", "3:live:0"]);
+    expect(processPhases).toEqual(["1:catching-up", "3:live"]);
     expect(headCalls).toEqual([
       { open: ["a"], event: null },
       { open: ["a", "b"], event: 3 },
@@ -1140,12 +1138,13 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     });
   });
 
-  it("runs the caughtUp reconcile AFTER the head event's own per-event work (ordering fix)", async () => {
-    // The head event registers BOTH a per-event append (blockProcessorWhile)
-    // and an at-head reconcile append (blockProcessorWhileCaughtUp). The
-    // reconcile MUST land after the per-event append — the guarantee that lets
-    // e.g. an interrupt cancel fold before the reconcile's re-fire. Without it
-    // the two race (the bug Bugbot caught folding onCaughtUp into processEvent).
+  it("runs blockProcessorWhile registrations in strict FIFO order — fold-derived work lands after per-event work", async () => {
+    // The head event registers TWO blockers in one `processEvent` body: a
+    // per-event append first, a fold-derived append second. Registration
+    // order MUST be journal order — the guarantee that lets e.g. an
+    // interrupt cancel fold before a fold-derived re-fire. This ordering
+    // used to need a separate deferred lane (`blockProcessorWhileCaughtUp`,
+    // deleted); FIFO chaining makes it structural.
     const journal = makeJournal();
     journal.seed({ type: REQUESTED, payload: { id: "a" } }); // 1 — consumed, at head
 
@@ -1160,7 +1159,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
         );
       },
       onHead: (args) => {
-        args.blockProcessorWhileCaughtUp(() =>
+        args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
             idempotencyKey: "test-task/at-head",

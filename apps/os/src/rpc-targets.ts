@@ -53,6 +53,10 @@ import {
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
 } from "iterate/live-state";
+import type {
+  ValidateProjectAppSessionInput,
+  ValidatedProjectAppSession,
+} from "@iterate-com/auth-contract/worker";
 import type { AppConfig } from "./config.ts";
 import { parseConfig } from "./config.ts";
 import {
@@ -115,7 +119,11 @@ import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-l
 import { normalizeWorkspaceMountKeys, normalizeWorkspacePath } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
-import { normalizeSecretPath } from "./domains/secrets/utils.ts";
+import {
+  generateProjectApiKeyMaterial,
+  normalizeSecretPath,
+  PROJECT_API_KEY_SECRET_PATH,
+} from "./domains/secrets/utils.ts";
 import {
   completeConnect,
   connectTelegram,
@@ -283,6 +291,10 @@ import {
   type ProjectAuthPolicy,
   type ProjectAuthRpcMetadata,
 } from "./auth/project-auth.ts";
+import {
+  localProjectAppSessionValidator,
+  verifyProjectAppSessionToken,
+} from "./auth/project-app-session-token.ts";
 import type {
   McpBeginOAuthInput,
   McpBeginOAuthResult,
@@ -2124,6 +2136,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
         fetch:
           "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
+        reveal:
+          "Read the material back — only for a secret born readable (the project ingress key); write-only secrets throw.",
         update:
           "Set the value, egress URLs, and/or refresh strategy. A value requires its complete egress policy in the same update; every update without a value clears stored material.",
       },
@@ -2160,6 +2174,17 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** Create this secret and wait until its processor has folded the birth certificate. */
   create(input: SecretCreateInput): Promise<StreamEvent> {
     return this.durableObjectStub.create(input);
+  }
+
+  /**
+   * Read the material back — only for a secret born `readable: true` (an
+   * immutable birth-certificate fact; every other secret stays write-only
+   * and this throws). The born project ingress key at
+   * /secrets/project-api-key is the canonical readable secret: show it to an
+   * external app as often as needed.
+   */
+  reveal(): Promise<unknown> {
+    return this.durableObjectStub.reveal();
   }
 
   /** Set secret material, its egress allowlist, and/or refresh strategy.
@@ -4516,6 +4541,39 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       "root-append",
       appendRootEvents,
     );
+    // Born credential: every project gets an ingress secret at
+    // /secrets/project-api-key — what the `project-secret` /api credential is
+    // verified against, inside the Secret DO. Empty egress pin: unlike every
+    // other secret it can never be substituted into ANY outbound request.
+    // Born `visibility: "readable"` (an immutable birth-certificate fact):
+    // pairing an external app is reveal()-and-copy, as often as needed;
+    // rotation is an ordinary material update. The DO's create dedupes, so
+    // re-seeding is a no-op: the ready path below AWAITS one seed (a
+    // waitUntilReady caller finds the key existing), the fast path only
+    // nudges it, and a failed nudge is logged — the documented pairing flow
+    // (docs/remote-apps.md) ensure-creates before reveal(), which heals a
+    // permanently lost seed.
+    const seedProjectApiKey = () =>
+      env.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: registered.projectId,
+          path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
+        }),
+      )
+        .create({
+          egress: { urls: [] },
+          material: generateProjectApiKeyMaterial(),
+          visibility: "readable",
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => {
+            console.warn("project create: api-key seed failed (ensure-create on reveal heals)", {
+              projectId: registered.projectId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          },
+        );
     const project = itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
@@ -4541,10 +4599,12 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     // nudge is telemetry, not a create failure — durable delivery retries
     // and the checklist's stall detector cover the rest.
     if (args.waitUntilReady === false) {
+      this.props.ctx.waitUntil(seedProjectApiKey());
       this.props.ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
       return project;
     }
 
+    await timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey);
     await driveBirth("wait-project-birth");
     await timedStep("create-timing", timing, "wait-project-ready", () => project.waitUntilReady());
     return project;
@@ -4922,7 +4982,7 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
       credentials,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
-      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+      validateSession: projectAppSessionValidator(),
     });
   }
 
@@ -4937,9 +4997,24 @@ class ProjectAuthRpcTarget extends IterateRpcTarget<"ProjectAuth"> {
       osBaseUrl: parseConfig(env).baseUrl,
       projectId: this.props.projectId,
       request: projectAuthRequestFromRpc(request),
-      validateSession: (input) => env.AUTH.validateProjectAppSession(input),
+      validateSession: projectAppSessionValidator(),
     });
   }
+}
+
+/**
+ * Session validation for project app hosts: local HS256 verification when the
+ * shared secret is configured (the hot per-request path — no auth-worker
+ * hop; the token's TTL bounds membership staleness), else the auth worker's
+ * validate RPC, which also re-checks membership live. The mint side always
+ * stays with the auth worker — it runs once per login, not per request.
+ */
+function projectAppSessionValidator(): (
+  input: ValidateProjectAppSessionInput,
+) => Promise<ValidatedProjectAppSession | null> {
+  const secret = parseConfig(env).projectAppSessionSecret;
+  if (secret === undefined) return (input) => env.AUTH.validateProjectAppSession(input);
+  return localProjectAppSessionValidator(secret.exposeSecret());
 }
 /**
  * THE one table of project built-ins: member name -> one-line blip. The
@@ -5670,6 +5745,25 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
       credentials: input,
       headers: this.props.headers,
       requestUrl: this.props.requestUrl,
+      // The project-secret lane's verifier: a one-bit constant-time compare
+      // INSIDE the project's born ingress-credential Secret DO — material
+      // never leaves the secret system, this door included.
+      verifyProjectSecret: ({ projectId, secret }) =>
+        env.SECRET.getByName(
+          DurableObjectNameCodec.stringify({
+            projectId,
+            path: normalizeSecretPath(PROJECT_API_KEY_SECRET_PATH),
+          }),
+        ).verifyMaterialField({ value: secret }),
+      // The project-app-session lane's verifier: local HS256 against the
+      // shared session secret — no auth-worker hop; membership was checked
+      // at mint time and the token's 15-minute TTL bounds revocation lag.
+      verifyProjectAppSession: async (token) => {
+        const secret = this.props.config.projectAppSessionSecret;
+        if (secret === undefined) return null;
+        const claims = await verifyProjectAppSessionToken(token, secret.exposeSecret());
+        return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
+      },
     });
     return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }
@@ -5888,7 +5982,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution; intercept(handler) installs a live egress interceptor (last writer wins).",
+        "Project-attributed outbound fetch: fetch(request) egresses with the project's identity and secret substitution. Headers and URL paths interpolate getSecret(...); an application/json body substitutes exact string values when x-iterate-secret-template: json is set. intercept(handler) installs a live egress interceptor (last writer wins).",
       children: {
         fetch: "Outbound fetch through project egress.",
         intercept: "Install an egress interceptor; returns a release handle.",
@@ -5901,7 +5995,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     super();
   }
 
-  /** Outbound fetch with the project's identity and secret substitution. */
+  /** Outbound fetch with project identity and secret substitution. Set
+   * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
+   * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse> {
     return projectStub(env.PROJECT, this.props.projectId).fetch(request);
   }

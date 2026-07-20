@@ -2,13 +2,13 @@ import { normalizePath } from "../durable-object-names.ts";
 
 /**
  * The egress placeholder grammar. A request may carry
- * `getSecret("/secrets/…")` (substitute the whole material — which must then
- * be a string) or `getSecret("/secrets/…", { field: "a.b" })`
+ * `getSecret("/secrets/…")` (substitute the whole material — which
+ * must then be a string) or `getSecret("/secrets/…", { field: "a.b" })`
  * (substitute one dotted field of structured material). Substitution reaches
  * headers and the request URL PATH (for providers that carry the credential
- * there, e.g. Telegram's `/bot<token>/…`) — never the query string, and never
- * the body: a header or path segment is a substitutable reference, everything
- * else is bytes the composer already holds (see
+ * there, e.g. Telegram's `/bot<token>/…`). An explicitly opted-in JSON body
+ * may also carry exact-reference string values; embedded references, object
+ * keys, unmarked bodies, and URL query strings are never substituted (see
  * apps/os/docs/integrations-and-secrets-design.md §1 and ADR 0005). A
  * placeholder outside the path fails loudly at substitution instead of
  * leaking the literal reference string to the provider. The `field` key is
@@ -22,6 +22,11 @@ import { normalizePath } from "../durable-object-names.ts";
  * the container.
  */
 const SECRET_REFERENCE = /getSecret\(\s*"([^"]+)"\s*(?:,\s*\{\s*field\s*:\s*"([^"]+)"\s*\})?\s*\)/g;
+const EXACT_SECRET_REFERENCE =
+  /^getSecret\(\s*"([^"]+)"\s*(?:,\s*\{\s*field\s*:\s*"([^"]+)"\s*\})?\s*\)$/;
+
+export const SECRET_JSON_TEMPLATE_HEADER = "x-iterate-secret-template";
+const MAX_SECRET_JSON_TEMPLATE_BYTES = 1024 * 1024;
 
 /** One parsed placeholder: the secret it addresses and, optionally, the dotted
  * field of that secret's material to substitute. */
@@ -42,7 +47,10 @@ export type PlatformReference = { platform: string };
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
   if (!normalized.startsWith("/secrets/")) {
-    throw new Error(`secret path must start with "/secrets/", got "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path must start with "/secrets/", got "${normalized}"`,
+    );
   }
   // A secret path becomes a Durable Object name (`durable-object-names.ts`),
   // and that name is reparsed with WHATWG `URL` — which collapses `.`/`..`
@@ -52,11 +60,17 @@ export function normalizeSecretPath(path: string): string {
   // through it) so the addressed path and the displayed path cannot diverge.
   // eslint-disable-next-line no-control-regex -- control chars are exactly what we reject
   if (/[\u0000-\u0020\u007f?#%\\]/.test(normalized)) {
-    throw new Error(`secret path has an illegal character: "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path has an illegal character: "${normalized}"`,
+    );
   }
   for (const segment of normalized.slice(1).split("/")) {
     if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`secret path has an empty or dot segment: "${normalized}"`);
+      throw new SecretSubstitutionError(
+        "secret_reference_invalid_path",
+        `secret path has an empty or dot segment: "${normalized}"`,
+      );
     }
   }
   return normalized;
@@ -77,25 +91,40 @@ export function secretReferencesFromHeaders(headers: Headers): SecretReference[]
  * query must still route to the Secret DO, where substitution rejects it
  * loudly (see {@link substituteSecretRequest}) instead of the request sailing
  * through egress with the literal placeholder in it. */
-export function secretReferencesFromRequest(request: {
-  headers: Headers;
-  url: string;
-}): SecretReference[] {
+export async function secretReferencesFromRequest(
+  request: Request,
+): Promise<{ problems: SecretSubstitutionError[]; references: SecretReference[] }> {
   const byKey = new Map<string, SecretReference>();
-  request.headers.forEach((value) => collectSecretReferences(byKey, value));
-  collectSecretReferences(byKey, decodedUrl(request.url));
-  return [...byKey.values()];
+  try {
+    request.headers.forEach((value) => collectSecretReferences(byKey, value));
+    collectSecretReferences(byKey, decodedUrl(request.url));
+    const jsonTemplate = await inspectSecretJsonTemplate(request);
+    if (jsonTemplate.problem !== undefined) {
+      return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+    }
+    if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
+    return { problems: [], references: [...byKey.values()] };
+  } catch (error) {
+    if (
+      error instanceof SecretSubstitutionError &&
+      error.code === "secret_reference_invalid_path"
+    ) {
+      return { problems: [error], references: [...byKey.values()] };
+    }
+    throw error;
+  }
 }
 
-/** The distinct secret PATHS referenced across a request's headers and URL —
+/** The distinct secret PATHS referenced across a request's headers, URL, and
+ * explicitly opted-in JSON body —
  * used by the project egress door to pick which Secret DO to hand the request
  * to (exactly one; multi-secret requests are not supported) and as a cheap
  * presence check. */
-export function secretReferencePathsFromRequest(request: {
-  headers: Headers;
-  url: string;
-}): string[] {
-  return [...new Set(secretReferencesFromRequest(request).map((reference) => reference.path))];
+export async function secretReferencePathsFromRequest(
+  request: Request,
+): Promise<{ paths: string[]; problems: SecretSubstitutionError[] }> {
+  const { problems, references } = await secretReferencesFromRequest(request);
+  return { paths: [...new Set(references.map((reference) => reference.path))], problems };
 }
 
 function collectSecretReferences(byKey: Map<string, SecretReference>, value: string): void {
@@ -106,6 +135,23 @@ function collectSecretReferences(byKey: Map<string, SecretReference>, value: str
       byKey.set(`${path} ${field ?? ""}`, field === undefined ? { path } : { field, path });
     }
   }
+}
+
+function collectJsonSecretReferences(byKey: Map<string, SecretReference>, value: unknown): void {
+  if (typeof value === "string") {
+    const match = EXACT_SECRET_REFERENCE.exec(value);
+    if (match === null) return;
+    const path = normalizeSecretPath(match[1]!);
+    const field = match[2];
+    byKey.set(`${path} ${field || ""}`, field === undefined ? { path } : { field, path });
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectJsonSecretReferences(byKey, item);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  for (const item of Object.values(value)) collectJsonSecretReferences(byKey, item);
 }
 
 /**
@@ -293,9 +339,9 @@ export function substituteSecretHeaders(
 }
 
 /**
- * Rewrites every `getSecret(...)` placeholder in every header AND in the
- * request URL's PATH — never the query (or fragment/userinfo/host), and never
- * the body. URL substitution exists for providers that authenticate in the
+ * Rewrites every `getSecret(...)` placeholder in every header, the request
+ * URL's PATH, and exact string values in an explicitly opted-in JSON body —
+ * never the query (or fragment/userinfo/host). URL substitution exists for providers that authenticate in the
  * URL path (Telegram's `/bot<token>/<method>`; there is no header auth), and
  * the path is deliberately ALL it covers: a placeholder anywhere else in the
  * URL throws here — silently passing the literal placeholder through to the
@@ -304,11 +350,23 @@ export function substituteSecretHeaders(
  * {@link decodedUrl}); a URL whose path carries no placeholder stays
  * byte-identical.
  */
-export function substituteSecretRequest(
+export async function substituteSecretRequest(
   request: Request,
   resolve: (reference: SecretReference) => string,
-): Request {
-  const substituted = substituteSecretHeaders(request, resolve);
+): Promise<Request> {
+  const inspectedJsonTemplate = await inspectSecretJsonTemplate(request);
+  if (inspectedJsonTemplate.problem !== undefined) throw inspectedJsonTemplate.problem;
+  const jsonTemplate = inspectedJsonTemplate.value;
+  let substituted = substituteSecretHeaders(request, resolve);
+  if (jsonTemplate !== undefined) {
+    const headers = new Headers(substituted.headers);
+    headers.delete(SECRET_JSON_TEMPLATE_HEADER);
+    headers.delete("content-length");
+    substituted = new Request(substituted, {
+      body: JSON.stringify(substituteSecretJsonValues(jsonTemplate, resolve)),
+      headers,
+    });
+  }
   const url = new URL(request.url);
   for (const [part, value] of [
     ["query", url.search],
@@ -339,6 +397,68 @@ export function substituteSecretRequest(
   if (!pathHasPlaceholder) return substituted;
   url.pathname = rewrittenPath;
   return new Request(url.toString(), substituted);
+}
+
+async function inspectSecretJsonTemplate(
+  request: Request,
+): Promise<{ problem?: SecretSubstitutionError; value?: unknown }> {
+  const mode = request.headers.get(SECRET_JSON_TEMPLATE_HEADER);
+  if (mode === null) return {};
+  if (mode !== "json") {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_mode") };
+  }
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_content_type") };
+  }
+  const inspectedBody = await readSecretJsonTemplateBody(request);
+  if (inspectedBody.problem !== undefined) return inspectedBody;
+  try {
+    return { value: JSON.parse(inspectedBody.body) as unknown };
+  } catch {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_body") };
+  }
+}
+
+async function readSecretJsonTemplateBody(
+  request: Request,
+): Promise<
+  { body: string; problem?: undefined } | { body?: undefined; problem: SecretSubstitutionError }
+> {
+  const stream = request.clone().body;
+  if (stream === null) return { body: "" };
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let byteLength = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) return { body: body + decoder.decode() };
+    byteLength += chunk.value.byteLength;
+    if (byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
+      void reader.cancel();
+      return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
+    }
+    body += decoder.decode(chunk.value, { stream: true });
+  }
+}
+
+function substituteSecretJsonValues(
+  value: unknown,
+  resolve: (reference: SecretReference) => string,
+): unknown {
+  if (typeof value === "string") {
+    const match = EXACT_SECRET_REFERENCE.exec(value);
+    if (match === null) return value;
+    const path = normalizeSecretPath(match[1]!);
+    const field = match[2];
+    return resolve(field === undefined ? { path } : { field, path });
+  }
+  if (Array.isArray(value)) return value.map((item) => substituteSecretJsonValues(item, resolve));
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, substituteSecretJsonValues(item, resolve)]),
+  );
 }
 
 /** Hex-encoded keyed HMAC-SHA256 over caller bytes — the webhook-signature
@@ -419,11 +539,16 @@ export function timingSafeStringEqual(a: string, b: string): boolean {
 
 type SecretErrorCode =
   | "secret_fetch_failed"
+  | "secret_json_template_body_too_large"
+  | "secret_json_template_invalid_body"
+  | "secret_json_template_invalid_content_type"
+  | "secret_json_template_invalid_mode"
   | "secret_material_not_a_string"
   | "secret_not_allowed_for_origin"
   | "secret_not_found"
   | "secret_reference_field_not_found"
   | "secret_reference_foreign"
+  | "secret_reference_invalid_path"
   | "secret_reference_outside_url_path"
   | "secret_reference_required";
 
@@ -450,4 +575,24 @@ export function secretErrorResponse(code: SecretErrorCode): Response {
         code === "secret_fetch_failed" ? 502 : code === "secret_not_allowed_for_origin" ? 403 : 400,
     },
   );
+}
+
+/**
+ * Every project is born with a write-only ingress credential at this path:
+ * the value the `project-secret` /api credential is verified against (inside
+ * the Secret Durable Object — material never leaves the secret system; the
+ * verifier's answer is one bit). Born with an EMPTY egress pin, so unlike
+ * every other secret it can never be substituted into any outbound request:
+ * the ingress key and any egress credentials an external app is dialed with
+ * are deliberately different secrets.
+ */
+export const PROJECT_API_KEY_SECRET_PATH = "/secrets/project-api-key";
+
+/** Random birth material for {@link PROJECT_API_KEY_SECRET_PATH}. Unusable
+ * until the owner overwrites it with a value they hold (secrets.update) —
+ * writing a known value IS the pairing ceremony with an external app. */
+export function generateProjectApiKeyMaterial(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `itxk_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

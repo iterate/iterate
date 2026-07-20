@@ -687,7 +687,7 @@ return await itx.projects.get(pid).__describe();
     e2eProven: false,
     title: "Make a plain HTTP request through project egress",
     description:
-      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers substitute at egress (see secret-postman-echo). External service — interactive-only.",
+      "itx.egress.fetch(request) is the raw outbound HTTP door: call an external API, download a file, GET or POST anything — every request project-attributed. It takes ONE argument, a Request (build headers/method/body onto it). Choosing a door: egress.fetch is the plain request; itx.browser.quickAction renders a JS-heavy page and can return markdown; itx.ai.toMarkdown converts documents. Secret placeholders in headers and URL paths substitute at egress; exact JSON string values also substitute when x-iterate-secret-template: json is set (see secret-postman-echo). External service — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { url?: string }) => {
       const url = vars.url ?? "https://example.com/";
@@ -733,7 +733,7 @@ return await itx.projects.get(pid).__describe();
     e2eProven: false,
     title: "Use a stored secret in a Postman Echo request",
     description:
-      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with a getSecret(path) header placeholder, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service — interactive-only.",
+      "Stores a secret with Postman Echo on its egress allowlist, sends a request through itx.egress.fetch with an exact getSecret(path) JSON value, and verifies that Postman Echo saw the substituted value while describe() still never exposes the material. External service — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { secretPath?: string; note?: string }) => {
       const secretPath = vars.secretPath ?? "/secrets/postman-echo";
@@ -747,10 +747,15 @@ return await itx.projects.get(pid).__describe();
       });
 
       const response = await itx.egress.fetch(
-        new Request("https://postman-echo.com/get?source=itx-secret-example", {
+        new Request("https://postman-echo.com/post?source=itx-secret-example", {
+          method: "POST",
           headers: {
-            "x-itx-secret": `Bearer getSecret("${secretPath}")`,
+            "content-type": "application/json",
+            "x-iterate-secret-template": "json",
           },
+          body: JSON.stringify({
+            secret: `getSecret("${secretPath}")`,
+          }),
         }),
       );
       if (!response.ok) {
@@ -761,10 +766,10 @@ return await itx.projects.get(pid).__describe();
       // plain-JS body's dynamic reads over the echoed shape typecheckable.
       const body = JSON.parse(await response.text());
       const after = await secret.__describe();
-      const echoedSecret = body?.headers?.["x-itx-secret"];
+      const echoedSecret = body?.json?.secret;
 
       return {
-        echoedSecretMatches: echoedSecret === `Bearer ${material}`,
+        echoedSecretMatches: echoedSecret === material,
         hasMaterial: after.hasMaterial,
         materialLeakedInDescription: JSON.stringify(after).includes(material),
         usedCount: after.audit.usedCount,

@@ -32,12 +32,17 @@ export async function startMockSlackApi(): Promise<TunnelHandle & { calls: strin
 export async function startEgressEcho(): Promise<TunnelHandle> {
   return await withTunnel({
     path: "/egress-echo",
-    fetch(request) {
+    async fetch(request) {
       const headers: Record<string, string> = {};
       request.headers.forEach((value, key) => {
         headers[key] = value;
       });
-      return Response.json({ headers });
+      const body = await request.text();
+      const contentType = request.headers.get("content-type") || "";
+      return Response.json({
+        body: body && contentType.includes("json") ? JSON.parse(body) : body || null,
+        headers,
+      });
     },
   });
 }

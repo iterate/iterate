@@ -41,9 +41,9 @@ export function ChatHeader(props: {
         ? COLORS.warning
         : COLORS.danger;
   const meta = [
+    props.notice,
     `${props.eventCount} event${props.eventCount === 1 ? "" : "s"}`,
     statusLabel,
-    props.notice,
   ]
     .filter(Boolean)
     .join(" · ");

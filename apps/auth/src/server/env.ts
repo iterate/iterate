@@ -27,6 +27,9 @@ export interface CloudflareEnv {
   APP_CONFIG_PUBLIC_URL?: string;
   /** better-auth signing secret (sessions, JWTs, project-ingress tokens). */
   APP_CONFIG_BETTER_AUTH_SECRET: string;
+  /** Dedicated project-app-session signing secret, shared with os for local
+   * verification. Optional: unset falls back to APP_CONFIG_BETTER_AUTH_SECRET. */
+  APP_CONFIG_PROJECT_APP_SESSION_SECRET?: string;
   /** Shared secret trusted by the internal.* oRPC procedures. */
   APP_CONFIG_SERVICE_AUTH_TOKEN: string;
   /**

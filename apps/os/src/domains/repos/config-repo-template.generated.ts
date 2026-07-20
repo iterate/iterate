@@ -619,7 +619,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "  protected override processEvent({\n" +
       "    append,\n" +
-      "    blockProcessorWhileCaughtUp,\n" +
+      "    blockProcessorWhile,\n" +
       "    delivery,\n" +
       "    state,\n" +
       "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"processEvent\"]>[0]): undefined {\n" +
@@ -635,7 +635,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (reached <= state.lastMilestone) return;\n" +
       "    const missed: number[] = [];\n" +
       "    for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);\n" +
-      "    blockProcessorWhileCaughtUp(async () => {\n" +
+      "    blockProcessorWhile(async () => {\n" +
       "      await append(\n" +
       "        ...missed.map((count) => ({\n" +
       "          type: \"events.iterate.com/guestbook/milestone-reached\" as const,\n" +
