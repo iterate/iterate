@@ -72,6 +72,7 @@ export default os;
     const out = polyfillEsbuildNodeRequire({ "bundle.js": helper });
     expect(out["bundle.js"]).toContain('import * as __iterate_node_os from "node:os"');
     expect(out["bundle.js"]).toContain("return __iterateNodeRequire(x)");
+    expect(out["bundle.js"]).toContain("mod.default");
     expect(out["bundle.js"]).not.toMatch(
       /throw Error\('Dynamic require of "' \+ x \+ '" is not supported'\)/,
     );

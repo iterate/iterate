@@ -285,8 +285,17 @@ const __iterateNodeBuiltins = {
 };
 function __iterateNodeRequire(id) {
   const mod = __iterateNodeBuiltins[id];
-  if (mod !== undefined) return mod;
-  throw Error('Dynamic require of "' + id + '" is not supported');
+  if (mod === undefined) {
+    throw Error('Dynamic require of "' + id + '" is not supported');
+  }
+  // CJS interop: require("events") is the EventEmitter constructor, not the
+  // ESM namespace object. Prefer default when present so \`class X extends
+  // require("events")\` works (otherwise: "Class extends value #<Object> is
+  // not a constructor").
+  if (mod != null && typeof mod === "object" && "default" in mod && mod.default != null) {
+    return mod.default;
+  }
+  return mod;
 }
 `;
 }
