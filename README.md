@@ -172,7 +172,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Design system & React](docs/design-system.md)
 - [Slack testing](docs/slack-testing.md) — real Slack flows; **`SLACK_CI_BOT_TOKEN` trigger actor**; channel membership (`#slack-agent-e2e-test`); preview setup; duplicate-bot caveats
 - [GitHub production smoke testing](docs/github-smoke-testing.md) — post-recreation config sync, authenticated requests, and webhook routing
-- [Slack preview OAuth clients](docs/slack-preview-oauth-clients.md) — bulk-create preview Slack apps and collect Doppler secrets
+- [Slack preview OAuth clients](docs/slack-preview-oauth-clients.md) — API-first creation and secret handoff for preview Slack apps
 - [Slack bot token migration](docs/slack-bot-token-migration.md) — per-app bot token fallback links and Doppler shape
 - [Testing](docs/testing.md) — test lanes, how to run them against any environment, the canonical env vars, and the retry/timeout policy (one retry layer, fail-fast watchdogs, retry telemetry)
 - [Vitest patterns](docs/vitest-patterns.md)

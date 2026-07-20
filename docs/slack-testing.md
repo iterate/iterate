@@ -20,7 +20,8 @@ and [Production mention-gate smoke](#production-mention-gate-smoke).
 - Preview Slack app creation and manifest:
   [apps/os/docs/slack-preview-app-manifest.md](../apps/os/docs/slack-preview-app-manifest.md)
 - Bulk-create remaining preview Slack OAuth clients:
-  [slack-preview-oauth-clients.md](slack-preview-oauth-clients.md)
+  [slack-preview-oauth-clients.md](slack-preview-oauth-clients.md) for the
+  API-first bulk workflow
 - Slack bot token migration and portal links:
   [slack-bot-token-migration.md](slack-bot-token-migration.md)
 - Public local URLs for Slack callbacks:

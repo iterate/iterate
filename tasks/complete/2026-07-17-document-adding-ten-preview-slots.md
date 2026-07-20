@@ -8,10 +8,11 @@ branch: docs/add-ten-preview-slots
 
 ## Status
 
-Complete. The new runbook covers repository edits, Doppler inheritance,
-Cloudflare provisioning, external apps, deployment, leasing, and per-slot
-acceptance. The code now derives preview projections from `envs.ts` and orders
-Streams after Auth. No infrastructure or secret state changed in this PR.
+Complete. The runbook now uses a plan/approve/apply/verify model for an
+agent-led expansion, including isolated browser sessions and narrow approval
+boundaries for purchases and external writes. It is updated for current main's
+six-Worker, two-R2, no-AI-Search topology. No infrastructure or secret state
+changed in this PR.
 
 ## Goal
 
@@ -78,6 +79,17 @@ or cannot be cleaned up safely.
   tests pass 33/33._
 - [x] Move this task to `tasks/complete/` once the guide and PR are ready. _Moved
   on 2026-07-17 after the documentation and focused verification were complete._
+- [x] Merge latest `main` and repeat the topology and live-state audit. _Merged
+  `270b1b30f`; refreshed Cloudflare counts and Semaphore health on 2026-07-20,
+  then removed stale builder/AI Search assumptions._
+- [x] Find the most hands-off safe route through domains, GitHub, Slack,
+  browser authorization, and secret handoff. _Documented Cloudflare's Registrar
+  API, Slack's Manifest API, GitHub's browser-reviewed manifest conversion,
+  dedicated browser profiles, resumable checkpoints, and exact approval
+  boundaries._
+- [x] Remove unsafe or broken supporting instructions. _Replaced the duplicated
+  Slack credential handoff guide, corrected GitHub `.com` URLs and runtime key,
+  and removed its disconnected callback-capture example._
 
 ## Implementation log
 
@@ -93,3 +105,9 @@ or cannot be cleaned up safely.
 - 2026-07-17: Implemented that design in the repository. Auth and mobile builds,
   focused orchestration/config tests, and the full repository gates verify the
   shared projection across runtime and script bundlers.
+- 2026-07-20: Merged current main and reran the read-only Cloudflare and
+  Semaphore audits. Current code provisions six Workers, two R2 buckets, no AI
+  Search, and a four-instance builder container pool per slot.
+- 2026-07-20: Reworked external provisioning around a concrete expansion plan,
+  one human approval per bounded batch, direct API-to-Doppler secret flow, and
+  a dedicated observable browser profile for the remaining authorization UI.

@@ -1,146 +1,209 @@
 # Adding preview slots
 
-This runbook expands the shared PR-preview fleet. It is written for the next
-expansion, from `preview_1`–`preview_9` to `preview_1`–`preview_19`.
+This runbook expands the PR-preview fleet from nine slots to nineteen. It is
+specific enough to run for `preview_10`–`preview_19`, but the safety model is
+the same for later batches.
 
-Do not start by adding Semaphore leases. A leased slot is live: CI may claim it,
-deploy into it, and later ask `main` to erase it. The repository, Doppler, and
-Cloudflare pieces must exist before the lease enters the pool.
+The important rule is simple: do not add a Semaphore lease until the slot has
+been provisioned, deployed, and tested. A lease makes the slot available to CI;
+from then on, any eligible PR may claim and erase it.
+
+## The safest automation model
+
+Use one agent and one durable checklist for the whole expansion. The agent may
+resume completed steps, but it must never infer permission for a purchase,
+overwrite, rotation, or production write.
+
+Work in four phases:
+
+1. **Plan:** inspect git, Doppler metadata, Cloudflare, GitHub, and Slack without
+   changing them. Produce the exact slot list, domains, expected app names,
+   existing objects, prices, and intended writes.
+2. **Approve:** a human approves the concrete batch. Domain approval includes
+   exact names and a maximum total price. External-app approval names the
+   GitHub organization and Slack workspace. No open-ended approval.
+3. **Apply:** create only missing objects. Every operation must be idempotent or
+   stop when an object with the intended name already exists.
+4. **Verify:** read the resulting state back from each system. Creation output
+   alone is not evidence that a slot works.
+
+The approval boundary is:
+
+| Action                                                                    | Agent may do it during planning? | Apply requirement                                        |
+| ------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------- |
+| Read inventories, validate manifests, check domain availability and price | Yes                              | None                                                     |
+| Create branch configs or cloud resources with new slot names              | No                               | Approve the exact slot batch                             |
+| Create GitHub or Slack apps                                               | No                               | Approve organization/workspace and app names             |
+| Register domains                                                          | No                               | Approve exact domains, current prices, and maximum total |
+| Write new per-slot Doppler secrets                                        | No                               | Approve project, configs, and secret names               |
+| Seed production Semaphore leases                                          | No                               | Separate approval after all slots pass                   |
+| Overwrite, rotate, delete, reclaim, or change production integrations     | No                               | Stop and obtain specific approval                        |
+
+Do not paste credentials into chat, markdown, command arguments, screenshots,
+or git. Pipe API responses directly into Doppler and verify only their shape.
+Temporary credential files belong in a mode-`0700` directory from `mktemp -d`
+outside the repository and must be removed after the write.
+
+### Browser sessions
+
+Use a dedicated, headed Chrome for Testing profile as described in
+[Browser testing](browser-testing.md). A human signs into GitHub, Slack, and
+Cloudflare once; the agent can then drive the approved batch and the human can
+watch it.
+
+Do not import a personal Chrome profile. Playwriter can control an already-open
+personal Chrome tab, so use it only when the human explicitly permits that for
+this task. The dedicated automation profile is the default because its cookies
+and permissions are isolated and disposable.
+
+Browser automation does not weaken the approval boundary. The agent stops on
+2FA, CAPTCHA, a changed price, a different workspace or organization, a name
+collision, or any page whose final action is outside the approved batch.
+
+### The missing orchestrator
+
+The repository has good idempotent leaf commands, but no durable expansion
+orchestrator. For this batch, the agent can run those commands and maintain the
+ledger at the end of this document. Before a later expansion, it would be worth
+adding a first-class command with this shape:
+
+```text
+pnpm preview expand plan     --slots 10-19 --out expansion.json
+pnpm preview expand apply    --plan expansion.json --approve <plan-sha256>
+pnpm preview expand verify   --plan expansion.json
+pnpm preview expand activate --plan expansion.json
+```
+
+`plan` would be read-only and contain no secrets. `apply` would reject a stale
+plan, require the hash of the reviewed plan, run sequentially, and resume from
+verified checkpoints. Domain registration would additionally require the
+approved price ceiling in the plan. `activate` would remain separate because
+adding production Semaphore leases changes who can use and erase the slots.
+
+The command should call the existing provisioners rather than reimplement
+them. Its value is durable state, precondition checks, direct secret piping,
+and safe resumption after browser authorization or a provider outage. It
+should never gain generic `--force`, `--rotate`, or deletion flags.
 
 ## What one slot contains
 
-| Layer         | Per-slot state                                                                                                                                                         |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository    | OS and Semaphore environment entries; derived app maps, OAuth audiences, mobile preset, and preview inventory                                                          |
-| Doppler       | Branch configs in `os`, `auth`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                                                |
-| Cloudflare    | Two zones, seven Workers, two D1 databases, two KV namespaces, three R2 buckets, one Queue, one AI Search namespace, DNS, routes, container classes, and email routing |
-| External apps | One GitHub App and one Slack app for full integration parity                                                                                                           |
-| Lease fleet   | One `environment-config-lease` resource in production Semaphore                                                                                                        |
+| Layer         | Per-slot state                                                                                                                               |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository    | OS and Semaphore resource IDs; derived Auth, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections                           |
+| Doppler       | `preview_N` in `os`, `auth`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                         |
+| Cloudflare    | Two zones, six Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, seven container apps, and email routing |
+| External apps | One GitHub App and one Slack app for full integration parity                                                                                 |
+| Lease fleet   | One production Semaphore `environment-config-lease` resource                                                                                 |
 
-The Workers are OS, its builder and typechecker sidecars, Auth, Semaphore, the
-Streams example app, and Dummy Petshop.
+The six Workers are OS, its typechecker sidecar, Auth, Semaphore, Streams, and
+Dummy Petshop. OS deploys six sandbox container classes plus one
+`standard-3` builder-pool class. AI Search and the separate builder Worker were
+removed in July 2026; old account objects may still exist and are not a slot
+template.
 
-## Before changing anything
+## 0. Build the expansion plan
 
-Use a branch from current `main`. The expansion PR should contain the code edits
-and the real Cloudflare resource IDs. Doppler and Cloudflare preparation happen
-while that PR is open; adding leases happens only after it merges.
-
-You need access to:
-
-- the Iterate Doppler workspace;
-- Cloudflare account `376ef7ed81b0573f93524de763666c15`;
-- GitHub App creation for the `iterate` organization;
-- the Slack workspace used for preview apps.
-
-Record the live fleet before touching it:
+Start from current `main` in a branch and worktree. Record the commit SHA and
+run the read-only fleet checks:
 
 ```bash
 doppler run --project _shared --config prd -- pnpm preview status
 doppler run --project _shared --config prd -- pnpm preview reconcile
 ```
 
-`reconcile` is useful but narrow. It checks the slots already in Semaphore for
-five Doppler configs and two active Cloudflare zones. It does not check
-`envs.ts`, resource IDs, secret shape, deployed Workers, OAuth audiences,
-Slack/GitHub routing, or e2e health.
+`reconcile` checks existing Semaphore entries, five Doppler configs, and two
+active zones. It does not check `envs.ts`, secret shape, deployed Workers,
+resource IDs, integration apps, or end-to-end health.
 
-### Capacity check
+For every proposed slot, the plan must contain:
 
-Recalculate capacity immediately before the expansion. Ten slots add:
+- both domain names and current zone status;
+- every existing Doppler config, Cloudflare object, GitHub App, and Slack app
+  with the intended name;
+- the exact missing objects to create;
+- current account capacity and projected capacity;
+- the GitHub organization and Slack workspace IDs;
+- any domain price and the maximum approved total;
+- a `not-started`, `created`, or `verified` state for each stage.
 
-| Resource             | Added | Live count on 2026-07-17 | Count after expansion | Published account limit |
-| -------------------- | ----: | -----------------------: | --------------------: | ----------------------: |
-| Workers              |    70 |                      122 |                   192 |                     500 |
-| D1 databases         |    20 |                       27 |                    47 |                  50,000 |
-| KV namespaces        |    20 |                       18 |                    38 |                   1,000 |
-| R2 buckets           |    30 |                       29 |                    59 |               1,000,000 |
-| Queues               |    10 |                        9 |                    19 |                  10,000 |
-| AI Search namespaces |    10 |                       11 |                    21 |                     100 |
+On 2026-07-20, `iterate-preview-10` through `iterate-preview-19` had active
+`.com` and `.app` zones but no matching DNS records or Cloudflare resources.
+Recheck; live state wins over this note.
 
-The current OS container caps reserve 75 GiB, 16.25 vCPU, and 196 GB of disk
-per slot. Nineteen slots reserve 1.39 TiB, 308.75 vCPU, and 3.72 TB, below the
-published limits of 6 TiB, 1,500 vCPU, and 30 TB. Recheck the caps in
-`SANDBOX_MAX_INSTANCES` and the current Cloudflare limits instead of copying
-these numbers.
+### Capacity
+
+Ten slots currently add 60 Workers, 20 D1 databases, 20 KV namespaces, 20 R2
+buckets, and 10 Queues. The 2026-07-20 preview account held 123 Workers, 27 D1
+databases, 18 KV namespaces, 29 R2 buckets, and 11 Queues before expansion.
+Some are retired objects, which explains differences from slot-count maths.
+
+The current caps reserve 99 GiB memory, 23.25 vCPU, and 244 GB disk per slot.
+Nineteen slots reserve 1,881 GiB, 441.75 vCPU, and 4,636 GB. Recalculate from
+`SANDBOX_MAX_INSTANCES`, `WORKER_BUILDER_POOL_SIZE`, and Cloudflare's current
+limits immediately before applying the plan.
 
 References: [Workers](https://developers.cloudflare.com/workers/platform/limits/),
 [Containers](https://developers.cloudflare.com/containers/platform-details/limits/),
 [D1](https://developers.cloudflare.com/d1/platform/limits/),
-[KV](https://developers.cloudflare.com/changelog/post/2025-01-27-kv-increased-namespaces-limits/),
-[R2](https://developers.cloudflare.com/r2/platform/limits/),
-[Queues](https://developers.cloudflare.com/queues/platform/limits/), and
-[AI Search](https://developers.cloudflare.com/ai-search/platform/limits-pricing/).
+[KV](https://developers.cloudflare.com/kv/platform/limits/),
+[R2](https://developers.cloudflare.com/r2/platform/limits/), and
+[Queues](https://developers.cloudflare.com/queues/platform/limits/).
 
 ## 1. Teach the repository about slots 10–19
 
-Make these edits together. A partial edit can produce a healthy-looking Worker
-that cannot authenticate or cannot be leased safely.
+In `envs.ts`, add `preview_10`–`preview_19` to `envs` using
+`previewSlot(N, ...)`, with all three resource IDs set to `UNPROVISIONED`. Add
+the same names to `semaphoreEnvs` using
+`semaphorePreviewSlot(N, UNPROVISIONED)`.
 
-### Make `envs.ts` the source of truth
+Never invent IDs or copy them from another slot. OS and Auth intentionally
+share the Auth D1 ID; Semaphore has its own D1 ID.
 
-In `envs.ts`, add:
+The resource-free maps and consumers derive from `envs.ts`:
 
-- `preview_10`–`preview_19` to `envs`, using `previewSlot(N, ...)` with all
-  three resource IDs set to `UNPROVISIONED`;
-- the same names to `semaphoreEnvs`, using `semaphorePreviewSlot(N,
-UNPROVISIONED)`;
+- `authEnvs`, `dummyPetshopEnvs`, and `streamsExampleEnvs`;
+- the preview provisioner and Semaphore inventory;
+- Auth audiences and per-slot OAuth client targets;
+- mobile server presets.
 
-Do not invent IDs and do not copy IDs from another slot. OS and Auth deliberately
-share the slot's Auth D1 ID; Semaphore has its own D1 ID.
+Streams must keep `previewDependencies: ["auth"]`: its deploy fetches Auth's
+JWKS. Do not add another numeric slot list or an exact-range test.
 
-The other three maps have no independent per-slot resource IDs. Their preview
-entries already derive from `envs`:
-
-- `authEnvs` preview entries derive from `envs`, with fixed test OTP enabled;
-- `dummyPetshopEnvs` preview entries derive from each OS preview's slot number;
-- `streamsExampleEnvs` preview entries derive from each OS preview's slot
-  number.
-
-Keep their production and Auth `dev_global` entries explicit. Type each derived
-map so a missing or extra deployed environment is a type error.
-
-### Derived fleet projections
-
-`envs.ts` exports a preview-only projection derived from the `envs` entries and
-their `dopplerConfig` values. The following consumers already use it:
-
-- Doppler provisioning and Semaphore inventory use the projected slot numbers
-  in `scripts/preview/preview.ts`;
-- the four Auth audience sets in `apps/auth/src/server/oauth-resources.ts` use
-  `envs`, `semaphoreEnvs`, and
-  `streamsExampleEnvs`;
-- `targets` in `apps/os/scripts/sync-auth-clients.ts` use `envs`;
-- `SERVER_PRESETS` in `apps/mobile/src/lib/servers.ts` use `envs`.
-
-Do not add another numeric slot list or an exact-range unit test. The remaining
-`scripts/preview/preview.test.ts` cases cover behavior that deployed-env smoke
-tests do not isolate: dependency ordering, diff selection, retry and force-push
-handling, inventory add/delete semantics, lease ownership, failed cleanup,
-reclaim, and GC.
-
-The Streams example app declares `previewDependencies: ["auth"]` because its
-deploy fetches and bakes Auth's JWKS. Preserve that dependency: an old slot can
-hide incorrect first-deploy ordering.
-
-Search again before moving on:
+Search for operational prose and hidden ranges before moving on:
 
 ```bash
 rg -n 'nine slots|all nine|1–9|1\.\.9|length: 9|\[1, 2, 3, 4, 5, 6, 7, 8, 9\]' \
   envs.ts scripts apps docs .depot
 ```
 
-Historical incident notes need not be rewritten. Operational descriptions and
-live fleet counts do.
+Historical incident notes do not need rewriting. Live procedures do.
 
-## 2. Create the Doppler branch configs
+## 2. Confirm domains
 
-Do not create `_shared/preview_11`–`preview_19`. Deployed apps inherit shared
+`ensure-resources` creates records in an existing zone. It does not register a
+domain or create a zone.
+
+If a domain is missing, use Cloudflare Registrar's domain-check API to confirm
+availability and the real-time price immediately before approval. Registration
+is billable and non-refundable. The agent may call the registration API only
+after a human approves the exact domain and price ceiling. A changed name or
+price invalidates that approval.
+
+Cloudflare registration requires a Registrar write token, a default payment
+method, registrant contact, and acceptance of the registration agreement. A
+successful registration normally creates the authoritative Cloudflare zone;
+read it back and wait for `active` before continuing.
+
+References: [Registrar API](https://developers.cloudflare.com/registrar/registrar-api/)
+and [register a domain](https://developers.cloudflare.com/api/resources/registrar/subresources/registrations/methods/create/).
+
+## 3. Create Doppler configs
+
+Do not create `_shared/preview_11`–`preview_19`. App configs inherit shared
 Cloudflare credentials from their project-level `preview` root, which inherits
-`_shared/preview`. Environment-shaped public values now come from `envs.ts`.
-`_shared/preview_10` already exists as old residue and is not a template.
+`_shared/preview`. `_shared/preview_10` is old residue, not a template.
 
-First create the two configs the provisioner does not create:
+After approval, create the two configs the provisioner does not create:
 
 ```bash
 for project in os dummy-petshop; do
@@ -152,119 +215,76 @@ for project in os dummy-petshop; do
 done
 ```
 
-Then run the repository provisioner from the expansion branch. It reads the
-updated `previewEnvironmentSlotNumbers`, creates `auth`, `semaphore`, and
-`streams-example-app` configs, and writes the three per-slot Auth clients plus
-their matching secrets.
+Then run:
 
 ```bash
 pnpm preview provision-auth-preview-configs
 ```
 
-Do not pass `--rotate`. Without it, existing slots retain their current client
-secrets, Better Auth secrets, and service tokens. The command still writes
-live Doppler state, including the existing preview root configs, so review its
-scope before running it.
+Do not pass `--rotate`. Without it, existing client secrets, Better Auth
+secrets, and service tokens are preserved. The command still writes live
+Doppler state, so its exact config list belongs in the approved plan.
 
-For every new config, verify:
+Verify names, inheritance, and required-secret presence without printing
+values. Auth must have its OAuth seed and runtime secrets; OS, Semaphore, and
+Streams must have matching per-slot Auth client IDs and secrets; Semaphore and
+Streams must have `AUTH_FORGE_PRIVATE_JWK`.
 
-- `doppler configs get preview_N --project PROJECT --json` reports environment
-  `preview`;
-- `doppler secrets --project PROJECT --config preview_N --only-names` includes
-  `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`;
-- Auth has `AUTH_SEED_OAUTH_CLIENTS`, `APP_CONFIG_BETTER_AUTH_SECRET`, and
-  `APP_CONFIG_SERVICE_AUTH_TOKEN`;
-- OS, Semaphore, and Streams have their matching
-  `APP_CONFIG_ITERATE_AUTH__CLIENT_ID` and client secret;
-- Semaphore and Streams have `AUTH_FORGE_PRIVATE_JWK`.
+Do not run `pnpm auth:sync-clients`. That older command can point every target
+at the Auth config wrapping the command; it is not the isolated preview-stack
+provisioner.
 
-`apps/os/scripts/sync-auth-clients.ts` is not the preview-stack provisioner.
-It predates isolated per-slot Auth and can point every target at whichever Auth
-config wraps the command. Do not run `pnpm auth:sync-clients` for this work.
+## 4. Create integration apps
 
-## 3. Add per-slot integration apps
+The Workers can deploy without Slack or GitHub config, but that is not a
+complete slot. Slack e2e skips without a signing secret, and GitHub e2e uses
+Dummy Petshop instead of the slot's real GitHub App.
 
-The platform deploys without real Slack or GitHub apps because both config
-blocks are optional. That is not full preview parity: Slack e2e silently skips
-without a signing secret, and GitHub e2e uses Dummy Petshop rather than the
-deployment's real GitHub App.
+### Slack: API first, browser for authorization
 
-### GitHub
+Use [the Slack preview-app runbook](../apps/os/docs/slack-preview-app-manifest.md).
+The preferred path is Slack's App Manifest API, not ten rounds of form entry:
 
-Create one GitHub App per slot. Use the permissions and events in
-`apps/os/docs/github-preview-app-manifest.md`, with these corrections:
+1. A human generates an app configuration token for the approved test
+   workspace. It is user-and-workspace scoped, not app scoped, and normally
+   expires after 12 hours.
+2. The agent renders and validates all ten manifests before creating anything.
+3. After approval, call `apps.manifest.create` sequentially; its Tier 1 rate
+   limit is at least one request per minute.
+4. Pipe `client_id`, `client_secret`, and `signing_secret` from each response
+   directly into `os/preview_N` as `APP_CONFIG_INTEGRATIONS__SLACK`.
+5. After OS is live, use the dedicated browser profile to install each app
+   through OS's Connect Slack flow. This captures the bot token and claims the
+   workspace in OS; installing only from Slack's dashboard is insufficient.
 
-- all app, callback, and webhook URLs use
-  `https://os.iterate-preview-N.com`, not `.app`;
-- the Doppler JSON key is `webhookSecret`, matching `apps/os/src/config.ts`,
-  not `webhookSigningSecret`;
-- write each value directly to `os/preview_N`; do not put a slot credential in
-  `os/preview`.
+Use the bootstrap manifest until OS can answer Slack's URL verification. Then
+apply the full manifest with `apps.manifest.update` and verify request URLs.
+Never store the configuration token in git or a long-lived shared preview
+config.
 
-The essential URLs are:
+### GitHub: manifest flow with one approved browser batch
 
-```text
-Homepage: https://os.iterate-preview-N.com
-Callback: https://os.iterate-preview-N.com/api/integrations/github/callback
-Webhook:  https://os.iterate-preview-N.com/api/integrations/github/webhook
-```
+Use [the GitHub preview-app runbook](../apps/os/docs/github-preview-app-manifest.md).
+GitHub has no `POST /apps`; the supported manifest flow includes a GitHub review
+screen. That does not require ten manual handoffs:
 
-The value stored in `APP_CONFIG_INTEGRATIONS__GITHUB` is:
+1. Start a local callback receiver and render the ten manifests with a unique
+   anti-CSRF `state` for each slot.
+2. Open the organization manifest forms in the dedicated browser profile.
+3. Confirm the review screen shows `iterate`, the exact ten app names, `.com`
+   callback/webhook URLs, and the approved permissions.
+4. Once the human approves that batch, the agent may click each Create button,
+   capture its one-time code, and call
+   `POST /app-manifests/{code}/conversions`.
+5. Pipe each conversion response directly into `os/preview_N`. The runtime key
+   is `webhookSecret`, not `webhookSigningSecret`.
 
-```json
-{
-  "appId": "...",
-  "appSlug": "iterate-preview-N",
-  "oauthClientId": "...",
-  "oauthClientSecret": "...",
-  "privateKey": "-----BEGIN RSA PRIVATE KEY-----\n...",
-  "webhookSecret": "..."
-}
-```
+Stop on an existing app name. Inspect and reconcile it; never create a
+near-duplicate or overwrite its settings by guesswork.
 
-Do not use the bulk script currently printed in the GitHub runbook. Besides
-the wrong hostname and secret key, its redirect-capture example does not pipe
-the background server's code back to the conversion step.
+## 5. Create Cloudflare resources and record IDs
 
-After OS is deployed, authenticate as the App and verify `GET /app` returns
-`iterate-preview-N`, then verify `GET /app/hook/config` returns that slot's
-`.com` webhook URL.
-
-### Slack
-
-Follow `apps/os/docs/slack-preview-app-manifest.md` for each slot:
-
-1. Create `iterate (preview-N)` with its bootstrap manifest.
-2. Store `APP_CONFIG_INTEGRATIONS__SLACK` directly in `os/preview_N`.
-3. Deploy OS.
-4. Save the full manifest so Slack can verify the now-live request URLs.
-5. Install it to the preview/test workspace and merge its `xoxb-` token into
-   the same JSON as `botToken`.
-
-The Slack guide's `.com` URLs and `webhookSigningSecret` key are correct.
-Test `botToken` with `auth.test`; presence in Doppler is not proof that a token
-has not been revoked.
-
-### Dummy Petshop
-
-`APP_CONFIG_INTEGRATIONS__PETSHOP` is inherited from `os/preview`. It needs
-OAuth client credentials but no per-slot override: OS derives the provider
-origin by replacing its own `os.` hostname with `dummy-petshop.`. OS deploy
-fails if this integration config is absent in a preview.
-
-## 4. Create Cloudflare resources and record their IDs
-
-For the 10–19 expansion, both `iterate-preview-N.com` and
-`iterate-preview-N.app` already exist as active full zones for slots 10–20.
-This was checked on 2026-07-17. At that point slots 10–19 had no matching DNS,
-Workers, D1, KV, R2, Queues, or AI Search namespaces. Recheck both facts.
-
-If either zone is missing or not active, stop. `ensure-resources` creates DNS
-records inside an existing zone; it does not register a domain or create a
-zone.
-
-Run resource creation sequentially to keep Cloudflare management API traffic
-bounded:
+Run management calls sequentially so retries and rate limits remain legible:
 
 ```bash
 for n in $(seq 10 19); do
@@ -275,32 +295,28 @@ for n in $(seq 10 19); do
 done
 ```
 
-There is no Streams `ensure-resources` command. Its deploy creates its DNS
-record before uploading the Worker.
+Streams has no `ensure-resources`; its deploy creates its DNS record. OS also
+installs R2 lifecycle rules, creates its Queue and event subscription, enables
+inbound Email Routing, and installs the zone catch-all.
 
-OS resource creation also installs R2 expiry rules, creates the Queue and event
-subscription, creates an AI Search namespace, enables inbound Email Routing,
-and installs the zone catch-all. Read every warning. In particular,
-`ensureAiSearchNamespace` logs a warning and continues when AI Search creation
-fails. Treat that warning as a failed slot: create the namespace manually and
-verify it before proceeding.
+Outbound Email Service onboarding remains a Cloudflare dashboard step. Within
+the approved batch, an agent may drive it using the dedicated browser profile,
+but must stop before onboarding a different sender domain or changing existing
+DNS. Verify each sender after saving.
 
-Outbound Email Service onboarding is a separate dashboard action because
-Cloudflare has no public API for it. Complete it for each new
-`iterate-preview-N.app` sender domain if preview email sending is expected.
-
-Paste the printed IDs into the expansion branch:
+Paste these IDs into the branch:
 
 - OS `projectDirectoryKvId` and `workerBuildCacheKvId`;
 - the shared OS/Auth `authDbId`;
 - Semaphore `resourcesDbId`.
 
-Run every `ensure-resources` command again. The second pass must report the
-recorded IDs as matching reality and make no new resources.
+Run every `ensure-resources` command again. The second pass must match the
+recorded IDs and create nothing. A collision, warning, different ID, or new
+object on the second pass is a failed checkpoint.
 
-## 5. Verify and merge the repository change
+## 6. Test and merge the repository change
 
-At minimum, run:
+Run:
 
 ```bash
 pnpm --dir apps/os exec vitest --root ../.. run \
@@ -313,21 +329,16 @@ pnpm lint
 pnpm format:check
 ```
 
-Inspect the generated Wrangler configs and confirm every new env selects its
-own worker names, routes, D1/KV IDs, and preview container caps.
+Inspect generated Wrangler config for every new environment. Names, routes,
+D1/KV IDs, and container caps must be slot-specific.
 
-Open and merge the expansion PR before deploying or leasing the new fleet. Its
-own PR preview will continue using one of slots 1–9. Do not seed Semaphore from
-the branch.
+Merge this branch before deployment or leasing. Never seed production
+Semaphore from an unmerged expansion branch.
 
-## 6. Bootstrap the Workers from current `main`
+## 7. Deploy from current `main`
 
-Pull current `main` after the expansion merges. Deploy each new slot directly
-while it is still absent from Semaphore. There is no legitimate lease holder
-to race yet.
-
-Auth must be serving before OS, Semaphore, or Streams tries to bake its JWKS.
-Dummy Petshop must be serving before OS preview e2e. Use this order:
+Pull current `main` after the expansion merges. Deploy while the slots are
+still absent from Semaphore, so there is no lease holder to race.
 
 ```bash
 for n in $(seq 10 19); do
@@ -340,18 +351,18 @@ for n in $(seq 10 19); do
 done
 ```
 
-Each deploy downloads its own Doppler config and fails before upload if required
-secrets, resource IDs, runtime config, migrations, JWKS, routes, or smoke probes
-are wrong. Do not replace a failed deploy with a curl-only health check.
+Auth must precede Streams, which fetches Auth's JWKS. Dummy Petshop must
+precede OS e2e. Do not replace a failed deploy with a curl-only health check;
+the deploy command validates secrets, resources, migrations, routes, and smoke
+probes.
 
-Finish the Slack full-manifest step after OS is live. Verify GitHub App metadata
-and webhook config now too.
+Now update Slack from bootstrap to full manifests, complete Slack installation
+through OS, and verify each GitHub App's `/app` identity and webhook URL.
 
-## 7. Add the slots to Semaphore
+## 8. Approve and add Semaphore leases
 
-This is the point at which CI can discover the new slots. Run from current
-`main`, never from an old checkout: inventory sync deletes unexpected entries,
-so a pre-expansion checkout would remove slots 10–19 again.
+This is a separate production write. Present the completed verification ledger
+and obtain approval immediately before running it from current `main`:
 
 ```bash
 doppler run --project semaphore --config prd -- \
@@ -361,12 +372,13 @@ doppler run --project _shared --config prd -- pnpm preview status
 doppler run --project _shared --config prd -- pnpm preview reconcile
 ```
 
-Stop unless `status` reports 19 slots and `reconcile` reports zero issues.
+Stop unless `status` reports nineteen slots and `reconcile` reports zero
+issues.
 
-## 8. Prove every new slot through the normal lifecycle
+## 9. Prove the normal lifecycle
 
-Use a small draft canary PR that touches a preview-shared path. For each new
-slot, pin the PR, run the full app fleet and e2e, then clean it up:
+Use a small draft canary PR that touches a preview-shared path. Pin, run, and
+clean one new slot at a time:
 
 ```bash
 PR=<canary-pr-number>
@@ -383,52 +395,54 @@ for n in $(seq 10 19); do
 done
 ```
 
-This proves more than first-deploy smoke tests: Semaphore assignment, entry
-erase, Auth reseeding, dependency ordering, all five deployments, full preview
-e2e, cleanup, and release. Check the canary PR's managed preview table, CI logs,
-Cloudflare traces, and `pnpm preview status` after each run. An unexplained
-error, skipped Slack test, unreleased lease, or mismatched final state is a
-failed slot.
+After each slot, inspect the managed PR table, CI logs, Cloudflare traces, and
+`pnpm preview status`. An unexplained error, skipped Slack test, unhealthy
+storage shard, unreleased lease, or mismatched final state fails the slot. Do
+not keep feeding work to a sick slot; leave it unavailable and record the
+reason until automatic health quarantine exists.
 
-After all ten pass, close the canary PR and run `status` and `reconcile` once
-more. The expansion is complete only when all 19 slots are present, available
-or legitimately leased, and free of reconciliation issues.
+Close the canary only after all ten slots have passed. Run `status` and
+`reconcile` once more.
 
-## Operator record
+## Resuming safely
 
-Keep this table in the expansion PR. Check a cell only after its corresponding
-verification has passed; creating a resource is not the same as verifying it.
+Keep this ledger in the expansion PR. `created` is not `verified`; mark the
+cell only after reading the state back from the owning system.
 
-| Slot | Doppler | Cloudflare IDs + second ensure | GitHub + Slack verified | Five apps deployed | Lease present | Full lifecycle passed |
-| ---- | ------- | ------------------------------ | ----------------------- | ------------------ | ------------- | --------------------- |
-| 10   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 11   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 12   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 13   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 14   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 15   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 16   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 17   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 18   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
-| 19   | ☐       | ☐                              | ☐                       | ☐                  | ☐             | ☐                     |
+| Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
+| ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
+| 10   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 11   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 12   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 13   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 14   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 15   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 16   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 17   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 18   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 19   | ☐       | ☐       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
 
-## Known drift found during the 2026-07-17 audit
+Before resuming, rerun the planning inventory and compare it with this ledger.
+If the systems disagree, trust the read-back and investigate. Never “finish” a
+half-created object by rotating or replacing credentials unless that action is
+explicitly approved.
 
-These are reasons to verify behavior from code and live metadata instead of
-cloning an old slot blindly:
+## Drift found while writing this runbook
 
-- `_shared/preview_10` exists, but no app-level `preview_10` config or matching
-  Cloudflare resource existed. It is partial historical state.
-- All current OS preview configs inherit one GitHub credential for the
-  `iterate (preview-1)` App; its webhook points only at preview 1. The per-slot
-  GitHub runbook describes the right isolation model but has the hostname,
-  secret-key, and bulk-script defects listed above.
-- Slack configs are per slot, but the stored preview 3 and preview 6 bot tokens
-  returned `invalid_auth`. New slots must validate credentials, not copy shape.
-- `apps/dummy-petshop/scripts/deploy.ts` says “workers.dev only, no routes, no
-  DNS”; its generated Wrangler config and `ensure-resources` use a custom route
-  and proxied DNS.
-- The audit found Streams' missing Auth dependency; this documentation PR also
-  fixes the deploy graph.
-- Existing environment docs describe nine slots and the generic four-step
-  environment bring-up. Neither is a complete fleet-expansion procedure.
+- `_shared/preview_10` exists without an app-level stack. It is residue, not a
+  template.
+- Existing OS preview configs inherited one preview-1 GitHub credential even
+  though a GitHub App has only one webhook URL.
+- Stored Slack bot tokens for preview 3 and preview 6 returned `invalid_auth`;
+  secret presence is not credential verification.
+- The old GitHub runbook used `.app` OS URLs, the wrong webhook key, and a
+  broken callback-capture script.
+- The old Slack bulk guide duplicated manifests and asked humans to paste
+  secrets into chat. It has been replaced by the Manifest API workflow.
+- Dummy Petshop's deploy comment claimed there was no route or DNS, while its
+  generated config uses both.
+- Streams lacked its Auth dependency; the expansion change fixes the deploy
+  graph.
+- AI Search and the standalone builder Worker were removed after the first
+  audit. Their retired account objects demonstrate why code and live state
+  must both be checked immediately before expansion.
