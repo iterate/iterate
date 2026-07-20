@@ -5,7 +5,7 @@ import type { TodoListState, TodoSessionApi } from "./state.ts";
 
 /**
  * The whole client: one Cap'n Web WebSocket to /api, authenticated from the
- * app's exact-origin cookie, its live state folded into the platform's
+ * app's exact-origin cookie, its live state fed into the platform's
  * `createLiveStateStore` (snapshot + patches) and read with
  * `useSyncExternalStore`. Mutations are plain calls on the session — the
  * Durable Object refreshes its one LiveState and every open tab, this one

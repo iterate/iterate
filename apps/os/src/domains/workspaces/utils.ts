@@ -66,7 +66,7 @@ function defaultWorkspaceMounts(): Record<string, WorkspaceMount> {
 
 /**
  * The mount-table door guard, shared by `create` and `configure`: raw stream
- * appends bypass it (and merely fold into config), but every platform door
+ * appends bypass it (and merely reduce into config), but every platform door
  * validates here so a bad table fails loudly at the caller instead of quietly
  * mis-routing reads. Returns the table with normalized mount-point keys.
  * Values may be partial (configure patches) or null (unmount) — `repoPath` is

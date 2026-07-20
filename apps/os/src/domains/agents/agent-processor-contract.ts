@@ -29,7 +29,11 @@ export type AgentConfig = z.infer<typeof AgentConfig>;
 const AgentConfigPatch = z.strictObject({
   llm: z.strictObject({ model: z.string().min(1).optional() }).optional(),
 });
-const AgentBirthCertificate = z.strictObject({});
+// Loose on purpose: the birth certificate is the caller's payload to
+// `agents.get(path).create(payload)` — arbitrary caller-authored birth facts
+// ride along ({} is the norm); runtime policy still arrives via separate
+// configuration and context events.
+const AgentBirthCertificate = z.looseObject({});
 
 /**
  * Spacing between LLM retries after consecutive failures: base × 2^(n-1),
@@ -485,7 +489,7 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
-  version: "4.0.0",
+  version: "4.1.0",
   description:
     "Maintains model-visible history, schedules LLM turns, and runs them through the Cloudflare AI binding.",
   stateSchema: z
@@ -657,11 +661,11 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/created": {
       description:
-        "Records that an agent exists on this stream. Runtime policy is supplied by separate configuration and context events.",
+        "Records that an agent exists on this stream. The payload is the caller's birth certificate (arbitrary birth facts; {} is the norm). Runtime policy is supplied by separate configuration and context events.",
       payloadSchema: AgentBirthCertificate,
       examples: [
         {
-          description: "An agent existence fact has no caller-selected configuration.",
+          description: "An agent existence fact usually carries no caller-selected birth facts.",
           payload: {},
         },
       ],

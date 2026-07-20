@@ -12,10 +12,7 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
-import {
-  CONNECTION_CLAIMED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
-} from "../../src/domains/integrations/utils.ts";
+import { INTEGRATION_DIRECTORY_STREAM_PATH } from "../../src/domains/integrations/utils.ts";
 import {
   buildIntegrationRouterCreatedEvent,
   buildIntegrationRouterSubscriptionConfiguredEvent,
@@ -83,7 +80,7 @@ test.skipIf(signingSecret === null)(
     );
     using directory = root.streams.get(INTEGRATION_DIRECTORY_STREAM_PATH);
     await directory.append({
-      type: CONNECTION_CLAIMED_EVENT_TYPE,
+      type: "events.iterate.com/integration/connection-claimed",
       payload: { connection: CONNECTION, externalId: teamId, projectId, slug: "slack" },
     });
 

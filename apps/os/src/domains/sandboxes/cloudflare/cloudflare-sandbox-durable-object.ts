@@ -116,7 +116,7 @@ const SANDBOX_TERMINATED_STREAM_DRAIN_TIMEOUT_MS = 5_000;
  */
 type SandboxEnvVars = Record<string, string>;
 
-/** An env-var input map as journaled on the `configured` event: `undefined`
+/** An env-var input map as recorded on the `configured` event: `undefined`
  * (unset) becomes an explicit `null`, because undefined values do not survive
  * JSON — and an unset should be visible in the sandbox's history. */
 function definedEnvEntries(
@@ -369,7 +369,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       projectId,
       version: workerVersion(this.env),
     });
-    // Pure fold: there is no consequential background work to recover after
+    // Pure reducer: there is no consequential background work to recover after
     // eviction, so this processor deliberately does not opt into recovery.
     const processor = registry.register(new SandboxProcessor({ stream, path, projectId }));
     const resources = { reads: registry.reads(processor), registry };
@@ -382,7 +382,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   // Do not override alarm(): @cloudflare/containers owns this object's one
-  // alarm for container scheduling and idle expiry. The pure-fold processor
+  // alarm for container scheduling and idle expiry. The pure-reduce processor
   // above has recovery disabled and therefore never arms a registry alarm.
 
   get processor() {
@@ -423,7 +423,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
 
   /**
    * Abort the current Durable Object incarnation; the next request boots it
-   * again. Journal and fold the operator intent first: `ctx.abort()` is
+   * again. Append and reduce the operator intent first: `ctx.abort()` is
    * necessarily observed by Cloudflare and the caller as a lifecycle reset,
    * so the sandbox stream must carry the durable explanation for that reset.
    */
@@ -439,7 +439,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   /**
    * Create the sandbox: write the durable record that makes it exist. The
    * instance type is validated against THIS class (the collection routed here
-   * by the type it journaled on `create-requested`) and fixed for life.
+   * by the type it recorded on `create-requested`) and fixed for life.
    * Strict once setup completes — a pet is born once; an existing or
    * destroyed path is an error, so two callers can't silently share a sandbox
    * they each think they created. The sole exception is a durable
@@ -450,7 +450,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * `sleepAfter` and `keepAlive` pass straight through to the SDK's own
    * durable setters (`setSleepAfter` / `setKeepAlive` — the SDK persists and
    * restores them itself); `env` merges as if by {@link setEnvVars}. The
-   * collection journals `create-requested` (the command) before calling;
+   * collection appends `create-requested` (the command) before calling;
    * this emits `created` (the completion). No container boots here — the
    * first command or an explicit `start()` does.
    */
@@ -504,8 +504,8 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     this.#creationInFlight = true;
     try {
       // Birth and the processor subscription are one batch, and create returns
-      // only after the hosted reducer has durably folded through both facts.
-      // Keep the pending record if append, fold, or configuration fails: stream
+      // only after the hosted reducer has durably reduced through both facts.
+      // Keep the pending record if append, reduce, or configuration fails: stream
       // RPC failures are ambiguous, and deleting it after a committed append
       // would leave a stream-visible ghost with no command record. Both birth
       // events are idempotency-keyed, so the next create retry safely heals the
@@ -697,9 +697,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     // idle expiry reclaims.
     await super.destroy();
     this.#invalidateWorkspaceMemo();
-    // Fold the terminal fact before tombstoning. Stream delivery reaches this
+    // Reduce the terminal fact before tombstoning. Stream delivery reaches this
     // processor through the collection without requiring a usable sandbox,
-    // but returning only after the fold gives callers a coherent final state.
+    // but returning only after the reduction gives callers a coherent final state.
     await this.#appendLifecycleEventAndWait({
       type: "events.iterate.com/sandbox/destroyed",
       payload: {},
@@ -859,7 +859,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     //   guard's in-flight one.
     this.#workspaceReady = undefined;
     this.#workspaceProvisioned = false;
-    // Invalidate before touching the stream: even if journaling fails and the
+    // Invalidate before touching the stream: even if the append fails and the
     // hook rejects, no later call may reuse readiness from the old container.
     this.#lastStartedOffset = await this.#appendLifecycleEventAndCatchUpInBackground({
       type: "events.iterate.com/sandbox/started",
@@ -951,7 +951,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * degrades to null so provisioning continues with an empty workspace rather
    * than failing the start. Emits nothing — `#ensureWorkspace` reports what
    * happened once provisioning completes, behind its run-identity guard, so a
-   * superseded run can't journal a restore for a container it no longer owns.
+   * superseded run can't record a restore for a container it no longer owns.
    */
   async #restoreWorkspace(): Promise<string | null> {
     const backup = this.ctx.storage.kv.get<DirectoryBackup>(BACKUP_HANDLE_STORAGE_KEY);
@@ -999,7 +999,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * upgrade to an SDK method. The stock implementation only mutates the
    * running container's in-memory map (nothing survives a restart); ours
    * persists the merge in Durable Object storage, re-applies it on every
-   * container start, and journals a `sandbox/configured` event. Same
+   * container start, and appends a `sandbox/configured` event. Same
    * signature and semantics otherwise: keys merge in, `undefined` unsets a
    * key. Keeping the SDK's name (rather than a bespoke `configureEnvVars`)
    * means a docs-reading caller can't pick the silently-non-durable spelling.
@@ -1559,8 +1559,8 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * (sandbox-processor-contract.ts); building through it keeps emission and
    * declaration from drifting. This fire-and-forget lane is reserved for
    * ancillary audit events. Lifecycle completions that drive `running` await
-   * their durable append and either wait for the fold at an ordinary command
-   * boundary or schedule it outside the SDK lifecycle callback.
+   * their durable append and either wait for the reduction at an ordinary
+   * command boundary or schedule it outside the SDK lifecycle callback.
    */
   #emitLifecycleEvent(input: SandboxLifecycleEventInput): void {
     try {
@@ -1622,7 +1622,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     return offset;
   }
 
-  /** Fold the latest completion before an explicit lifecycle command
+  /** Reduce the latest completion before an explicit lifecycle command
    * returns. An undefined offset means this command found the container
    * already in the requested condition; catchUp still closes any reducer lag
    * left by an earlier incarnation's durable lifecycle append. */

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import { foldConnectionDirectory } from "./integration-streams.ts";
-import { CONNECTION_CLAIMED_EVENT_TYPE, CONNECTION_UNCLAIMED_EVENT_TYPE } from "./utils.ts";
 
 let offset = 0;
 function event(type: string, payload: Record<string, unknown>): StreamEvent {
@@ -10,9 +9,19 @@ function event(type: string, payload: Record<string, unknown>): StreamEvent {
 }
 
 const claim = (slug: string, externalId: string, projectId: string, connection: string) =>
-  event(CONNECTION_CLAIMED_EVENT_TYPE, { connection, externalId, projectId, slug });
+  event("events.iterate.com/integration/connection-claimed", {
+    connection,
+    externalId,
+    projectId,
+    slug,
+  });
 const unclaim = (slug: string, externalId: string, projectId: string, connection: string) =>
-  event(CONNECTION_UNCLAIMED_EVENT_TYPE, { connection, externalId, projectId, slug });
+  event("events.iterate.com/integration/connection-unclaimed", {
+    connection,
+    externalId,
+    projectId,
+    slug,
+  });
 
 describe("foldConnectionDirectory", () => {
   test("a matching unclaim clears a live claim", () => {
@@ -36,7 +45,11 @@ describe("foldConnectionDirectory", () => {
 
   test("another project's unclaim never clears a claim; claims without a connection are ignored", () => {
     const claims = foldConnectionDirectory([
-      event(CONNECTION_CLAIMED_EVENT_TYPE, { externalId: "T0", projectId: "prj_1", slug: "slack" }),
+      event("events.iterate.com/integration/connection-claimed", {
+        externalId: "T0",
+        projectId: "prj_1",
+        slug: "slack",
+      }),
       claim("slack", "T1", "prj_1", "acme"),
       unclaim("slack", "T1", "prj_2", "acme"),
     ]);

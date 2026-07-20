@@ -6,13 +6,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  GITHUB_CONNECTED_EVENT_TYPE,
-  GITHUB_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_CONNECTED_EVENT_TYPE,
-  GOOGLE_DISCONNECTED_EVENT_TYPE,
-  integrationConnectionStreamPath,
-} from "./utils.ts";
+import { integrationConnectionStreamPath } from "./utils.ts";
 
 const network = await vi.hoisted(async () => {
   const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
@@ -58,7 +52,7 @@ test("connection status filters lifecycle facts before reading a webhook-heavy j
     "install-1",
     [
       {
-        type: GITHUB_CONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/github/connected",
         payload: {
           connection: "install-1",
           externalId: "115079265",
@@ -79,7 +73,7 @@ test("connection status filters lifecycle facts before reading a webhook-heavy j
   expect(network.getEventsCalls).toEqual([
     {
       afterOffset: 0,
-      eventTypes: [GITHUB_CONNECTED_EVENT_TYPE, GITHUB_DISCONNECTED_EVENT_TYPE],
+      eventTypes: ["events.iterate.com/github/connected", "events.iterate.com/github/disconnected"],
       limit: 500,
     },
   ]);
@@ -89,7 +83,7 @@ describe("getConnectionStatus (google)", () => {
   test("connected fact yields display metadata (no tokens)", async () => {
     seed("prj_1", "jonas", [
       {
-        type: GOOGLE_CONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/google/connected",
         payload: { email: "jonas@nustom.com", googleUserId: "g-1", name: "Jonas", scopes: ["a"] },
       },
     ]);
@@ -110,8 +104,8 @@ describe("getConnectionStatus (google)", () => {
 
   test("a later disconnected fact wins (no metadata on the disconnected fact)", async () => {
     seed("prj_1", "jonas", [
-      { type: GOOGLE_CONNECTED_EVENT_TYPE, payload: { email: "jonas@nustom.com" } },
-      { type: GOOGLE_DISCONNECTED_EVENT_TYPE, payload: {} },
+      { type: "events.iterate.com/google/connected", payload: { email: "jonas@nustom.com" } },
+      { type: "events.iterate.com/google/disconnected", payload: {} },
     ]);
     expect(
       await getConnectionStatus({ connection: "jonas", projectId: "prj_1", provider: "google" }),
@@ -120,7 +114,7 @@ describe("getConnectionStatus (google)", () => {
 
   test("non-lifecycle events on top of the connected fact are skipped", async () => {
     seed("prj_1", "jonas", [
-      { type: GOOGLE_CONNECTED_EVENT_TYPE, payload: { email: "jonas@nustom.com" } },
+      { type: "events.iterate.com/google/connected", payload: { email: "jonas@nustom.com" } },
       { type: "events.iterate.com/google/token-refreshed", payload: {} },
     ]);
     expect(

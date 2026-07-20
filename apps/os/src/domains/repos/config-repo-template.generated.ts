@@ -239,7 +239,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  guestbookStreamPath,\n" +
       "  guestbookSubscriptionConfigVersion,\n" +
       "} from \"./guestbook-ref.ts\";\n" +
-      "import { GuestbookProcessor, type GuestbookFoldState } from \"./guestbook.ts\";\n" +
+      "import { GuestbookProcessor, type GuestbookState } from \"./guestbook.ts\";\n" +
       "\n" +
       "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
       "\n" +
@@ -247,14 +247,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// a cold /api WebSocket loads only the processor host and Cap'n Web runtime,\n" +
       "// never the unrelated TanStack SSR bundle in worker.ts.\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
-      "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
+      "  #host: { registry: StreamProcessorRegistry<GuestbookState> } | undefined;\n" +
       "  #configurationInFlight: Promise<void> | undefined;\n" +
       "\n" +
       "  // Hosting is constructed lazily, not in the constructor: the registry and\n" +
       "  // the processor's provenance stamps need the owning project's id, which\n" +
       "  // arrives with the wake request or is read from the project stub on first\n" +
       "  // fetch — and is cached durably so an alarm fire needs no dial.\n" +
-      "  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {\n" +
+      "  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookState> } {\n" +
       "    if (this.#host === undefined) {\n" +
       "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
       "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
@@ -262,9 +262,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      // register — the closure runs lazily, on refreshes the registry itself\n" +
       "      // schedules, so the assignment below always wins the race. The\n" +
       "      // explicit return type makes the registry a\n" +
-      "      // LiveState<GuestbookFoldState> (the platform's secret DO establishes\n" +
+      "      // LiveState<GuestbookState> (the platform's secret DO establishes\n" +
       "      // this exact shape).\n" +
-      "      let reads: { currentState: GuestbookFoldState } | undefined;\n" +
+      "      let reads: { currentState: GuestbookState } | undefined;\n" +
       "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
       "        path: guestbookStreamPath,\n" +
       "        projectId,\n" +
@@ -273,15 +273,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
       "        // worker recovers on its next build (the antidote deploy).\n" +
       "        version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "        // The fold IS the live state — nothing to redact, nothing to mirror.\n" +
-      "        getLiveState: (): GuestbookFoldState => reads!.currentState,\n" +
+      "        // The reduced state IS the live state — nothing to redact, nothing\n" +
+      "        // to mirror.\n" +
+      "        getLiveState: (): GuestbookState => reads!.currentState,\n" +
       "      });\n" +
       "      const guestbook = registry.register(\n" +
       "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
       "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
-      "        // work (a milestone append), the alarm fires, the keepalive journals\n" +
-      "        // a revival fact, and its wake delivery re-runs the at-head\n" +
-      "        // reconcile.\n" +
+      "        // work (a milestone append), the alarm fires, the keepalive appends\n" +
+      "        // a revival fact, and its wake delivery re-runs the at-head pass.\n" +
       "        { recovery: true },\n" +
       "      );\n" +
       "      reads = registry.reads(guestbook);\n" +
@@ -292,7 +292,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "  /** Construct the host without a wake request in hand: any prior contact\n" +
       "   * cached the project id durably; only the very first ever needs a dial. */\n" +
-      "  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {\n" +
+      "  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookState> }> {\n" +
       "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
       "    if (projectId === undefined) {\n" +
       "      using project = await this.env.ITX.get();\n" +
@@ -364,7 +364,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "   * current wake-subscription config — every signer offers it; the stream\n" +
       "   * collapses each version and replaces older config at the same subscription\n" +
       "   * key) plus this entry. The spine delivers the append back into this\n" +
-      "   * object's runner, the fold absorbs it, and the registry republishes the\n" +
+      "   * object's runner, reduce absorbs it, and the registry republishes the\n" +
       "   * live state to every subscribed tab — nothing else to do here. */\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
       "    const trimmedName = name.trim().slice(0, 80);\n" +
@@ -387,21 +387,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "}\n" +
       "\n" +
-      "// What every browser holds: the fold as live state (read-only by\n" +
+      "// What every browser holds: the reduced state as live state (read-only by\n" +
       "// construction) and one verb.\n" +
       "class PublicGuestbookApi extends RpcTarget {\n" +
       "  constructor(\n" +
       "    private readonly app: GuestbookApp,\n" +
-      "    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,\n" +
+      "    private readonly registry: StreamProcessorRegistry<GuestbookState>,\n" +
       "  ) {\n" +
       "    super();\n" +
       "  }\n" +
       "\n" +
-      "  get liveState(): LiveStateRpc<GuestbookFoldState> {\n" +
+      "  get liveState(): LiveStateRpc<GuestbookState> {\n" +
       "    // The registry is a refreshing live-state source: the target loads\n" +
       "    // committed runner progress before the first read, so a cold object's\n" +
-      "    // first snapshot is the real fold, not the schema default.\n" +
-      "    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);\n" +
+      "    // first snapshot is the real reduced state, not the schema default.\n" +
+      "    return new LiveStateRpcTarget<GuestbookState>(this.registry);\n" +
       "  }\n" +
       "\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
@@ -445,7 +445,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // The split app cannot share the legacy host: that host's persisted wake\n" +
       "  // recipe can resolve today's page-only Vite build, which no longer exports\n" +
       "  // GuestbookApp, and poison its live facet before the new ref arrives. The\n" +
-      "  // fold's truth is the stream, so this new host safely rebuilds by replay.\n" +
+      "  // state's truth is the stream, so this new host safely rebuilds by replay.\n" +
       "  durableWorkerKey: \"app-guestbook-v2\",\n" +
       "  updatePolicy: \"stale-while-rebuild\",\n" +
       "  source: {\n" +
@@ -501,14 +501,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/src/guestbook.ts",
     content:
       "// A stream-processor-backed domain object in project userspace: the guestbook\n" +
-      "// is a fold of durable events on the project stream at /guestbook, processed\n" +
-      "// by the SAME machinery that runs the platform's own domain objects\n" +
-      "// (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in\n" +
-      "// the repo root's worker.ts, which keeps its number in Durable Object\n" +
-      "// storage, and the tanstack todo app, which keeps rows in its own SQLite:\n" +
-      "// this state is a disposable cache of `reduce` over the journal — delete it\n" +
-      "// and replay rebuilds it, and every consequential outcome is an event you\n" +
-      "// can read back.\n" +
+      "// state is `reduce` run over the durable events on the project stream at\n" +
+      "// /guestbook, by the SAME machinery that runs the platform's own domain\n" +
+      "// objects (agents, repos, schedulers — `iterate/processors`). Contrast\n" +
+      "// CounterApp in the repo root's worker.ts, which keeps its number in Durable\n" +
+      "// Object storage, and the tanstack todo app, which keeps rows in its own\n" +
+      "// SQLite: this state is a disposable cache — delete it and replay rebuilds\n" +
+      "// it, and every consequential outcome is an event you can read back.\n" +
       "//\n" +
       "// GuestbookApp in guestbook-app.ts is the hosting half: a Durable Object\n" +
       "// registry over an itx-dialed stream handle, woken by the durable wake\n" +
@@ -517,8 +516,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import {\n" +
       "  defineProcessorContract,\n" +
       "  PLATFORM_STREAM_EVENTS,\n" +
-      "  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
       "  StreamProcessor,\n" +
+      "  type ProcessEventArgs,\n" +
+      "  type ReduceArgs,\n" +
       "} from \"iterate/processors\";\n" +
       "\n" +
       "export { guestbookAppRef, guestbookCreationEvents, guestbookStreamPath } from \"./guestbook-ref.ts\";\n" +
@@ -527,22 +527,43 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  slug: \"guestbook\",\n" +
       "  version: \"0.1.0\",\n" +
       "  description:\n" +
-      "    \"Folds guestbook signatures on /guestbook and emits a milestone fact every five entries.\",\n" +
+      "    \"Reduces guestbook signatures on /guestbook and emits a milestone fact every five entries.\",\n" +
       "  stateSchema: z.object({\n" +
-      "    birthCertificate: z\n" +
-      "      .object({ config: z.object({ title: z.string() }) })\n" +
-      "      .nullable()\n" +
-      "      .default(null),\n" +
+      "    birthCertificate: guestbookBirthCertificateSchema().nullable().default(null).meta({\n" +
+      "      description:\n" +
+      "        \"Existence marker: null until guestbook/created reduces. No milestone is emitted before it.\",\n" +
+      "    }),\n" +
       "    entries: z\n" +
-      "      .array(z.object({ name: z.string(), message: z.string(), signedAt: z.string() }))\n" +
-      "      .default([]),\n" +
-      "    lastMilestone: z.number().int().nonnegative().default(0),\n" +
+      "      .array(\n" +
+      "        z.object({\n" +
+      "          name: z.string().meta({ description: \"The signer's name, as signed.\" }),\n" +
+      "          message: z.string().meta({ description: \"The signer's message, as signed.\" }),\n" +
+      "          signedAt: z.string().meta({\n" +
+      "            description:\n" +
+      "              \"ISO timestamp copied from the entry-signed event's createdAt stamp — reduce \" +\n" +
+      "              \"never reads the wall clock, so a replay rebuilds identical state.\",\n" +
+      "          }),\n" +
+      "        }),\n" +
+      "      )\n" +
+      "      .default([])\n" +
+      "      .meta({ description: \"Every signature in stream order. Append-only.\" }),\n" +
+      "    lastMilestone: z\n" +
+      "      .number()\n" +
+      "      .int()\n" +
+      "      .nonnegative()\n" +
+      "      .default(0)\n" +
+      "      .meta({\n" +
+      "        description:\n" +
+      "          \"The highest milestone-reached count this state has absorbed; the at-head pass \" +\n" +
+      "          \"appends only thresholds above it.\",\n" +
+      "      }),\n" +
       "  }),\n" +
       "  events: {\n" +
       "    \"events.iterate.com/guestbook/created\": {\n" +
       "      description:\n" +
-      "        \"The guestbook exists: its birth certificate, the first event in its domain history. Appended (idempotency-keyed) by whoever signs first.\",\n" +
-      "      payloadSchema: z.object({ config: z.object({ title: z.string() }) }),\n" +
+      "        \"The guestbook exists: its birth certificate, the first event in its domain history. \" +\n" +
+      "        \"Appended (idempotency-keyed) by whoever signs first.\",\n" +
+      "      payloadSchema: guestbookBirthCertificateSchema(),\n" +
       "      examples: [\n" +
       "        {\n" +
       "          description: \"A guestbook born with its display title.\",\n" +
@@ -553,8 +574,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    \"events.iterate.com/guestbook/entry-signed\": {\n" +
       "      description: \"Someone signed the guestbook: their name and message.\",\n" +
       "      payloadSchema: z.object({\n" +
-      "        name: z.string().trim().min(1),\n" +
-      "        message: z.string().trim().min(1),\n" +
+      "        name: z.string().trim().min(1).meta({ description: \"The signer's name.\" }),\n" +
+      "        message: z.string().trim().min(1).meta({ description: \"The message they left.\" }),\n" +
       "      }),\n" +
       "      examples: [\n" +
       "        {\n" +
@@ -565,8 +586,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    },\n" +
       "    \"events.iterate.com/guestbook/milestone-reached\": {\n" +
       "      description:\n" +
-      "        \"The entry count crossed a multiple of five. Emitted by the guestbook processor from its at-head reconcile, idempotency-keyed by the milestone count so refolds and redeliveries collapse to one fact.\",\n" +
-      "      payloadSchema: z.object({ count: z.number().int().positive() }),\n" +
+      "        \"The entry count crossed a multiple of five. Emitted by the guestbook processor at the \" +\n" +
+      "        \"head of the stream, idempotency-keyed by the count so redeliveries, revivals, and \" +\n" +
+      "        \"replays collapse to one fact.\",\n" +
+      "      payloadSchema: z.object({\n" +
+      "        count: z\n" +
+      "          .number()\n" +
+      "          .int()\n" +
+      "          .positive()\n" +
+      "          .meta({ description: \"The entry count that was reached — a positive multiple of five.\" }),\n" +
+      "      }),\n" +
       "      examples: [\n" +
       "        {\n" +
       "          description: \"The fifth signature landed.\",\n" +
@@ -582,20 +611,75 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    \"events.iterate.com/guestbook/created\",\n" +
       "    \"events.iterate.com/guestbook/entry-signed\",\n" +
       "    \"events.iterate.com/guestbook/milestone-reached\",\n" +
-      "    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
+      "    \"events.iterate.com/stream/processor-revived\",\n" +
       "  ],\n" +
       "  emits: [\"events.iterate.com/guestbook/milestone-reached\"],\n" +
       "});\n" +
+      "export type GuestbookProcessorContract = typeof GuestbookProcessorContract;\n" +
       "\n" +
-      "export type GuestbookFoldState = z.infer<typeof GuestbookProcessorContract.stateSchema>;\n" +
+      "export type GuestbookState = z.output<typeof GuestbookProcessorContract.stateSchema>;\n" +
       "\n" +
-      "export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {\n" +
+      "/**\n" +
+      " * The guestbook processor. HOW IT WORKS, end to end:\n" +
+      " *\n" +
+      " * Signatures arrive as `guestbook/entry-signed` events (GuestbookApp's `sign`\n" +
+      " * verb appends them, prefixed by the idempotency-keyed creation batch). The\n" +
+      " * pure `reduce` switch projects them into `state.entries`; timestamps come\n" +
+      " * from each event's own `createdAt` stamp, never the wall clock, so replaying\n" +
+      " * the stream from offset zero rebuilds byte-identical state.\n" +
+      " *\n" +
+      " * The one side effect lives in `processEvent`: when the processor is caught\n" +
+      " * up to the head of the stream and the entry count has crossed a multiple of\n" +
+      " * five that `state.lastMilestone` has not absorbed, it appends one\n" +
+      " * `guestbook/milestone-reached` fact per crossed threshold. That append is\n" +
+      " * derived from the reduced state — not from any single event — so it runs in\n" +
+      " * the background: if this attempt is lost, any later at-head pass re-derives\n" +
+      " * it, and the stable idempotency keys (`milestone:<count>`) collapse the\n" +
+      " * duplicates. The emitted fact comes back through the processor's own\n" +
+      " * subscription, reduces into `lastMilestone`, and the loop closes.\n" +
+      " *\n" +
+      " * If an eviction kills the isolate while a milestone append is still owed,\n" +
+      " * the recovery keepalive wired in guestbook-app.ts (`{ recovery: true }`)\n" +
+      " * appends `stream/processor-revived`; its ordinary delivery lands an at-head\n" +
+      " * `processEvent` turn in the fresh incarnation, which re-derives the milestone\n" +
+      " * from state. That is the whole recovery story — no bookkeeping outside the\n" +
+      " * stream.\n" +
+      " */\n" +
+      "export class GuestbookProcessor extends StreamProcessor<GuestbookProcessorContract> {\n" +
       "  readonly contract = GuestbookProcessorContract;\n" +
       "\n" +
-      "  protected override reduce({\n" +
-      "    event,\n" +
-      "    state,\n" +
-      "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"reduce\"]>[0]) {\n" +
+      "  // The guestbook has no per-event consequences (nothing depends on seeing\n" +
+      "  // one particular event exactly once), so there is no per-event switch —\n" +
+      "  // the whole hook is the state-derived pass at head.\n" +
+      "  protected override processEvent(args: ProcessEventArgs<GuestbookProcessorContract>): undefined {\n" +
+      "    const { append, delivery, runInBackground, state } = args;\n" +
+      "    // Derive milestones from the reduced state AT HEAD, never from\n" +
+      "    // event-time state: a replay redelivers every historical event, and only\n" +
+      "    // the at-head state has absorbed the milestones already on the stream.\n" +
+      "    // One fact per crossed threshold, even when catch-up lands past several\n" +
+      "    // at once (routine while the worker cold-builds).\n" +
+      "    if (!delivery.caughtUp || state.birthCertificate === null) return;\n" +
+      "    const reached = Math.floor(state.entries.length / 5) * 5;\n" +
+      "    if (reached <= state.lastMilestone) return;\n" +
+      "    const missed: number[] = [];\n" +
+      "    for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);\n" +
+      "    // Background, not blocking: a lost attempt is re-derived by any later\n" +
+      "    // at-head pass over the same state (the recovery keepalive guarantees\n" +
+      "    // one), and the stable idempotency keys — count only, no event bound —\n" +
+      "    // collapse the appends across redeliveries, revivals, and replays.\n" +
+      "    runInBackground(async () => {\n" +
+      "      await append(\n" +
+      "        ...missed.map((count) => ({\n" +
+      "          type: \"events.iterate.com/guestbook/milestone-reached\" as const,\n" +
+      "          payload: { count },\n" +
+      "          idempotencyKey: this.idempotencyKey(`milestone:${count}`),\n" +
+      "        })),\n" +
+      "      );\n" +
+      "    });\n" +
+      "  }\n" +
+      "\n" +
+      "  protected override reduce(args: ReduceArgs<GuestbookProcessorContract>) {\n" +
+      "    const { event, state } = args;\n" +
       "    switch (event.type) {\n" +
       "      case \"events.iterate.com/guestbook/created\":\n" +
       "        if (state.birthCertificate !== null) {\n" +
@@ -616,50 +700,36 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        return state;\n" +
       "    }\n" +
       "  }\n" +
+      "}\n" +
       "\n" +
-      "  protected override processEvent({\n" +
-      "    append,\n" +
-      "    blockProcessorWhile,\n" +
-      "    delivery,\n" +
-      "    state,\n" +
-      "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"processEvent\"]>[0]): undefined {\n" +
-      "    // At-head reconcile: derive milestones from the WHOLE fold, never from\n" +
-      "    // event-time state — a refold replays every historical event, and only\n" +
-      "    // the at-head state has absorbed the milestones already journaled. One\n" +
-      "    // fact per crossed threshold, even when catch-up lands past several at\n" +
-      "    // once (routine while the worker cold-builds); the stable idempotency\n" +
-      "    // keys (count folded in, no event bound) make the appends collapse\n" +
-      "    // across redeliveries, revivals, and refolds.\n" +
-      "    if (!delivery.caughtUp || state.birthCertificate === null) return;\n" +
-      "    const reached = Math.floor(state.entries.length / 5) * 5;\n" +
-      "    if (reached <= state.lastMilestone) return;\n" +
-      "    const missed: number[] = [];\n" +
-      "    for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);\n" +
-      "    blockProcessorWhile(async () => {\n" +
-      "      await append(\n" +
-      "        ...missed.map((count) => ({\n" +
-      "          type: \"events.iterate.com/guestbook/milestone-reached\" as const,\n" +
-      "          payload: { count },\n" +
-      "          idempotencyKey: this.idempotencyKey(`milestone:${count}`),\n" +
-      "        })),\n" +
-      "      );\n" +
-      "    });\n" +
-      "  }\n" +
+      "/**\n" +
+      " * The birth certificate — the ONE schema the contract uses twice (the\n" +
+      " * `guestbook/created` payload and the state's existence marker), so it lives\n" +
+      " * in this hoisted function instead of inline.\n" +
+      " */\n" +
+      "function guestbookBirthCertificateSchema() {\n" +
+      "  return z.object({\n" +
+      "    config: z\n" +
+      "      .object({\n" +
+      "        title: z.string().meta({ description: \"Display title the guestbook page renders.\" }),\n" +
+      "      })\n" +
+      "      .meta({ description: \"Configuration chosen at creation.\" }),\n" +
+      "  });\n" +
       "}\n",
   },
   {
     path: "apps/guestbook/src/lib/state.ts",
     content:
       "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import type { GuestbookFoldState } from \"../guestbook.ts\";\n" +
+      "import type { GuestbookState } from \"../guestbook.ts\";\n" +
       "\n" +
-      "// The browser mirrors the processor's fold VERBATIM — the live state IS the\n" +
-      "// domain state, no projection layer in between.\n" +
-      "export type { GuestbookFoldState };\n" +
+      "// The browser mirrors the processor's reduced state VERBATIM — the live\n" +
+      "// state IS the domain state, no projection layer in between.\n" +
+      "export type { GuestbookState };\n" +
       "\n" +
       "/** The Cap'n Web root at /api — public, so no authenticate step. */\n" +
       "export type GuestbookApi = {\n" +
-      "  liveState: LiveStateRpc<GuestbookFoldState>;\n" +
+      "  liveState: LiveStateRpc<GuestbookState>;\n" +
       "  sign(name: string, message: string): Promise<void>;\n" +
       "};\n",
   },
@@ -669,20 +739,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { newWebSocketRpcSession } from \"@iterate-com/capnweb\";\n" +
       "import { createLiveStateStore } from \"iterate/live-state\";\n" +
       "import { useEffect, useRef, useState, useSyncExternalStore } from \"react\";\n" +
-      "import type { GuestbookApi, GuestbookFoldState } from \"./state.ts\";\n" +
+      "import type { GuestbookApi, GuestbookState } from \"./state.ts\";\n" +
       "\n" +
       "/**\n" +
       " * The whole client: one Cap'n Web WebSocket to /api (public — the root\n" +
-      " * target needs no authenticate step), the processor's fold folded into the\n" +
-      " * platform's `createLiveStateStore` (snapshot + patches) and read with\n" +
+      " * target needs no authenticate step), the processor's reduced state fed into\n" +
+      " * the platform's `createLiveStateStore` (snapshot + patches) and read with\n" +
       " * `useSyncExternalStore`. Signing is a plain call on the root — the append\n" +
-      " * flows through the stream's wake spine back into the fold, and every open\n" +
-      " * tab, this one included, repaints from the pushed patch.\n" +
+      " * flows through the stream's wake spine back into the processor, and every\n" +
+      " * open tab, this one included, repaints from the pushed patch.\n" +
       " */\n" +
       "export function useGuestbook() {\n" +
       "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
       "  const [error, setError] = useState<string | null>(null);\n" +
-      "  const storeRef = useRef(createLiveStateStore<GuestbookFoldState>());\n" +
+      "  const storeRef = useRef(createLiveStateStore<GuestbookState>());\n" +
       "  const store = storeRef.current;\n" +
       "\n" +
       "  useEffect(() => {\n" +
@@ -865,11 +935,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "export const Route = createFileRoute(\"/\")({ component: Guestbook });\n" +
       "\n" +
-      "// The project's public guestbook. Its state is a stream-processor fold on the\n" +
-      "// project stream at /guestbook (src/guestbook-app.ts hosts the processor);\n" +
-      "// this page hydrates, opens /api, and stays live — every open tab repaints the\n" +
-      "// moment anyone signs, and every fifth signature earns a milestone from the\n" +
-      "// processor's at-head reconcile.\n" +
+      "// The project's public guestbook. Its state is a stream processor's reduced\n" +
+      "// state on the project stream at /guestbook (src/guestbook-app.ts hosts the\n" +
+      "// processor); this page hydrates, opens /api, and stays live — every open tab\n" +
+      "// repaints the moment anyone signs, and every fifth signature earns a\n" +
+      "// milestone from the processor's at-head pass.\n" +
       "function Guestbook() {\n" +
       "  const { guestbook, api, error } = useGuestbook();\n" +
       "  const [name, setName] = useState(\"\");\n" +
@@ -956,7 +1026,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          guestbook.entries\n" +
       "            .map((entry, index) => ({ entry, index }))\n" +
       "            .reverse()\n" +
-      "            // The pre-reverse index: entries are append-only in the fold, so\n" +
+      "            // The pre-reverse index: entries are append-only in the state, so\n" +
       "            // it identifies a row for its whole lifetime — a new signature\n" +
       "            // inserts one element instead of remounting the list.\n" +
       "            .map(({ entry, index }) => (\n" +
@@ -1125,7 +1195,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "/**\n" +
       " * The whole client: one Cap'n Web WebSocket to /api, authenticated from the\n" +
-      " * app's exact-origin cookie, its live state folded into the platform's\n" +
+      " * app's exact-origin cookie, its live state fed into the platform's\n" +
       " * `createLiveStateStore` (snapshot + patches) and read with\n" +
       " * `useSyncExternalStore`. Mutations are plain calls on the session — the\n" +
       " * Durable Object refreshes its one LiveState and every open tab, this one\n" +

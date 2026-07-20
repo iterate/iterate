@@ -15,7 +15,7 @@ import {
   guestbookStreamPath,
   guestbookSubscriptionConfigVersion,
 } from "./guestbook-ref.ts";
-import { GuestbookProcessor, type GuestbookFoldState } from "./guestbook.ts";
+import { GuestbookProcessor, type GuestbookState } from "./guestbook.ts";
 
 const SUBSCRIPTION_VERSION_STORAGE_KEY = "guestbook:subscription-config-version";
 
@@ -23,14 +23,14 @@ const SUBSCRIPTION_VERSION_STORAGE_KEY = "guestbook:subscription-config-version"
 // a cold /api WebSocket loads only the processor host and Cap'n Web runtime,
 // never the unrelated TanStack SSR bundle in worker.ts.
 export class GuestbookApp extends IterateDurableObject {
-  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;
+  #host: { registry: StreamProcessorRegistry<GuestbookState> } | undefined;
   #configurationInFlight: Promise<void> | undefined;
 
   // Hosting is constructed lazily, not in the constructor: the registry and
   // the processor's provenance stamps need the owning project's id, which
   // arrives with the wake request or is read from the project stub on first
   // fetch — and is cached durably so an alarm fire needs no dial.
-  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {
+  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookState> } {
     if (this.#host === undefined) {
       this.ctx.storage.kv.put("guestbook:project-id", projectId);
       const stream = itxProjectStream(this.env, guestbookStreamPath);
@@ -38,9 +38,9 @@ export class GuestbookApp extends IterateDurableObject {
       // register — the closure runs lazily, on refreshes the registry itself
       // schedules, so the assignment below always wins the race. The
       // explicit return type makes the registry a
-      // LiveState<GuestbookFoldState> (the platform's secret DO establishes
+      // LiveState<GuestbookState> (the platform's secret DO establishes
       // this exact shape).
-      let reads: { currentState: GuestbookFoldState } | undefined;
+      let reads: { currentState: GuestbookState } | undefined;
       const registry = createStreamProcessorRegistry(this.ctx, {
         path: guestbookStreamPath,
         projectId,
@@ -49,15 +49,15 @@ export class GuestbookApp extends IterateDurableObject {
         // crash-looping keepalive's backoff budget, so a broken-then-fixed
         // worker recovers on its next build (the antidote deploy).
         version: this.env.ITERATE_WORKER_VERSION,
-        // The fold IS the live state — nothing to redact, nothing to mirror.
-        getLiveState: (): GuestbookFoldState => reads!.currentState,
+        // The reduced state IS the live state — nothing to redact, nothing
+        // to mirror.
+        getLiveState: (): GuestbookState => reads!.currentState,
       });
       const guestbook = registry.register(
         new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),
         // Keepalive recovery: if an eviction kills this object while it owes
-        // work (a milestone append), the alarm fires, the keepalive journals
-        // a revival fact, and its wake delivery re-runs the at-head
-        // reconcile.
+        // work (a milestone append), the alarm fires, the keepalive appends
+        // a revival fact, and its wake delivery re-runs the at-head pass.
         { recovery: true },
       );
       reads = registry.reads(guestbook);
@@ -68,7 +68,7 @@ export class GuestbookApp extends IterateDurableObject {
 
   /** Construct the host without a wake request in hand: any prior contact
    * cached the project id durably; only the very first ever needs a dial. */
-  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {
+  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookState> }> {
     let projectId = this.ctx.storage.kv.get<string>("guestbook:project-id");
     if (projectId === undefined) {
       using project = await this.env.ITX.get();
@@ -140,7 +140,7 @@ export class GuestbookApp extends IterateDurableObject {
    * current wake-subscription config — every signer offers it; the stream
    * collapses each version and replaces older config at the same subscription
    * key) plus this entry. The spine delivers the append back into this
-   * object's runner, the fold absorbs it, and the registry republishes the
+   * object's runner, reduce absorbs it, and the registry republishes the
    * live state to every subscribed tab — nothing else to do here. */
   async sign(name: string, message: string): Promise<void> {
     const trimmedName = name.trim().slice(0, 80);
@@ -163,21 +163,21 @@ export class GuestbookApp extends IterateDurableObject {
   }
 }
 
-// What every browser holds: the fold as live state (read-only by
+// What every browser holds: the reduced state as live state (read-only by
 // construction) and one verb.
 class PublicGuestbookApi extends RpcTarget {
   constructor(
     private readonly app: GuestbookApp,
-    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,
+    private readonly registry: StreamProcessorRegistry<GuestbookState>,
   ) {
     super();
   }
 
-  get liveState(): LiveStateRpc<GuestbookFoldState> {
+  get liveState(): LiveStateRpc<GuestbookState> {
     // The registry is a refreshing live-state source: the target loads
     // committed runner progress before the first read, so a cold object's
-    // first snapshot is the real fold, not the schema default.
-    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);
+    // first snapshot is the real reduced state, not the schema default.
+    return new LiveStateRpcTarget<GuestbookState>(this.registry);
   }
 
   async sign(name: string, message: string): Promise<void> {

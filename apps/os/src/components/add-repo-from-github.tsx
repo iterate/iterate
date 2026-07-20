@@ -148,8 +148,7 @@ function AddRepoFromGithubWizard({
       setCreatedHere((previous) => new Set(previous).add(input.path));
       // create is "create if it does not exist yet", so a retry after a
       // mid-flow failure is safe and finishes the job.
-      await itx.repos.create({ path: input.path });
-      const repo = itx.repos.get(input.path);
+      const repo = await itx.repos.get(input.path).create();
       const link = await repo.linkGithub({
         connection,
         owner: input.repo.owner,

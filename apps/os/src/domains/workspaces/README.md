@@ -9,7 +9,7 @@ filesystems for agents and tooling.
   `/workspaces/**` path; that path is its Durable Object name AND its stream
   path. `workspace/created` is the birth certificate (carrying the complete
   initial config); `workspace/configured` patches it. `WorkspaceProcessor` is
-  a pure fold — reduce only, no side effects — hosted by the DO under the
+  a pure reducer — reduce only, no side effects — hosted by the DO under the
   standard registry/runner machinery.
 - **First touch births.** `itx.workspaces.get(path)` needs no create step:
   the first operation appends the birth certificate with the DEFAULT mount

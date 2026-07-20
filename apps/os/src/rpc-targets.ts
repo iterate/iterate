@@ -95,7 +95,6 @@ import { projectStub } from "./domains/projects/egress.ts";
 import { ProjectProcessorContract } from "./domains/projects/project-processor-contract.ts";
 import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
-import { RepoProcessorContract } from "./domains/repos/repo-processor-contract.ts";
 import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
 import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
@@ -140,7 +139,7 @@ import {
   isBuiltinIntegrationSlug,
 } from "./domains/integrations/utils.ts";
 import {
-  TelegramAllowedUserIds,
+  TelegramProcessorContract,
   type TelegramProcessorState,
 } from "./domains/integrations/telegram-processor-contract.ts";
 import {
@@ -259,9 +258,9 @@ import {
   type AgentProcessorState,
 } from "./domains/agents/agent-processor-contract.ts";
 import {
-  CapabilityHostProcessorContract,
-  capabilityFallbackForScope,
-} from "./domains/capability-host/capability-host-processor-contract.ts";
+  capabilityHostCreationEvents,
+  type CapabilityHostCreateInput,
+} from "./domains/capability-host/capability-host-defaults.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -362,20 +361,16 @@ import {
   emailDomainForDeployment,
   emailThreadReplyAddress,
   EMAIL_INTEGRATION_STREAM_PATH,
-  EMAIL_RECEIVED_EVENT_TYPE,
-  EMAIL_SENT_EVENT_TYPE,
   isOwnProjectMail,
   mintOutboundEmailThreadId,
   replySubject,
   type OutboundEmailAttachment,
   type SendEmailBinding,
 } from "./domains/email/utils.ts";
-import {
-  EmailAgentBirthCertificate,
-  EmailProcessorContract,
-} from "./domains/email/email-processor-contract.ts";
+import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
-import { agentCreationForPath } from "./domains/agents/agent-defaults.ts";
+import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
+import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -1079,55 +1074,6 @@ function streamDurableObjectName(props: { projectId: string | null; path: string
   return DurableObjectNameCodec.stringify(props, { allowNullProjectId: true });
 }
 
-async function requestRepoCreate(input: {
-  auth: ItxAuth;
-  path: string;
-  projectId: string | null;
-}): Promise<RepoRpcTarget> {
-  const path = normalizePath(input.path);
-  const stream = new StreamRpcTarget({
-    auth: input.auth,
-    path,
-    projectId: input.projectId,
-  });
-  const timing = { projectId: input.projectId, path };
-  const committed = await timedStep("create-timing", timing, "repo-append", () =>
-    stream.append(
-      {
-        type: "events.iterate.com/repo/created",
-        idempotencyKey: `repo-created:${input.projectId}:${path}`,
-        payload: { config: {} },
-      },
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName: streamDurableObjectName({ projectId: input.projectId, path }),
-        processor: ["repos", ["get", path], "processor"],
-        processorSlug: RepoProcessorContract.slug,
-      }),
-    ),
-  );
-  const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-  if (createOffset === 0) throw new Error("repo create committed no events");
-  const repo = new RepoRpcTarget({ auth: input.auth, path, projectId: input.projectId });
-  await repo.processor.waitUntilProcessed({
-    offset: createOffset,
-    timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-  });
-
-  await timedStep("create-timing", timing, "wait-repo-ready", () =>
-    stream.waitForEvent({
-      afterOffset: committed[0]!.offset - 1,
-      eventTypes: ["events.iterate.com/repo/ready"],
-      predicate: (event) =>
-        event.payload?.projectId === input.projectId && event.payload?.path === path,
-      // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
-      // for the cold-slot outliers). Preview CI warms slots before the suites.
-      timeoutMs: 60_000,
-    }),
-  );
-
-  return repo;
-}
-
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   async __describe(): Promise<Description> {
@@ -1138,7 +1084,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
           "One commit's metadata plus its changed files with +/- line counts, diffed against its first parent ({ commitOid }).",
         commitFiles:
           "Commit a batch of file changes ({ message, changes }); each change is { path, content } for text, { path, contentBase64 } for binary, or { path, delete: true }.",
-        create: "Create the repo if it does not exist yet.",
+        create:
+          "Create the repo (optional payload = the repo/created birth certificate) and wait until repo/ready; returns this same repo handle.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
         kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
@@ -1183,13 +1130,53 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     );
   }
 
-  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
-  create(): Promise<RepoRpcTarget> {
-    return requestRepoCreate({
+  /**
+   * Create this repo and wait until it is usable: appends the atomic birth
+   * batch (`repo/created` + the repo processor subscription), waits for the
+   * processor to consume it, then for `repo/ready` (the backing Artifacts
+   * repository exists). Resolves with this same handle, so create chains.
+   * Identical-payload retries dedupe on the birth idempotency keys; a create
+   * over an existing repo with a different payload fails loudly.
+   */
+  async create(payload?: RepoCreateInput): Promise<RepoRpcTarget> {
+    const path = normalizePath(this.props.path);
+    const stream = new StreamRpcTarget({
       auth: this.props.auth,
-      path: this.props.path,
+      path,
       projectId: this.props.projectId,
     });
+    const timing = { projectId: this.props.projectId, path };
+    const committed = await timedStep("create-timing", timing, "repo-append", () =>
+      stream.append(
+        ...repoCreationEvents({
+          path,
+          projectId: this.props.projectId,
+          ...(payload === undefined ? {} : { payload }),
+        }),
+      ),
+    );
+    // append() preserves INPUT order, including idempotency hits at their old
+    // offsets — the create boundary is the maximum offset across the batch.
+    const createOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (createOffset === 0) throw new Error("repo create committed no events");
+    await this.processor.waitUntilProcessed({
+      offset: createOffset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
+
+    await timedStep("create-timing", timing, "wait-repo-ready", () =>
+      stream.waitForEvent({
+        afterOffset: committed[0]!.offset - 1,
+        eventTypes: ["events.iterate.com/repo/ready"],
+        predicate: (event) =>
+          event.payload?.projectId === this.props.projectId && event.payload?.path === path,
+        // Tight on purpose: creates should be fast (see tasks/os-cold-create-latency.md
+        // for the cold-slot outliers). Preview CI warms slots before the suites.
+        timeoutMs: 60_000,
+      }),
+    );
+
+    return this;
   }
 
   /** Repo identity string (debug). */
@@ -1361,23 +1348,14 @@ class RepoCollectionRpcTarget<
 > extends IterateRpcTarget<Name> {
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: "Repo catalog: get(path) / create({ path }).",
-      children: { create: "Create a repo at a path.", get: "The repo at a path." },
+      instructions: "Repo catalog: get(path); get(path).create() births a new repo at that path.",
+      children: { get: "The repo at a path." },
     });
   }
 
   constructor(readonly props: { auth: ItxAuth; projectId: string | null }) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
-  }
-
-  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */
-  create(input: { path: string }): Promise<RepoRpcTarget> {
-    return requestRepoCreate({
-      auth: this.props.auth,
-      path: input.path,
-      projectId: this.props.projectId,
-    });
   }
 
   /** The repo at a path. */
@@ -2132,7 +2110,8 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return describeNode({
       instructions: `The secret at "${this.props.path}": __describe() for metadata (audit, egress, hasMaterial, refresh — never the value), update() to set value/egress/refresh, fetch() to use it in an egress request via placeholder substitution.`,
       children: {
-        create: "Create this secret with its initial egress, material, and refresh config.",
+        create:
+          "Create this secret with its initial egress, material, and refresh config; returns this same secret handle.",
         fetch:
           "Egress fetch with secret placeholders substituted server-side (HTTP headers/URL, including Upgrade handshake).",
         kill: "Restart the secret's server-side object; the next request boots it fresh.",
@@ -2171,9 +2150,19 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
 
-  /** Create this secret and wait until its processor has folded the birth certificate. */
-  create(input: SecretCreateInput): Promise<StreamEvent> {
-    return this.durableObjectStub.create(input);
+  /**
+   * Create this secret and wait until its processor has reduced the birth
+   * certificate, then return this same secret handle, so create chains. The
+   * Secret Durable Object owns the birth semantics: it encrypts the material
+   * bound to the exact commit offset and appends `secret/created` plus the
+   * secret's processor subscription in one atomic batch. An identical-policy
+   * retry over an existing secret resolves fine (material is write-only and
+   * not comparable — it is kept, never replaced; rotate through `update()`);
+   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.
+   */
+  async create(input: SecretCreateInput): Promise<SecretRpcTarget> {
+    await this.durableObjectStub.create(input);
+    return this;
   }
 
   /**
@@ -3245,7 +3234,9 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     connection: string;
   }): Promise<{ allowedUserIds: string[] }> {
     await this.#assertConnectedTelegram(input.connection);
-    const allowedUserIds = TelegramAllowedUserIds.parse(input.allowedUserIds);
+    const allowedUserIds = TelegramProcessorContract.events[
+      "events.iterate.com/telegram/access-configured"
+    ].payloadSchema.shape.allowedUserIds.parse(input.allowedUserIds);
     const configuredEvents = await new StreamRpcTarget({
       auth: this.props.auth,
       path: integrationConnectionStreamPath("telegram", input.connection),
@@ -3596,7 +3587,9 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
         `email agent birth key on "${this.props.scopePath}" names unexpected event type "${event.type}"`,
       );
     }
-    return EmailAgentBirthCertificate.parse(event.payload).config.threadId;
+    return EmailProcessorContract.events[
+      "events.iterate.com/email-agent/created"
+    ].payloadSchema.parse(event.payload).config.threadId;
   }
 
   /**
@@ -3684,7 +3677,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
     }));
     const appendAudit = () =>
       integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append({
-        type: EMAIL_SENT_EVENT_TYPE,
+        type: "events.iterate.com/email/sent",
         idempotencyKey: `email-sent:${this.props.projectId}:${messageId ?? crypto.randomUUID()}`,
         // Recipients + subject for audit; bodies stay out of the stream. The
         // threadId (reply path) lets the email router index the outbound
@@ -3728,14 +3721,14 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
    * the email-agent processor applies) so reply never targets ourselves.
    */
   async #lastReceivedOnThread() {
-    const schema = EmailProcessorContract.events[EMAIL_RECEIVED_EVENT_TYPE].payloadSchema;
+    const schema = EmailProcessorContract.events["events.iterate.com/email/received"].payloadSchema;
     const stream = integrationStreamStub(this.props.projectId, this.props.scopePath);
     let afterOffset = 0;
     let last: ReturnType<(typeof schema)["parse"]> | null = null;
     for (;;) {
       const page = await stream.getEvents({
         afterOffset,
-        eventTypes: [EMAIL_RECEIVED_EVENT_TYPE],
+        eventTypes: ["events.iterate.com/email/received"],
         limit: 500,
       });
       for (const event of page) {
@@ -3972,32 +3965,28 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
   /**
    * Create the generic agent machinery on this stream and wait until the
    * agent, capability-host, and singleton collection processors have reduced
-   * the birth. Configuration, context, and tasks are separate events: append
-   * processor-consumed events through `agent.append()` or use a typed helper
-   * such as `message()` after creation.
+   * the birth. The optional payload is the `agent/created` birth certificate
+   * (arbitrary birth facts; defaults to `{}`). Configuration, context, and
+   * tasks remain separate events: append processor-consumed events through
+   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Resolves with this same agent handle, so create chains.
+   * Identical-payload retries dedupe on the birth idempotency keys; a create
+   * over an existing agent with a different payload fails loudly.
    */
-  async create(): Promise<void> {
-    if (arguments.length !== 0) {
-      throw new Error(
-        "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
-      );
-    }
-    const snapshot = await this.processor.snapshot();
-    let birthOffset = snapshot.offset;
-    if (snapshot.state.birthCertificate === null) {
-      const creation = agentCreationForPath({
-        agentPath: this.#path,
-        projectId: this.#props.projectId,
-        ...(await agentBootProjectFacts(this.#props.projectId)),
-      });
-      const committed = await this.stream.append(...creation.events);
-      // append() preserves INPUT order, including idempotency hits at their old
-      // offsets. A paired capability host may already exist, so the last input
-      // is not necessarily the newest event. The create boundary is the maximum
-      // offset across the complete batch.
-      birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
-      if (birthOffset === 0) throw new Error("agent create committed no events");
-    }
+  async create(payload?: AgentCreateInput): Promise<AgentRpcTarget> {
+    const creation = agentCreationForPath({
+      agentPath: this.#path,
+      projectId: this.#props.projectId,
+      ...(payload === undefined ? {} : { payload }),
+      ...(await agentBootProjectFacts(this.#props.projectId)),
+    });
+    const committed = await this.stream.append(...creation.events);
+    // append() preserves INPUT order, including idempotency hits at their old
+    // offsets. A paired capability host may already exist, so the last input
+    // is not necessarily the newest event. The create boundary is the maximum
+    // offset across the complete batch.
+    const birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (birthOffset === 0) throw new Error("agent create committed no events");
 
     const agentCollection = env.AGENT_COLLECTION.getByName(
       DurableObjectNameCodec.stringify({
@@ -4019,6 +4008,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
     ]);
+    return this;
   }
 
   /**
@@ -4171,7 +4161,8 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         capabilityHost:
           "This agent scope's durable capability table — also the dotted door to its dynamic capabilities (capabilityHost.<name>(args)).",
         chat: "The agent's web-chat door (sendMessage).",
-        create: "Create this agent and wait for its processors to consume the birth batch.",
+        create:
+          "Create this agent (optional payload = the agent/created birth certificate), wait for its processors to consume the birth batch, and return this same agent handle.",
         kill: "Restart the agent's server-side object; the next request boots it fresh.",
         message:
           "Send this agent a message (string, or { message, files? }); the sender is derived from the calling scope.",
@@ -4833,33 +4824,32 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     });
   }
 
-  /** Create this capability host and return only after it has processed its birth batch. */
-  async create(): Promise<void> {
-    const durableObjectName = DurableObjectNameCodec.stringify({
-      path: this.#props.path,
-      projectId: this.#props.projectId,
-    });
+  /**
+   * Create this capability host: append the atomic birth batch (created +
+   * processor subscription; the payload defaults to `{}` config with the
+   * standard one-hop fallback to the project root host — the path is
+   * normalized in the constructor), wait until the processor has consumed it,
+   * and return this same host handle, so create chains. Identical-payload
+   * retries dedupe on the birth idempotency keys; a create over an existing
+   * host with a different payload fails loudly.
+   */
+  async create(payload?: CapabilityHostCreateInput): Promise<CapabilityHostRpcTarget> {
     const committed = await this.#stream.append(
-      {
-        type: "events.iterate.com/capability-host/created",
-        idempotencyKey: `capability-host/created:${this.#props.projectId}:${this.#props.path}`,
-        // The root host ends resolution; every other scope journals a one-hop
-        // fallback straight to it (path is normalized in the constructor).
-        payload: { config: {}, fallback: capabilityFallbackForScope(this.#props.path) },
-      },
-      buildDurableObjectProcessorSubscriptionConfiguredEvent({
-        durableObjectName,
-        idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-        processor: ["capabilityHosts", ["get", this.#props.path], "processor"],
-        processorSlug: CapabilityHostProcessorContract.slug,
+      ...capabilityHostCreationEvents({
+        path: this.#props.path,
+        projectId: this.#props.projectId,
+        ...(payload === undefined ? {} : { payload }),
       }),
     );
+    // append() preserves INPUT order, including idempotency hits at their old
+    // offsets — the create boundary is the maximum offset across the batch.
     const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (offset === 0) throw new Error("capability host create committed no events");
     await this.processor.waitUntilProcessed({
       offset,
       timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
     });
+    return this;
   }
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
@@ -4899,7 +4889,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       instructions: `The capability host at scope "${this.#props.path}": the durable dynamic-capability table and script journal for this scope. Mounting is local; on a local miss reads follow the scope's journaled fallback (usually the project root host), so \`capabilities\` includes the fallback's mounts tagged with their declaring scope.`,
       children: {
         create:
-          "Create this capability host and wait until its processor has processed the birth batch.",
+          "Create this capability host (optional payload = the capability-host/created birth certificate), wait until its processor has processed the birth batch, and return this same host handle.",
         invokeCapability:
           "Explicit dynamic dispatch ({ path, args }); dotted calls compile to this.",
         kill: "Restart this scope's server-side object; the next request boots it fresh.",

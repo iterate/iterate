@@ -826,26 +826,34 @@ describe("minimal web-chat agent processors", () => {
     ).toHaveLength(1);
   });
 
-  it("rejects a second birth certificate", async () => {
+  it("a second birth certificate is a no-op: the first one wins", async () => {
     const stream = agentStream();
     const agent = makeAgentProcessor({ stream, path: stream.path, projectId: null });
     const runner = agentRunner(agent, stream);
 
+    // Conflicting births are rejected at the create() door (same-key-
+    // different-body); a duplicate that still reaches reduce must not wedge
+    // the frame, and must not replace the original certificate.
     await stream.append({
       type: "events.iterate.com/agent/created",
-      payload: {},
+      payload: { note: "impostor" },
     });
+    await runner.catchUp();
 
-    await expect(runner.catchUp()).rejects.toThrow("agent received more than one created event");
+    expect(runner.currentState.birthCertificate).toEqual({});
   });
 
-  it("keeps model and prompt policy out of the birth wire format", () => {
-    expect(() =>
-      AgentProcessorContract.parseEventInput("events.iterate.com/agent/created", {
-        type: "events.iterate.com/agent/created",
-        payload: { config: { llm: { model: DEFAULT_AGENT_MODEL } } },
-      }),
-    ).toThrow(/Unrecognized key/);
+  it("birth facts parse loosely; runtime configuration stays a strict separate event", () => {
+    // The birth certificate is the caller's loose payload — arbitrary birth
+    // facts ride along without meaning to the runtime…
+    const created = AgentProcessorContract.parseEventInput("events.iterate.com/agent/created", {
+      type: "events.iterate.com/agent/created",
+      payload: { config: { llm: { model: DEFAULT_AGENT_MODEL } } },
+    });
+    expect(created.payload).toEqual({ config: { llm: { model: DEFAULT_AGENT_MODEL } } });
+    // …while model and prompt policy remain strict, dedicated events (the
+    // "uses later model configuration" test proves birth facts never
+    // configure anything).
     expect(() =>
       AgentProcessorContract.parseEventInput("events.iterate.com/agent/configured", {
         type: "events.iterate.com/agent/configured",

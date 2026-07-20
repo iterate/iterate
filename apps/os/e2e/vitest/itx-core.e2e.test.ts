@@ -290,7 +290,7 @@ test("Trusted internal root can access global streams and repos", async () => {
     type: "events.iterate.test/global-stream",
   });
 
-  using repo = await itx.repos.create({ path });
+  using repo = await itx.repos.get(path).create();
   expect(await repo.whoami()).toBe(`repo null:${path}`);
 });
 

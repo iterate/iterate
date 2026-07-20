@@ -4,7 +4,7 @@ import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
-import type { ScriptExecutionSettlement } from "./capability-host-processor-contract.ts";
+import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 
 const DEADLINE_EXCEEDED_ERROR =
   "Script execution exceeded its absolute deadline after it started. Its worker execution context ended, but arbitrary external work cannot be proven terminated. It may have partially executed; it was NOT re-run.";

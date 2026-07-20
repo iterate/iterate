@@ -7,15 +7,15 @@
 // a hoisted function defined below the contract, so the contract still opens
 // the file.
 //
-// No synthetic ids anywhere: the journal already assigns every event a
+// No synthetic ids anywhere: the stream already assigns every event a
 // unique, ordered identity — its offset. An LLM request IS its
-// `llm-request-requested` event, named by the offset the journal gave it on
+// `llm-request-requested` event, named by the offset the stream gave it on
 // commit; settlements point back with that offset, and idempotency keys are
 // derived from offsets.
 //
 // Event NAMES are shared with the production agent contract wherever the
 // semantics are identical (`agents/context-added`, `agent/llm-request-requested`,
-// `agent/llm-response-chunk`, ...) so existing journals remain meaningful on
+// `agent/llm-response-chunk`, ...) so existing streams remain meaningful on
 // cutover — this processor REPLACES the production one. The slug differs
 // (`agent-next`) only so idempotency keys cannot collide during the cutover
 // window.
@@ -43,12 +43,12 @@ export const AgentNextProcessorContract = defineProcessorContract({
       .nullable()
       .default(null)
       .meta({
-        description: "Existence marker: null until agent/created folds. No turns run before it.",
+        description: "Existence marker: null until agent/created reduces. No turns run before it.",
       }),
     // The complete configuration, every knob defaulted. `.prefault({})` is
     // core zod 4 (not a patch): unlike `.default(value)`, which returns the
     // value AS-IS when the input is absent, prefault PARSES it — so the empty
-    // fold runs `{}` through the schema and every nested knob default fills
+    // initial state runs `{}` through the schema and every nested knob default fills
     // in. `agent/configured` merges partial patches (omitted keys keep their
     // values); the implementation re-validates merges through
     // `AgentNextProcessorContract.stateSchema.shape.config`.
@@ -71,7 +71,7 @@ export const AgentNextProcessorContract = defineProcessorContract({
           .default(250)
           .meta({
             description:
-              "Debounce window before a pending trigger journals its turn intent: long enough " +
+              "Debounce window before a pending trigger appends its turn intent: long enough " +
               "to coalesce a burst of context events that arrive together (a message plus its " +
               "attachments, a script result fan-in), short enough to be invisible next to LLM " +
               "latency. Measured from the FIRST uncovered trigger — continuous input cannot " +
@@ -84,7 +84,7 @@ export const AgentNextProcessorContract = defineProcessorContract({
           .default(10 * 60_000)
           .meta({
             description:
-              "How long a journaled intent stays runnable, measured from its trigger. Past " +
+              "How long an appended intent stays runnable, measured from its trigger. Past " +
               "this the processor settles it cancelled/expired instead of running it: " +
               "answering a ten-minute-old message with a context snapshot from then does more " +
               "harm than admitting the miss. Also the per-attempt transport deadline, so an " +
@@ -122,7 +122,7 @@ export const AgentNextProcessorContract = defineProcessorContract({
           .meta({
             description:
               "Circuit breaker on self-driven turn chains (scripts/agents triggering the next " +
-              "turn): this many autonomous turns without external input journals agent/paused; " +
+              "turn): this many autonomous turns without external input appends agent/paused; " +
               "the next external message resumes.",
           }),
         scriptResultHistoryLimit: z
@@ -142,7 +142,7 @@ export const AgentNextProcessorContract = defineProcessorContract({
       .array(
         z.object({
           offset: z.number().int().positive().meta({
-            description: "Journal offset of the context-added event this item folded from.",
+            description: "Stream offset of the context-added event this item was reduced from.",
           }),
           payload: agentContextItemSchema(),
         }),
@@ -150,7 +150,7 @@ export const AgentNextProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "The conversation fold: ONE ordered list of every model-visible item (system items " +
+          "The reduced conversation: ONE ordered list of every model-visible item (system items " +
           "sit in place — providers accept system/developer content mid-history). A keyed item " +
           "no request has covered yet is replaced in place by an update with the same key; a " +
           "covered one appends a new occurrence (see lastLlmRequestOffset).",
@@ -201,10 +201,10 @@ export const AgentNextProcessorContract = defineProcessorContract({
       .default(null)
       .meta({
         description:
-          "The one open LLM request: a turn whose INTENT is journaled. null = nothing owed. " +
-          "This is the whole recoverability story — the intent lives in the journal, not in a " +
-          "closure, so any incarnation that folds the journal knows what is owed regardless " +
-          "of who died in between. At most one request is ever open: a new intent folds to " +
+          "The one open LLM request: a turn whose INTENT is on the stream. null = nothing owed. " +
+          "This is the whole recoverability story — the intent lives in the stream, not in a " +
+          "closure, so any incarnation that reduces the stream knows what is owed regardless " +
+          "of who died in between. At most one request is ever open: a new intent reduces to " +
           "nothing while this is set.",
       }),
     consecutiveLlmFailures: z
@@ -289,9 +289,9 @@ export const AgentNextProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The journaled INTENT to run one LLM turn. Carries no id: the request's identity is the " +
-        "offset this event gets on commit. The fold ignores it when no trigger is pending or a " +
-        "request already is open — a late debounced intent is a harmless journal fact.",
+        "The appended INTENT to run one LLM turn. Carries no id: the request's identity is the " +
+        "offset this event gets on commit. The reducer ignores it when no trigger is pending or a " +
+        "request already is open — a late debounced intent is a harmless stream fact.",
       payloadSchema: z.object({
         model: z.string().meta({ description: "Model pinned for this turn." }),
         expiresAt: z.number().meta({
@@ -362,11 +362,11 @@ export const AgentNextProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/agent/llm-response-chunk": {
-      description: "Ephemeral streaming of an in-flight response; never folded, never replayed.",
+      description: "Ephemeral streaming of an in-flight response; never reduced, never replayed.",
       // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
       // Every append/parse lane built from this definition defaults the
       // envelope's `ephemeral` flag to true and REJECTS `ephemeral: false`,
-      // so a chunk can never become a durable journal fact by accident.
+      // so a chunk can never become a durable stream fact by accident.
       ephemeral: true,
       payloadSchema: z.object({
         requestOffset: z
@@ -520,7 +520,7 @@ function agentContextItemSchema() {
         .meta({
           description:
             "On assistant items: offset of the llm-request-requested event this output " +
-            "answers. The fold IGNORES an assistant item whose request is no longer the open " +
+            "answers. The reducer IGNORES an assistant item whose request is no longer the open " +
             "one — that guard is what closes the interrupt-vs-settle race.",
         }),
     })

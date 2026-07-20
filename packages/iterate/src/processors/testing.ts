@@ -1,7 +1,7 @@
 // In-memory test doubles for the stream substrate — the ONE MemoryStream
 // (plus MemoryStreamNetwork for router suites observing cross-stream
 // forwards) — and `driveProcessor`, REAL runner drive over the in-memory
-// journal: the shared form of the cutover suites' local `drive()` helpers.
+// stream: the shared form of the cutover suites' local `drive()` helpers.
 // Registry-level harnesses (fake DurableObjectState, virtual clock, alarm
 // cell, crash-as-eviction) live inline in the suites that need them
 // (stream-processor-registry.test.ts, the per-domain *-recovery tests).
@@ -232,22 +232,23 @@ export class MemoryStreamNetwork {
 type ProcessorDriver<Contract extends StreamProcessorContract> = {
   /** The driving runner, for tests that need its full surface. */
   runner: StreamProcessorRunner<Contract>;
-  /** One catch-up pass to the journal's current head — the production
+  /** One catch-up pass to the stream's current head — the production
    * delivery cadence. Failures RETHROW with the cursor held, so a retry
    * redelivers the failed events exactly like the transport would. */
   deliver(): Promise<void>;
-  /** The runner's committed fold (schema default until the first pass). */
+  /** The runner's committed reduced state (schema default until the first pass). */
   readonly state: ProcessorState<Contract>;
-  /** One consistent read of the fold, pinned to its offset. */
+  /** One consistent read of the reduced state, pinned to its offset. */
   snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }>;
 };
 
 /**
- * REAL runner drive over an in-memory journal — the shared form of the
+ * REAL runner drive over an in-memory stream — the shared form of the
  * cutover suites' local `drive()` helpers: one StreamProcessorRunner per
- * processor (in-memory progress; a fresh driver over the same journal
- * replays from scratch, which is the refold recipe). The processor instance
- * holds no fold of its own — read `driver.state` / `driver.snapshot()`.
+ * processor (in-memory progress; a fresh driver over the same stream
+ * replays from scratch, which is the full-replay recipe). The processor
+ * instance holds no reduced state of its own — read `driver.state` /
+ * `driver.snapshot()`.
  */
 export function driveProcessor<Contract extends StreamProcessorContract, Deps extends object>(
   processor: StreamProcessor<Contract, Deps>,
@@ -282,12 +283,12 @@ export function eventsOfType(source: MemoryStream | StreamEvent[], type: string)
  * - `["advanceTime", ms]` — move the virtual clock, releasing any harness
  *   `sleep(...)` calls that come due;
  * - `["crash"]` — abandon the incarnation like an eviction (runtime state and
- *   pending closures die; journal, progress, and clock survive);
+ *   pending closures die; stream, progress, and clock survive);
  * - `async () => ...` — anything processor-specific (resolve a fake transport,
  *   assert mid-scenario).
  *
  * After every step the harness drives delivery to a fixpoint, so each step
- * observes the journal consequences of the previous one.
+ * observes the stream consequences of the previous one.
  */
 export type HarnessStep<Contract extends StreamProcessorContract> =
   | readonly ["append", ...ConsumedInput<Contract>[]]
@@ -327,23 +328,23 @@ export type ProcessorHarness<Contract extends StreamProcessorContract> = {
   /** Advance the virtual clock, release due sleeps, drive to fixpoint. */
   advanceTime(ms: number): Promise<void>;
   /** Abandon this incarnation like an eviction; a fresh one takes over the
-   * same journal/progress/clock. Does NOT deliver — the successor first acts
+   * same stream/progress/clock. Does NOT deliver — the successor first acts
    * on the next step, exactly like a real revival. */
   crash(): void;
   /** Drive delivery to a fixpoint: repeated catch-up passes (with microtask
    * drains between them, so settled background work can land its appends)
-   * until the journal head stops moving. */
+   * until the stream head stops moving. */
   settle(): Promise<void>;
-  /** The runner's committed fold. */
+  /** The runner's committed reduced state. */
   state(): ProcessorState<Contract>;
-  /** Committed journal rows, optionally filtered by event type. */
+  /** Committed stream rows, optionally filtered by event type. */
   events(type?: string): StreamEvent[];
 };
 
 /** In-memory {@link ProcessorProgressStore} with the DO store's fencing check,
  * so progress survives `crash()` into the successor incarnation. Exported so
- * suites can hand a harness a FRESH store over an existing journal — a full
- * replay from offset zero, which is both the refold recipe and the harshest
+ * suites can hand a harness a FRESH store over an existing stream — a full
+ * replay from offset zero, which is both the re-reduce-from-scratch recipe and the harshest
  * at-least-once redelivery test (every per-event append re-runs). */
 export function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
   let record: ProcessorProgress<unknown> | undefined;
@@ -367,7 +368,7 @@ export function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
  * about the processor under test — construct it in `createProcessor` from the
  * supplied base deps plus whatever fakes the suite owns (LLM transports,
  * capability hosts). Pass another harness's `substrate` to run a second
- * incarnation over the SAME journal (the zombie-race setup).
+ * incarnation over the SAME stream (the zombie-race setup).
  */
 export function makeProcessorHarness<Contract extends StreamProcessorContract>(args: {
   createProcessor: (deps: HarnessProcessorDeps) => StreamProcessor<Contract, object>;
@@ -419,7 +420,7 @@ export function makeProcessorHarness<Contract extends StreamProcessorContract>(a
     // Fixpoint with a bounded round count: each round drains real microtasks
     // and macrotasks (so background work released by the previous round can
     // land its appends), then catches the runner up. Stop when a full round
-    // leaves the journal head unchanged.
+    // leaves the stream head unchanged.
     for (let round = 0; round < 50; round++) {
       const headBefore = stream.events.at(-1)?.offset ?? 0;
       await new Promise((resolve) => setTimeout(resolve, 0));

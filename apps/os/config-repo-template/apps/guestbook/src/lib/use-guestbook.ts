@@ -1,20 +1,20 @@
 import { newWebSocketRpcSession } from "@iterate-com/capnweb";
 import { createLiveStateStore } from "iterate/live-state";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { GuestbookApi, GuestbookFoldState } from "./state.ts";
+import type { GuestbookApi, GuestbookState } from "./state.ts";
 
 /**
  * The whole client: one Cap'n Web WebSocket to /api (public — the root
- * target needs no authenticate step), the processor's fold folded into the
- * platform's `createLiveStateStore` (snapshot + patches) and read with
+ * target needs no authenticate step), the processor's reduced state fed into
+ * the platform's `createLiveStateStore` (snapshot + patches) and read with
  * `useSyncExternalStore`. Signing is a plain call on the root — the append
- * flows through the stream's wake spine back into the fold, and every open
- * tab, this one included, repaints from the pushed patch.
+ * flows through the stream's wake spine back into the processor, and every
+ * open tab, this one included, repaints from the pushed patch.
  */
 export function useGuestbook() {
   const [api, setApi] = useState<GuestbookApi | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const storeRef = useRef(createLiveStateStore<GuestbookFoldState>());
+  const storeRef = useRef(createLiveStateStore<GuestbookState>());
   const store = storeRef.current;
 
   useEffect(() => {

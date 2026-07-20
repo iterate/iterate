@@ -4,11 +4,11 @@ import { useGuestbook } from "../lib/use-guestbook.ts";
 
 export const Route = createFileRoute("/")({ component: Guestbook });
 
-// The project's public guestbook. Its state is a stream-processor fold on the
-// project stream at /guestbook (src/guestbook-app.ts hosts the processor);
-// this page hydrates, opens /api, and stays live — every open tab repaints the
-// moment anyone signs, and every fifth signature earns a milestone from the
-// processor's at-head reconcile.
+// The project's public guestbook. Its state is a stream processor's reduced
+// state on the project stream at /guestbook (src/guestbook-app.ts hosts the
+// processor); this page hydrates, opens /api, and stays live — every open tab
+// repaints the moment anyone signs, and every fifth signature earns a
+// milestone from the processor's at-head pass.
 function Guestbook() {
   const { guestbook, api, error } = useGuestbook();
   const [name, setName] = useState("");
@@ -95,7 +95,7 @@ function Guestbook() {
           guestbook.entries
             .map((entry, index) => ({ entry, index }))
             .reverse()
-            // The pre-reverse index: entries are append-only in the fold, so
+            // The pre-reverse index: entries are append-only in the state, so
             // it identifies a row for its whole lifetime — a new signature
             // inserts one element instead of remounting the list.
             .map(({ entry, index }) => (

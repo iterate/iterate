@@ -210,8 +210,6 @@ export interface StreamCollection {
 /** Repo catalog for either a project or the deployment-wide global scope. */
 export interface RepoCollection {
   __describe(): Promise<Description>;
-  /** Create the repo at a path; resolves once its backing artifact is `repo/ready`. */
-  create(input: { path: string }): Promise<Repo>;
   /** The repo at a path. */
   get(path: string): Repo;
 }
@@ -429,11 +427,15 @@ export interface Agent {
   /**
    * Create the generic agent machinery on this stream and wait until the
    * agent, capability-host, and singleton collection processors have reduced
-   * the birth. Configuration, context, and tasks are separate events: append
-   * processor-consumed events through `agent.append()` or use a typed helper
-   * such as `message()` after creation.
+   * the birth. The optional payload is the `agent/created` birth certificate
+   * (arbitrary birth facts; defaults to `{}`). Configuration, context, and
+   * tasks remain separate events: append processor-consumed events through
+   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Resolves with this same agent handle, so create chains.
+   * Identical-payload retries dedupe on the birth idempotency keys; a create
+   * over an existing agent with a different payload fails loudly.
    */
-  create(): Promise<void>;
+  create(payload?: AgentCreateInput): Promise<Agent>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -533,8 +535,16 @@ export interface CapabilityHost {
   /** This scope's capability-host stream processor (snapshot/state). A real
    * member, so it also claims the name: mounts cannot shadow `processor`. */
   processor: WakeableStreamProcessorRpc;
-  /** Create this capability host and return only after it has processed its birth batch. */
-  create(): Promise<void>;
+  /**
+   * Create this capability host: append the atomic birth batch (created +
+   * processor subscription; the payload defaults to `{}` config with the
+   * standard one-hop fallback to the project root host — the path is
+   * normalized in the constructor), wait until the processor has consumed it,
+   * and return this same host handle, so create chains. Identical-payload
+   * retries dedupe on the birth idempotency keys; a create over an existing
+   * host with a different payload fails loudly.
+   */
+  create(payload?: CapabilityHostCreateInput): Promise<CapabilityHost>;
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
@@ -1037,8 +1047,15 @@ export interface SecretCollection {
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   __describe(): Promise<Description>;
-  /** Create the repo if it does not exist yet; resolves once `repo/ready` lands. */
-  create(): Promise<Repo>;
+  /**
+   * Create this repo and wait until it is usable: appends the atomic birth
+   * batch (`repo/created` + the repo processor subscription), waits for the
+   * processor to consume it, then for `repo/ready` (the backing Artifacts
+   * repository exists). Resolves with this same handle, so create chains.
+   * Identical-payload retries dedupe on the birth idempotency keys; a create
+   * over an existing repo with a different payload fails loudly.
+   */
+  create(payload?: RepoCreateInput): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
   /** Restart the repo's server-side object; the next request boots it fresh. */
@@ -1432,8 +1449,17 @@ export interface Secret {
   fetch(request: Request): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** Create this secret and wait until its processor has folded the birth certificate. */
-  create(input: SecretCreateInput): Promise<StreamEvent>;
+  /**
+   * Create this secret and wait until its processor has reduced the birth
+   * certificate, then return this same secret handle, so create chains. The
+   * Secret Durable Object owns the birth semantics: it encrypts the material
+   * bound to the exact commit offset and appends `secret/created` plus the
+   * secret's processor subscription in one atomic batch. An identical-policy
+   * retry over an existing secret resolves fine (material is write-only and
+   * not comparable — it is kept, never replaced; rotate through `update()`);
+   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.
+   */
+  create(input: SecretCreateInput): Promise<Secret>;
   /**
    * Read the material back — only for a secret born `readable: true` (an
    * immutable birth-certificate fact; every other secret stays write-only
@@ -1726,6 +1752,8 @@ export type ProjectProcessorState = {
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
   customDomains: {
+    createdAt: string;
+    updatedAt: string;
     cloudflareHostnameId: string | null;
     error: string | null;
     hostname: string;
@@ -1735,8 +1763,6 @@ export type ProjectProcessorState = {
     status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";
     validationRecords: { name: string; status: string | null; value: string }[];
     wildcard: boolean;
-    createdAt: string;
-    updatedAt: string;
   }[];
   egressRules: {
     ruleKey: string;
@@ -2099,7 +2125,7 @@ export type CfBrowserQuickActionOptions = Record<string, unknown> &
  * `stateSchema`.
  */
 export type AgentProcessorState = {
-  birthCertificate: Record<string, never> | null;
+  birthCertificate: { [x: string]: unknown } | null;
   config: { llm: { model: string } } | null;
   context: {
     system: (
@@ -2418,7 +2444,7 @@ export type AgentEventInput =
       "events.iterate.com/agent/configured",
       { config: { llm?: { model?: string | undefined } | undefined } }
     >
-  | TypedConsumedEventInput<"events.iterate.com/agent/created", Record<string, never>>
+  | TypedConsumedEventInput<"events.iterate.com/agent/created", { [x: string]: unknown }>
   | TypedConsumedEventInput<
       "events.iterate.com/agent/llm-request-cancelled",
       | { phase: "scheduled"; reason: "interrupted-by-user-input"; requestId: string }
@@ -2693,6 +2719,10 @@ export type StreamEvent = {
   path: string;
 };
 
+/** The `agent/created` payload — the agent's birth certificate (a loose
+ * object of caller-authored birth facts; `{}` is the norm). */
+export type AgentCreateInput = { [x: string]: unknown };
+
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -2711,6 +2741,9 @@ export type AgentFileAttachment = {
   size: number;
   url: string;
 };
+
+/** The `capability-host/created` payload — the scope's birth certificate. */
+export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {
@@ -3089,7 +3122,7 @@ export type SandboxInstanceType =
  * - `__describe()` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
- *   journaled as a `configured` event); values are conventionally
+ *   recorded as a `configured` event); values are conventionally
  *   `getSecret(path)` placeholders substituted only at egress — real
  *   secret material never enters the container. All sandbox egress flows
  *   through project egress policy; there is no direct internet path.
@@ -3236,6 +3269,9 @@ export type CollectSecretLink = {
   url: string;
 };
 
+/** The `repo/created` payload — the repo's birth certificate. */
+export type RepoCreateInput = { config: Record<string, never> };
+
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
   author?: { email: string; name: string };
@@ -3367,7 +3403,7 @@ export type DynamicWorkerDispatchOptions = {
 };
 
 /** One repo mount: the repo a workspace subtree reads from and its commit policy. */
-export type WorkspaceMount = { policy: "commit-to-main" | "read-only"; repoPath: string };
+export type WorkspaceMount = WorkspaceConfig["mounts"][string];
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
@@ -3581,7 +3617,7 @@ export type DeviceEnrollInput = {
   platform: "ios" | "android";
 };
 
-/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */
+/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */
 export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-opened",
@@ -3638,7 +3674,7 @@ export type SecretDescription = {
     usedCount: number;
   };
   egress: { urls: string[] };
-  /** Whether the secret processor has folded its birth certificate. */
+  /** Whether the secret processor has reduced its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
   /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */
@@ -3795,7 +3831,7 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   updatePolicy?: "block" | "stale-while-rebuild";
 };
 
-/** The workspace processor's reduced state: birth certificate plus folded config. */
+/** The workspace processor's reduced state: birth certificate plus the merged config. */
 export type WorkspaceProcessorState = {
   birthCertificate: {
     config: {
@@ -3806,11 +3842,12 @@ export type WorkspaceProcessorState = {
 };
 
 /** A workspace's complete configuration: the mount table, keyed by mount path. */
-export type WorkspaceConfig = {
-  mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
-};
+export type WorkspaceConfig = WorkspaceProcessorState["config"];
 
-/** A configuration patch: deep-merged per mount point; null unmounts. */
+/** A configuration patch: deep-merged per mount point; null unmounts.
+ * (Spelled as one z.output<> reference — not an indexed access over it — so
+ * the itx-api generator expands it structurally instead of copying the
+ * expression verbatim into the generated public API.) */
 export type WorkspaceConfigPatch = {
   mounts?:
     | Record<

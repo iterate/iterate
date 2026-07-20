@@ -1,14 +1,14 @@
 // Repo artifact readiness as an at-head obligation, plus eviction recovery: the repo
-// processor's `onCaughtUp` reconciliation of the two durable obligations —
-// creation (blocking, NEVER re-run once `repo/ready` folded) and GitHub imports (background,
+// processor's at-head processEvent pass re-drives the two durable obligations —
+// creation (blocking, NEVER re-run once `repo/ready` reduced) and GitHub imports (background,
 // safely RE-driven: the sync is an idempotent current-head fast-forward).
 //
 // The processor is driven the way production drives it: a REAL
 // createStreamProcessorRegistry (runner + durableObjectRecovery + keepalive
-// alarm) over a fake DurableObjectState, the in-memory MemoryStream journal,
+// alarm) over a fake DurableObjectState, the in-memory MemoryStream,
 // and a virtual clock — the same harness shape as
 // capability-host-recovery.test.ts. `crash()` is an eviction: in-flight work
-// dies; the journal, KV progress, and the durable alarm survive.
+// dies; the stream, KV progress, and the durable alarm survive.
 
 import { describe, expect, it, vi } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
@@ -124,10 +124,10 @@ function makeHarness() {
     get registry() {
       return registry;
     },
-    /** The runner's committed fold — the read the DO's registry serves. */
+    /** The runner's committed reduced state — the read the DO's registry serves. */
     state: () => registry.reads(processor).currentState,
     /** Evict the incarnation: registry, runner, and in-flight vendor bodies
-     * die; the journal, KV progress, and the durable alarm survive. */
+     * die; the stream, KV progress, and the durable alarm survive. */
     crash() {
       pending = [];
       boot();
@@ -175,7 +175,7 @@ function makeHarness() {
 }
 
 describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)", () => {
-  it("creates the artifact once at head and journals repo/ready", async () => {
+  it("creates the artifact once at head and appends repo/ready", async () => {
     const h = makeHarness();
     const createCalls: unknown[] = [];
     h.create.impl = async (input) => {
@@ -199,15 +199,17 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
     expect(createCalls).toHaveLength(1);
   });
 
-  it("throws when a second repo birth certificate is reduced", async () => {
+  it("a second repo birth certificate is a no-op: the first one wins", async () => {
     const h = makeHarness();
     h.create.impl = async () => createdArtifact;
     await h.stream.append(repoCreated, repoCreated);
 
-    await expect(h.deliverPending()).rejects.toThrow("repo received more than one created event");
+    await h.deliverPending();
+    await h.deliverPending();
+    expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });
   });
 
-  it("defers creation while the fold is behind the head, then creates once caught up", async () => {
+  it("defers creation while the reduced state is behind the head, then creates once caught up", async () => {
     const h = makeHarness();
     const createCalls: unknown[] = [];
     h.create.impl = async (input) => {
@@ -242,7 +244,7 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
     expect(createCalls).toHaveLength(1);
   });
 
-  it("refold: a journal that already contains repo/ready never re-creates", async () => {
+  it("replay: a stream that already contains repo/ready never re-creates", async () => {
     const h = makeHarness();
     const createCalls: unknown[] = [];
     h.create.impl = async (input) => {
@@ -254,31 +256,31 @@ describe("RepoProcessor birth lane (artifact readiness as an at-head obligation)
     await h.deliverPending();
     await h.deliverPending();
     expect(createCalls).toHaveLength(1);
-    const journalBeforeRefold = h.stream.events.length;
-    const stateBeforeRefold = h.state();
+    const eventCountBeforeReplay = h.stream.events.length;
+    const stateBeforeReplay = h.state();
 
-    // A fresh incarnation replaying the WHOLE journal (durable progress
-    // erased): the refold replays `repo/created` with event-time state in
-    // which `ready` is still false, but the at-head fold has absorbed the
-    // journaled `repo/ready` fact — the completed external creation
+    // A fresh incarnation replaying the WHOLE stream (durable progress
+    // erased): the replay re-reduces `repo/created` with event-time state in
+    // which `ready` is still false, but the at-head reduced state has absorbed
+    // the committed `repo/ready` fact — the completed external creation
     // obligation must provably not run again.
     h.kv.clear();
     h.crash();
     h.create.impl = () => {
-      throw new Error("refold must not re-create an existing repo");
+      throw new Error("replay must not re-create an existing repo");
     };
     await h.deliverPending();
 
-    expect(h.stream.events).toHaveLength(journalBeforeRefold);
-    expect(h.state()).toEqual(stateBeforeRefold);
+    expect(h.stream.events).toHaveLength(eventCountBeforeReplay);
+    expect(h.state()).toEqual(stateBeforeReplay);
   });
 });
 
 describe("eviction recovery end to end", () => {
-  it("died owing the creation → keepalive alarm → revived fact → its delivery reaches head → onCaughtUp completes the creation", async () => {
+  it("died owing the creation → keepalive alarm → revived fact → its delivery reaches head → the at-head pass completes the creation", async () => {
     const h = makeHarness();
     // Incarnation 1 HANGS mid-create: the at-head frame is blocked inside
-    // onCaughtUp's creation obligation, the attempt rides the keepalive, the
+    // the creation obligation, the attempt rides the keepalive, the
     // revival alarm is armed. The frame never resolves — do not await it.
     h.create.impl = () => new Promise<never>(() => {});
     await h.stream.append(repoCreated);
@@ -300,7 +302,7 @@ describe("eviction recovery end to end", () => {
       false,
     );
 
-    h.crash(); // the in-flight creation dies; journal, KV, and the alarm survive
+    h.crash(); // the in-flight creation dies; stream, KV, and the alarm survive
     const createCalls: unknown[] = [];
     h.create.impl = async (input) => {
       createCalls.push(input);
@@ -308,7 +310,7 @@ describe("eviction recovery end to end", () => {
     };
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
-    // durableObjectRecovery's revival pass journaled the processor-scoped
+    // durableObjectRecovery's revival pass appended the processor-scoped
     // fact — the ONLY thing that creates a delivery turn for the wedged frame.
     const revived = h.stream.events.filter(
       (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
@@ -320,9 +322,9 @@ describe("eviction recovery end to end", () => {
       version: "v-test",
     });
 
-    // Its ordinary delivery drives the runner to head; onCaughtUp finds the
-    // still-open creation obligation in the fold and completes it — exactly
-    // once, under the stable obligation key.
+    // Its ordinary delivery drives the runner to head; the at-head pass finds
+    // the still-open creation obligation in the reduced state and completes it
+    // — exactly once, under the stable obligation key.
     await h.deliverPending();
     const ready = h.stream.events.filter((event) => event.type === "events.iterate.com/repo/ready");
     expect(ready).toHaveLength(1);
@@ -333,7 +335,7 @@ describe("eviction recovery end to end", () => {
     expect(h.state()).toMatchObject({ birthCertificate: { config: {} }, ready: true });
   });
 
-  it("re-drives a GitHub import owed at zero lag: revived fact → onCaughtUp re-runs the idempotent sync", async () => {
+  it("re-drives a GitHub import owed at zero lag: revived fact → the at-head pass re-runs the idempotent sync", async () => {
     const h = makeHarness();
     await h.stream.append(repoCreated, {
       type: "events.iterate.com/repo/ready",
@@ -341,7 +343,7 @@ describe("eviction recovery end to end", () => {
     });
     await h.deliverPending();
     // Incarnation 1 starts the import and HANGS mid-sync: the started fact is
-    // journaled, the attempt rides the keepalive, the revival alarm is armed.
+    // committed, the attempt rides the keepalive, the revival alarm is armed.
     h.sync.impl = () => new Promise<never>(() => {});
     await h.stream.append({
       type: "events.iterate.com/repo/github-import-requested",
@@ -359,14 +361,14 @@ describe("eviction recovery end to end", () => {
         ),
       ).toBe(true);
     });
-    // Fold the started fact too, so the acknowledged cursor sits AT HEAD:
+    // Reduce the started fact too, so the acknowledged cursor sits AT HEAD:
     // the zero-lag wedge — after the eviction, no ordinary redelivery exists
     // to hand this processor a recovery turn.
     await h.deliverPending();
     expect((await h.wake()).checkpointOffset).toBe(h.head());
     expect(h.alarm.at).not.toBeNull();
 
-    h.crash(); // the in-flight sync dies; journal, KV, and the alarm survive
+    h.crash(); // the in-flight sync dies; stream, KV, and the alarm survive
     const syncCalls: unknown[] = [];
     h.sync.impl = async (input) => {
       syncCalls.push(input);
@@ -378,9 +380,9 @@ describe("eviction recovery end to end", () => {
       h.stream.events.filter((event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE),
     ).toHaveLength(1);
 
-    // The revived delivery drives the runner to head; onCaughtUp finds the
-    // open import obligation and — unlike scripts — RE-drives it: the sync is
-    // an idempotent current-head fast-forward.
+    // The revived delivery drives the runner to head; the at-head pass finds
+    // the open import obligation and — unlike scripts — RE-drives it: the sync
+    // is an idempotent current-head fast-forward.
     await h.deliverPending();
     await vi.waitFor(() => {
       const completed = h.stream.events.find(

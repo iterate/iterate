@@ -114,12 +114,16 @@ export type ReduceArgs<Contract> = {
  */
 type SideEffectHelpers = {
   /** Hold the cursor (and the next event) until this work completes.
+   * Blocking is the EXCEPTION, not the default — the required `reason` is the
+   * call site's justification (one sentence: why the next event must wait,
+   * i.e. why losing this append would lose a per-event consequence forever).
+   * It is also what failure logs name when the blocker rejects.
    * Registrations run STRICTLY IN REGISTRATION ORDER: each blocker starts
    * only after the previous one settles, so a later registration in the same
    * `processEvent` body observes the earlier work's appends. Order
-   * fold-derived work after per-event work by writing it later in the
+   * state-derived work after per-event work by writing it later in the
    * function — no separate lane needed. */
-  blockProcessorWhile: (work: () => Promise<unknown>) => void;
+  blockProcessorWhile: (reason: string, work: () => Promise<unknown>) => void;
   /** A droppable attempt; failures are caught and logged, evictions lose it. */
   runInBackground: (work: () => Promise<unknown>) => void;
 };

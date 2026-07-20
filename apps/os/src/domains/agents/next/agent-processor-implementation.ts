@@ -13,28 +13,28 @@ import {
  *
  * Context events arrive on the agent's stream (`agents/context-added`: user
  * messages, developer notes, script results, assistant output). The pure
- * `reduce` fold projects them into `state.contextItems` — ONE ordered list;
+ * `reduce` projects them into `state.contextItems` — ONE ordered list;
  * system items sit in place — and records the newest turn-worthy one as
  * `state.pendingLlmRequestTrigger`. When `processEvent` runs at the head of
  * the stream with a trigger pending and no request open, it waits out a
- * short debounce window (plus failure backoff) and then journals the INTENT
+ * short debounce window (plus failure backoff) and then appends the INTENT
  * to run one turn: an `agent/llm-request-requested` event. That event's own
- * journal offset IS the request's identity — there are no synthetic ids
+ * stream offset IS the request's identity — there are no synthetic ids
  * anywhere; every related idempotency key derives from an offset.
  *
  * The requested event comes back through the processor's own subscription;
- * the fold opens `state.openRequest`, and the at-head pass finds an open
+ * the reducer opens `state.openRequest`, and the at-head pass finds an open
  * request this incarnation is not executing and starts the LLM call — the
- * ONE place work ever starts. Because the intent lives in the journal and
+ * ONE place work ever starts. Because the intent lives in the stream and
  * not in a closure, recovery is the same code path: after an eviction the
- * platform appends `stream/processor-revived`, the fresh incarnation folds
- * the journal, sees the open request, and adopts it — same offset, same
+ * platform appends `stream/processor-revived`, the fresh incarnation reduces
+ * the stream, sees the open request, and adopts it — same offset, same
  * idempotency keys, so a zombie incarnation racing the successor collapses
- * to one journal story on the shared `settle/<offset>` key.
+ * to one stream story on the shared `settle/<offset>` key.
  *
  * Success lands as ONE atomic append: the assistant context item plus the
  * `agent/llm-request-settled` fact. Failures settle with an accompanying
- * `stream/error-occurred` event; the fold schedules the retry (backoff and
+ * `stream/error-occurred` event; the reduced state schedules the retry (backoff and
  * caps are plain state arithmetic), and EVERY error-occurred event on the
  * stream — from this processor or anything else — is transcribed into
  * model-visible context so the next turn can see it. Cancellation is a
@@ -44,11 +44,11 @@ import {
  * interrupting message's own trigger drives the next turn.
  *
  * At most ONE LLM request is ever open: `state.openRequest` is a single slot
- * and the requested-event fold-guard drops intents while it is set.
+ * and the requested-event reduce-guard drops intents while it is set.
  * Concurrency belongs to subagents (separate streams), not to parallel turns
- * over one conversation fold. Runaway self-driven chains hit the
- * `maxAutonomousTurns` breaker, which journals `agent/paused` (mirroring
- * stream/paused); the next external message journals `agent/resumed`.
+ * over one reduced conversation. Runaway self-driven chains hit the
+ * `maxAutonomousTurns` breaker, which appends `agent/paused` (mirroring
+ * stream/paused); the next external message appends `agent/resumed`.
  *
  * All tuning (model, debounce, expiry, retry policy, breaker threshold)
  * lives in `state.config` with schema defaults; `agent/configured` merges
@@ -62,8 +62,8 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
    * LLM call THIS incarnation is executing (mirroring the single
    * `state.openRequest` slot), with its abort handle and the text streamed so
    * far (preserved into the cancelled settlement when an interrupt aborts
-   * mid-response). The journal never knows about incarnations — a fresh one
-   * folds the journal, finds the open request absent here, and runs it again
+   * mid-response). The stream never knows about incarnations — a fresh one
+   * reduces the stream, finds the open request absent here, and runs it again
    * (adopt-based recovery).
    */
   #inFlightLlmCall: {
@@ -83,7 +83,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
   //   fast local append.
   // - STATE-DERIVED consequences (the whole block after `delivery.caughtUp`)
   //   use `runInBackground`: a lost attempt is re-derived by ANY later
-  //   delivery over the same fold, so nothing needs to hold the cursor.
+  //   delivery over the same reduced state, so nothing needs to hold the cursor.
   protected override processEvent(args: ProcessEventArgs<AgentNextProcessorContract>): undefined {
     const { event, state, blockProcessorWhile, runInBackground, append, delivery } = args;
 
@@ -137,23 +137,21 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             },
             idempotencyKey: this.idempotencyKey(`settle/${open.requestedAtOffset}`),
           });
-          // Block: this is a per-event consequence of THE interrupting
-          // message. If the cancel append were a droppable attempt, a crash
-          // after the cursor passed this event would leave the open request
-          // uncancelled — and the next at-head pass would ADOPT and run the
-          // very request the user tried to stop.
-          blockProcessorWhile(() => this.#appendUnlessLostIdempotencyRace(append, appends));
+          blockProcessorWhile(
+            "a dropped cancel would leave the open request uncancelled, and the next at-head pass would adopt and run the very request the user tried to stop",
+            () => this.#appendUnlessLostIdempotencyRace(append, appends),
+          );
           // STOP: nothing below may act this frame. The at-head code would
           // otherwise re-run the very request the queued settlement is about
-          // to cancel (it reads the pre-cancel fold — the eviction-window
-          // interrupt case, where nothing here is executing the request). The
-          // settlement's own delivery re-runs everything over the settled
-          // fold, where the interrupting input's trigger drives the next turn.
+          // to cancel (it reads the pre-cancel reduced state — the
+          // eviction-window interrupt case, where nothing here is executing
+          // the request). The settlement's own delivery re-runs everything
+          // over the settled state, where the interrupting input's trigger
+          // drives the next turn.
           return;
         }
         // RESPONSE PARSING — an accepted assistant output may carry a script;
-        // extraction rides the same delivery that folded the text. Blocked for
-        // the same per-event reason as above: this event is delivered once.
+        // extraction rides the same delivery that reduced the text.
         if (
           payload.role === "assistant" &&
           payload.llmRequestOffset !== undefined &&
@@ -161,24 +159,26 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         ) {
           const code = extractAgentScript(payload.content);
           if (code !== null) {
-            blockProcessorWhile(() =>
-              // Deterministic body (expiresAt anchors to the assistant event,
-              // never `now`): an at-least-once redelivery of this event
-              // re-appends the identical request and dedupes on the key —
-              // a `now`-stamped expiry would make the re-append a same-key
-              // CONFLICT and wedge the frame forever. The race-tolerant
-              // append covers a config change between deliveries.
-              this.#appendUnlessLostIdempotencyRace(append, [
-                {
-                  type: "events.iterate.com/capability-host/script-run-requested",
-                  payload: {
-                    code,
-                    executionId: `agent-output:${event.offset}`,
-                    expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+            blockProcessorWhile(
+              "the assistant output is delivered once; a dropped append would silently lose the script run",
+              () =>
+                // Deterministic body (expiresAt anchors to the assistant event,
+                // never `now`): an at-least-once redelivery of this event
+                // re-appends the identical request and dedupes on the key —
+                // a `now`-stamped expiry would make the re-append a same-key
+                // CONFLICT and wedge the frame forever. The race-tolerant
+                // append covers a config change between deliveries.
+                this.#appendUnlessLostIdempotencyRace(append, [
+                  {
+                    type: "events.iterate.com/capability-host/script-run-requested",
+                    payload: {
+                      code,
+                      executionId: `agent-output:${event.offset}`,
+                      expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
+                    },
+                    idempotencyKey: this.idempotencyKey(`script-run-requested@${event.offset}`),
                   },
-                  idempotencyKey: this.idempotencyKey(`script-run-requested@${event.offset}`),
-                },
-              ]),
+                ]),
             );
           }
         }
@@ -187,27 +187,27 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
       case "events.iterate.com/capability-host/script-run-settled": {
         const { executionId, settlement } = event.payload;
         if (!executionId.startsWith("agent-output:")) break;
-        // Per-event render (blocked): the settlement is delivered once, and a
-        // lost render would silently drop the script's result from the
-        // conversation. Race-tolerant: a truncation-limit config change
-        // between redeliveries alters the rendered body under the same key.
-        blockProcessorWhile(() =>
-          this.#appendUnlessLostIdempotencyRace(append, [
-            {
-              type: "events.iterate.com/agents/context-added",
-              payload: {
-                role: "developer",
-                content: renderScriptSettlement(
-                  executionId,
-                  settlement,
-                  state.config.scriptResultHistoryLimit,
-                ),
-                actor: { type: "script", executionId },
-                llmRequestPolicy: { behaviour: "after-current-request" },
+        // Race-tolerant: a truncation-limit config change between
+        // redeliveries alters the rendered body under the same key.
+        blockProcessorWhile(
+          "the settlement is delivered once; a lost render would silently drop the script's result from the conversation",
+          () =>
+            this.#appendUnlessLostIdempotencyRace(append, [
+              {
+                type: "events.iterate.com/agents/context-added",
+                payload: {
+                  role: "developer",
+                  content: renderScriptSettlement(
+                    executionId,
+                    settlement,
+                    state.config.scriptResultHistoryLimit,
+                  ),
+                  actor: { type: "script", executionId },
+                  llmRequestPolicy: { behaviour: "after-current-request" },
+                },
+                idempotencyKey: this.idempotencyKey(`render-script-result@${event.offset}`),
               },
-              idempotencyKey: this.idempotencyKey(`render-script-result@${event.offset}`),
-            },
-          ]),
+            ]),
         );
         break;
       }
@@ -215,37 +215,39 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // EVERY error on the stream — this processor's own LLM failures, the
         // runner's poison skips, anything else — is transcribed into
         // model-visible context, without itself triggering a turn (retries
-        // are the fold's job). The integration actor demotes the error text
+        // are the reducer's job). The integration actor demotes the error text
         // to user role at prompt time: error strings are data, not
-        // instructions. Per-event render (blocked): delivered once.
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agents/context-added",
-            payload: {
-              role: "developer",
-              content: `Error on stream: ${event.payload.message}`,
-              actor: { type: "integration", name: "stream-error" },
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-            },
-            idempotencyKey: this.idempotencyKey(`transcribe-error@${event.offset}`),
-          }),
+        // instructions.
+        blockProcessorWhile(
+          "the error event is delivered once; a lost transcription would hide the failure from the model",
+          () =>
+            append({
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                role: "developer",
+                content: `Error on stream: ${event.payload.message}`,
+                actor: { type: "integration", name: "stream-error" },
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+              idempotencyKey: this.idempotencyKey(`transcribe-error@${event.offset}`),
+            }),
         );
         break;
       }
       // created / configured / requested / settled / paused / resumed /
       // script-run-requested / revived: no per-event effect — they matter
-      // through the fold below.
+      // through the reduced state below.
     }
 
     // ---------------------------------------- state-derived side effects
-    // Plain code over the fold, after every delivery. Act only at head —
-    // behind it the fold is partial and outcomes may sit in journal pages not
-    // yet replayed. Everything here is re-derived by any later delivery, so
-    // every append is a droppable background attempt.
+    // Plain code over the reduced state, after every delivery. Act only at
+    // head — behind it the reduction is partial and outcomes may sit in
+    // stream pages not yet replayed. Everything here is re-derived by any
+    // later delivery, so every append is a droppable background attempt.
     if (!delivery.caughtUp) return;
     if (state.birthCertificate === null) return;
 
-    // Paused: turns stay parked until fresh EXTERNAL input journals the
+    // Paused: turns stay parked until fresh EXTERNAL input appends the
     // resume (self-driven triggers are exactly what the breaker paused).
     if (state.paused !== null) {
       const trigger = state.pendingLlmRequestTrigger;
@@ -261,10 +263,10 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
       return;
     }
 
-    // A trigger is pending and nothing is open → journal the intent (or trip
+    // A trigger is pending and nothing is open → append the intent (or trip
     // the breaker), and STOP. The LLM call does not start here: the requested
     // event comes back through our own subscription carrying the offset the
-    // journal gave it, and the adopt branch below — the ONE place work ever
+    // stream gave it, and the adopt branch below — the ONE place work ever
     // starts — picks it up. Starting fresh and recovering after an eviction
     // are the same code path.
     const trigger = state.pendingLlmRequestTrigger;
@@ -285,8 +287,8 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
       // Debounce = wait for more content, plus failure backoff — one window,
       // anchored at the trigger. The delayed append IS the intent (no wake
       // event): if the trigger moves or an interrupt clears it before the
-      // sleep ends, the requested event's fold-guard turns the late intent
-      // into a harmless journal fact. A droppable attempt: dying mid-window
+      // sleep ends, the requested event's reduce-guard turns the late intent
+      // into a harmless stream fact. A droppable attempt: dying mid-window
       // means the revival turn re-runs this code with the window long closed
       // and appends immediately.
       //
@@ -305,7 +307,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           expiresAt: trigger.atMs + state.config.llmRequestExpiryMs,
         },
         // Dedupe fence only, keyed on the trigger's coordinates — the
-        // request's IDENTITY is the offset the journal assigns on commit.
+        // request's IDENTITY is the offset the stream assigns on commit.
         idempotencyKey: this.idempotencyKey(`request/${trigger.offset}`),
       };
       runInBackground(async () => {
@@ -350,11 +352,11 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
   }
 
   /**
-   * Execute the LLM call for a journaled intent — background work: it can run
-   * for minutes, and the journal (not this closure) is what survives an
+   * Execute the LLM call for an appended intent — background work: it can run
+   * for minutes, and the stream (not this closure) is what survives an
    * eviction. Success lands as ONE atomic append: the assistant context item
    * plus the settlement, both idempotency-keyed on the request's offset, so a
-   * zombie racing a fresh incarnation collapses to one journal story.
+   * zombie racing a fresh incarnation collapses to one stream story.
    */
   #runLlmRequest(
     args: ProcessEventArgs<AgentNextProcessorContract>,
@@ -379,7 +381,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             inFlight.partialText += text;
             const sequence = chunkSequence;
             chunkSequence += 1;
-            // Ephemeral streaming: best-effort, never awaited, never folded.
+            // Ephemeral streaming: best-effort, never awaited, never reduced.
             void args
               .append({
                 type: "events.iterate.com/agent/llm-response-chunk",
@@ -417,8 +419,8 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // the request as cancelled.
         if (inFlight.controller.signal.aborted) return;
         const errorMessage = error instanceof Error ? error.message : String(error);
-        // Attempt arithmetic from the dispatch-time fold: this failure is
-        // attempt (consecutiveLlmFailures + 1). The settled event's fold
+        // Attempt arithmetic from the dispatch-time reduced state: this failure
+        // is attempt (consecutiveLlmFailures + 1). Reducing the settled event
         // schedules the retry; the error-occurred event gets transcribed into
         // context so the next turn sees what happened.
         const attempt = args.state.consecutiveLlmFailures + 1;
@@ -456,10 +458,10 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
    * Append a batch whose idempotency keys may race concurrent writers: every
    * writer of `settle/<offset>` (success, failure, interrupt, expiry) races
    * every other, and two debounce schedulings of one trigger race on
-   * `request/<offset>` when config changed between them. The journal rejects
+   * `request/<offset>` when config changed between them. The stream rejects
    * a same-key append with a different body; the FIRST writer's story stands
-   * and losing the race is success — the obligation is settled/journaled, and
-   * the fold sorts out whose fact counts.
+   * and losing the race is success — the obligation is settled on the stream,
+   * and the reducer sorts out whose fact counts.
    */
   async #appendUnlessLostIdempotencyRace(
     append: ProcessEventArgs<AgentNextProcessorContract>["append"],
@@ -474,7 +476,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
   }
 
   // ------------------------------------------------------------------ reduce
-  // Pure fold, one switch, cases inline.
+  // Pure reducer, one switch, cases inline.
   protected override reduce({ event, state }: ReduceArgs<AgentNextProcessorContract>) {
     switch (event.type) {
       case "events.iterate.com/agent/created":
@@ -491,9 +493,9 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           ),
         };
       case "events.iterate.com/agent/llm-request-requested": {
-        // Fold-guard: a late debounced intent — trigger interrupted away, a
-        // sibling intent already won, or the agent paused meanwhile — folds
-        // to nothing, a harmless journal fact. THIS is what makes the delayed
+        // Reduce-guard: a late debounced intent — trigger interrupted away, a
+        // sibling intent already won, or the agent paused meanwhile — reduces
+        // to nothing, a harmless stream fact. THIS is what makes the delayed
         // append safe without any timer bookkeeping or cancellation.
         if (
           state.pendingLlmRequestTrigger === null ||
@@ -510,7 +512,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
             expiresAt: event.payload.expiresAt,
             model: event.payload.model,
           },
-          // The turn covers everything folded so far: keyed context updates
+          // The turn covers everything reduced so far: keyed context updates
           // after this point append occurrences instead of replacing in place.
           lastLlmRequestOffset: event.offset,
           autonomousTurnCount:
@@ -520,8 +522,8 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         };
       }
       case "events.iterate.com/agent/llm-request-settled": {
-        // Fold-guard: a stale settlement (zombie driver finishing a turn an
-        // interrupt already closed) folds to nothing.
+        // Reduce-guard: a stale settlement (zombie driver finishing a turn an
+        // interrupt already closed) reduces to nothing.
         if (event.payload.requestOffset !== state.openRequest?.requestedAtOffset) return state;
         const settled = { ...state, openRequest: null };
         const result = event.payload.result;
@@ -532,7 +534,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           ...settled,
           consecutiveLlmFailures: failures,
           // Under the retry cap the failure itself is the next trigger — the
-          // retry is pure fold arithmetic, no wake event, no rendered nudge.
+          // retry is pure state arithmetic, no wake event, no rendered nudge.
           // At the cap the conversation waits for fresh input.
           ...(failures < state.config.llmRequestRetryPolicy.maxAttempts
             ? {
@@ -549,7 +551,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         // The breaker (or an operator) parked the loop. Only a SELF-DRIVEN
         // pending trigger dies with it: an external trigger that raced the
         // pause append survives, so the paused branch of the at-head pass
-        // immediately journals the resume — a user message can never be
+        // immediately appends the resume — a user message can never be
         // swallowed by a pause it crossed in flight.
         return {
           ...state,
@@ -568,7 +570,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
           paused: null,
           autonomousTurnCount: 0,
           // Re-anchor a surviving trigger to THIS event. A debounced intent
-          // that landed during the pause folded to nothing but still consumed
+          // that landed during the pause reduced to nothing but still consumed
           // the trigger-keyed `request/<offset>` idempotency key —
           // re-scheduling under the old key would dedupe to that no-op event
           // forever and strand the trigger. A fresh offset is a fresh key; it
@@ -600,8 +602,8 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
         };
       case "events.iterate.com/agents/context-added": {
         const payload = event.payload;
-        // Fold-guard: assistant output for a request that is no longer the
-        // open one (an interrupt won the race) folds to nothing — text
+        // Reduce-guard: assistant output for a request that is no longer the
+        // open one (an interrupt won the race) reduces to nothing — text
         // included.
         if (
           payload.role === "assistant" &&
@@ -634,7 +636,7 @@ export class AgentNextProcessor extends StreamProcessor<AgentNextProcessorContra
       }
       default:
         // stream/processor-revived, stream/error-occurred, and anything else
-        // consumed only for its delivery turn: no fold change.
+        // consumed only for its delivery turn: no state change.
         return state;
     }
   }
@@ -689,7 +691,7 @@ export type AgentNextDeps = {
 // -----------------------------------------------------------------------------
 
 /** Which turn-loop trigger a context item carries. A trigger only ever comes
- * from context or from a failed settlement's fold — there is no other
+ * from context or from reducing a failed settlement — there is no other
  * scheduling input. */
 export function contextTriggerSource(
   payload: AgentNextContextAddedPayload,
@@ -705,7 +707,7 @@ export function contextTriggerSource(
 }
 
 /**
- * Fold one context item into the list. The rule, in one sentence: if no LLM
+ * Reduce one context item into the list. The rule, in one sentence: if no LLM
  * request has seen the keyed item yet, an update with the same key replaces
  * it in place; once a request has seen it, the update appends a new
  * occurrence (append-only history — every covered prompt stays
@@ -728,7 +730,7 @@ export function projectContextAdded(args: {
   return [...args.items, args.item];
 }
 
-/** Exponential failure backoff folded into the debounce window: doubling from
+/** Exponential failure backoff added into the debounce window: doubling from
  * the policy's base, capped at its ceiling. */
 export function retryBackoffMs(
   state: Pick<AgentNextState, "consecutiveLlmFailures" | "config">,
@@ -738,8 +740,8 @@ export function retryBackoffMs(
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
-/** Build the model-facing message array from the fold: the covered items in
- * journal order (system items sit in place — providers accept system content
+/** Build the model-facing message array from the reduced state: the covered
+ * items in stream order (system items sit in place — providers accept system content
  * mid-history), then the timestamp. The CONTENT is pinned to the request's
  * offset, so an adopting incarnation reproduces the covered context exactly;
  * the trailing timestamp deliberately is NOT pinned — it reports the actual

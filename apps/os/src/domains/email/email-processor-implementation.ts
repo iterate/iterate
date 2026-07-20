@@ -1,8 +1,5 @@
-// Implements the "email" thread-router processor on itx, shaped after the
-// Slack webhook router (slack-processor-implementation.ts). Emitted event
-// types, payloads, and idempotency keys are stable wire formats.
-
-import { StreamProcessor, type EmittedInput } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
+import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import {
   agentCreationForPath,
   EMAIL_AGENT_SYSTEM_PROMPT,
@@ -17,63 +14,132 @@ import {
 } from "./email-processor-contract.ts";
 import { emailAgentPath, emailCounterpart, normalizeMessageId } from "./utils.ts";
 
-/** Where one inbound email belongs: an existing thread or a brand-new one. */
-type EmailThreadResolution = {
-  isNew: boolean;
-  streamPath: string;
-  threadId: string;
-};
-
 /**
- * Resolve the thread for one received email against router state, in fallback
- * order:
+ * The email thread router, mounted on the per-project `/integrations/email`
+ * stream. Emitted event types, payloads, and idempotency keys are stable wire
+ * formats.
  *
- * 1. The recipient's `+t<threadId>` tag, when it names a thread we know. An
- *    unknown tag falls through — it routes by headers or starts a new thread
- *    instead of minting an attacker-chosen thread id.
- * 2. In-Reply-To, then References, against the message-id index. This catches
- *    replies sent to the bare project address.
- * 3. A new thread whose id is the received event's offset on
- *    `/integrations/email` — deterministic, unique per project, replay-safe.
+ * HOW IT WORKS, end to end:
  *
- * Shared by `reduce` (folding the index) and `processEvent` (forwarding), so
- * the fold and the forward can never disagree.
+ * The worker's `email()` handler (email-ingress.ts) authenticates inbound
+ * mail, parses the MIME, stores attachment bytes into project file storage,
+ * and appends one `email/received` event here. This processor resolves which
+ * email thread the mail belongs to — the recipient's `+t<threadId>` tag
+ * first, then In-Reply-To/References against the reduced message-id index,
+ * else a NEW thread whose id is the received event's own offset — and
+ * forwards the received event unchanged to the thread's agent stream
+ * (`/agents/email/t<threadId>`).
+ *
+ * For a new thread the forward and the thread's whole creation ride ONE
+ * batch onto the routed stream: the Agent + CapabilityHost birth pair, the
+ * email facet's `email-agent/created` certificate, the system prompt, the
+ * thread's binding, and all subscriptions — then the route context and the
+ * mail itself. Every event in that batch is idempotency-keyed and
+ * deterministic, so an at-least-once redelivery re-appends identical bodies
+ * that dedupe instead of duplicating a thread. The route is also recorded
+ * on THIS stream as `email/thread-route-configured`, which is what `reduce`
+ * merges into the routing table.
+ *
+ * Outbound mail is indexed too: `email/sent` audit events carrying a
+ * `threadId` reduce their messageId into the same index, so replies to what
+ * the agent sent route back to the thread even without the `+t` tag.
+ * Agent-initiated conversations (agent-scoped itx.email.send) append a route
+ * whose streamPath is the calling agent's OWN path, so their replies forward
+ * straight to that agent instead of minting an `/agents/email/**` stream.
+ *
+ * Both forwards run under `blockProcessorWhile`: the forward is the only
+ * copy of the email on its way to the agent (a fire-and-forget append once
+ * lost a message for good), so a failed append holds the checkpoint and the
+ * redelivered frame retries into the idempotency keys.
  */
-function resolveEmailThread(input: {
-  offset: number;
-  payload: InboundEmailPayload;
-  state: EmailProcessorState;
-}): EmailThreadResolution {
-  const { offset, payload, state } = input;
+export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
+  readonly contract = EmailProcessorContract;
 
-  const tagged = payload.recipient.threadId;
-  if (tagged !== null) {
-    const streamPath = state.threads[tagged];
-    if (streamPath !== undefined) return { isNew: false, streamPath, threadId: tagged };
-  }
+  // ------------------------------------------------------------ processEvent
+  protected override processEvent(args: ProcessEventArgs<EmailProcessorContract>): undefined {
+    const { event, previousState, state, append, appendTo, blockProcessorWhile } = args;
 
-  const headerIds = [payload.message.inReplyTo, ...payload.message.references]
-    .map((id) => normalizeMessageId(id))
-    .filter((id): id is string => id !== null);
-  for (const id of headerIds) {
-    const threadId = state.threadByMessageId[id];
-    const streamPath = threadId === undefined ? undefined : state.threads[threadId];
-    if (threadId !== undefined && streamPath !== undefined) {
-      return { isNew: false, streamPath, threadId };
+    switch (event?.type) {
+      case "events.iterate.com/email/received": {
+        // Project creation owns the router's birth; no mail routes before it.
+        if (state.birthCertificate === null) return;
+
+        // Resolve against the state BEFORE this event — the same input
+        // reduce() consumed — so the forward target and the reduced routing
+        // table can never disagree.
+        const resolution = resolveEmailThread({
+          offset: event.offset,
+          payload: event.payload,
+          state: previousState,
+        });
+
+        const forwardedEvent = {
+          type: "events.iterate.com/email/received" as const,
+          idempotencyKey: this.idempotencyKey("forward-received", event),
+          payload: event.payload,
+        };
+
+        if (resolution.isNew) {
+          // Same reply-target chain as everywhere else (emailCounterpart), so
+          // the durable route event never disagrees with the agent's reply
+          // door.
+          const counterpart = emailCounterpart(event.payload);
+          const routeEvent = {
+            type: "events.iterate.com/email/thread-route-configured" as const,
+            idempotencyKey: `email-route:${resolution.threadId}`,
+            payload: {
+              threadId: resolution.threadId,
+              streamPath: resolution.streamPath,
+              ...(counterpart === null ? {} : { counterpart }),
+              ...(event.payload.message.subject === undefined
+                ? {}
+                : { subject: event.payload.message.subject }),
+            },
+          };
+          blockProcessorWhile(
+            "this forward is the only copy of the email on its way to the agent; a failed append must hold the checkpoint for replay",
+            async () => {
+              await append(routeEvent);
+              if (this.projectId === null) {
+                throw new Error("Email router cannot create a project agent without a project id");
+              }
+              await appendTo(
+                resolution.streamPath,
+                ...emailAgentCreationEvents({
+                  counterpart: counterpart ?? undefined,
+                  path: resolution.streamPath,
+                  projectId: this.projectId,
+                  subject: event.payload.message.subject,
+                  threadId: resolution.threadId,
+                }),
+                routeEvent,
+                forwardedEvent,
+              );
+            },
+          );
+          return;
+        }
+
+        blockProcessorWhile(
+          "this forward is the only copy of the email on its way to the agent; a failed append must hold the checkpoint for replay",
+          async () => {
+            await appendTo(resolution.streamPath, forwardedEvent);
+          },
+        );
+        return;
+      }
+      // email/created, email/sender-allowed, email/sent, and
+      // email/thread-route-configured are reduce-only facts, and the router
+      // has no event-less at-head work.
     }
   }
 
-  const threadId = String(offset);
-  return { isNew: true, streamPath: emailAgentPath(threadId), threadId };
-}
-
-export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContract> {
-  readonly contract = EmailProcessorContract;
-
+  // ------------------------------------------------------------------ reduce
+  // Pure reduction, one switch, cases inline.
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof EmailProcessorContract>["reduce"]>[0]): EmailProcessorState {
+  }: ReduceArgs<EmailProcessorContract>): EmailProcessorState {
     switch (event.type) {
       case "events.iterate.com/email/created":
         if (state.birthCertificate !== null) {
@@ -121,91 +187,76 @@ export class EmailProcessor extends StreamProcessor<typeof EmailProcessorContrac
         return state;
     }
   }
-
-  protected override processEvent({
-    append,
-    appendTo,
-    blockProcessorWhile,
-    event,
-    previousState,
-    state,
-  }: Parameters<StreamProcessor<typeof EmailProcessorContract>["processEvent"]>[0]): undefined {
-    // Event-less at-head pass: this processor has no at-head work.
-    if (event === null) return;
-    if (event.type === "events.iterate.com/email/created") return;
-    if (state.birthCertificate === null) return;
-    if (event.type !== "events.iterate.com/email/received") return;
-
-    // Resolve against the state BEFORE this event — the same input reduce()
-    // folded — so forward target and fold always agree.
-    const resolution = resolveEmailThread({
-      offset: event.offset,
-      payload: event.payload,
-      state: previousState,
-    });
-
-    const forwardedEvent = {
-      type: "events.iterate.com/email/received" as const,
-      idempotencyKey: this.idempotencyKey("forward-received", event),
-      payload: event.payload,
-    };
-
-    if (resolution.isNew) {
-      // Same reply-target chain as everywhere else (emailCounterpart), so the
-      // durable route event never disagrees with the agent's reply door.
-      const counterpart = emailCounterpart(event.payload);
-      const routeEvent = {
-        type: "events.iterate.com/email/thread-route-configured" as const,
-        idempotencyKey: `email-route:${resolution.threadId}`,
-        payload: {
-          threadId: resolution.threadId,
-          streamPath: resolution.streamPath,
-          ...(counterpart === null ? {} : { counterpart }),
-          ...(event.payload.message.subject === undefined
-            ? {}
-            : { subject: event.payload.message.subject }),
-        },
-      };
-      // Durable obligation, NOT best-effort: this forward is the only copy of
-      // the email on its way to the agent (same reasoning as the Slack
-      // router's forward — a fire-and-forget append once lost a message for
-      // good). blockProcessorWhile holds the checkpoint so a failed append
-      // replays; idempotency keys make the replay dedupe.
-      blockProcessorWhile(async () => {
-        await append(routeEvent);
-        if (this.projectId === null) {
-          throw new Error("Email router cannot create a project agent without a project id");
-        }
-        await appendTo(
-          resolution.streamPath,
-          ...emailAgentCreationEvents({
-            counterpart: counterpart ?? undefined,
-            path: resolution.streamPath,
-            projectId: this.projectId,
-            subject: event.payload.message.subject,
-            threadId: resolution.threadId,
-          }),
-          routeEvent,
-          forwardedEvent,
-        );
-      });
-      return;
-    }
-
-    // Durable obligation — same reasoning as the route-creation forward above.
-    blockProcessorWhile(async () => {
-      await appendTo(resolution.streamPath, forwardedEvent);
-    });
-  }
 }
 
+// -----------------------------------------------------------------------------
+// Pure helpers.
+// -----------------------------------------------------------------------------
+
+/** Where one inbound email belongs: an existing thread or a brand-new one. */
+type EmailThreadResolution = {
+  isNew: boolean;
+  streamPath: string;
+  threadId: string;
+};
+
+/**
+ * Resolve the thread for one received email against router state, in fallback
+ * order:
+ *
+ * 1. The recipient's `+t<threadId>` tag, when it names a thread we know. An
+ *    unknown tag falls through — it routes by headers or starts a new thread
+ *    instead of minting an attacker-chosen thread id.
+ * 2. In-Reply-To, then References, against the message-id index. This catches
+ *    replies sent to the bare project address.
+ * 3. A new thread whose id is the received event's offset on
+ *    `/integrations/email` — deterministic, unique per project, replay-safe.
+ *
+ * Shared by `reduce` (indexing) and `processEvent` (forwarding), so the
+ * reduced routing table and the forward can never disagree.
+ */
+function resolveEmailThread(input: {
+  offset: number;
+  payload: InboundEmailPayload;
+  state: EmailProcessorState;
+}): EmailThreadResolution {
+  const { offset, payload, state } = input;
+
+  const tagged = payload.recipient.threadId;
+  if (tagged !== null) {
+    const streamPath = state.threads[tagged];
+    if (streamPath !== undefined) return { isNew: false, streamPath, threadId: tagged };
+  }
+
+  const headerIds = [payload.message.inReplyTo, ...payload.message.references]
+    .map((id) => normalizeMessageId(id))
+    .filter((id): id is string => id !== null);
+  for (const id of headerIds) {
+    const threadId = state.threadByMessageId[id];
+    const streamPath = threadId === undefined ? undefined : state.threads[threadId];
+    if (threadId !== undefined && streamPath !== undefined) {
+      return { isNew: false, streamPath, threadId };
+    }
+  }
+
+  const threadId = String(offset);
+  return { isNew: true, streamPath: emailAgentPath(threadId), threadId };
+}
+
+/**
+ * The creation batch for one new email thread stream: the standard
+ * Agent + CapabilityHost pair (agentCreationForPath) with the email facet as
+ * the named sibling, the thread's binding among the initial events, and the
+ * email system prompt. Every event is idempotency-keyed and deterministic —
+ * a redelivered forward re-appends identical bodies that dedupe.
+ */
 function emailAgentCreationEvents(input: {
   counterpart?: string;
   path: string;
   projectId: string;
   subject?: string;
   threadId: string;
-}): EmittedInput<typeof EmailProcessorContract>[] {
+}): EmittedInput<EmailProcessorContract>[] {
   const subject = normalizeAgentBindingLabel(input.subject);
   const counterpart = normalizeAgentBindingLabel(input.counterpart);
   const creation = agentCreationForPath({
@@ -243,5 +294,5 @@ function emailAgentCreationEvents(input: {
       processorSlug: EmailAgentProcessorContract.slug,
     },
   });
-  return creation.events satisfies EmittedInput<typeof EmailProcessorContract>[];
+  return creation.events satisfies EmittedInput<EmailProcessorContract>[];
 }

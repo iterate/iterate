@@ -21,19 +21,28 @@ test("agent create installs only generic machinery; later events configure it", 
 
   using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
-  await expect(
-    (
-      agent as unknown as {
-        create(input: { unexpected: true }): Promise<void>;
-      }
-    ).create({ unexpected: true }),
-  ).rejects.toThrow(
-    "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
-  );
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
 
-  await agent.create();
-  await expect(agent.create()).resolves.toBeUndefined();
+  // create() resolves with the same agent handle, so create chains.
+  using created = await agent.create({ note: "birth facts ride the certificate" });
+  expect((await created.processor.snapshot()).state).toMatchObject({
+    birthCertificate: { note: "birth facts ride the certificate" },
+  });
+  // An identical-payload retry dedupes on the birth idempotency keys …
+  using retried = await agent.create({ note: "birth facts ride the certificate" });
+  expect((await retried.processor.snapshot()).state).toMatchObject({
+    birthCertificate: { note: "birth facts ride the certificate" },
+  });
+  // … while a different payload over the existing agent fails loudly (the
+  // stream rejects a same-key-different-body created event).
+  await expect(
+    (async () => {
+      await agent.create({ note: "a conflicting birth certificate" });
+    })(),
+  ).rejects.toThrow();
+  expect((await agent.processor.snapshot()).state).toMatchObject({
+    birthCertificate: { note: "birth facts ride the certificate" },
+  });
 
   await expect(
     (

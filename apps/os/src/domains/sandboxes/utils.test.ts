@@ -30,7 +30,7 @@ describe("assertSandboxPath", () => {
   });
 
   test("rejects nested paths — including every pre-flat /sandboxes/<instanceType>/<name> path", () => {
-    // The instance type is configuration (journaled on create-requested), not
+    // The instance type is configuration (recorded on create-requested), not
     // a path segment: nesting would materialize folder streams like
     // /sandboxes/lite that are not sandboxes.
     expect(() => assertSandboxPath("/sandboxes/lite/bla")).toThrow(/single-segment/);

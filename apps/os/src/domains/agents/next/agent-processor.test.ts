@@ -151,7 +151,7 @@ describe("AgentNextProcessor turn lifecycle", () => {
       ["advanceTime", 10_000], // closes the debounce window → intent lands, request adopted
     );
 
-    // The request's identity is the offset the journal assigned the intent.
+    // The request's identity is the offset the stream assigned the intent.
     expect(h.llm.calls).toHaveLength(1);
     const requested = h.events(REQUESTED)[0]!;
     expect(requested.idempotencyKey).toMatch(/^agent-next\/request\/\d+$/);
@@ -191,7 +191,7 @@ describe("AgentNextProcessor turn lifecycle", () => {
     );
 
     // Exactly one request ever opened, and its prompt covers both messages
-    // (any late sibling intent is a journal fact the fold ignored).
+    // (any late sibling intent is a stream fact the reducer ignored).
     expect(h.llm.calls).toHaveLength(1);
     const prompt = h.llm.calls[0]!.messages.map((message) => message.content).join("\n");
     expect(prompt).toContain("first");
@@ -256,7 +256,7 @@ describe("AgentNextProcessor turn lifecycle", () => {
 // =============================================================================
 
 describe("AgentNextProcessor recovery", () => {
-  it("eviction mid-debounce: the revival turn finds the window closed and journals the intent directly", async () => {
+  it("eviction mid-debounce: the revival turn finds the window closed and appends the intent directly", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello?")], // debounce sleep parked…
@@ -265,7 +265,7 @@ describe("AgentNextProcessor recovery", () => {
       ["append", REVIVED],
     );
 
-    // processEvent re-ran over the fold: trigger still pending, window long
+    // processEvent re-ran over the reduced state: trigger still pending, window long
     // closed, intent appended immediately, request adopted, LLM running.
     expect(h.events(REQUESTED)).toHaveLength(1);
     expect(h.llm.calls).toHaveLength(1);
@@ -283,7 +283,7 @@ describe("AgentNextProcessor recovery", () => {
 
     await h.play(["crash"], ["advanceTime", 30_000], ["append", REVIVED]);
 
-    // No new requested event — the same journaled intent runs again.
+    // No new requested event — the same stream-recorded intent runs again.
     expect(h.events(REQUESTED)).toHaveLength(1);
     expect(h.llm.calls).toHaveLength(2);
     await h.play(() => h.llm.respond("Adopted."));
@@ -304,7 +304,7 @@ describe("AgentNextProcessor recovery", () => {
     expect(h.llm.calls).toHaveLength(2);
 
     await h.play(() => h.llm.calls[1]!.resolve({ text: "from-successor" }));
-    // The zombie finishes too — same settle key, DIFFERENT body: the journal
+    // The zombie finishes too — same settle key, DIFFERENT body: the stream
     // rejects the batch and the successor's story stands.
     await h.play(() => h.llm.calls[0]!.resolve({ text: "from-zombie" }));
 
@@ -320,7 +320,7 @@ describe("AgentNextProcessor recovery", () => {
 
     // The user interrupts before any revival. The delivery must settle the
     // request cancelled and must NOT start a doomed attempt for it in the
-    // same frame (the fold it reads is pre-cancel).
+    // same frame (the reduced state it reads is pre-cancel).
     await h.play(
       ["crash"],
       ["append", userMessage("wait, stop", { behaviour: "interrupt-current-request" })],
@@ -367,7 +367,7 @@ describe("AgentNextProcessor recovery", () => {
 });
 
 // =============================================================================
-// Failure policy — retry via the fold, errors transcribed, pause/resume
+// Failure policy — retry via the reduced state, errors transcribed, pause/resume
 // =============================================================================
 
 describe("AgentNextProcessor failure policy", () => {
@@ -395,7 +395,7 @@ describe("AgentNextProcessor failure policy", () => {
     expect(h.state().consecutiveLlmFailures).toBe(2);
     expect(h.state().pendingLlmRequestTrigger).toBeNull();
 
-    // Both failures were journaled as stream errors and transcribed into
+    // Both failures were appended as stream errors and transcribed into
     // model-visible context without triggering turns of their own.
     expect(h.events("events.iterate.com/stream/error-occurred")).toMatchObject([
       { payload: { message: expect.stringContaining("attempt 1 of 2") } },
@@ -419,7 +419,7 @@ describe("AgentNextProcessor failure policy", () => {
     expect(h.state().consecutiveLlmFailures).toBe(0);
   });
 
-  it("the autonomous-loop breaker journals agent/paused; the next user message journals agent/resumed", async () => {
+  it("the autonomous-loop breaker appends agent/paused; the next user message appends agent/resumed", async () => {
     const h = makeAgentHarness();
     await h.play([
       "append",
@@ -501,9 +501,9 @@ describe("AgentNextProcessor script execution", () => {
     expect(prompt).toContain("3");
   });
 
-  it("a full replay (fresh cursor over the same journal) redelivers every event without wedging on per-event appends", async () => {
+  it("a full replay (fresh cursor over the same stream) redelivers every event without wedging on per-event appends", async () => {
     // The harshest at-least-once redelivery: a fresh progress store over the
-    // SAME journal replays every event, so every per-event blocked append
+    // SAME stream replays every event, so every per-event blocked append
     // (script request, settlement render, error transcription) re-runs long
     // after the clock moved. Each must produce a body IDENTICAL to the
     // committed one (dedupe) or tolerate losing the race — a now()-stamped
@@ -529,18 +529,18 @@ describe("AgentNextProcessor script execution", () => {
       ],
       ["advanceTime", 10_000], // the clock is now well past every original append
     );
-    const journalledOffsets = h.events().map((row) => row.offset);
+    const committedOffsets = h.events().map((row) => row.offset);
 
     const replay = makeAgentHarness({
       clock: h.clock,
       stream: h.stream,
       progress: makeMemoryProgressStore(),
     });
-    await replay.settle(); // replays the whole journal; a wedge would throw here
+    await replay.settle(); // replays the whole stream; a wedge would throw here
 
-    // Every re-appended per-event consequence deduped: the journal is
-    // byte-identical, and the replayed fold reaches the same head state.
-    expect(replay.events().map((row) => row.offset)).toEqual(journalledOffsets);
+    // Every re-appended per-event consequence deduped: the stream is
+    // byte-identical, and the replayed reduction reaches the same head state.
+    expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
     expect(replay.state().activeScriptExecutionIds).toEqual([]);
   });
 });
@@ -572,7 +572,7 @@ describe("AgentNextProcessor stream facts", () => {
   it("a pause landing after an external message does NOT swallow it: the trigger survives and resumes the loop", async () => {
     // The breaker's paused append is background work: an external message can
     // land between the pause being decided and the paused event committing.
-    // The fold only clears SELF-DRIVEN triggers on pause; the raced external
+    // The reducer only clears SELF-DRIVEN triggers on pause; the raced external
     // trigger survives, resumes the loop, and gets its turn.
     const h = makeAgentHarness();
     await h.play(
@@ -593,7 +593,7 @@ describe("AgentNextProcessor stream facts", () => {
   it("an intent landing DURING a pause burns its key harmlessly: resume re-anchors the trigger and the turn still runs", async () => {
     // The tight production race: the pause lands, the auto-resume append (a
     // droppable background attempt) fails transiently, and the parked
-    // debounced intent fires while the pause still stands. The intent folds
+    // debounced intent fires while the pause still stands. The intent reduces
     // to nothing but consumes the trigger-keyed request/<offset> idempotency
     // key — without re-anchoring, every post-resume re-schedule would dedupe
     // against that no-op event forever and the user message would strand.
@@ -604,7 +604,7 @@ describe("AgentNextProcessor stream facts", () => {
         h.stream.failAppendsOfType = "events.iterate.com/agent/resumed";
       },
       ["append", { type: "events.iterate.com/agent/paused", payload: { reason: "operator" } }],
-      ["advanceTime", 10_000], // the parked intent lands while paused → folds to nothing, key burned
+      ["advanceTime", 10_000], // the parked intent lands while paused → reduces to nothing, key burned
       () => {
         h.stream.failAppendsOfType = undefined;
       },
@@ -614,7 +614,7 @@ describe("AgentNextProcessor stream facts", () => {
 
     expect(h.events("events.iterate.com/agent/resumed")).toHaveLength(1);
     expect(h.state().paused).toBeNull();
-    // The burned no-op intent is a journal fact; the re-anchored trigger got
+    // The burned no-op intent is a stream fact; the re-anchored trigger got
     // a FRESH key, so a second requested event committed and the turn ran.
     expect(h.events(REQUESTED)).toHaveLength(2);
     expect(h.state().openRequest).not.toBeNull();
@@ -626,7 +626,7 @@ describe("AgentNextProcessor stream facts", () => {
     // Every at-head delivery while the debounce window is open schedules
     // another sleep-then-append for the SAME trigger. The body is
     // deterministic (expiresAt anchors to the trigger, never `now`), so the
-    // duplicates dedupe on the idempotency key instead of the journal
+    // duplicates dedupe on the idempotency key instead of the stream
     // rejecting a same-key-different-body append.
     const h = makeAgentHarness();
     await h.play(

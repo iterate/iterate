@@ -31,7 +31,7 @@ export const guestbookAppRef = {
   // The split app cannot share the legacy host: that host's persisted wake
   // recipe can resolve today's page-only Vite build, which no longer exports
   // GuestbookApp, and poison its live facet before the new ref arrives. The
-  // fold's truth is the stream, so this new host safely rebuilds by replay.
+  // state's truth is the stream, so this new host safely rebuilds by replay.
   durableWorkerKey: "app-guestbook-v2",
   updatePolicy: "stale-while-rebuild",
   source: {

@@ -50,7 +50,7 @@ describe("initialTriggerAtMs", () => {
     );
   });
 
-  it("returns null instead of throwing for an unparseable cron (raw appends must not poison the fold)", () => {
+  it("returns null instead of throwing for an unparseable cron (raw appends must not poison reduce)", () => {
     expect(initialTriggerAtMs({ cron: "not a cron" }, BASE)).toBeNull();
     expect(initialTriggerAtMs({ at: "not a date" }, BASE)).toBeNull();
   });

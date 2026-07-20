@@ -1,189 +1,201 @@
+// The agent collection's executable spec on the generic step harness from
+// iterate/processors/testing: the REAL StreamProcessorRunner over the shared
+// MemoryStream. The collection is a pure projector, so scenarios are appends
+// of cross-posted agent facts plus assertions on the reduced catalog —
+// no side-effect lanes, no crash steps, and the stream never grows beyond
+// what the tests append.
+
 import { describe, expect, test } from "vitest";
-import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
-import type { StreamEvent } from "iterate/processors";
-import { StreamProcessorRunner } from "iterate/processors";
-import type { Stream } from "../../itx-api.generated.ts";
+import type { ConsumedInput } from "iterate/processors";
 import {
-  AGENT_COLLECTION_CREATED_EVENT_TYPE,
-  AgentCollectionProcessorContract,
-} from "./agent-collection-processor-contract.ts";
+  makeMemoryProgressStore,
+  makeProcessorHarness,
+  type HarnessSubstrate,
+} from "iterate/processors/testing";
+import { AgentCollectionProcessorContract } from "./agent-collection-processor-contract.ts";
 import { AgentCollectionStreamProcessor } from "./agent-collection-processor-implementation.ts";
 
-const neverStream = new Proxy({} as Stream, {
-  get(_target, property) {
-    throw new Error(`Unexpected stream access: ${String(property)}`);
-  },
-});
+type CollectionEventInput = ConsumedInput<AgentCollectionProcessorContract>;
 
-function subject() {
-  const processor = new AgentCollectionStreamProcessor({
+function makeCollectionHarness(substrate?: HarnessSubstrate) {
+  return makeProcessorHarness<AgentCollectionProcessorContract>({
+    createProcessor: (deps) => new AgentCollectionStreamProcessor(deps),
     path: "/agents",
-    projectId: "prj_example",
-    stream: neverStream,
+    ...(substrate === undefined ? {} : { substrate }),
   });
-  const runner = new StreamProcessorRunner({ processor, stream: neverStream });
+}
+
+const COLLECTION_CREATED = {
+  type: "events.iterate.com/agent-collection/created",
+  payload: {},
+} satisfies CollectionEventInput;
+
+// -----------------------------------------------------------------------------
+// Event builders (data, not append wrappers): copies of agent-stream facts as
+// the collection receives them — the payload plus the cross-post hop naming
+// the SOURCE stream and the fact's original coordinates. The source commit
+// time derives from the source offset (10:00:0<offset> on 2026-07-18), while
+// the copy's own commit time comes from the harness's 1970-epoch virtual
+// clock — decades apart ON PURPOSE, so timestamp assertions prove the reduced
+// catalog preserves source chronology, not ingest delay.
+// -----------------------------------------------------------------------------
+
+function crossPostHop(type: string, path: string, sourceOffset: number) {
   return {
-    async deliver(events: StreamEvent[]) {
-      const opened = await runner.openDelivery();
-      await opened.sink({
-        events,
-        scannedAfterOffset: opened.checkpointOffset,
-        scannedThroughOffset: events.at(-1)?.offset ?? opened.checkpointOffset,
-        streamMaxOffset: events.at(-1)?.offset ?? opened.checkpointOffset,
-      });
-    },
-    snapshot: () => runner.snapshot(),
+    crossPostedFrom: [
+      {
+        subscriptionKey: "agent-collection",
+        createdAt: new Date(
+          Date.parse("2026-07-18T10:00:00.000Z") + sourceOffset * 1_000,
+        ).toISOString(),
+        offset: sourceOffset,
+        path,
+        projectId: "proj_harness",
+        type,
+      },
+    ],
   };
 }
 
-function collectionCreated(): StreamEvent {
+function agentCreatedCopy(args: { sourceOffset: number; path?: string }): CollectionEventInput {
+  const path = args.path ?? "/agents/researcher";
   return {
-    createdAt: "2026-07-18T10:00:00.000Z",
-    offset: 1,
-    path: "/agents",
+    type: "events.iterate.com/agent/created",
     payload: {},
-    type: AGENT_COLLECTION_CREATED_EVENT_TYPE,
+    source: crossPostHop("events.iterate.com/agent/created", path, args.sourceOffset),
   };
 }
 
-function copiedAgentEvent(
-  offset: number,
-  type: "events.iterate.com/agent/created" | typeof AGENT_SUMMARY_UPDATED_EVENT_TYPE,
-  payload: Record<string, unknown>,
-  path = "/agents/researcher",
-  sourceOffset = offset,
-): StreamEvent {
-  const sourceCreatedAt = new Date(
-    Date.parse("2026-07-18T10:00:00.000Z") + sourceOffset * 1_000,
-  ).toISOString();
-  // The collection copy may arrive much later than the source fact. Reduced
-  // catalogue timestamps must preserve source chronology, not ingest delay.
-  const createdAt = new Date(Date.parse(sourceCreatedAt) + 60_000).toISOString();
+function summaryUpdatedCopy(
+  update: Extract<
+    CollectionEventInput,
+    { type: "events.iterate.com/agent/summary-updated" }
+  >["payload"],
+  args: { sourceOffset: number; path?: string },
+): CollectionEventInput {
+  const path = args.path ?? "/agents/researcher";
   return {
-    createdAt,
-    offset,
-    path: "/agents",
-    payload,
-    source: {
-      crossPostedFrom: [
-        {
-          subscriptionKey: "agent-collection",
-          createdAt: sourceCreatedAt,
-          offset: sourceOffset,
-          path,
-          projectId: "prj_example",
-          type,
-        },
-      ],
-    },
-    type,
+    type: "events.iterate.com/agent/summary-updated",
+    payload: update,
+    source: crossPostHop("events.iterate.com/agent/summary-updated", path, args.sourceOffset),
   };
 }
 
 describe("AgentCollectionStreamProcessor", () => {
-  test("reduces created and summary copies into the agent database", async () => {
-    const driver = subject();
-    await driver.deliver([
-      collectionCreated(),
-      copiedAgentEvent(2, "events.iterate.com/agent/created", {}),
-      copiedAgentEvent(3, AGENT_SUMMARY_UPDATED_EVENT_TYPE, {
-        title: "Release researcher",
-        activity: "Checking CI",
-      }),
+  test("reduces created and summary copies into the agent database with source-time stamps", async () => {
+    const h = makeCollectionHarness();
+    await h.play([
+      "append",
+      COLLECTION_CREATED,
+      agentCreatedCopy({ sourceOffset: 2 }),
+      summaryUpdatedCopy(
+        { title: "Release researcher", activity: "Checking CI" },
+        { sourceOffset: 3 },
+      ),
     ]);
 
-    await expect(driver.snapshot()).resolves.toMatchObject({
-      state: {
-        birthCertificate: {},
-        agents: {
-          "/agents/researcher": {
-            path: "/agents/researcher",
-            summary: {
-              pinned: false,
-              title: "Release researcher",
-              activity: "Checking CI",
-            },
-            timestamps: {
-              createdAt: "2026-07-18T10:00:02.000Z",
-              lastWorkAt: "2026-07-18T10:00:03.000Z",
-              summaryUpdatedAt: "2026-07-18T10:00:03.000Z",
-            },
+    expect(h.state()).toMatchObject({
+      birthCertificate: {},
+      agents: {
+        "/agents/researcher": {
+          path: "/agents/researcher",
+          summary: { pinned: false, title: "Release researcher", activity: "Checking CI" },
+          timestamps: {
+            createdAt: "2026-07-18T10:00:02.000Z",
+            lastWorkAt: "2026-07-18T10:00:03.000Z",
+            summaryUpdatedAt: "2026-07-18T10:00:03.000Z",
+            activityUpdatedAt: "2026-07-18T10:00:03.000Z",
           },
         },
       },
     });
-  });
-
-  test("refolds deterministically and rejects agent facts without provenance", async () => {
-    const events = [
-      collectionCreated(),
-      copiedAgentEvent(2, "events.iterate.com/agent/created", {}),
-      copiedAgentEvent(3, AGENT_SUMMARY_UPDATED_EVENT_TYPE, { pinned: true }),
-    ];
-    const first = subject();
-    const second = subject();
-    await first.deliver(events);
-    await second.deliver(events);
-    expect((await first.snapshot()).state).toEqual((await second.snapshot()).state);
-
-    const invalid = subject();
-    await expect(
-      invalid.deliver([
-        collectionCreated(),
-        {
-          createdAt: "2026-07-18T10:00:02.000Z",
-          offset: 2,
-          path: "/agents",
-          payload: {},
-          type: "events.iterate.com/agent/created",
-        },
-      ]),
-    ).rejects.toThrow("without cross-post provenance");
+    // The copies themselves committed at the harness's 1970-epoch clock; the
+    // reduced timestamps above came from the SOURCE hop, not ingest time.
+    expect(h.events("events.iterate.com/agent/created")[0]!.createdAt).not.toContain("2026");
   });
 
   test("a delayed conditional summary clear cannot erase a newer wait", async () => {
-    const driver = subject();
-    await driver.deliver([
-      collectionCreated(),
-      copiedAgentEvent(2, "events.iterate.com/agent/created", {}, "/agents/researcher", 1),
-      copiedAgentEvent(
-        3,
-        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
-        { waitingFor: "user_input" },
-        "/agents/researcher",
-        2,
-      ),
-      copiedAgentEvent(
-        4,
-        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
-        { waitingFor: "timer" },
-        "/agents/researcher",
-        4,
-      ),
-      copiedAgentEvent(
-        5,
-        AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+    const h = makeCollectionHarness();
+    await h.play([
+      "append",
+      COLLECTION_CREATED,
+      agentCreatedCopy({ sourceOffset: 1 }),
+      summaryUpdatedCopy({ waitingFor: "user_input" }, { sourceOffset: 2 }),
+      summaryUpdatedCopy({ waitingFor: "timer" }, { sourceOffset: 4 }),
+      // The clear was decided against the wait set at source offset 2, but a
+      // newer wait (offset 4) landed first — the guard drops the stale clear.
+      summaryUpdatedCopy(
         { waitingFor: null, clearWaitingForThroughOffset: 3 },
-        "/agents/researcher",
-        5,
+        { sourceOffset: 5 },
       ),
     ]);
 
-    await expect(driver.snapshot()).resolves.toMatchObject({
-      state: {
-        agents: {
-          "/agents/researcher": { summary: { waitingFor: "timer" } },
-        },
-        waitingForSinceOffsets: { "/agents/researcher": 4 },
-      },
+    expect(h.state()).toMatchObject({
+      agents: { "/agents/researcher": { summary: { waitingFor: "timer" } } },
+      waitingForSinceOffsets: { "/agents/researcher": 4 },
     });
   });
 
-  test("contract consumes only collection birth, agent creation, and summary", () => {
+  test("a full replay (fresh cursor over the same stream) reduces to the identical catalog and appends nothing", async () => {
+    const h = makeCollectionHarness();
+    await h.play([
+      "append",
+      COLLECTION_CREATED,
+      agentCreatedCopy({ sourceOffset: 2 }),
+      summaryUpdatedCopy({ pinned: true }, { sourceOffset: 3 }),
+    ]);
+    const committedOffsets = h.events().map((row) => row.offset);
+
+    const replay = makeCollectionHarness({
+      clock: h.clock,
+      stream: h.stream,
+      progress: makeMemoryProgressStore(),
+    });
+    await replay.settle(); // replays the whole stream from offset zero
+
+    expect(replay.state()).toEqual(h.state());
+    // A pure projector: replaying must not have grown the stream.
+    expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
+  });
+
+  test("rejects agent facts without provenance, duplicate creations, and summaries before creation", async () => {
+    // Each rejection fails its frame with the cursor held (the runner
+    // redelivers, never skips), so every scenario gets a fresh harness.
+    await expect(
+      makeCollectionHarness().play([
+        "append",
+        COLLECTION_CREATED,
+        { type: "events.iterate.com/agent/created", payload: {} },
+      ]),
+    ).rejects.toThrow("without cross-post provenance");
+
+    await expect(
+      makeCollectionHarness().play(["append", COLLECTION_CREATED, COLLECTION_CREATED]),
+    ).rejects.toThrow("more than one created event");
+
+    await expect(
+      makeCollectionHarness().play([
+        "append",
+        COLLECTION_CREATED,
+        agentCreatedCopy({ sourceOffset: 1 }),
+        agentCreatedCopy({ sourceOffset: 5 }),
+      ]),
+    ).rejects.toThrow("more than one agent/created event for /agents/researcher");
+
+    await expect(
+      makeCollectionHarness().play([
+        "append",
+        COLLECTION_CREATED,
+        summaryUpdatedCopy({ pinned: true }, { sourceOffset: 2 }),
+      ]),
+    ).rejects.toThrow("before agent/created");
+  });
+
+  test("the contract consumes only collection birth, agent creation, and summary facts", () => {
     expect(AgentCollectionProcessorContract.consumes).toEqual([
-      AGENT_COLLECTION_CREATED_EVENT_TYPE,
+      "events.iterate.com/agent-collection/created",
       "events.iterate.com/agent/created",
-      AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+      "events.iterate.com/agent/summary-updated",
     ]);
   });
 });

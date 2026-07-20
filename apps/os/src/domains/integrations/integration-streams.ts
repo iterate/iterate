@@ -8,12 +8,7 @@
 import type { StreamEvent } from "iterate/processors";
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import {
-  CONNECTION_CLAIMED_EVENT_TYPE,
-  CONNECTION_UNCLAIMED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
-  integrationConnectionStreamPath,
-} from "./utils.ts";
+import { INTEGRATION_DIRECTORY_STREAM_PATH, integrationConnectionStreamPath } from "./utils.ts";
 
 export function integrationStreamStub(projectId: string | null, path: string) {
   return itxEnv.STREAM.getByName(
@@ -101,14 +96,14 @@ export function foldConnectionDirectory(
       continue;
     }
     const key = directoryKey(payload.slug, payload.externalId);
-    if (event.type === CONNECTION_CLAIMED_EVENT_TYPE) {
+    if (event.type === "events.iterate.com/integration/connection-claimed") {
       if (typeof payload.connection !== "string") continue;
       const existingClaim = claims.get(key);
       if (existingClaim === undefined || existingClaim.projectId === payload.projectId) {
         claims.set(key, { connection: payload.connection, projectId: payload.projectId });
       }
     } else if (
-      event.type === CONNECTION_UNCLAIMED_EVENT_TYPE &&
+      event.type === "events.iterate.com/integration/connection-unclaimed" &&
       claims.get(key)?.projectId === payload.projectId &&
       claims.get(key)?.connection === payload.connection
     ) {
@@ -215,7 +210,9 @@ export async function appendConnectionDirectoryEvents(
 ): Promise<void> {
   await integrationStreamStub(null, INTEGRATION_DIRECTORY_STREAM_PATH).append(
     ...inputs.map((input) => ({
-      type: input.claimed ? CONNECTION_CLAIMED_EVENT_TYPE : CONNECTION_UNCLAIMED_EVENT_TYPE,
+      type: input.claimed
+        ? "events.iterate.com/integration/connection-claimed"
+        : "events.iterate.com/integration/connection-unclaimed",
       payload: {
         connection: input.connection,
         externalId: input.externalId,

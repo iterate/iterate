@@ -85,7 +85,7 @@ function ProjectReposIndexContent() {
   const reposList = projectState?.repos;
   const createRepo = useMutation({
     mutationFn: async (input: { path: string }) => {
-      await itx.repos.create({ path: input.path });
+      await itx.repos.get(input.path).create();
       return input.path;
     },
     onSuccess: (path) => {

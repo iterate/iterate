@@ -180,15 +180,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     // exactly what starts an obligation stranded because the stream head is
     // an unconsumed event (subscriber-disconnected, a foreign fact). Start or
     // settle open LLM obligations, then derive the next scheduling decision.
-    // ONE blocking closure so the whole pass is awaited as this head event's
-    // own work before its deferred commit; a failure fails the frame and the
-    // transport replays it. A mid-catch-up fold never reaches this branch, so
-    // nothing dials env.AI for a long-settled request.
+    // ONE blocking closure for the whole pass; a mid-catch-up fold never
+    // reaches this branch, so nothing dials env.AI for a long-settled request.
     if (args.delivery.caughtUp) {
-      args.blockProcessorWhile(async () => {
-        await this.#reconcileLlmObligations(args);
-        await this.#reconcileLlmScheduling(args);
-      });
+      args.blockProcessorWhile(
+        "the at-head LLM obligation/scheduling pass is this head event's own work; a failure must fail the frame so the transport replays it",
+        async () => {
+          await this.#reconcileLlmObligations(args);
+          await this.#reconcileLlmScheduling(args);
+        },
+      );
     }
   }
 
@@ -206,19 +207,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // Files the agent attached to its own message ride the reflection too,
         // so the model SEES what it sent (vision) on later turns.
         const files = event.payload.files;
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agents/context-added",
-            idempotencyKey: this.idempotencyKey("render-web-response", event),
-            payload: {
-              // This quotes assistant-authored text. Keep it as assistant
-              // history so model output can never acquire developer/system
-              // instruction precedence merely by passing through sendMessage.
-              role: "assistant",
-              content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
-              ...(files === undefined || files.length === 0 ? {} : { files }),
-            },
-          }),
+        blockProcessorWhile(
+          "the sent message is delivered once; a lost reflection append would hide the agent's own message from its later turns",
+          () =>
+            append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey("render-web-response", event),
+              payload: {
+                // This quotes assistant-authored text. Keep it as assistant
+                // history so model output can never acquire developer/system
+                // instruction precedence merely by passing through sendMessage.
+                role: "assistant",
+                content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
+                ...(files === undefined || files.length === 0 ? {} : { files }),
+              },
+            }),
         );
         return;
       }
@@ -230,15 +233,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           previousState.summary.waitingFor !== undefined &&
           contextClearsWaitingFor(event.payload)
         ) {
-          blockProcessorWhile(() =>
-            append({
-              type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
-              idempotencyKey: this.idempotencyKey("waiting-clear", event),
-              payload: {
-                waitingFor: null,
-                clearWaitingForThroughOffset: event.offset,
-              },
-            }),
+          blockProcessorWhile(
+            "the waiting-clear is a per-event consequence of this context item; a dropped append would leave the agent stuck waiting forever",
+            () =>
+              append({
+                type: AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+                idempotencyKey: this.idempotencyKey("waiting-clear", event),
+                payload: {
+                  waitingFor: null,
+                  clearWaitingForThroughOffset: event.offset,
+                },
+              }),
           );
         }
         if (
@@ -247,7 +252,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ) {
           const interrupted = previousState.currentRequest;
           if (interrupted !== null) {
-            blockProcessorWhile(() => append(...this.#cancelEventsForCurrentRequest(interrupted)));
+            blockProcessorWhile(
+              "the interrupt's cancel must fold before any later re-fire, or the re-fire wins the fold and the cancel no-ops",
+              () => append(...this.#cancelEventsForCurrentRequest(interrupted)),
+            );
           }
         }
         // Only output linked to a durably started provider request is
@@ -259,44 +267,47 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           return;
         const linkedRequest = previousState.llmRequests[String(event.payload.llmRequestOffset)];
         if (linkedRequest?.status !== "started") return;
-        blockProcessorWhile(async () => {
-          const extraction = extractAsyncTypescriptSnippet(event.payload.content);
-          if (extraction.kind === "none") return;
-          if (extraction.kind === "malformed") {
+        blockProcessorWhile(
+          "the assistant output is delivered once; a lost append would silently drop the script run or its rejection notice",
+          async () => {
+            const extraction = extractAsyncTypescriptSnippet(event.payload.content);
+            if (extraction.kind === "none") return;
+            if (extraction.kind === "malformed") {
+              await append({
+                type: "events.iterate.com/agents/context-added",
+                idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
+                payload: {
+                  role: "developer",
+                  content:
+                    "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
+                  llmRequestPolicy: { behaviour: "after-current-request" },
+                },
+              });
+              return;
+            }
+            if (extraction.kind === "multiple") {
+              await append({
+                type: "events.iterate.com/agents/context-added",
+                idempotencyKey: this.idempotencyKey("multi-snippet-rejected", event),
+                payload: {
+                  role: "developer",
+                  content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
+                  llmRequestPolicy: { behaviour: "after-current-request" },
+                },
+              });
+              return;
+            }
             await append({
-              type: "events.iterate.com/agents/context-added",
-              idempotencyKey: this.idempotencyKey("malformed-snippet-rejected", event),
+              type: "events.iterate.com/capability-host/script-run-requested",
+              idempotencyKey: this.idempotencyKey("script-run-requested", event),
               payload: {
-                role: "developer",
-                content:
-                  "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
-                llmRequestPolicy: { behaviour: "after-current-request" },
+                code: extraction.code,
+                executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
+                expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
               },
             });
-            return;
-          }
-          if (extraction.kind === "multiple") {
-            await append({
-              type: "events.iterate.com/agents/context-added",
-              idempotencyKey: this.idempotencyKey("multi-snippet-rejected", event),
-              payload: {
-                role: "developer",
-                content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
-                llmRequestPolicy: { behaviour: "after-current-request" },
-              },
-            });
-            return;
-          }
-          await append({
-            type: "events.iterate.com/capability-host/script-run-requested",
-            idempotencyKey: this.idempotencyKey("script-run-requested", event),
-            payload: {
-              code: extraction.code,
-              executionId: `${AGENT_SCRIPT_EXECUTION_ID_PREFIX}${event.offset}`,
-              expiresAt: this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-            },
-          });
-        });
+          },
+        );
         return;
       }
       case "events.iterate.com/agent/llm-request-scheduled":
@@ -346,20 +357,23 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // first (a durable write that can wait on the checkout's first-use
         // clone), so the whole render-then-append runs inside the blocking
         // section — the input must not land before the file it references.
-        blockProcessorWhile(async () => {
-          const content = await scriptResultAgentInput(event, this.deps.writeWorkspaceFile);
-          if (content === null) return;
-          await append({
-            type: "events.iterate.com/agents/context-added",
-            idempotencyKey: this.idempotencyKey("render-script-result", event),
-            payload: {
-              role: "developer",
-              actor: { type: "script", executionId: event.payload.executionId },
-              content,
-              llmRequestPolicy: { behaviour: "after-current-request" },
-            },
-          });
-        });
+        blockProcessorWhile(
+          "the settlement is delivered once; a lost render would silently drop the script's result from the conversation",
+          async () => {
+            const content = await scriptResultAgentInput(event, this.deps.writeWorkspaceFile);
+            if (content === null) return;
+            await append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey("render-script-result", event),
+              payload: {
+                role: "developer",
+                actor: { type: "script", executionId: event.payload.executionId },
+                content,
+                llmRequestPolicy: { behaviour: "after-current-request" },
+              },
+            });
+          },
+        );
         return;
       }
       // A failed request must never brick the stream: the error becomes a
@@ -385,29 +399,30 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           (isRateLimitErrorMessage(result.error.message)
             ? MAX_CONSECUTIVE_RATE_LIMITED_LLM_FAILURES
             : MAX_CONSECUTIVE_LLM_FAILURES);
-        blockProcessorWhile(() =>
-          append({
-            type: "events.iterate.com/agents/context-added",
-            idempotencyKey: this.idempotencyKey("render-llm-failure", event),
-            payload: {
-              role: "developer",
-              content:
-                `Your LLM request failed:\n\`\`\`\n${result.error.message}\n\`\`\`` +
-                (retry
-                  ? ""
-                  : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
-              llmRequestPolicy: {
-                behaviour: retry ? "after-current-request" : "dont-trigger-request",
+        blockProcessorWhile(
+          "the failure completion is delivered once; a lost render would silently swallow the error and stall the turn",
+          () =>
+            append({
+              type: "events.iterate.com/agents/context-added",
+              idempotencyKey: this.idempotencyKey("render-llm-failure", event),
+              payload: {
+                role: "developer",
+                content:
+                  `Your LLM request failed:\n\`\`\`\n${result.error.message}\n\`\`\`` +
+                  (retry
+                    ? ""
+                    : `\nConsecutive failure ${state.consecutiveLlmFailures} — automatic retries stopped; this stays in your context for the next turn.`),
+                llmRequestPolicy: {
+                  behaviour: retry ? "after-current-request" : "dont-trigger-request",
+                },
               },
-            },
-          }),
+            }),
         );
         return;
       }
       // Compaction: a turn's usage report says how full the context ran. Past
       // the threshold, STOP THE WORLD and summarize the history prefix into
-      // one context item. blockProcessorWhile holds the checkpoint and later
-      // delivery until that item lands.
+      // one context item.
       //
       // A catch-up that folds past SEVERAL over-threshold reports coalesces
       // onto the NEWEST: only the last over-threshold report in the frame
@@ -424,22 +439,25 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           usage.maxContextTokens * AGENT_COMPACTION_TRIGGER_FRACTION,
         );
         if (contextTokens < thresholdTokens) return;
-        blockProcessorWhile(async () => {
-          // A later over-threshold report already in the journal supersedes
-          // this one: summarizing an older prefix now would be thrown away by
-          // the newer request's compaction, so defer to it (the coalescing the
-          // batch model got from `#queueCompaction`'s microtask, recovered
-          // under the runner's strict per-event blocking).
-          if (await this.#laterOverThresholdReportPending(usage.llmRequestOffset)) return;
-          await this.#queueCompaction({
-            contextTokens,
-            hasHistory: state.context.history.length > 0,
-            llmRequestOffset: usage.llmRequestOffset,
-            model: usage.model,
-            thresholdTokens,
-            triggerOffset: event.offset,
-          });
-        });
+        blockProcessorWhile(
+          "compaction stops the world: the checkpoint and later delivery must wait until the summary context item lands",
+          async () => {
+            // A later over-threshold report already in the journal supersedes
+            // this one: summarizing an older prefix now would be thrown away by
+            // the newer request's compaction, so defer to it (the coalescing the
+            // batch model got from `#queueCompaction`'s microtask, recovered
+            // under the runner's strict per-event blocking).
+            if (await this.#laterOverThresholdReportPending(usage.llmRequestOffset)) return;
+            await this.#queueCompaction({
+              contextTokens,
+              hasHistory: state.context.history.length > 0,
+              llmRequestOffset: usage.llmRequestOffset,
+              model: usage.model,
+              thresholdTokens,
+              triggerOffset: event.offset,
+            });
+          },
+        );
         return;
       }
       default:
@@ -1104,9 +1122,10 @@ function reduceAgentEventCore(input: { event: AgentConsumedEvent; state: AgentSt
   const { event, state } = input;
   switch (event.type) {
     case "events.iterate.com/agent/created":
-      if (state.birthCertificate !== null) {
-        throw new Error("agent received more than one created event");
-      }
+      // The first created event wins; a duplicate is a no-op (explicit
+      // creation rejects conflicting births at the append door — a throwing
+      // reducer would only wedge the frame).
+      if (state.birthCertificate !== null) return state;
       return {
         ...state,
         birthCertificate: event.payload,

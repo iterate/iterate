@@ -116,12 +116,12 @@ processEvent({ state, event }) {
 }
 ```
 
-Reducers still fold ordinary events before birth; they do not need a second
+Reducers still reduce ordinary events before birth; they do not need a second
 dispatcher or a `reduceConfiguredEvent` abstraction. The pre-birth guard is
 only around actions. Command/RPC methods that require a live object assert
 that `birthCertificate !== null` and fail clearly when called too early.
 
-A second distinct birth is a corrupt journal and MUST throw. Retrying the same
+A second distinct birth is a corrupt stream and MUST throw. Retrying the same
 create command with the exact same batch is different: creators use stable
 idempotency keys, so the stream append deduplicates the retry and the processor
 still sees exactly one birth. Reusing a key for a different type, payload,
@@ -214,12 +214,12 @@ matching event has the same reducer meaning whichever append API wrote it.
 `create()` remains the normal birth path, and higher-level methods remain
 responsible for coordinated lifecycle invariants; a low-level caller can still
 append a second birth or an unmatched completion and make the reducer reject
-the journal. Do not misdescribe `ConsumedInput` as a command-state validator
+the stream. Do not misdescribe `ConsumedInput` as a command-state validator
 or an authorization boundary.
 
 Do not add `configure()`, `rename()`, `setFoo()`, or one method per event when
 the implementation would only wrap `stream.append({ type, payload })`. Those
-methods duplicate the event schema, hide the journal model, and drift when the
+methods duplicate the event schema, hide the stream's event model, and drift when the
 contract changes. A higher-level method earns its place when it adds real
 domain semantics—encryption, external I/O, attachment storage, provenance,
 multi-stream coordination, birth/readiness waits, or another invariant that
@@ -228,7 +228,7 @@ helpers may build on `append`; they are not a substitute for the typed door.
 
 This is an API-shape rule, not merely an implementation preference. Do not
 expose a domain object that has only `setName`, `addContext`, and similar
-event-shaped commands while hiding its journal vocabulary. The mechanically
+event-shaped commands while hiding its stream vocabulary. The mechanically
 derived typed `append` is the primary mutation contract; named methods are
 reserved for operations that actually coordinate more than validation plus
 one append.
@@ -304,28 +304,28 @@ The table records the creation owner as of 2026-07-15. "Router" means a
 processor that creates a destination stream batch while handling an ingress
 event; it does not mean the destination path implicitly selects a processor.
 
-| Processor                 | Birth                     | Who appends it                                                                                        | Other creation work                                                                                                                                                                                                  |
-| ------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Project                   | `project/created`         | `session.projects.create(...)`                                                                        | Subscribes Project; Project's birth reaction creates the root Capability Host, primary Scheduler, config Repo, and Email router. `project/ready` follows config-repo and worker readiness.                           |
-| Repo                      | `repo/created`            | `project.repos.create(...)`, global repo creation, or Project bootstrap for `/repos/config`           | Subscribes Repo, cross-posts its birth to `/`, provisions the artifact, then emits `repo/ready`.                                                                                                                     |
-| Agent                     | `agent/created`           | `project.agents.get(path).create()` or a Slack/Telegram/Email router                                  | Creates the paired Capability Host, setup events, and subscriptions; cross-posts its birth to `/`. Caller-selected context/configuration is appended afterwards.                                                     |
-| Capability Host           | `capability-host/created` | Agent creation, Project bootstrap for `/`, or `capabilityHosts.get(path).create()`                    | Subscription is explicit; standalone create waits through its batch.                                                                                                                                                 |
-| Scheduler                 | `scheduler/created`       | Project bootstrap or `schedulers.get(path).create()`                                                  | Subscription is explicit; create waits through its batch.                                                                                                                                                            |
-| Secret                    | `secret/created`          | `secrets.get(path).create(...)`; integration connection setup uses that same Secret DO API            | Encrypts material before append, subscribes Secret, waits for processing, and cross-posts the birth to `/` without plaintext material.                                                                               |
-| Email router              | `email/created`           | Project birth reaction on `/integrations/email`                                                       | Subscribes Email. Raw email ingress only appends `email/received`; it never creates the router.                                                                                                                      |
-| Email agent facet         | `email-agent/created`     | Email router when it resolves a new inbound thread, or the first outbound send from an existing agent | New routed threads share a stream with Agent and Capability Host; outbound binding adds only the Email facet to an already-created agent. In both cases the facet birth precedes route context and subscription.     |
-| Slack router              | `slack/created`           | Slack connection setup on `/integrations/slack/<connection>`                                          | Connect setup appends the router birth, subscription, then the provider-connected fact.                                                                                                                              |
-| Slack agent facet         | `slack-agent/created`     | Slack router when it resolves a new thread                                                            | Shares a stream with Agent and Capability Host; config names the explicit connection/channel/thread.                                                                                                                 |
-| Telegram router           | `telegram/created`        | Telegram connection setup on `/integrations/telegram/<connection>`                                    | Connect setup appends the router birth, subscription, then the provider-connected fact.                                                                                                                              |
-| Telegram agent facet      | `telegram-agent/created`  | Telegram router when it resolves a new chat session                                                   | Shares a stream with Agent and Capability Host; config names the explicit connection/chat/topic.                                                                                                                     |
-| Sandbox status projection | `sandbox/created`         | The Sandbox instance DO called by `sandboxes.create(...)`                                             | The collection first claims the unique name with `sandbox/create-requested` in `/sandboxes`; the instance appends its birth and processor subscription in one batch, then waits for its hosted reducer to fold them. |
+| Processor                 | Birth                     | Who appends it                                                                                        | Other creation work                                                                                                                                                                                                    |
+| ------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project                   | `project/created`         | `session.projects.create(...)`                                                                        | Subscribes Project; Project's birth reaction creates the root Capability Host, primary Scheduler, config Repo, and Email router. `project/ready` follows config-repo and worker readiness.                             |
+| Repo                      | `repo/created`            | `project.repos.get(path).create(...)`, global repo creation, or Project bootstrap for `/repos/config` | Subscribes Repo, cross-posts its birth to `/`, provisions the artifact, then emits `repo/ready`.                                                                                                                       |
+| Agent                     | `agent/created`           | `project.agents.get(path).create()` or a Slack/Telegram/Email router                                  | Creates the paired Capability Host, setup events, and subscriptions; cross-posts its birth to `/`. Caller-selected context/configuration is appended afterwards.                                                       |
+| Capability Host           | `capability-host/created` | Agent creation, Project bootstrap for `/`, or `capabilityHosts.get(path).create()`                    | Subscription is explicit; standalone create waits through its batch.                                                                                                                                                   |
+| Scheduler                 | `scheduler/created`       | Project bootstrap or `schedulers.get(path).create()`                                                  | Subscription is explicit; create waits through its batch.                                                                                                                                                              |
+| Secret                    | `secret/created`          | `secrets.get(path).create(...)`; integration connection setup uses that same Secret DO API            | Encrypts material before append, subscribes Secret, waits for processing, and cross-posts the birth to `/` without plaintext material.                                                                                 |
+| Email router              | `email/created`           | Project birth reaction on `/integrations/email`                                                       | Subscribes Email. Raw email ingress only appends `email/received`; it never creates the router.                                                                                                                        |
+| Email agent facet         | `email-agent/created`     | Email router when it resolves a new inbound thread, or the first outbound send from an existing agent | New routed threads share a stream with Agent and Capability Host; outbound binding adds only the Email facet to an already-created agent. In both cases the facet birth precedes route context and subscription.       |
+| Slack router              | `slack/created`           | Slack connection setup on `/integrations/slack/<connection>`                                          | Connect setup appends the router birth, subscription, then the provider-connected fact.                                                                                                                                |
+| Slack agent facet         | `slack-agent/created`     | Slack router when it resolves a new thread                                                            | Shares a stream with Agent and Capability Host; config names the explicit connection/channel/thread.                                                                                                                   |
+| Telegram router           | `telegram/created`        | Telegram connection setup on `/integrations/telegram/<connection>`                                    | Connect setup appends the router birth, subscription, then the provider-connected fact.                                                                                                                                |
+| Telegram agent facet      | `telegram-agent/created`  | Telegram router when it resolves a new chat session                                                   | Shares a stream with Agent and Capability Host; config names the explicit connection/chat/topic.                                                                                                                       |
+| Sandbox status projection | `sandbox/created`         | The Sandbox instance DO called by `sandboxes.create(...)`                                             | The collection first claims the unique name with `sandbox/create-requested` in `/sandboxes`; the instance appends its birth and processor subscription in one batch, then waits for its hosted reducer to reduce them. |
 
 ### Other processor shapes and deliberate exceptions
 
 - The Core stream processor owns the infrastructure-level `stream/created`
-  fact. It establishes the journal, not a domain object on that journal, so it
+  fact. It establishes the stream, not a domain object on that stream, so it
   does not use `state.birthCertificate`.
-- `SandboxProcessor` is a pure fold hosted by the same container-backed
+- `SandboxProcessor` is a pure projection hosted by the same container-backed
   Sandbox Durable Object whose lifecycle it projects. It disables processor
   recovery because the Containers SDK owns that object's single alarm. The
   sandbox collection relays `processor(path)` and `liveState(path)` while
@@ -335,27 +335,27 @@ event; it does not mean the destination path implicitly selects a processor.
   existence and therefore have no domain birth.
 - The project worker is a worker-hosted subscriber with its own durable
   delivery cursor, not a path-created domain object.
-- Custom-domain events are folded and acted on by ProjectProcessor; there is
+- Custom-domain events are reduced and acted on by ProjectProcessor; there is
   no separately hosted CustomDomain processor to create.
 - Sandbox's catalog claim is intentionally a request fact in a separate
-  journal. `sandbox/created` remains the authoritative birth on the sandbox's
+  stream. `sandbox/created` remains the authoritative birth on the sandbox's
   own stream.
 
 ## The supporting rules
 
 - **Derive what names carry; reduce everything else.** Durable Object names
-  carry project id and stream path. Identity, journal reference, and self
+  carry project id and stream path. Identity, stream reference, and self
   address are projections of that name—not birth config. Facts the processor
   needs arrive as events.
-- **State is a fold; the checkpoint is disposable.** A processor's storage
-  holds `{offset, state}` as a cache of `reduce` over the journal. Delete it
+- **State is a reduction; the checkpoint is disposable.** A processor's storage
+  holds `{offset, state}` as a cache of `reduce` over the stream. Delete it
   and replay rebuilds it. The stream is the only authority.
 - **Side effects live in `processEvent`, never in `reduce`.** Replay rebuilds
   state and can re-run side effects for events past the durable checkpoint, so
   side effects must follow the guarantees in the companion guide.
 - **Appends go through stamped lanes; `emits` is the complete append
   vocabulary.** A processor appends through `args.append`/`args.appendTo`
-  (event-bound) or `this.append`/`this.appendTo` (alarms and whole-fold
+  (event-bound) or `this.append`/`this.appendTo` (alarms and whole-state
   decisions). Both validate against `contract.emits`. Build stable keys with
   `this.idempotencyKey(key, event?)` unless a deliberately shared cross-lane
   key must be byte-identical.

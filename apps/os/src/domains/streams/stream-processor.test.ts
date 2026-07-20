@@ -215,7 +215,7 @@ describe("StreamProcessor provenance stamping", () => {
         idempotencyKey: this.idempotencyKey("echo", event),
         payload: { id: event.payload.id },
       };
-      blockProcessorWhile(async () => {
+      blockProcessorWhile("test echo append", async () => {
         await append(echo);
         await appendTo("/tests/echo-sibling", {
           ...echo,
@@ -238,7 +238,7 @@ describe("StreamProcessor provenance stamping", () => {
       args: Parameters<StreamProcessor<typeof EchoContract>["processEvent"]>[0],
     ): undefined {
       if (!args.delivery.caughtUp) return;
-      args.blockProcessorWhile(() =>
+      args.blockProcessorWhile("test at-head summary append", () =>
         args.append({
           type: "events.iterate.com/test/echoed",
           idempotencyKey: this.idempotencyKey(

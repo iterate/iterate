@@ -35,7 +35,7 @@ import type { SandboxInstanceType } from "./instance-types.ts";
  * - `__describe()` (the capability-tree convention) carries the durable
  *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
  * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
- *   journaled as a `configured` event); values are conventionally
+ *   recorded as a `configured` event); values are conventionally
  *   `getSecret(path)` placeholders substituted only at egress — real
  *   secret material never enters the container. All sandbox egress flows
  *   through project egress policy; there is no direct internet path.
@@ -180,7 +180,7 @@ export function assertSandboxPath(path: string): string {
  * instantiation (even `destroy()` becomes unreachable; only manual storage
  * surgery recovers). Accepted forms mirror the SDK's parser exactly:
  * a positive number of seconds, or `<digits><s|m|h>`. Lives here (not on the
- * Durable Object) because the collection validates it before journaling a
+ * Durable Object) because the collection validates it before appending a
  * `create-requested`, and the Durable Object validates it again at its door.
  */
 export function assertValidSleepAfter(value: string | number): void {
