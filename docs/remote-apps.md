@@ -30,21 +30,36 @@ credential never grants `/api` access.
    verified against. Rotate it with an ordinary `update({ egress: { urls: [] },
 material: newValue })`; visibility is an immutable birth-certificate fact.
 
-2. **Connect from your app** with the `iterate` package's node client (or
-   raw Cap'n Web against `wss://os.iterate.com/api`):
+2. **Connect from your app.** On node, the `iterate` package's client does
+   the whole dance in one call:
 
    ```ts
    import { connectItx } from "iterate/node";
 
-   using session = connectItx({ baseUrl: "https://os.iterate.com" });
-   using os = session.authenticate({
-     type: "project-secret",
+   using project = connectItx({
+     baseUrl: "https://os.iterate.com",
+     auth: {
+       type: "project-secret",
+       projectId: "prj_…",
+       secret: process.env.ITERATE_PROJECT_API_KEY!,
+     },
      projectId: "prj_…",
-     secret: process.env.ITERATE_PROJECT_API_KEY!,
    });
-   using project = os.projects.get("prj_…");
-   // The full project itx: streams, secrets, agents, workers, …
+   // The full project itx: streams, secrets, agents, workers, repos, …
    await project.streams.get("/app-events").append({ type: "…", payload: {} });
+   ```
+
+   On runtimes without the node `ws` package (a Cloudflare Worker, a
+   browser-like environment), dial with raw Cap'n Web — the generated types
+   come from the same package:
+
+   ```ts
+   import { newWebSocketRpcSession } from "capnweb";
+   import type { UnauthenticatedOs } from "iterate/client";
+
+   const os = newWebSocketRpcSession<UnauthenticatedOs>("wss://os.iterate.com/api");
+   using session = os.authenticate({ type: "project-secret", projectId, secret });
+   using project = session.projects.get(projectId);
    ```
 
    The credential is verified inside the project's secret Durable Object
@@ -55,12 +70,13 @@ material: newValue })`; visibility is an immutable birth-certificate fact.
 ## Outbound: mount your app as `itx.<name>`
 
 1. **Expose a Cap'n Web WebSocket endpoint** in your app and verify a bearer
-   token on the upgrade. No platform code required:
+   token on the upgrade. No platform code required. This is literally the
+   `worker.ts` you `wrangler deploy` to your own workers.dev:
 
    ```ts
-   // Plain node example; on Workers use newWorkersWebSocketRpcResponse.
-   import { RpcTarget, newWebSocketRpcSession } from "@iterate-com/capnweb";
-   import { WebSocketServer } from "ws";
+   // worker.ts — the whole app. Dependency (same alias the platform uses):
+   //   "capnweb": "npm:@iterate-com/capnweb@^0.10.0"
+   import { RpcTarget, newWorkersRpcResponse } from "capnweb";
 
    class TodoApp extends RpcTarget {
      async add(title: string) {
@@ -70,6 +86,41 @@ material: newValue })`; visibility is an immutable birth-certificate fact.
        /* … */
      }
    }
+
+   export default {
+     async fetch(request: Request, env: Env): Promise<Response> {
+       const url = new URL(request.url);
+       if (url.pathname !== "/api") return new Response("not found", { status: 404 });
+       // The platform substitutes the Authorization header into the WebSocket
+       // handshake; on Workers the upgrade IS this fetch, so a plain header
+       // check guards the whole session.
+       if (request.headers.get("authorization") !== `Bearer ${env.EGRESS_KEY}`) {
+         return new Response("missing or invalid credential", { status: 401 });
+       }
+       return newWorkersRpcResponse(request, new TodoApp());
+     },
+   } satisfies ExportedHandler<Env>;
+   ```
+
+   ```jsonc
+   // wrangler.jsonc — nothing fancy; add Durable Objects / Start assets as
+   // your app grows (see apps/tanstack for the richer shape).
+   {
+     "name": "my-todos",
+     "main": "./worker.ts",
+     "compatibility_date": "2026-06-17",
+   }
+   ```
+
+   `wrangler secret put EGRESS_KEY`, `wrangler deploy`, and the endpoint is
+   `wss://my-todos.<account>.workers.dev/api`.
+
+   The same thing on plain node (a VPS, a laptop) is the `ws` package plus
+   `newWebSocketRpcSession`:
+
+   ```ts
+   import { RpcTarget, newWebSocketRpcSession } from "capnweb";
+   import { WebSocketServer } from "ws";
 
    wss.on("connection", (socket, request) => {
      if (request.headers.authorization !== `Bearer ${process.env.EGRESS_KEY}`) {
@@ -86,8 +137,8 @@ material: newValue })`; visibility is an immutable birth-certificate fact.
 
    ```ts
    await itx.secrets.get("/secrets/my-todos").create({
-     egress: { urls: ["https://my-todos.example"] },
-     material: { apiKey: process.env.EGRESS_KEY },
+     egress: { urls: ["https://my-todos.<account>.workers.dev"] },
+     material: { apiKey: "<the same value you gave wrangler secret put>" },
    });
    ```
 
@@ -103,7 +154,7 @@ material: newValue })`; visibility is an immutable birth-certificate fact.
        "remoteCapability",
        [
          "get",
-         "wss://my-todos.example/api",
+         "wss://my-todos.<account>.workers.dev/api",
          {
            headers: {
              authorization: 'Bearer getSecret({ path: "/secrets/my-todos", field: "apiKey" })',
