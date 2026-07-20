@@ -292,12 +292,9 @@ export function polyfillEsbuildNodeRequire(
 }
 
 function nodeRequirePrelude(builtinNames: string[], stubSpecs: string[]): string {
+  // Only the builtins actually __require'd — do NOT bulk-add events/stream/util
+  // when only npm stubs are needed (that path OOMs small DO isolates).
   const names = new Set(builtinNames);
-  if (names.size > 0 || stubSpecs.length > 0) {
-    names.add("events");
-    names.add("stream");
-    names.add("util");
-  }
   const list = [...names].sort();
   const stubImports = stubSpecs
     .map((spec, i) => {

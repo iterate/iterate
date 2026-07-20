@@ -129,7 +129,9 @@ test(
           "    return {",
           "      chat: { postMessage: (args: Record<string, unknown>) => call('chat.postMessage', args) },",
           "      users: { list: () => call('users.list', {}) },",
-          "      _emitterName: ee.constructor.name,",
+          // Method (not a data property): Cap'n Web property reads can surface
+          // as RpcPromise; a method return is a plain string.
+          "      emitterName: () => ee.constructor.name,",
           "    };",
           "  }",
         ].join("\n"),
@@ -160,7 +162,7 @@ test(
       });
 
       // @ts-expect-error - Cap'n Web stub typing flattens the nested surface.
-      expect(await project.worker.slack._emitterName).toBe("EventEmitter");
+      expect(await project.worker.slack.emitterName()).toBe("EventEmitter");
 
       expect(mock).toMatchObject({
         calls: expect.arrayContaining(["chat.postMessage", "users.list"]),
