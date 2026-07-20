@@ -73,6 +73,28 @@ export function isStreamUnavailableError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(STREAM_UNAVAILABLE_MESSAGE_PREFIX);
 }
 
+/**
+ * Replay one idempotent stream operation after an explicit lifecycle loss.
+ *
+ * The bound is intentionally fixed at one: a fresh call boots a fresh stream
+ * incarnation, while a second rejection is evidence that availability has
+ * not recovered and belongs to the caller. `onRetry` makes the absorbed first
+ * outcome observable without forcing every call site to duplicate the
+ * classifier.
+ */
+export async function retryStreamUnavailableOnce<T>(
+  operation: () => Promise<T>,
+  onRetry?: (error: unknown) => void,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isStreamUnavailableError(error)) throw error;
+    onRetry?.(error);
+    return await operation();
+  }
+}
+
 /** Whether a rejection is the stream DO's explicitly modelled waiter timeout. */
 export function isStreamWaitTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith(STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX);

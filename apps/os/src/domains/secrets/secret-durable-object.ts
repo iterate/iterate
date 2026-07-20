@@ -149,6 +149,15 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #create(input: SecretCreateInput) {
     const egress = normalizeEgress(input.egress);
+    // Readable and substitutable are mutually exclusive kinds: material
+    // leaves via reveal() OR via pinned egress substitution, never both. The
+    // matching update() guard makes this an INVARIANT, not a default — a
+    // readable secret can never later grow an egress pin.
+    if ((input.visibility ?? "write-only") === "readable" && egress.urls.length > 0) {
+      throw new Error(
+        `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
+      );
+    }
     const idempotencyKey = `secret/created:${this.#name.projectId}:${this.#name.path}`;
     const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName: this.ctx.id.name!,
@@ -194,6 +203,7 @@ export class SecretDurableObject extends DurableObject<Env> {
                 egress,
                 ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
                 refresh: input.refresh ?? null,
+                visibility: input.visibility ?? "write-only",
               },
             },
           } as StreamEventInput,
@@ -265,6 +275,17 @@ export class SecretDurableObject extends DurableObject<Env> {
     assertSecretCreated(initialSnapshot.state, this.#name.path);
 
     const egress = input.egress === undefined ? undefined : normalizeEgress(input.egress);
+    // The create()-side exclusivity as an invariant: a readable secret's
+    // "never substituted outbound" property must survive every later update.
+    if (
+      initialSnapshot.state.birthCertificate?.config.visibility === "readable" &&
+      egress !== undefined &&
+      egress.urls.length > 0
+    ) {
+      throw new Error(
+        `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
+      );
+    }
 
     // A material-less update is intentionally destructive in the fold. It
     // needs no privileged append lane: egress, refresh, and audit facts are all
@@ -387,6 +408,49 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
       throw error;
     }
+  }
+
+  /**
+   * Read the material back — ONLY for a secret whose birth certificate
+   * declared `visibility: "readable"`. Visibility is immutable (create-time
+   * only, never updatable), so the write-only invariant survives per
+   * secret: a secret born write-only can never be retro-flipped readable.
+   * Readable secrets exist for credentials whose whole purpose is to be
+   * SHOWN to the outside, as often as needed — the born project ingress key
+   * is the canonical case.
+   */
+  async reveal(): Promise<unknown> {
+    const { state } = await this.#snapshotWithOffset();
+    assertSecretCreated(state, this.#name.path);
+    if (state.birthCertificate?.config.visibility !== "readable") {
+      throw new Error(`secret is write-only (not born readable): ${this.#name.path}`);
+    }
+    if (state.encryptedMaterial === null) return null;
+    return await this.#decrypt(state.encryptedMaterial, state.egress);
+  }
+
+  /**
+   * Compare one material field (or the whole plain-string material, when
+   * `field` is omitted) against a caller-supplied candidate. The material
+   * never leaves this object — the answer is one bit. This is the verifier
+   * behind the `project-secret` /api credential (auth.ts): the candidate
+   * arrives from the UNAUTHENTICATED door, so the comparison is
+   * constant-time (HMAC both sides under a throwaway key, so neither length
+   * nor prefix leaks through timing) and a missing/uncreated/structured-only
+   * secret answers false rather than throwing.
+   */
+  async verifyMaterialField(input: { field?: string; value: string }): Promise<boolean> {
+    const { state } = await this.#snapshotWithOffset();
+    if (state.encryptedMaterial === null) return false;
+    const material = await this.#decrypt(state.encryptedMaterial, state.egress);
+    let expected: unknown;
+    try {
+      expected = selectSecretField(material, input.field);
+    } catch {
+      return false;
+    }
+    if (typeof expected !== "string" || expected.length === 0) return false;
+    return await constantTimeStringEquals(expected, input.value);
   }
 
   /** Substitute this secret's placeholders (headers, URL path, opted-in JSON) from material. */
@@ -811,6 +875,7 @@ function describeSecretState(state: SecretState): SecretDescription {
     created: state.birthCertificate !== null,
     egress: state.egress,
     hasMaterial: state.encryptedMaterial !== null,
+    visibility: state.birthCertificate?.config.visibility ?? "write-only",
     refresh: state.refresh?.kind ?? null,
   };
 }
@@ -819,4 +884,23 @@ function assertSecretCreated(state: SecretState, path: string): void {
   if (state.birthCertificate === null) {
     throw new Error(`secret has not been created: ${path}`);
   }
+}
+
+/**
+ * Constant-time string comparison for the verify lane: HMAC both values under
+ * one throwaway key and compare the fixed-length digests byte-by-byte with no
+ * early exit, so neither content nor LENGTH differences shape the timing.
+ */
+async function constantTimeStringEquals(expected: string, candidate: string): Promise<boolean> {
+  const key = await crypto.subtle.generateKey({ hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+  const encoder = new TextEncoder();
+  const [expectedDigest, candidateDigest] = await Promise.all([
+    crypto.subtle.sign("HMAC", key, encoder.encode(expected)),
+    crypto.subtle.sign("HMAC", key, encoder.encode(candidate)),
+  ]);
+  const a = new Uint8Array(expectedDigest);
+  const b = new Uint8Array(candidateDigest);
+  let difference = 0;
+  for (let i = 0; i < a.length; i += 1) difference |= a[i]! ^ b[i]!;
+  return difference === 0;
 }

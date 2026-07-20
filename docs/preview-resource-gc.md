@@ -7,8 +7,8 @@ see [Dev environments](dev-environments.md); this doc is the "why".
 ## The principle: releasing a slot never waits on teardown
 
 There are nine preview **slots**. Each is a fixed shell of Cloudflare
-resources — a Worker, its hostname/DNS, a D1 database, KV namespaces, R2
-buckets, an AI Search namespace — created once by `ensure-resources` and
+resources — a Worker, its hostname/DNS, a D1 database, KV namespaces, and R2
+buckets — created once by `ensure-resources` and
 **never deleted** (Workers especially: recreating a container-bearing Durable
 Object class is broken upstream). Erase preserves container classes declared
 by the incoming branch, but deletes any retired container application before
@@ -28,22 +28,6 @@ So the rule is: **the lease is the load-bearing outcome, not the teardown.**
 The slot must free the instant a PR closes or its lease lapses; reclaiming the
 resources is a separate, lazy, rate-limited job.
 
-## Why no generation token: the project ID already is one
-
-You might expect we need to stamp each tenancy with an identifier so a new PR's
-data can't collide with the old PR's. We don't — the **project ID already does
-this**. Project IDs are `crypto.randomUUID()` (`apps/auth/src/server/id.ts`),
-and they're baked into every per-tenant resource key:
-
-- R2 objects are keyed `{projectId}/…` (`search-corpus.ts`).
-- AI Search instances are one-per-project, IDed by the project ID and scoped to
-  index only `{projectId}/**` (`search-index.ts`).
-
-A new tenant always mints fresh random project IDs, so its data lands under
-fresh keys and can never overlap a dead tenant's. **Correctness is free.** The
-only reason to delete a dead tenant's data at all is **cost** — so deletion can
-be lazy.
-
 ## Two speeds of teardown
 
 Teardown splits by what it costs to leave running:
@@ -51,16 +35,12 @@ Teardown splits by what it costs to leave running:
 | Concern                                                                                                                 | Reaped by                                                                    | When                                                                 |
 | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | Orphaned **compute** — Durable Object scheduler alarms keep firing agent turns (real LLM spend) against erased projects | one O(1) parked-worker deploy that tombstones every DO class (`do-reset.ts`) | **promptly**, on PR-close cleanup, and as a backstop in the GC sweep |
-| **R2 storage** — search corpus + itx.files + sandbox backups                                                            | Cloudflare **lifecycle rules** (server-side, zero control-plane calls)       | continuously, 3h after last write                                    |
-| **AI Search instances** — no server-side expiry exists (namespace delete requires an empty namespace)                   | per-instance DELETE sweep                                                    | in the GC sweep (and PR-close cleanup)                               |
+| **R2 storage** — itx.files + sandbox backups                                                                            | Cloudflare **lifecycle rules** (server-side, zero control-plane calls)       | continuously, 3h after last write                                    |
 | **D1 rows / KV keys**                                                                                                   | O(1) batched wipe                                                            | on cleanup / erase-on-acquire                                        |
 
-The expensive, rate-limit-prone operations were the **per-item** ones: R2
-deletes (a churned search-index held 1521 objects) and AI Search deletes (up to
-~162 per e2e run). Everything else is one or a few bounded calls. All of it
-shares one account-wide budget (~1200 requests / 5 min), so the per-item R2
-storm was _starving_ the AI Search deletes. Moving R2 to lifecycle rules frees
-the budget for the AI Search sweep.
+The expensive, rate-limit-prone operations were the **per-item** R2 deletes.
+Everything else is one or a few bounded calls. Moving R2 to lifecycle rules
+keeps cleanup within the account-wide control-plane budget.
 
 ## Everything disposable expires 3 hours after last use
 
@@ -72,12 +52,12 @@ One TTL governs it: **3 hours** (`PREVIEW_DISPOSABLE_TTL_SECONDS` in
   whose PR hasn't deployed/tested for 3h has an expired lease and is reclaimed.
   A deploy/e2e cycle is minutes, so an active PR never lapses mid-run; a PR that
   goes quiet stops costing us within ~3h instead of a full day.
-- **R2 lifecycle** on the preview `-search-index`, `-files`, and `-sandboxes`
+- **R2 lifecycle** on the preview `-files` and `-sandboxes`
   (`backups/`) buckets: objects are deleted 3h after they're written.
   `ensure-resources` installs these rules for preview slots only, and
-  `erase-data` re-installs all three on every acquire/cleanup so existing slots
+  `erase-data` re-installs both on every acquire/cleanup so existing slots
   self-heal without a manual `ensure-resources` run (CI never runs that). Prd
-  keeps its data (sandbox backups 90 days, corpus + files forever).
+  keeps its data (sandbox backups 90 days, files forever).
 - **Sandboxes**: containers already sleep after ~10 min idle
   (`onActivityExpired` snapshots then destroys the container). The 3h backup
   expiry finishes the job — a preview sandbox not used for 3h loses its backup,

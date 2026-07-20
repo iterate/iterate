@@ -66,7 +66,29 @@ export type ItxAuthCredentials =
   | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string }
   | { type: "operator-session"; token: string }
-  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+  | { type: "impersonate"; secret: string; token: ItxAuthToken }
+  /**
+   * A project's own long-lived machine credential — for externally deployed
+   * apps that connect back to /api as their project (docs/remote-apps.md).
+   * Verified against the secret every project is born with at
+   * `/secrets/project-api-key` (the comparison happens inside the Secret
+   * Durable Object — this door never receives material, only a one-bit
+   * answer). None of the existing lanes fit this caller: `bearer` is a
+   * user identity, `operator-session` is a short-lived human grant, and
+   * `admin-secret` is deployment-global. Grants exactly one project, no
+   * admin, no user identity.
+   */
+  | { type: "project-secret"; projectId: string; secret: string }
+  /**
+   * The short-lived user-on-project token auth mints for project app hosts
+   * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
+   * externally deployed app forwards the browser's request as-is, and the app
+   * presents the token here to act AS THAT USER on exactly that project
+   * (docs/remote-apps.md). Verified locally — an HS256 check against the
+   * shared project-app-session secret, no auth-worker hop; membership was
+   * checked at mint time and the 15-minute expiry bounds revocation lag.
+   */
+  | { type: "project-app-session"; token: string };
 
 /** A request supplied no usable authority. This is a caller outcome at the
  * public authentication door, not a server defect. */
@@ -237,12 +259,57 @@ export async function resolveItxAuth(input: {
   credentials: ItxAuthCredentials;
   headers: Headers;
   requestUrl: string;
+  /** The `project-secret` lane's verifier — dials the project's born
+   * `/secrets/project-api-key` Secret Durable Object for a one-bit
+   * constant-time comparison (rpc-targets wires it; auth stays free of DO
+   * plumbing). Absent means the caller does not serve that lane. */
+  verifyProjectSecret?: (input: { projectId: string; secret: string }) => Promise<boolean>;
+  /** The `project-app-session` lane's verifier — a local HS256 signature +
+   * expiry check against the shared session secret (rpc-targets wires it).
+   * Answers the token's own claims or null; absent means the caller does not
+   * serve that lane. */
+  verifyProjectAppSession?: (
+    token: string,
+  ) => Promise<{ projectId: string; userId: string } | null>;
 }): Promise<ItxAuthContext> {
   const { config, credentials } = input;
 
   if (credentials.type === "admin-secret") {
     assertAdminSecret(config, credentials.secret);
     return new ItxAuthContext({ isAdmin: true, principal: "admin" });
+  }
+
+  if (credentials.type === "project-secret") {
+    if (input.verifyProjectSecret === undefined) throw new ItxAuthenticationError();
+    if (credentials.secret.length === 0) throw new ItxAuthenticationError();
+    const verified = await input.verifyProjectSecret({
+      projectId: credentials.projectId,
+      secret: credentials.secret,
+    });
+    if (!verified) throw new ItxAuthenticationError();
+    // Exactly one project, no admin, no user identity — and no directory
+    // fallback: the credential IS the project scope; there is nothing to
+    // widen into.
+    return new ItxAuthContext({
+      isAdmin: false,
+      principal: `project-secret:${credentials.projectId}`,
+      projectIds: [credentials.projectId],
+    });
+  }
+
+  if (credentials.type === "project-app-session") {
+    if (input.verifyProjectAppSession === undefined) throw new ItxAuthenticationError();
+    if (credentials.token.length === 0) throw new ItxAuthenticationError();
+    const claims = await input.verifyProjectAppSession(credentials.token);
+    if (claims === null) throw new ItxAuthenticationError();
+    // One user on one project, exactly as minted — no admin, no directory
+    // fallback. The principal names the human so audit trails show who acted
+    // through the proxied app.
+    return new ItxAuthContext({
+      isAdmin: false,
+      principal: `project-app-session:${claims.userId}@${claims.projectId}`,
+      projectIds: [claims.projectId],
+    });
   }
 
   if (credentials.type === "operator-session") {

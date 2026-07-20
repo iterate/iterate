@@ -150,7 +150,7 @@ export interface Project {
   /** The docs door: `search({ q })` finds e2e-tested example scripts, type
    * declarations, and this scope's mounted capabilities; `get({ name })`
    * fetches one. Pass search MANY related words — matching is dumb word
-   * overlap. For project CONTENT and history, see itx.search. */
+   * overlap. */
   docs: Docs;
   /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */
   files: Files;
@@ -171,8 +171,6 @@ export interface Project {
   /** The project's sandboxes — explicitly created, sized Linux containers
    * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
-  /** Search over everything this project accumulates — streams, files, repos, docs (Cloudflare AI Search). */
-  search: Search;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
   /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */
@@ -672,8 +670,7 @@ export interface EmailCapability {
  *
  * The search mechanism is deliberately dumb (word matching, no embeddings),
  * which is why every docstring here tells callers to pass MANY related words
- * — recall comes from the query, not the engine. (For semantic search over
- * the project's own content and history, see itx.search.)
+ * — recall comes from the query, not the engine.
  */
 export interface Docs {
   __describe(): Promise<Description>;
@@ -686,8 +683,7 @@ export interface Docs {
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
    * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc. (For the
-   * project's own content and history, see itx.search.)
+   * the ready-made docs.get call that fetches its full doc.
    */
   search(input: { q: string }): Promise<DocsSearchHit[]>;
   /**
@@ -952,166 +948,6 @@ export interface SandboxCollection {
   /** Every sandbox stream path in the project (`/sandboxes/...`), including
    * destroyed sandboxes' streams — the stream is the history. */
   list(): Promise<StreamListItem[]>;
-}
-
-/**
- * Search everything this project has accumulated — every conversation (web
- * chat, Slack threads, email, Telegram), inbound webhook (GitHub, Slack),
- * stream event, itx.files object, repo file, and custom document — with
- * semantic + keyword retrieval. Every hit carries a `ref` expression that
- * fetches the exact source back, so a result is never a dead end.
- *
- * Mechanics: one Cloudflare AI Search instance per project (born with the
- * project), indexing only that project's slice of the deployment's corpus
- * bucket — tenancy is structural, not a query filter.
- */
-export interface Search {
-  __describe(): Promise<Description>;
-  /**
-   * Ensure this project's search instance exists (idempotent). The project
-   * CREATE SAGA calls this so search is warm from birth; the lazy
-   * query/index paths remain as self-heal for projects that predate it.
-   * Safe to call any time — an existing instance is a no-op.
-   */
-  ensureIndex(): Promise<{ created: boolean }>;
-  /**
-   * Retrieve scored chunks matching a query, scoped to this project's own
-   * search instance. Merges the corpus (streams/files/repos/custom kinds)
-   * with federated itx.docs, each result tagged with its `kind` and `context`
-   * so callers can contextualize a hit. ONE row per MATCH — distinct event
-   * windows within one stream segment stay distinct rows (full-text-search
-   * semantics); only same-location re-scores collapse. Rows are TINY: kind,
-   * date, context, a ~2-sentence snippet around the match, and the ref that
-   * fetches the whole thing — so the default 30 rows read at a glance and a
-   * result set stays well inside one inline script return. Docs hits carry
-   * synthetic 0.5-band
-   * scores (not comparable to corpus relevance), ride on top of `limit`
-   * corpus chunks (their own cap: min(limit, 5)), and ignore
-   * `scoreThreshold`. On a
-   * project whose instance doesn't exist yet, the instance is created and
-   * docs results return with a `warning` — retry once its first index
-   * completes (typically a minute or two). A warning-free empty result means
-   * the index is live and simply has no match.
-   */
-  query(input: {
-    q: string;
-    /** Max result rows (1–50, default 30 — rows are tiny snippets; go wide). */
-    limit?: number;
-    /** Rewrite the query for retrieval first (extra LLM call). */
-    rewriteQuery?: boolean;
-    /** Drop chunks scoring below this threshold (0–1, default 0.2 — generous; filter downstream). */
-    scoreThreshold?: number;
-    /** Restrict to ONE corpus kind — "streams" | "files" | "repos" or a custom index() kind (skips docs federation). */
-    source?: string;
-    /** Exclude kinds from results (platform or custom), e.g. `["streams"]` to skip the event log. */
-    exclude?: readonly string[];
-  }): Promise<SearchQueryResult>;
-  /**
-   * Retrieve matching chunks AND generate an answer from them (RAG). Same
-   * first-touch grammar as `query`: on a project whose instance doesn't
-   * exist yet, the instance is created and an empty-response result returns
-   * with a `warning` — retry shortly. `searchQuery` echoes the input
-   * verbatim (never the rewritten query).
-   */
-  answer(input: {
-    q: string;
-    limit?: number;
-    rewriteQuery?: boolean;
-    scoreThreshold?: number;
-    source?: string;
-    exclude?: readonly string[];
-    /** Optional system prompt for the answer generation. */
-    systemPrompt?: string;
-  }): Promise<SearchAnswerResult>;
-  /**
-   * Add (or replace) one document in the search corpus — the general
-   * mechanism to make derived content (summaries, notes, digests) findable
-   * via `query`. `ref` is REQUIRED: the itx expression leading back to the
-   * domain object the text derives from (e.g. `["streams", ["get", path],
-   * ["getEvents", { afterOffset, beforeOffset }]]`), returned on every hit so
-   * a search result is never a dead end. `kind` is `[a-z0-9._-]+` and must
-   * not be a reserved platform kind (streams/files/repos/docs); the
-   * serialized ref caps at 500 chars. `id` is stable within
-   * `(project, kind)`, so re-indexing the same id overwrites. `context` is
-   * the one-line descriptor shown on every hit and to the answer model.
-   */
-  index(input: {
-    kind: string;
-    id: string;
-    text: string;
-    /** The itx expression that leads back to the source domain object. */
-    ref: ItxExpression;
-    title?: string;
-    context?: string;
-  }): Promise<{ key: string }>;
-  /**
-   * Pin one stream event into the search corpus by its coordinates — the
-   * domain-object way to make a specific moment findable. The event's content
-   * is read from the stream (never trusted from the caller) and indexed as a
-   * focused document together with the optional `note`; the search hit's
-   * `ref` is the itx expression fetching exactly that event. Idempotent per
-   * (stream, offset).
-   */
-  indexEvent(
-    input: (
-      | {
-          /** The stream path, e.g. "/agents/slack/T1/thr-9". */
-          path: string;
-          stream?: undefined;
-        }
-      | {
-          /** Alias for `path` (the original name of this parameter). */
-          stream: string;
-          path?: undefined;
-        }
-    ) & {
-      /** The event's offset on that stream. */
-      offset: number;
-      /** Optional annotation, indexed alongside the event ("decision made here"). */
-      note?: string;
-    },
-  ): Promise<{ key: string }>;
-  /**
-   * Re-index one stream from the beginning — the repair verb for streams that
-   * predate search indexing, or the rare tail gap a failed per-batch write can
-   * leave (`path` is the stream path, e.g. "/agents/slack/T1/thr-9").
-   */
-  indexStream(input: { path: string }): Promise<{ segments: number }>;
-  /**
-   * Snapshot one repo's default-branch HEAD into the search corpus now — the
-   * backfill verb for repos that predate search indexing (writes index
-   * incrementally from here on). Runs on the repo Durable Object's own write
-   * chain so its stale-key sweep can't race post-commit indexing. Returned
-   * counts: `deleted` = stale keys swept, `skipped` = oversize/over-long-key
-   * files, and a nonzero `failed` means re-run.
-   */
-  indexRepo(input: { path: string }): Promise<{
-    deleted: number;
-    indexed: number;
-    skipped: number;
-    failed: number;
-  }>;
-  /**
-   * Re-mirror every existing itx.files object into the search corpus — the
-   * backfill verb for files that predate search indexing (puts mirror
-   * incrementally from here on). Counts reflect the actual mirror outcome:
-   * `failed` is a swallowed R2 error, so a nonzero `failed` means re-run.
-   */
-  backfillFiles(): Promise<{ mirrored: number; skipped: number; failed: number }>;
-  /**
-   * Reindex the WHOLE project — every known stream, every repo's default
-   * branch, every itx.files object — in one crude, idempotent sweep. This is
-   * the backfill/repair verb for projects that predate search indexing (new
-   * writes index automatically); every unit overwrites its own corpus keys,
-   * so re-running (including after a timeout on a huge project) only fills
-   * gaps. Streams run a few at a time; expect minutes on large projects. Per
-   * unit failures are counted, never thrown — nonzero `failed` means re-run.
-   */
-  reindex(): Promise<{
-    streams: { indexed: number; segments: number; failed: number };
-    repos: { indexed: number; failed: number };
-    files: { mirrored: number; skipped: number; failed: number };
-  }>;
 }
 
 /**
@@ -1573,6 +1409,14 @@ export interface Secret {
   kill(): Promise<void>;
   /** Create this secret and wait until its processor has folded the birth certificate. */
   create(input: SecretCreateInput): Promise<StreamEvent>;
+  /**
+   * Read the material back — only for a secret born `readable: true` (an
+   * immutable birth-certificate fact; every other secret stays write-only
+   * and this throws). The born project ingress key at
+   * /secrets/project-api-key is the canonical readable secret: show it to an
+   * external app as often as needed.
+   */
+  reveal(): Promise<unknown>;
   /** Set secret material, its egress allowlist, and/or refresh strategy.
    * Replacement material requires its complete egress policy in the same
    * update. Every update without replacement material clears stored material. */
@@ -1766,7 +1610,29 @@ export type ItxAuthCredentials =
   | { type: "bearer"; token: string }
   | { type: "admin-secret"; secret: string }
   | { type: "operator-session"; token: string }
-  | { type: "impersonate"; secret: string; token: ItxAuthToken };
+  | { type: "impersonate"; secret: string; token: ItxAuthToken }
+  /**
+   * A project's own long-lived machine credential — for externally deployed
+   * apps that connect back to /api as their project (docs/remote-apps.md).
+   * Verified against the secret every project is born with at
+   * `/secrets/project-api-key` (the comparison happens inside the Secret
+   * Durable Object — this door never receives material, only a one-bit
+   * answer). None of the existing lanes fit this caller: `bearer` is a
+   * user identity, `operator-session` is a short-lived human grant, and
+   * `admin-secret` is deployment-global. Grants exactly one project, no
+   * admin, no user identity.
+   */
+  | { type: "project-secret"; projectId: string; secret: string }
+  /**
+   * The short-lived user-on-project token auth mints for project app hosts
+   * (the `iterate-project-auth` cookie). A config worker reverse-proxying an
+   * externally deployed app forwards the browser's request as-is, and the app
+   * presents the token here to act AS THAT USER on exactly that project
+   * (docs/remote-apps.md). Verified locally — an HS256 check against the
+   * shared project-app-session secret, no auth-worker hop; membership was
+   * checked at mint time and the 15-minute expiry bounds revocation lag.
+   */
+  | { type: "project-app-session"; token: string };
 
 /** Principal shape for `impersonate` credentials. */
 export type ItxAuthToken =
@@ -2471,6 +2337,7 @@ export type AgentProcessorState = {
   pendingTriggerSource: "agent-loop" | "user" | null;
   autonomousTurnCount: number;
   requestGeneration: number;
+  cancelledScheduledRequestId: string | null;
   consecutiveLlmFailures: number;
   lastLlmFailureRateLimited: boolean;
   llmRequests: Record<
@@ -3245,22 +3112,6 @@ export type CloudflareSandbox = object & {
   kill(): Promise<void>;
 };
 
-/** What `itx.search.query` returns: the (possibly rewritten) query plus scored chunks. */
-export type SearchQueryResult = {
-  searchQuery: string;
-  results: SearchResultChunk[];
-  /**
-   * Present when the AI Search corpus was unreachable (e.g. the instance is
-   * not created yet) and only federated docs results are returned.
-   */
-  warning?: string;
-};
-
-/** What `itx.search.answer` returns: a generated answer plus the chunks it cited. */
-export type SearchAnswerResult = SearchQueryResult & {
-  response: string;
-};
-
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {
   birthCertificate: { config: Record<string, never> } | null;
@@ -3724,43 +3575,6 @@ export type DeviceAppendInput =
       }
     >;
 
-/** One retrieved chunk: the matched index document plus its scored text and provenance. */
-export type SearchResultChunk = {
-  /**
-   * The internal corpus key this chunk came from (diagnostic; for federated
-   * docs hits it holds the docs.get fetchCall instead). Use `ref` — not this
-   * — to fetch the source.
-   */
-  filename: string;
-  /**
-   * Relevance in [0, 1] for corpus hits. `kind: "docs"` hits carry synthetic
-   * scores in a descending band from 0.5 — not comparable to corpus
-   * relevance.
-   */
-  score: number;
-  /**
-   * A SHORT snippet around the matching text (~2 sentences). Judge relevance
-   * here; evaluate `ref` for the whole thing.
-   */
-  content: string;
-  /** When the source object was last written (ISO), where the index knows. */
-  date?: string;
-  /** Which corpus this came from (`streams` | `files` | `repos` | `docs` | a custom kind). */
-  kind?: string;
-  /** One-line human-readable source descriptor, e.g. "Stream /agents/… events 101–200". */
-  context?: string;
-  /**
-   * The itx expression that leads back to the DOMAIN OBJECT this hit mirrors
-   * — evaluate it against the project itx to fetch the real thing instead of
-   * trusting chunk text. E.g. `["streams", ["get", "/agents/x"],
-   * ["getEvents", { afterOffset: 100, beforeOffset: 201 }]]` for a stream
-   * segment, `["files", ["get", "/reports/q3.pdf"]]` for a file, `["repos",
-   * ["get", "/repos/config"], ["readFile", { path: "worker.ts" }]]` for a
-   * repo file, `["docs", ["get", { name }]]` for a docs entry.
-   */
-  ref?: ItxExpression;
-};
-
 /**
  * When a Schedule triggers. Exactly one canonical spelling per shape: a single
  * ISO instant (`at`), a seconds interval re-anchored on each trigger
@@ -3802,17 +3616,14 @@ export type SecretDescription = {
   /** Whether the secret processor has folded its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
+  /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */
+  visibility: SecretVisibility;
   /** The configured refresh strategy's kind, or null when none is configured. */
   refresh: SecretRefresh["kind"] | null;
 };
 
-/**
- * Public secret capability data shapes. A secret's public live state IS its
- * {@link SecretDescription}: there is deliberately no separate secret processor
- * state type — the internal fold carries the encrypted material, and the DO's
- * processor facade projects it away (write-only material) before anything
- * crosses the RPC boundary.
- */
+/** Input to `itx.secrets.get(path).create` — the birth policy (egress pin,
+ * visibility, refresh strategy) plus optional initial material. */
 export type SecretCreateInput = {
   /** Complete egress policy established by the birth certificate. */
   egress: { urls: string[] };
@@ -3820,6 +3631,18 @@ export type SecretCreateInput = {
   material?: unknown;
   /** Optional initial refresh strategy; omitted means no refresh. */
   refresh?: SecretRefresh | null;
+  /**
+   * How the material may leave: "write-only" (never — the default and the
+   * classic secret invariant) or "readable" (reveal() answers it, as often
+   * as asked). IMMUTABLE: declared at birth, never updatable, so a
+   * write-only secret can never be retro-flipped readable. Readable and
+   * substitutable are mutually exclusive: a readable secret must have (and
+   * keep) an empty egress pin — create and update both reject egress
+   * origins on one. Reserve "readable" for credentials whose whole purpose
+   * is to be shown to the outside — the born project ingress key at
+   * /secrets/project-api-key is the canonical case.
+   */
+  visibility?: SecretVisibility;
 };
 
 /** Input for replacing secret material or changing its egress and refresh policy. */
@@ -4123,6 +3946,10 @@ export type CfVideoTransformInput = {
   transform?: CfVideoTransformOptions;
   output: CfVideoOutputOptions;
 };
+
+/** How a secret's material may leave the secret system. Extendable — e.g. a
+ * future "reveal-once". */
+export type SecretVisibility = "write-only" | "readable";
 
 /**
  * A named credential-refresh strategy a secret runs in its own trusted DO

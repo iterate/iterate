@@ -1507,10 +1507,7 @@ export const cloudflarePreviewSharedPaths = [
 ] as const;
 
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
-export const cloudflarePreviewAdditionalTriggerPaths = [
-  "apps/iterate-com/**",
-  "apps/auth-example/**",
-] as const;
+export const cloudflarePreviewAdditionalTriggerPaths = ["apps/auth-example/**"] as const;
 
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   os: {

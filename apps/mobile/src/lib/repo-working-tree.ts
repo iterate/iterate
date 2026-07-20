@@ -106,6 +106,7 @@ class RepoWorkingTreeStore {
         ...this.#snapshot.buffers,
         [path]: { current: "", head: null, loaded: true },
       },
+      editorView: isMarkdownPath(path) ? "preview" : "source",
       newPath: "",
       selectedPath: path,
     });

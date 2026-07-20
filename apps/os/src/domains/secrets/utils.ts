@@ -48,7 +48,10 @@ export type PlatformReference = { platform: string };
 export function normalizeSecretPath(path: string): string {
   const normalized = normalizePath(path);
   if (!normalized.startsWith("/secrets/")) {
-    throw new Error(`secret path must start with "/secrets/", got "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path must start with "/secrets/", got "${normalized}"`,
+    );
   }
   // A secret path becomes a Durable Object name (`durable-object-names.ts`),
   // and that name is reparsed with WHATWG `URL` — which collapses `.`/`..`
@@ -58,11 +61,17 @@ export function normalizeSecretPath(path: string): string {
   // through it) so the addressed path and the displayed path cannot diverge.
   // eslint-disable-next-line no-control-regex -- control chars are exactly what we reject
   if (/[\u0000-\u0020\u007f?#%\\]/.test(normalized)) {
-    throw new Error(`secret path has an illegal character: "${normalized}"`);
+    throw new SecretSubstitutionError(
+      "secret_reference_invalid_path",
+      `secret path has an illegal character: "${normalized}"`,
+    );
   }
   for (const segment of normalized.slice(1).split("/")) {
     if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`secret path has an empty or dot segment: "${normalized}"`);
+      throw new SecretSubstitutionError(
+        "secret_reference_invalid_path",
+        `secret path has an empty or dot segment: "${normalized}"`,
+      );
     }
   }
   return normalized;
@@ -87,14 +96,24 @@ export async function secretReferencesFromRequest(
   request: Request,
 ): Promise<{ problems: SecretSubstitutionError[]; references: SecretReference[] }> {
   const byKey = new Map<string, SecretReference>();
-  request.headers.forEach((value) => collectSecretReferences(byKey, value));
-  collectSecretReferences(byKey, decodedUrl(request.url));
-  const jsonTemplate = await inspectSecretJsonTemplate(request);
-  if (jsonTemplate.problem !== undefined) {
-    return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+  try {
+    request.headers.forEach((value) => collectSecretReferences(byKey, value));
+    collectSecretReferences(byKey, decodedUrl(request.url));
+    const jsonTemplate = await inspectSecretJsonTemplate(request);
+    if (jsonTemplate.problem !== undefined) {
+      return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+    }
+    if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
+    return { problems: [], references: [...byKey.values()] };
+  } catch (error) {
+    if (
+      error instanceof SecretSubstitutionError &&
+      error.code === "secret_reference_invalid_path"
+    ) {
+      return { problems: [error], references: [...byKey.values()] };
+    }
+    throw error;
   }
-  if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
-  return { problems: [], references: [...byKey.values()] };
 }
 
 /** The distinct secret PATHS referenced across a request's headers, URL, and
@@ -394,14 +413,35 @@ async function inspectSecretJsonTemplate(
   if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
     return { problem: new SecretSubstitutionError("secret_json_template_invalid_content_type") };
   }
-  const body = await request.clone().text();
-  if (new TextEncoder().encode(body).byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
-    return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
-  }
+  const inspectedBody = await readSecretJsonTemplateBody(request);
+  if (inspectedBody.problem !== undefined) return inspectedBody;
   try {
-    return { value: JSON.parse(body) as unknown };
+    return { value: JSON.parse(inspectedBody.body) as unknown };
   } catch {
     return { problem: new SecretSubstitutionError("secret_json_template_invalid_body") };
+  }
+}
+
+async function readSecretJsonTemplateBody(
+  request: Request,
+): Promise<
+  { body: string; problem?: undefined } | { body?: undefined; problem: SecretSubstitutionError }
+> {
+  const stream = request.clone().body;
+  if (stream === null) return { body: "" };
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let byteLength = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) return { body: body + decoder.decode() };
+    byteLength += chunk.value.byteLength;
+    if (byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
+      void reader.cancel();
+      return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
+    }
+    body += decoder.decode(chunk.value, { stream: true });
   }
 }
 
@@ -510,6 +550,7 @@ type SecretErrorCode =
   | "secret_not_found"
   | "secret_reference_field_not_found"
   | "secret_reference_foreign"
+  | "secret_reference_invalid_path"
   | "secret_reference_outside_url_path"
   | "secret_reference_required";
 
@@ -536,4 +577,24 @@ export function secretErrorResponse(code: SecretErrorCode): Response {
         code === "secret_fetch_failed" ? 502 : code === "secret_not_allowed_for_origin" ? 403 : 400,
     },
   );
+}
+
+/**
+ * Every project is born with a write-only ingress credential at this path:
+ * the value the `project-secret` /api credential is verified against (inside
+ * the Secret Durable Object — material never leaves the secret system; the
+ * verifier's answer is one bit). Born with an EMPTY egress pin, so unlike
+ * every other secret it can never be substituted into any outbound request:
+ * the ingress key and any egress credentials an external app is dialed with
+ * are deliberately different secrets.
+ */
+export const PROJECT_API_KEY_SECRET_PATH = "/secrets/project-api-key";
+
+/** Random birth material for {@link PROJECT_API_KEY_SECRET_PATH}. Unusable
+ * until the owner overwrites it with a value they hold (secrets.update) —
+ * writing a known value IS the pairing ceremony with an external app. */
+export function generateProjectApiKeyMaterial(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return `itxk_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }

@@ -15,9 +15,10 @@
  * in ./chat-view.tsx. OpenTUI is just another React renderer, so the browser's
  * query policy and hooks run here unchanged.
  */
+import { userInfo } from "node:os";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot, useKeyboard } from "@opentui/react";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { QueryClientProvider, QueryErrorResetBoundary, useMutation } from "@tanstack/react-query";
 import {
   configureIterateSession,
@@ -34,16 +35,32 @@ import {
 } from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { sendAgentMessage } from "./agent-message-command.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
-import { readAgentFeedHistory } from "./agent-feed-query.ts";
+import { ensureAgentFeedReady, readAgentFeedHistory } from "./agent-feed-query.ts";
 import { resolveItxAuth } from "./itx-auth.ts";
 import { ChatHeader, FeedItem, LiveActivity } from "./chat-view.tsx";
 import { COLORS } from "./chat-colors.ts";
+import { createChatComputerSharing, launchUseMyComputerProvider } from "./chat-computer-sharing.ts";
+import { computerCapabilityName, parseChatSlashCommand } from "./chat-slash-command.ts";
 import { LoadingTerminal, TerminalErrorBoundary } from "./terminal-shell.tsx";
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("iterate chat requires an interactive terminal.");
 }
 
 const args = parseArgs(process.argv.slice(2));
+const computerName = computerCapabilityName(userInfo().username);
+const computerSharing = createChatComputerSharing({
+  name: computerName,
+  launch: () =>
+    launchUseMyComputerProvider({
+      bearerTokenCameFromStoredSession: process.env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION === "1",
+      cliPath: args.cliPath,
+      configName: args.configName,
+      environment: process.env,
+      name: computerName,
+      projectId: args.projectId,
+    }),
+});
+process.on("exit", () => computerSharing[Symbol.dispose]());
 const historyQueryKey = ["agent-feed-history", args.projectId, args.agentPath] as const;
 
 // One keeper socket for the whole process — the TUI's equivalent of the
@@ -67,12 +84,6 @@ async function openAgentFeedSubscription(input: {
   // handle on dependency changes, reconnect, and unmount.
   const agent = input.itx.agents.get(args.agentPath);
   try {
-    if (args.agentPath === ONBOARDING_AGENT_PATH) {
-      await ensureOnboardingAgentReady({ agent });
-    } else {
-      const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create();
-    }
     return await agent.stream.subscribe({
       processEventBatch: (batch) => {
         if (input.model.applyEvents(batch.events)) input.publishFeed();
@@ -86,12 +97,19 @@ async function openAgentFeedSubscription(input: {
 }
 
 function AgentChatApp() {
+  const computerShare = useSyncExternalStore(computerSharing.subscribe, computerSharing.snapshot);
   // The immutable/durable half is a finite TanStack query, exactly like a
   // browser route read. The live subscription starts at that query's cursor,
   // closes the read→subscribe race with replay, then owns the tail.
   const history = useItxQuery({
     key: historyQueryKey,
-    query: (itx) => readAgentFeedHistory(itx, args.agentPath),
+    query: (itx) =>
+      readAgentFeedHistory(itx, args.agentPath, {
+        initialize: (agent) =>
+          args.agentPath === ONBOARDING_AGENT_PATH
+            ? ensureOnboardingAgentReady({ agent })
+            : ensureAgentFeedReady(agent),
+      }),
   });
   const [model] = useState(() => {
     const next = createAgentFeedModel();
@@ -105,12 +123,12 @@ function AgentChatApp() {
   const publishFeed = useCallback(() => setFeed(model.snapshot()), [model]);
 
   /**
-   * Establish the live agent feed on the shared socket: ensure the agent
-   * exists, then subscribe from the query-seeded model's resume cursor. The
-   * onboarding agent is deliberately not born at project bootstrap (a birth
-   * costs a real LLM turn); opening either browser or terminal chat births it
-   * with the same explicit batch. Recovery rereads the current cursor and the
-   * model folds replay overlap out by offset.
+   * Establish the live agent feed on the shared socket from the query-seeded
+   * model's resume cursor. The finite query above owns one-time agent birth and
+   * durable history. That keeps potentially slow creation outside the live
+   * subscription's transport watchdog, whose timer now covers only subscribe.
+   * Recovery rereads the current cursor and the model folds replay overlap out
+   * by offset.
    */
   const subscribeAgentFeed = useCallback(
     (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed }),
@@ -164,6 +182,10 @@ function AgentChatApp() {
       const message = value.trim();
       if (message === "") return;
       clearComposer();
+      if (parseChatSlashCommand(message)?.kind === "use-my-computer") {
+        computerSharing.start();
+        return;
+      }
       sendMessage(message);
     },
     [clearComposer, sendMessage],
@@ -175,7 +197,7 @@ function AgentChatApp() {
         title={`${args.projectId} ${args.agentPath}`}
         status={subscription.status}
         detail={subscription.error}
-        notice={notice}
+        notice={[notice, computerShare.notice].filter(Boolean).join(" · ")}
         eventCount={feed.eventCount}
       />
       <scrollbox
@@ -235,17 +257,25 @@ function parseArgs(argv: string[]) {
   const baseUrl = readFlag(argv, "--base-url");
   const projectId = readFlag(argv, "--project-id");
   const agentPath = readFlag(argv, "--agent-path");
+  const cliPath = readFlag(argv, "--cli-path");
+  const configName = readFlag(argv, "--config-name");
 
-  if (baseUrl == null || projectId == null || agentPath == null) {
+  if (
+    baseUrl == null ||
+    projectId == null ||
+    agentPath == null ||
+    cliPath == null ||
+    configName == null
+  ) {
     throw new Error(
-      "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name>",
+      "Usage: bun agent-chat-terminal.tsx --base-url <url> --project-id <prj_id> --agent-path </agents/name> --cli-path <path> --config-name <name>",
     );
   }
   if (!agentPath.startsWith("/agents/")) {
     throw new Error(`--agent-path must start with "/agents/", got "${agentPath}".`);
   }
 
-  return { baseUrl, projectId, agentPath };
+  return { baseUrl, projectId, agentPath, cliPath, configName };
 }
 
 function readFlag(argv: string[], flagName: string) {

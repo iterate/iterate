@@ -6,6 +6,16 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
+import {
+  guestbookAppRef,
+  guestbookCreationEvents,
+  guestbookPageSource,
+  guestbookSubscriptionConfigVersion,
+} from "../../../config-repo-template/apps/guestbook/src/guestbook-ref.ts";
+import {
+  tanstackPageSource,
+  tanstackTodosRef,
+} from "../../../config-repo-template/apps/tanstack/src/todos-ref.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
@@ -46,6 +56,53 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   expect(templatePackageJson.dependencies).toEqual({
     "@iterate-com/capnweb": expect.any(String),
   });
+});
+
+test("TanStack pages and stateful APIs have independent worker entries", () => {
+  const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
+  expect(paths).toEqual(
+    expect.arrayContaining([
+      "apps/guestbook/src/guestbook-app.ts",
+      "apps/tanstack/src/todos-app.ts",
+    ]),
+  );
+
+  for (const [pageSource, statefulRef] of [
+    [guestbookPageSource, guestbookAppRef],
+    [tanstackPageSource, tanstackTodosRef],
+  ] as const) {
+    expect(pageSource.options.pipeline).toBe("vite");
+    expect(statefulRef.source.options).not.toHaveProperty("pipeline");
+    expect(statefulRef.source.options.entryPoint).not.toBe("worker.ts");
+    expect(statefulRef.source.options.minify).toBe(true);
+    expect(statefulRef.updatePolicy).toBe("stale-while-rebuild");
+  }
+});
+
+test("guestbook wake delivery replaces the legacy Vite-backed subscription", () => {
+  const subscription = guestbookCreationEvents()[1];
+
+  // The legacy wake recipe can be retried after the repository has already
+  // moved GuestbookApp out of its Vite build. It must not be able to poison
+  // the new app's host facet under the old durable identity.
+  expect(guestbookAppRef.durableWorkerKey).not.toBe("app-guestbook");
+  expect(subscription).toMatchObject({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "app-guestbook#guestbook",
+      delivery: {
+        mode: "wake",
+        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
+      },
+    },
+  });
+  // The pre-split template committed the same subscription identity with
+  // this append idempotency key. A distinct event must reach the stream's
+  // replacement reducer while preserving its delivery cursor.
+  expect(subscription?.idempotencyKey).not.toBe("guestbook/subscription");
+  expect(subscription?.idempotencyKey).toBe(
+    `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,
+  );
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {

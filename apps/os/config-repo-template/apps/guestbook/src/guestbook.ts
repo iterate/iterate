@@ -8,9 +8,9 @@
 // and replay rebuilds it, and every consequential outcome is an event you
 // can read back.
 //
-// GuestbookApp in worker.ts is the hosting half: a Durable Object registry
-// over an itx-dialed stream handle, woken by the durable wake subscription
-// the creation batch (guestbook-ref.ts) configures.
+// GuestbookApp in guestbook-app.ts is the hosting half: a Durable Object
+// registry over an itx-dialed stream handle, woken by the durable wake
+// subscription the creation batch (guestbook-ref.ts) configures.
 import { z } from "zod";
 import {
   defineProcessorContract,
@@ -73,7 +73,7 @@ export const GuestbookProcessorContract = defineProcessorContract({
       ],
     },
   },
-  // Required by `{ recovery: true }` (see worker.ts): a recovery-wired
+  // Required by `{ recovery: true }` (see guestbook-app.ts): a recovery-wired
   // contract must consume the platform revival fact.
   processorDeps: [PLATFORM_STREAM_EVENTS],
   consumes: [
@@ -117,7 +117,7 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
 
   protected override processEvent({
     append,
-    blockProcessorWhileCaughtUp,
+    blockProcessorWhile,
     delivery,
     state,
   }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["processEvent"]>[0]): undefined {
@@ -133,7 +133,7 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
     if (reached <= state.lastMilestone) return;
     const missed: number[] = [];
     for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);
-    blockProcessorWhileCaughtUp(async () => {
+    blockProcessorWhile(async () => {
       await append(
         ...missed.map((count) => ({
           type: "events.iterate.com/guestbook/milestone-reached" as const,

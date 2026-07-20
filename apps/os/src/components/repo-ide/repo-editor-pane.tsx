@@ -579,7 +579,16 @@ function MarkdownPreview({ markdown }: { markdown: string }) {
         )}
         {/* A settled document, not a stream — skip streamdown's unpaired-
             marker balancing (it appends a phantom `*` to text like "17 * 23"). */}
-        <MessageResponse parseIncompleteMarkdown={false}>{preview.body}</MessageResponse>
+        <MessageResponse
+          loadingFallback={
+            <div className="text-sm text-muted-foreground" data-spinner="true" role="status">
+              Rendering preview...
+            </div>
+          }
+          parseIncompleteMarkdown={false}
+        >
+          {preview.body}
+        </MessageResponse>
       </div>
     </div>
   );

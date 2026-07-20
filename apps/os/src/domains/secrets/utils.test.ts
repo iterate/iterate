@@ -167,6 +167,46 @@ describe("secret reference parsing", () => {
       problems: [{ code: "secret_json_template_invalid_body" }],
     });
   });
+
+  test("reports an invalid secret path without throwing", async () => {
+    const result = await secretReferencePathsFromRequest(
+      new Request('https://api.example.com/getSecret({ path: "/not-a-secret" })'),
+    );
+
+    expect(result).toMatchObject({
+      paths: [],
+      problems: [{ code: "secret_reference_invalid_path" }],
+    });
+  });
+
+  test("stops reading an opted-in JSON body once it exceeds the byte limit", async () => {
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 20) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(128 * 1024));
+      },
+    });
+    const request = new Request("https://api.example.com/messages", {
+      body,
+      headers: {
+        "content-type": "application/json",
+        "x-iterate-secret-template": "json",
+      },
+      method: "POST",
+      ...({ duplex: "half" } as any),
+    });
+
+    await expect(secretReferencePathsFromRequest(request)).resolves.toMatchObject({
+      paths: [],
+      problems: [{ code: "secret_json_template_body_too_large" }],
+    });
+    expect(pulls).toBeLessThan(20);
+  });
 });
 
 describe("substituteSecretHeaders", () => {

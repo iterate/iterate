@@ -55,6 +55,10 @@ export const REQUIRED_SECRETS = [
  */
 export const OPTIONAL_SECRETS = [
   "APP_CONFIG_CLOUDFLARE__API_TOKEN",
+  // Shared with the auth app: local verification of project-app-session
+  // tokens (the project-host gate + the /api credential lane). Optional —
+  // absent, both fall back to the auth worker's validate RPC.
+  "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
   // Iterate-owned Exa/Parallel API keys (platform-secrets.ts registry
   // entries) — collectSecrets ships only names listed here, so a key absent
   // from this list never reaches a deployed worker even when Doppler has it.
@@ -320,11 +324,6 @@ function workerBindings(input: {
       { binding: "TYPECHECKER", service: typecheckerWorkerName(input.workerName) },
     ],
     ai: { binding: "AI" },
-    // The itx.search per-project instance namespace (env.SEARCH_INSTANCES,
-    // domains/search/search-index.ts). Namespace name = the worker name;
-    // ensure-resources creates it. Instances are created at runtime, one per
-    // project, over the SEARCH_BUCKET below.
-    ai_search_namespaces: [{ binding: "SEARCH_INSTANCES", namespace: input.workerName }],
     browser: { binding: "BROWSER" },
     images: { binding: "IMAGES" },
     media: { binding: "MEDIA" },
@@ -356,9 +355,6 @@ function workerBindings(input: {
     r2_buckets: [
       { binding: "BACKUP_BUCKET", bucket_name: `${input.workerName}-sandboxes` },
       { binding: "FILES_BUCKET", bucket_name: `${input.workerName}-files` },
-      // SEARCH_BUCKET: the itx.search corpus (domains/search/search-index.ts) —
-      // derived data an AI Search instance indexes. Same create-if-missing story.
-      { binding: "SEARCH_BUCKET", bucket_name: `${input.workerName}-search-index` },
     ],
     // Email Service send binding for itx.email. Sender authorization is
     // enforced in OS (a project only sends as <slug>@<hostname base>, see

@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { StreamEvent } from "../itx-api.generated.ts";
 import type { Itx } from "../itx/itx-react.ts";
-import { readAgentFeedHistory } from "./agent-feed-query.ts";
+import { ensureAgentFeedReady, readAgentFeedHistory } from "./agent-feed-query.ts";
 
 const event = (offset: number): StreamEvent => ({
   type: "test/event",
@@ -11,6 +11,48 @@ const event = (offset: number): StreamEvent => ({
 });
 
 describe("readAgentFeedHistory", () => {
+  test("births only an unborn agent before opening its feed", async () => {
+    const createFresh = vi.fn(async () => {});
+    await ensureAgentFeedReady({
+      create: createFresh,
+      processor: { snapshot: async () => ({ state: { birthCertificate: null } }) },
+    });
+    expect(createFresh).toHaveBeenCalledOnce();
+
+    const createExisting = vi.fn(async () => {});
+    await ensureAgentFeedReady({
+      create: createExisting,
+      processor: { snapshot: async () => ({ state: { birthCertificate: {} } }) },
+    });
+    expect(createExisting).not.toHaveBeenCalled();
+  });
+
+  test("finishes initialization before reading history", async () => {
+    const order: string[] = [];
+    const agent = {
+      stream: {
+        getEvents: vi.fn(async () => {
+          order.push("history");
+          return [];
+        }),
+      },
+      [Symbol.dispose]: vi.fn(),
+    };
+    const itx = { agents: { get: () => agent } } as unknown as Itx;
+
+    await expect(
+      readAgentFeedHistory(itx, "/agents/test", {
+        initialize: async (initializedAgent) => {
+          expect(initializedAgent).toBe(agent);
+          order.push("initialize");
+        },
+      }),
+    ).resolves.toEqual([]);
+
+    expect(order).toEqual(["initialize", "history"]);
+    expect(agent[Symbol.dispose]).toHaveBeenCalledOnce();
+  });
+
   test("pages to the durable tail and releases the agent capability", async () => {
     const firstPage = Array.from({ length: 500 }, (_, index) => event(index + 1));
     const secondPage = [event(501), event(502)];

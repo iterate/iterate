@@ -57,7 +57,6 @@ on:
       - scripts/preview/**
       - envs.ts
       - scripts/lib/**
-      - apps/iterate-com/**
       - apps/auth-example/**
       - apps/os/**
       - packages/iterate/**

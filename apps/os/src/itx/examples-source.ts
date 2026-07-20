@@ -880,7 +880,7 @@ return await itx.projects.get(pid).__describe();
     id: "docs-search-and-get",
     title: "Find working code + types through itx.docs",
     description:
-      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query. (For the project's own content and history, use itx.search.query.)",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { name?: string }) => {
       // MANY related words per query — the search is dumb word matching, so
@@ -904,75 +904,6 @@ return await itx.projects.get(pid).__describe();
         examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
         streamTypesIncludeAppend: streamTypes.includes("append("),
       };
-    },
-  }),
-  projectExample<
-    // The whole point of this entry is DYNAMIC dispatch — walking a hit's ref
-    // expression member by member — so the itx is loosened wholesale; the
-    // static surface cannot know where a ref leads.
-    Record<string, any>
-  >({
-    id: "search-query-and-resolve-ref",
-    // Not in the unattended matrix: on a fresh fixture project the instance
-    // (born with the project) has not finished its first sync, so the corpus
-    // lane is empty-but-warming — the assertion would race the index.
-    e2eProven: false,
-    title: "Search the project, then follow a hit's ref to the real object",
-    description:
-      "itx.search.query({ q }) searches everything the project accumulates (stream events, files, repo files, plus federated itx.docs). Every hit carries kind, context, and usually a `ref` — an itx EXPRESSION (array of steps) leading back to the domain object. Evaluate the ref by walking it: a string step is a property read, an [method, ...args] step is an awaited call. A search result is never a dead end: fetch the real events/file/doc instead of trusting chunk text.",
-    runtimes: ALL_RUNTIMES,
-    fn: async (itx, vars: { q?: string }) => {
-      const found = await itx.search.query({
-        q: vars.q ?? "project setup configuration decisions",
-      });
-      // found.warning is set on a project whose instance was JUST created (first
-      // index in progress) — docs results still return; retry the corpus shortly.
-
-      // Take the best hit that carries a ref and walk the expression back to the
-      // domain object: string step = property read, [method, ...args] = call.
-      const hit = found.results.find((result) => result.ref !== undefined);
-      if (!hit) return { found, note: "no ref-carrying hit yet (index warming?)" };
-
-      let target = itx;
-      for (const step of hit.ref ?? []) {
-        target = typeof step === "string" ? target[step] : await target[step[0]](...step.slice(1));
-      }
-      // For a stream hit target is now the EXACT events the chunk matched; for a
-      // file hit the file; for a repo hit the file text; for a docs hit the doc.
-      return { query: found.searchQuery, kind: hit.kind, context: hit.context, target };
-    },
-  }),
-  projectExample({
-    id: "search-index-custom-document",
-    e2eProven: false,
-    title: "Index your own document into project search (ref required)",
-    description:
-      "itx.search.index({ kind, id, text, ref, title?, context? }) adds derived content — summaries, decisions, digests — to the project's search corpus. `ref` is REQUIRED and must be an itx expression (array) leading back to the source object, so the hit is never a dead end. kind is [a-z0-9._-]+ and must not be streams/files/repos/docs (those are platform-owned). Re-indexing the same (kind, id) overwrites. The document becomes searchable after the next sync (~a minute).",
-    runtimes: ALL_RUNTIMES,
-    fn: async (itx, vars: { kind?: string; id?: string; text?: string; ref?: any[] }) => {
-      // Suppose a decision was made on a stream — index a digest of it. The ref
-      // points back at the exact events (afterOffset/beforeOffset are EXCLUSIVE
-      // bounds, so 41/43 selects offset 42).
-      const { key } = await itx.search.index({
-        kind: vars.kind ?? "decisions",
-        id: vars.id ?? "example-decision",
-        title: "Deploy cadence decision",
-        text: vars.text ?? "We decided to deploy on merge to main, with previews per PR.",
-        context: "Digest of the deploy-cadence discussion",
-        ref: vars.ref ?? [
-          "streams",
-          ["get", "/example"],
-          ["getEvents", { afterOffset: 41, beforeOffset: 43 }],
-        ],
-      });
-
-      // Later: pin the source moment itself too — indexEvent reads the event from
-      // the stream (never trusts caller text) and its hit ref fetches exactly it.
-      // await itx.search.indexEvent({ stream: "/example", offset: 42, note: "decision made here" });
-
-      // Find it again (after the ~minute sync): scope to the custom kind.
-      // const found = await itx.search.query({ q: "deploy cadence", source: "decisions" });
-      return { key };
     },
   }),
   agentExample({

@@ -108,7 +108,7 @@ Verify project IDs/routing, every recreated secret through a harmless real
 consumer, every integration's connected status and external ID, directory
 claims, [Slack webhook delivery](../../../docs/slack-testing.md#post-recreation-proof),
 the complete [GitHub production smoke](../../../docs/github-smoke-testing.md),
-project-worker boot, and AI Search indexing. Add PR-specific checks for whatever
+and project-worker boot. Add PR-specific checks for whatever
 changed. Do not trigger externally visible provider actions without approval.
 
 For Slack, run

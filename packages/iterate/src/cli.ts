@@ -113,6 +113,8 @@ export const buildChatCommand = (input: {
   projectId: string;
   agentPath: string;
   entrypointPath: string;
+  cliPath: string;
+  configName: string;
 }) => ({
   command: "bun",
   args: [
@@ -123,6 +125,10 @@ export const buildChatCommand = (input: {
     input.projectId,
     "--agent-path",
     input.agentPath,
+    "--cli-path",
+    input.cliPath,
+    "--config-name",
+    input.configName,
   ],
 });
 
@@ -1035,11 +1041,15 @@ const launcherProcedures = {
         configuredDefaultProject: resolved.config.defaultProject,
         explicitProject: input.project,
       });
+      const cliPath = process.argv[1];
+      if (!cliPath) throw new Error("iterate chat could not identify its CLI entrypoint.");
       const command = buildChatCommand({
         osBaseUrl: resolved.config.osBaseUrl,
         projectId: project,
         agentPath: input.agentPath,
         entrypointPath: resolveStreamTuiEntrypointPath(),
+        cliPath,
+        configName: resolved.name,
       });
       // Auth: admin/bearer secrets from the inherited environment win (doppler,
       // e2e). Otherwise refresh the stored `iterate login` session here — the
@@ -1055,6 +1065,7 @@ const launcherProcedures = {
           );
         }
         env.ITERATE_BEARER_TOKEN = token;
+        env.ITERATE_CHAT_BEARER_FROM_STORED_SESSION = "1";
       }
       replaceWithInheritedProcess({ ...command, env });
     }),

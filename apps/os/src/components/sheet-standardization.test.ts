@@ -9,7 +9,6 @@ const productSourceRoots = [
   "apps/auth-example/src",
   "apps/auth/src",
   "apps/dummy-petshop/src",
-  "apps/iterate-com/backend",
   "apps/mobile/src",
   "apps/os/src",
   "apps/semaphore/src",

@@ -10,7 +10,8 @@ import {
 } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
-import { guestbookAppRef } from "./apps/guestbook/src/guestbook-ref.ts";
+import { guestbookAppRef, guestbookPageSource } from "./apps/guestbook/src/guestbook-ref.ts";
+import { tanstackPageSource, tanstackTodosRef } from "./apps/tanstack/src/todos-ref.ts";
 
 // This is ordinary project policy. Every GitHub-linked project repository is
 // in scope; no platform GitHub code knows that pull-request agents exist.
@@ -108,19 +109,9 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       // over Cap'n Web). Pages are gated to project members HERE; /api is
       // the unauthenticated Cap'n Web root that authenticates in-band from
       // the app cookie, exactly like the internal app.
-      const tanstackSource = {
-        files: { type: "repo", repoPath: "/repos/config" },
-        options: { pipeline: "vite", rootDir: "apps/tanstack" },
-      } as const;
       const url = new URL(req.url);
       if (url.pathname === "/api") {
-        return this.fetchDynamicWorker(req, {
-          type: "stateful",
-          path: "/",
-          className: "TanstackTodos",
-          durableWorkerKey: "app-tanstack",
-          source: tanstackSource,
-        });
+        return this.fetchDynamicWorker(req, tanstackTodosRef);
       }
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
@@ -128,7 +119,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return this.fetchDynamicWorker(req, {
         type: "stateless",
         path: "/",
-        source: tanstackSource,
+        source: tanstackPageSource,
       });
     }
     if (app === "counter") {
@@ -159,7 +150,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return this.fetchDynamicWorker(req, {
         type: "stateless",
         path: "/",
-        source: guestbookAppRef.source,
+        source: guestbookPageSource,
       });
     }
     if (app) return new Response(`unknown app: ${app}`, { status: 404 });

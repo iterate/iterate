@@ -145,7 +145,11 @@ type ConfiguredEntry = {
   parkedAtOffset?: number;
 };
 
-function makeHarness() {
+function makeHarness(
+  options: {
+    runDurable?: (work: () => Promise<unknown>) => void;
+  } = {},
+) {
   let now = 0;
   let assignedMaxOffset = 0;
   let streamCreatedAt: string | undefined = "stream-v1";
@@ -245,6 +249,7 @@ function makeHarness() {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => armedAlarms.push(atMs),
+      runDurable: options.runDurable ?? ((work) => kept.push(work())),
       keepAlive: (promise) => kept.push(promise),
     },
   });
@@ -367,6 +372,22 @@ function makeSink() {
 }
 
 describe("StreamSubscribers", () => {
+  it("hands durable delivery to its scheduler without starting the receiver call", async () => {
+    const scheduled: (() => Promise<unknown>)[] = [];
+    const h = makeHarness({ runDurable: (work) => scheduled.push(work) });
+    h.configure(pushPayload(), 0);
+    h.append(evt(1, "a"));
+
+    h.subscribers.wake();
+
+    expect(scheduled).toHaveLength(1);
+    expect(h.pushes).toHaveLength(0);
+
+    await scheduled[0]!();
+    expect(h.pushes).toHaveLength(1);
+    expect(h.row("k")?.ackedOffset).toBe(1);
+  });
+
   it("a. push happy path: drains to the tail, acks, and resumes from the cursor", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
@@ -718,6 +739,37 @@ describe("StreamSubscribers", () => {
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
+  });
+
+  it("schedules idle teardown on the DO alarm without retaining the current turn", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const connection = makeSink();
+    h.dialImpl.poke = async () => ({ checkpointOffset: 1, sink: connection.sink });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    h.subscribers.armOrClearIdleAlarm();
+    expect(h.armedAlarms.at(-1)).toBe(60_000);
+
+    // Activity restarts the quiet window. The already-armed earlier alarm may
+    // still fire, but it must only schedule the later deadline, not tear down.
+    h.advanceTo(10_000);
+    h.subscribers.armOrClearIdleAlarm();
+    expect(h.armedAlarms.at(-1)).toBe(70_000);
+    h.advanceTo(60_000);
+    h.subscribers.onAlarm();
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.armedAlarms.at(-1)).toBe(70_000);
+
+    h.advanceTo(70_000);
+    h.subscribers.onAlarm();
+    await h.settle();
+    expect(h.subscribers.hasConnection("k")).toBe(false);
+    expect(h.factsOfType(DISCONNECTED)[0]?.payload).toMatchObject({ reason: "idle" });
   });
 
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {
@@ -1319,6 +1371,38 @@ describe("StreamSubscribers", () => {
     expect(h.pushes.at(-1)!.events.map((event) => event.offset)).toEqual([1, 2, 3]);
     expect(h.row("k")).toMatchObject({ ackedOffset: 3, attempt: 0, nextAttemptAt: null });
     expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+  });
+
+  it("a delivery timeout is receiver unavailability, never poison", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness();
+      h.configure(pushPayload({ onPoison: "skip" }), 0);
+      h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"));
+      h.dialImpl.push = () => new Promise<void>(() => {});
+
+      h.subscribers.wake();
+      const settling = h.settle();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.runAllTimersAsync();
+      await settling;
+
+      // A transport stall says nothing about any individual event. The same
+      // whole batch remains owed, with a normal availability backoff; poison
+      // bisection, skip facts, and cursor movement are all forbidden.
+      expect(h.pushes.map((batch) => batch.events.map((event) => event.offset))).toEqual([
+        [1, 2, 3],
+      ]);
+      expect(h.row("k")).toMatchObject({
+        ackedOffset: 0,
+        attempt: 1,
+        lastError: "push k timed out after 20000ms",
+      });
+      expect(h.factsOfType(ERROR_OCCURRED)).toHaveLength(0);
+      expect(h.factsOfType(PARKED)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("y. sustained receiver unavailability parks loudly instead of mass-skipping the backlog", async () => {

@@ -226,7 +226,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         return earliest === null || at < earliest ? at : earliest;
       }, null);
     if (settlements.length > 0 || nextReceiptCheck !== null) {
-      args.blockProcessorWhileCaughtUp(async () => {
+      args.blockProcessorWhile(async () => {
         if (settlements.length > 0) {
           await this.append(
             ...settlements.map(({ outcome, requestOffset }) => ({

@@ -126,7 +126,7 @@ describe("preview workflow scope", () => {
   test("includes shared preview orchestration paths", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
     expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
-    expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
+    expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/auth-example/**");
     // The preview deploy + e2e lifecycle is one Depot CI workflow; a change to
     // it triggers a full-fleet preview. Cleanup is a separate closed-event
     // workflow with no paths filter (it must run for every closed PR that
