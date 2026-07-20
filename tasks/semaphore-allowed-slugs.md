@@ -38,3 +38,4 @@ Let callers constrain generic Semaphore acquisition to an explicit set of resour
 
 - 2026-07-20: Split from preview-slot expansion so the server can accept the new field before PR #2161 starts sending it.
 - 2026-07-20: Followed red→green slices for generic selection, specific selection, legacy fallback, and duplicate validation.
+- 2026-07-20: PR preview review exposed head-of-line blocking between disjoint allow-lists. A live API test reproduced the timeout; dispatch now scans one FIFO pass and preserves unmatched waiter order.
