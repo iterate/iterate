@@ -155,6 +155,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   ): undefined {
     const { event, state } = args;
     if (state.createRequest === null && state.birthCertificate === null) return;
+    if (state.createFailure !== null) return;
     // Per-event blockers register FIRST: `blockProcessorWhile` runs in FIFO
     // registration order, so the at-head registration below must come after
     // them — its appends must land after this frame's per-event appends.
