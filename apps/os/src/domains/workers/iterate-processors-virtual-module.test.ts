@@ -18,22 +18,17 @@ test("the embedded iterate/processors runtime is loader-ready plain JavaScript",
     esbuild.transform(ITERATE_PROCESSORS_VIRTUAL_MODULE, { format: "esm", loader: "js" }),
   ).resolves.toBeDefined();
 
-  // The PURE machinery a worker-authored processor needs (see the config-repo
-  // template's guestbook). The hosting layer (registry + DO durability) is
-  // deliberately absent — it ships as iterate/processors/cloudflare below.
+  // The PURE machinery a worker-authored processor needs. The hosting layer
+  // (registry + DO durability) is deliberately absent — it ships as
+  // iterate/processors/cloudflare below.
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).toContain("defineProcessorContract");
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).toContain("StreamProcessor");
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).not.toContain("createStreamProcessorRegistry");
 
-  // Real bundle; deliberate externals only: zod (the worker's own installed
-  // copy, so worker-authored contract schemas and the machinery share one
-  // instance) and cloudflare:workers — which OUR pure machinery never
-  // imports (that is the point of the entry split); it enters here solely as
-  // capnweb's workerd build, selected by the bundle's workerd condition. In
-  // node the same entry resolves capnweb's node build and the graph is
-  // cloudflare-free (the e2e suite imports template processor modules with no
-  // shim).
-  expect(externals(ITERATE_PROCESSORS_VIRTUAL_MODULE)).toEqual(["cloudflare:workers", "zod"]);
+  // Cap'n Web is another platform virtual module so every generated module
+  // shares one class identity. Zod stays external so the SDK and
+  // worker-authored schemas use the worker's one declared dependency.
+  expect(externals(ITERATE_PROCESSORS_VIRTUAL_MODULE)).toEqual(["@iterate-com/capnweb", "zod"]);
 });
 
 test("the embedded iterate/processors/cloudflare hosting layer shares the pure module", async () => {

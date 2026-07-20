@@ -26,26 +26,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "GitHub pull-request router and structural-review policy are deliberately\n" +
       "inline in `worker.ts`: it is a complete, copyable userspace example. Extract\n" +
       "local modules only when project-specific logic earns them. The worker is built\n" +
-      "by the platform's worker build pipeline: multi-file TypeScript works (the\n" +
-      "bundler follows imports), and npm dependencies declared in `package.json` are\n" +
-      "installed at build time. The platform's capability types and worker base\n" +
-      "classes come from the `iterate` package — `import { IterateWorkerEntrypoint,\n" +
-      "IterateDurableObject, type StreamEvent } from \"iterate/sdk\"`. It's a\n" +
-      "devDependency here: the platform supplies the runtime `iterate/*` subpaths to\n" +
-      "every worker build as virtual modules, so the build never installs them; run\n" +
-      "`npm install` to get typechecking and editor support. Shared external runtimes\n" +
-      "used by those modules, such as `@iterate-com/capnweb`, remain ordinary\n" +
-      "dependencies so app code and the platform module share one implementation.\n" +
+      "by the platform's worker build pipeline: it passes the repo file map and build\n" +
+      "options to `@cloudflare/worker-bundler`, which follows local imports and\n" +
+      "attempts to install dependencies declared in `package.json`. The platform's\n" +
+      "capability types and worker base classes come from the `iterate` package —\n" +
+      "`import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from\n" +
+      "\"iterate/sdk\"`. It's a devDependency here: the platform supplies the runtime\n" +
+      "`iterate/*` subpaths and `@iterate-com/capnweb` to ordinary worker builds, so\n" +
+      "`npm install` is only for local typechecking and editor support.\n" +
       "\n" +
-      "Every worker class — the root project worker AND the apps — extends one of\n" +
-      "the two sdk base classes: `IterateWorkerEntrypoint` (stateless) or\n" +
+      "The root project worker and its in-file examples extend one of the two SDK\n" +
+      "base classes: `IterateWorkerEntrypoint` (stateless) or\n" +
       "`IterateDurableObject` (stateful). Both carry the same platform surface:\n" +
       "`processEventBatch` unpacks delivered event batches into overrideable\n" +
       "`processEvent(event)` calls, `invokeCapability` dispatches flattened\n" +
       "`itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP\n" +
       "into sibling workers. Env defaults to `{ ITX: ItxBinding }`.\n" +
       "\n" +
-      "The example apps are named exports of the same `worker.ts`, routed by the\n" +
+      "The in-file example apps are named exports of the same `worker.ts`, routed by the\n" +
       "default export's `fetch`: `HelloApp` (stateless, extends\n" +
       "`IterateWorkerEntrypoint`), `InternalApp` (stateless, with authenticated HTML\n" +
       "and a Cap'n Web API), and `CounterApp` (stateful, extends\n" +
@@ -70,7 +68,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`CounterApp`'s `/ws` route is the seeded WebSocket proof-of-concept; copy its\n" +
       "shape for anything real-time. Method calls on apps\n" +
       "(`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP\n" +
-      "rides the fetch lane.\n" +
+      "rides the fetch lane. App refs use `source.createApp` directly with ordinary\n" +
+      "worker-bundler `server` and `client` entry-point options; its repo-aware\n" +
+      "`files` option is the only platform adaptation, and file paths reach\n" +
+      "worker-bundler unchanged.\n" +
+      "\n" +
+      "`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app\n" +
+      "shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per\n" +
+      "app. The client entry is served separately and imports React directly from\n" +
+      "`esm.sh`; those browser dependencies are not copied into the Worker bundle.\n" +
+      "This is an example, not a platform file-layout rule. The apps deliberately\n" +
+      "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
+      "can inject the small Iterate status overlay in the corner.\n" +
       "\n" +
       "`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch\n" +
       "HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an\n" +
@@ -80,7 +89,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "default-export worker class: the platform dispatches dotted\n" +
       "`itx.worker.<path>` calls as one flattened `invokeCapability({ path, args })`\n" +
       "that the base class walks in userland, so a getter can hand back a whole\n" +
-      "vendor SDK (installed from `package.json`) in a single round trip. Built-in\n" +
+      "platform-supplied SDK surface in a single round trip. Built-in\n" +
       "integrations (Slack, Gmail, GitHub, Telegram, Waitrose) already live at\n" +
       "`itx.integrations.<slug>.get()` (or `.get(\"<connection>\")` when the exact\n" +
       "account matters) — reach for a worker getter when\n" +
@@ -132,9 +141,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "This repo is seeded at project creation by the repo stream processor.\n" +
       "\n" +
       "The project worker entrypoint is `worker.ts` (TypeScript). The worker build\n" +
-      "pipeline bundles it — together with any files it imports and the npm\n" +
-      "dependencies in `package.json` — into a loader-ready worker on first use, so\n" +
-      "committing a change here changes the running worker on its next use.\n" +
+      "pipeline bundles it and the files it imports into loader-ready code on first\n" +
+      "use, so committing a change here changes the running worker on its next use.\n" +
+      "The platform passes this repo's files and build options directly to\n" +
+      "`@cloudflare/worker-bundler`; when `package.json` declares dependencies, that\n" +
+      "library attempts to install and bundle them.\n" +
+      "\n" +
+      "`apps/todo` and `apps/guestbook` are deliberately basic browser examples.\n" +
+      "Each contains only `server.tsx` and `client.tsx`: the server exports a\n" +
+      "Durable Object and the client becomes a separately served browser module. JSX is\n" +
+      "compiled with the classic transform, so the explicit React imports remain\n" +
+      "direct `esm.sh` URLs instead of becoming npm dependencies. There is no\n" +
+      "app-local install, Vite config, router generator, or framework adapter. Iterate\n" +
+      "injects its small status overlay into the HTML response in production.\n" +
+      "Their two-file layout is only an example: app refs may choose arbitrary server\n" +
+      "and client entry points from the complete `files` map passed to the bundler.\n" +
       "\n" +
       "## Authenticated web apps\n" +
       "\n" +
@@ -187,1576 +208,450 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "authority crosses the wire.\n",
   },
   {
-    path: "apps/guestbook/package.json",
+    path: "apps/guestbook/client.tsx",
     content:
-      "{\n" +
-      "  \"name\": \"project-guestbook\",\n" +
-      "  \"private\": true,\n" +
-      "  \"type\": \"module\",\n" +
-      "  \"description\": \"The project's guestbook: a TanStack Start app (built by the platform's vite worker-build pipeline) whose state is a stream-processor fold of durable events at /guestbook — the hosting Durable Object mirrors the fold into Cap'n Web live state, so every open tab repaints the moment anyone signs.\",\n" +
-      "  \"scripts\": {\n" +
-      "    \"build\": \"vite build\"\n" +
-      "  },\n" +
-      "  \"dependencies\": {\n" +
-      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"@tanstack/react-router\": \"1.170.15\",\n" +
-      "    \"@tanstack/react-start\": \"1.168.18\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
-      "    \"react\": \"19.1.1\",\n" +
-      "    \"react-dom\": \"19.1.1\",\n" +
-      "    \"zod\": \"4.3.6\"\n" +
-      "  },\n" +
-      "  \"devDependencies\": {\n" +
-      "    \"@cloudflare/vite-plugin\": \"1.43.0\",\n" +
-      "    \"@tailwindcss/vite\": \"4.3.2\",\n" +
-      "    \"@types/react\": \"19.2.17\",\n" +
-      "    \"@types/react-dom\": \"19.2.3\",\n" +
-      "    \"@vitejs/plugin-react\": \"6.0.2\",\n" +
-      "    \"tailwindcss\": \"4.3.2\",\n" +
-      "    \"typescript\": \"5.9.3\",\n" +
-      "    \"vite\": \"8.0.16\",\n" +
-      "    \"wrangler\": \"4.107.0\"\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/guestbook-app.ts",
-    content:
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import {\n" +
-      "  type StreamEventInput,\n" +
-      "  type StreamSubscriberWakeRequest,\n" +
-      "  type StreamSubscriberWakeResponse,\n" +
-      "} from \"iterate/processors\";\n" +
-      "import {\n" +
-      "  createStreamProcessorRegistry,\n" +
-      "  type StreamProcessorRegistry,\n" +
-      "} from \"iterate/processors/cloudflare\";\n" +
-      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
-      "import {\n" +
-      "  guestbookCreationEvents,\n" +
-      "  guestbookStreamPath,\n" +
-      "  guestbookSubscriptionConfigVersion,\n" +
-      "} from \"./guestbook-ref.ts\";\n" +
-      "import { GuestbookProcessor, type GuestbookFoldState } from \"./guestbook.ts\";\n" +
+      "import React, {\n" +
+      "  type FormEvent,\n" +
+      "  useCallback,\n" +
+      "  useEffect,\n" +
+      "  useState,\n" +
+      "} from \"https://esm.sh/react@19.2.4\";\n" +
+      "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
       "\n" +
-      "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
+      "type Entry = {\n" +
+      "  id: string;\n" +
+      "  message: string;\n" +
+      "  name: string;\n" +
+      "  signedAt: string;\n" +
+      "};\n" +
       "\n" +
-      "// The small, stateful half of the guestbook. It has its own Wrangler entry so\n" +
-      "// a cold /api WebSocket loads only the processor host and Cap'n Web runtime,\n" +
-      "// never the unrelated TanStack SSR bundle in worker.ts.\n" +
-      "export class GuestbookApp extends IterateDurableObject {\n" +
-      "  #host: { registry: StreamProcessorRegistry<GuestbookFoldState> } | undefined;\n" +
-      "  #configurationInFlight: Promise<void> | undefined;\n" +
-      "\n" +
-      "  // Hosting is constructed lazily, not in the constructor: the registry and\n" +
-      "  // the processor's provenance stamps need the owning project's id, which\n" +
-      "  // arrives with the wake request or is read from the project stub on first\n" +
-      "  // fetch — and is cached durably so an alarm fire needs no dial.\n" +
-      "  #ensureHost(projectId: string): { registry: StreamProcessorRegistry<GuestbookFoldState> } {\n" +
-      "    if (this.#host === undefined) {\n" +
-      "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
-      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
-      "      // getLiveState reads `reads`, which is built from this registry after\n" +
-      "      // register — the closure runs lazily, on refreshes the registry itself\n" +
-      "      // schedules, so the assignment below always wins the race. The\n" +
-      "      // explicit return type makes the registry a\n" +
-      "      // LiveState<GuestbookFoldState> (the platform's secret DO establishes\n" +
-      "      // this exact shape).\n" +
-      "      let reads: { currentState: GuestbookFoldState } | undefined;\n" +
-      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
-      "        path: guestbookStreamPath,\n" +
-      "        projectId,\n" +
-      "        stream,\n" +
-      "        // The worker's own build identity: a version change resets a\n" +
-      "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
-      "        // worker recovers on its next build (the antidote deploy).\n" +
-      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "        // The fold IS the live state — nothing to redact, nothing to mirror.\n" +
-      "        getLiveState: (): GuestbookFoldState => reads!.currentState,\n" +
-      "      });\n" +
-      "      const guestbook = registry.register(\n" +
-      "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
-      "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
-      "        // work (a milestone append), the alarm fires, the keepalive journals\n" +
-      "        // a revival fact, and its wake delivery re-runs the at-head\n" +
-      "        // reconcile.\n" +
-      "        { recovery: true },\n" +
-      "      );\n" +
-      "      reads = registry.reads(guestbook);\n" +
-      "      this.#host = { registry };\n" +
-      "    }\n" +
-      "    return this.#host;\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Construct the host without a wake request in hand: any prior contact\n" +
-      "   * cached the project id durably; only the very first ever needs a dial. */\n" +
-      "  async #freshHost(): Promise<{ registry: StreamProcessorRegistry<GuestbookFoldState> }> {\n" +
-      "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
-      "    if (projectId === undefined) {\n" +
-      "      using project = await this.env.ITX.get();\n" +
-      "      projectId = await project.projectId;\n" +
-      "    }\n" +
-      "    return this.#ensureHost(projectId);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The hosting Durable Object's alarm fire, delivered here like a native\n" +
-      "   * one. Route it to the registry: each keepalive self-gates on its own\n" +
-      "   * persisted record, so a stale fire is a no-op. */\n" +
-      "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    await registry.handleAlarm(alarmInfo);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Append through the one stream lane and record only a successful current\n" +
-      "   * subscription offer. The creation/config events are idempotent; entries\n" +
-      "   * supplied by a caller retain their own keys. */\n" +
-      "  async #appendWithCurrentSubscription(...events: StreamEventInput[]): Promise<void> {\n" +
-      "    using project = await this.env.ITX.get();\n" +
-      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
-      "    this.ctx.storage.kv.put(SUBSCRIPTION_VERSION_STORAGE_KEY, guestbookSubscriptionConfigVersion);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** A read-only visit must migrate the persisted wake target too. Waiting\n" +
-      "   * here is bounded by the ordinary append call; delivery itself starts in\n" +
-      "   * the stream's native alarm turn, so this cannot form an app↔stream actor\n" +
-      "   * cycle. The durable version makes the extra RPC once per config revision. */\n" +
-      "  async #ensureCurrentSubscription(): Promise<void> {\n" +
-      "    if (\n" +
-      "      this.ctx.storage.kv.get<number>(SUBSCRIPTION_VERSION_STORAGE_KEY) ===\n" +
-      "      guestbookSubscriptionConfigVersion\n" +
-      "    ) {\n" +
-      "      return;\n" +
-      "    }\n" +
-      "    if (this.#configurationInFlight === undefined) {\n" +
-      "      this.#configurationInFlight = this.#appendWithCurrentSubscription();\n" +
-      "    }\n" +
-      "    const pending = this.#configurationInFlight;\n" +
-      "    try {\n" +
-      "      await pending;\n" +
-      "    } finally {\n" +
-      "      if (this.#configurationInFlight === pending) this.#configurationInFlight = undefined;\n" +
-      "    }\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The wake door the stream spine dials — the subscription's persisted\n" +
-      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`, which\n" +
-      "   * the platform's dynamic capability dispatch flattens into an\n" +
-      "   * invokeCapability walk that lands here. The request carries the stream's\n" +
-      "   * coordinates, so the host can construct itself before answering the\n" +
-      "   * handshake (checkpoint + a live sink the stream then delivers frames to). */\n" +
-      "  get processor() {\n" +
-      "    return {\n" +
-      "      wakeStreamSubscriber: async (\n" +
-      "        request: StreamSubscriberWakeRequest,\n" +
-      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
-      "        if (request.stream.projectId === null) {\n" +
-      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
-      "        }\n" +
-      "        const { registry } = this.#ensureHost(request.stream.projectId);\n" +
-      "        return await registry.wakeStreamSubscriber(request);\n" +
-      "      },\n" +
-      "    };\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Signing IS appending: the idempotency-keyed creation batch (birth +\n" +
-      "   * current wake-subscription config — every signer offers it; the stream\n" +
-      "   * collapses each version and replaces older config at the same subscription\n" +
-      "   * key) plus this entry. The spine delivers the append back into this\n" +
-      "   * object's runner, the fold absorbs it, and the registry republishes the\n" +
-      "   * live state to every subscribed tab — nothing else to do here. */\n" +
-      "  async sign(name: string, message: string): Promise<void> {\n" +
-      "    const trimmedName = name.trim().slice(0, 80);\n" +
-      "    const trimmedMessage = message.trim().slice(0, 500);\n" +
-      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
-      "    await this.#appendWithCurrentSubscription({\n" +
-      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
-      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
-      "    });\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The Cap'n Web door: every /api WebSocket upgrade terminates here. The\n" +
-      "   * guestbook is deliberately public — same as its signing lane always was —\n" +
-      "   * so the root target needs no authenticate step. */\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
-      "    await this.#ensureCurrentSubscription();\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
-      "  }\n" +
+      "async function api<T>(init?: RequestInit): Promise<T> {\n" +
+      "  const response = await fetch(\"/api/entries\", init);\n" +
+      "  if (!response.ok)\n" +
+      "    throw new Error((await response.text()) || `request failed (${response.status})`);\n" +
+      "  return (await response.json()) as T;\n" +
       "}\n" +
       "\n" +
-      "// What every browser holds: the fold as live state (read-only by\n" +
-      "// construction) and one verb.\n" +
-      "class PublicGuestbookApi extends RpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly app: GuestbookApp,\n" +
-      "    private readonly registry: StreamProcessorRegistry<GuestbookFoldState>,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpc<GuestbookFoldState> {\n" +
-      "    // The registry is a refreshing live-state source: the target loads\n" +
-      "    // committed runner progress before the first read, so a cold object's\n" +
-      "    // first snapshot is the real fold, not the schema default.\n" +
-      "    return new LiveStateRpcTarget<GuestbookFoldState>(this.registry);\n" +
-      "  }\n" +
-      "\n" +
-      "  async sign(name: string, message: string): Promise<void> {\n" +
-      "    await this.app.sign(name, message);\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/guestbook-ref.ts",
-    content:
-      "// The guestbook's shared IDENTITY, dependency-free on purpose (type-only\n" +
-      "// imports bundle to pure data): the repo root's worker.ts imports this module\n" +
-      "// for its HTTP route, guestbook-app.ts for its sign verb, and the wake\n" +
-      "// subscription persists the same ref — so ingress, spine delivery, and the\n" +
-      "// creation batch can never disagree about which Durable Object (and which\n" +
-      "// build) the guestbook is.\n" +
-      "import type { StreamEventInput } from \"iterate/processors\";\n" +
-      "import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
-      "\n" +
-      "export const guestbookStreamPath = \"/guestbook\";\n" +
-      "export const guestbookSubscriptionConfigVersion = 3;\n" +
-      "\n" +
-      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
-      "\n" +
-      "/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */\n" +
-      "export const guestbookPageSource = {\n" +
-      "  files: repoFiles,\n" +
-      "  options: { pipeline: \"vite\", rootDir: \"apps/guestbook\" },\n" +
-      "} satisfies DynamicWorkerSource;\n" +
-      "\n" +
-      "// One declarative ref for the guestbook host, shared by the HTTP routes and\n" +
-      "// the wake subscription below — the same Durable Object either way, addressed\n" +
-      "// by its durableWorkerKey. Its small Wrangler entry excludes the independent\n" +
-      "// TanStack SSR build. The stale policy lets a still-running facet answer while\n" +
-      "// the host checks for a newer repo version in the background; a cold facet\n" +
-      "// mounts this exact cached artifact.\n" +
-      "export const guestbookAppRef = {\n" +
-      "  type: \"stateful\",\n" +
-      "  path: \"/\",\n" +
-      "  className: \"GuestbookApp\",\n" +
-      "  // The split app cannot share the legacy host: that host's persisted wake\n" +
-      "  // recipe can resolve today's page-only Vite build, which no longer exports\n" +
-      "  // GuestbookApp, and poison its live facet before the new ref arrives. The\n" +
-      "  // fold's truth is the stream, so this new host safely rebuilds by replay.\n" +
-      "  durableWorkerKey: \"app-guestbook-v2\",\n" +
-      "  updatePolicy: \"stale-while-rebuild\",\n" +
-      "  source: {\n" +
-      "    files: repoFiles,\n" +
-      "    options: {\n" +
-      "      entryPoint: \"src/guestbook-app.ts\",\n" +
-      "      minify: true,\n" +
-      "      rootDir: \"apps/guestbook\",\n" +
-      "    },\n" +
-      "  },\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n" +
-      "\n" +
-      "/**\n" +
-      " * The guestbook's creation batch: the birth certificate plus the durable\n" +
-      " * WAKE subscription that puts the GuestbookApp Durable Object on the\n" +
-      " * stream's own delivery spine — the platform evaluates the persisted\n" +
-      " * expression (`workers.get(ref).processor.wakeStreamSubscriber`, resolved\n" +
-      " * via the dynamic capability fallback into the app's `processor` getter),\n" +
-      " * performs the wake handshake, and pushes event frames straight into the\n" +
-      " * registry's runner. Same machinery, same lane as the platform's own\n" +
-      " * domain processors. Every creator (the app's sign verb, a script, a test)\n" +
-      " * offers this same batch. The birth key is permanent; the subscription event\n" +
-      " * key is versioned whenever its persisted expression changes. Its stable\n" +
-      " * subscriptionKey then replaces the old config without resetting its cursor.\n" +
-      " */\n" +
-      "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
-      "  return [\n" +
-      "    {\n" +
-      "      type: \"events.iterate.com/guestbook/created\",\n" +
-      "      payload: { config: { title: \"Guestbook\" } },\n" +
-      "      idempotencyKey: \"guestbook/created\",\n" +
-      "    },\n" +
-      "    {\n" +
-      "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
-      "      payload: {\n" +
-      "        // Deliberately stable across the host migration: latest config for a\n" +
-      "        // subscriptionKey replaces the old target without leaving two wakes.\n" +
-      "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
-      "        delivery: {\n" +
-      "          mode: \"wake\",\n" +
-      "          expression: [\"workers\", [\"get\", guestbookAppRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
-      "          processorSlug: \"guestbook\",\n" +
-      "        },\n" +
-      "      },\n" +
-      "      // A new append key lets this config reach the replacement reducer. Bump\n" +
-      "      // the version whenever the persisted delivery expression changes.\n" +
-      "      idempotencyKey: `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,\n" +
-      "    },\n" +
-      "  ];\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/guestbook.ts",
-    content:
-      "// A stream-processor-backed domain object in project userspace: the guestbook\n" +
-      "// is a fold of durable events on the project stream at /guestbook, processed\n" +
-      "// by the SAME machinery that runs the platform's own domain objects\n" +
-      "// (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in\n" +
-      "// the repo root's worker.ts, which keeps its number in Durable Object\n" +
-      "// storage, and the tanstack todo app, which keeps rows in its own SQLite:\n" +
-      "// this state is a disposable cache of `reduce` over the journal — delete it\n" +
-      "// and replay rebuilds it, and every consequential outcome is an event you\n" +
-      "// can read back.\n" +
-      "//\n" +
-      "// GuestbookApp in guestbook-app.ts is the hosting half: a Durable Object\n" +
-      "// registry over an itx-dialed stream handle, woken by the durable wake\n" +
-      "// subscription the creation batch (guestbook-ref.ts) configures.\n" +
-      "import { z } from \"zod\";\n" +
-      "import {\n" +
-      "  defineProcessorContract,\n" +
-      "  PLATFORM_STREAM_EVENTS,\n" +
-      "  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
-      "  StreamProcessor,\n" +
-      "} from \"iterate/processors\";\n" +
-      "\n" +
-      "export { guestbookAppRef, guestbookCreationEvents, guestbookStreamPath } from \"./guestbook-ref.ts\";\n" +
-      "\n" +
-      "export const GuestbookProcessorContract = defineProcessorContract({\n" +
-      "  slug: \"guestbook\",\n" +
-      "  version: \"0.1.0\",\n" +
-      "  description:\n" +
-      "    \"Folds guestbook signatures on /guestbook and emits a milestone fact every five entries.\",\n" +
-      "  stateSchema: z.object({\n" +
-      "    birthCertificate: z\n" +
-      "      .object({ config: z.object({ title: z.string() }) })\n" +
-      "      .nullable()\n" +
-      "      .default(null),\n" +
-      "    entries: z\n" +
-      "      .array(z.object({ name: z.string(), message: z.string(), signedAt: z.string() }))\n" +
-      "      .default([]),\n" +
-      "    lastMilestone: z.number().int().nonnegative().default(0),\n" +
-      "  }),\n" +
-      "  events: {\n" +
-      "    \"events.iterate.com/guestbook/created\": {\n" +
-      "      description:\n" +
-      "        \"The guestbook exists: its birth certificate, the first event in its domain history. Appended (idempotency-keyed) by whoever signs first.\",\n" +
-      "      payloadSchema: z.object({ config: z.object({ title: z.string() }) }),\n" +
-      "      examples: [\n" +
-      "        {\n" +
-      "          description: \"A guestbook born with its display title.\",\n" +
-      "          payload: { config: { title: \"Guestbook\" } },\n" +
-      "        },\n" +
-      "      ],\n" +
-      "    },\n" +
-      "    \"events.iterate.com/guestbook/entry-signed\": {\n" +
-      "      description: \"Someone signed the guestbook: their name and message.\",\n" +
-      "      payloadSchema: z.object({\n" +
-      "        name: z.string().trim().min(1),\n" +
-      "        message: z.string().trim().min(1),\n" +
-      "      }),\n" +
-      "      examples: [\n" +
-      "        {\n" +
-      "          description: \"A visitor left a note.\",\n" +
-      "          payload: { name: \"Ada\", message: \"Lovely worker you have here.\" },\n" +
-      "        },\n" +
-      "      ],\n" +
-      "    },\n" +
-      "    \"events.iterate.com/guestbook/milestone-reached\": {\n" +
-      "      description:\n" +
-      "        \"The entry count crossed a multiple of five. Emitted by the guestbook processor from its at-head reconcile, idempotency-keyed by the milestone count so refolds and redeliveries collapse to one fact.\",\n" +
-      "      payloadSchema: z.object({ count: z.number().int().positive() }),\n" +
-      "      examples: [\n" +
-      "        {\n" +
-      "          description: \"The fifth signature landed.\",\n" +
-      "          payload: { count: 5 },\n" +
-      "        },\n" +
-      "      ],\n" +
-      "    },\n" +
-      "  },\n" +
-      "  // Required by `{ recovery: true }` (see guestbook-app.ts): a recovery-wired\n" +
-      "  // contract must consume the platform revival fact.\n" +
-      "  processorDeps: [PLATFORM_STREAM_EVENTS],\n" +
-      "  consumes: [\n" +
-      "    \"events.iterate.com/guestbook/created\",\n" +
-      "    \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "    \"events.iterate.com/guestbook/milestone-reached\",\n" +
-      "    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
-      "  ],\n" +
-      "  emits: [\"events.iterate.com/guestbook/milestone-reached\"],\n" +
-      "});\n" +
-      "\n" +
-      "export type GuestbookFoldState = z.infer<typeof GuestbookProcessorContract.stateSchema>;\n" +
-      "\n" +
-      "export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {\n" +
-      "  readonly contract = GuestbookProcessorContract;\n" +
-      "\n" +
-      "  protected override reduce({\n" +
-      "    event,\n" +
-      "    state,\n" +
-      "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"reduce\"]>[0]) {\n" +
-      "    switch (event.type) {\n" +
-      "      case \"events.iterate.com/guestbook/created\":\n" +
-      "        if (state.birthCertificate !== null) {\n" +
-      "          throw new Error(\"guestbook received more than one created event\");\n" +
-      "        }\n" +
-      "        return { ...state, birthCertificate: event.payload };\n" +
-      "      case \"events.iterate.com/guestbook/entry-signed\":\n" +
-      "        return {\n" +
-      "          ...state,\n" +
-      "          entries: [...state.entries, { ...event.payload, signedAt: event.createdAt }],\n" +
-      "        };\n" +
-      "      case \"events.iterate.com/guestbook/milestone-reached\":\n" +
-      "        return {\n" +
-      "          ...state,\n" +
-      "          lastMilestone: Math.max(state.lastMilestone, event.payload.count),\n" +
-      "        };\n" +
-      "      default:\n" +
-      "        return state;\n" +
-      "    }\n" +
-      "  }\n" +
-      "\n" +
-      "  protected override processEvent({\n" +
-      "    append,\n" +
-      "    blockProcessorWhile,\n" +
-      "    delivery,\n" +
-      "    state,\n" +
-      "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"processEvent\"]>[0]): undefined {\n" +
-      "    // At-head reconcile: derive milestones from the WHOLE fold, never from\n" +
-      "    // event-time state — a refold replays every historical event, and only\n" +
-      "    // the at-head state has absorbed the milestones already journaled. One\n" +
-      "    // fact per crossed threshold, even when catch-up lands past several at\n" +
-      "    // once (routine while the worker cold-builds); the stable idempotency\n" +
-      "    // keys (count folded in, no event bound) make the appends collapse\n" +
-      "    // across redeliveries, revivals, and refolds.\n" +
-      "    if (!delivery.caughtUp || state.birthCertificate === null) return;\n" +
-      "    const reached = Math.floor(state.entries.length / 5) * 5;\n" +
-      "    if (reached <= state.lastMilestone) return;\n" +
-      "    const missed: number[] = [];\n" +
-      "    for (let count = state.lastMilestone + 5; count <= reached; count += 5) missed.push(count);\n" +
-      "    blockProcessorWhile(async () => {\n" +
-      "      await append(\n" +
-      "        ...missed.map((count) => ({\n" +
-      "          type: \"events.iterate.com/guestbook/milestone-reached\" as const,\n" +
-      "          payload: { count },\n" +
-      "          idempotencyKey: this.idempotencyKey(`milestone:${count}`),\n" +
-      "        })),\n" +
-      "      );\n" +
-      "    });\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/lib/state.ts",
-    content:
-      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import type { GuestbookFoldState } from \"../guestbook.ts\";\n" +
-      "\n" +
-      "// The browser mirrors the processor's fold VERBATIM — the live state IS the\n" +
-      "// domain state, no projection layer in between.\n" +
-      "export type { GuestbookFoldState };\n" +
-      "\n" +
-      "/** The Cap'n Web root at /api — public, so no authenticate step. */\n" +
-      "export type GuestbookApi = {\n" +
-      "  liveState: LiveStateRpc<GuestbookFoldState>;\n" +
-      "  sign(name: string, message: string): Promise<void>;\n" +
-      "};\n",
-  },
-  {
-    path: "apps/guestbook/src/lib/use-guestbook.ts",
-    content:
-      "import { newWebSocketRpcSession } from \"@iterate-com/capnweb\";\n" +
-      "import { createLiveStateStore } from \"iterate/live-state\";\n" +
-      "import { useEffect, useRef, useState, useSyncExternalStore } from \"react\";\n" +
-      "import type { GuestbookApi, GuestbookFoldState } from \"./state.ts\";\n" +
-      "\n" +
-      "/**\n" +
-      " * The whole client: one Cap'n Web WebSocket to /api (public — the root\n" +
-      " * target needs no authenticate step), the processor's fold folded into the\n" +
-      " * platform's `createLiveStateStore` (snapshot + patches) and read with\n" +
-      " * `useSyncExternalStore`. Signing is a plain call on the root — the append\n" +
-      " * flows through the stream's wake spine back into the fold, and every open\n" +
-      " * tab, this one included, repaints from the pushed patch.\n" +
-      " */\n" +
-      "export function useGuestbook() {\n" +
-      "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
-      "  const [error, setError] = useState<string | null>(null);\n" +
-      "  const storeRef = useRef(createLiveStateStore<GuestbookFoldState>());\n" +
-      "  const store = storeRef.current;\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    store.reset();\n" +
-      "    // Updater form is LOAD-BEARING everywhere a Cap'n Web stub meets React\n" +
-      "    // state: stubs are callable Proxies (that is what makes pipelining\n" +
-      "    // work), so setApi(stub) would make React CALL it as an updater.\n" +
-      "    setApi(() => null);\n" +
-      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
-      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
-      "    const publicApi = newWebSocketRpcSession<GuestbookApi>(endpoint.toString());\n" +
-      "\n" +
-      "    let disposed = false;\n" +
-      "    let subscription: { unsubscribe(): void } | undefined;\n" +
-      "    void (async () => {\n" +
-      "      const subscribe = async () => {\n" +
-      "        // A revision gap means a missed patch; resubscribing makes the server\n" +
-      "        // lead with a fresh snapshot. Both lanes gate on disposal so a dying\n" +
-      "        // socket's stragglers cannot repopulate the store.\n" +
-      "        subscription?.unsubscribe();\n" +
-      "        subscription = await publicApi.liveState.subscribe((update) => {\n" +
-      "          if (disposed) return;\n" +
-      "          store.apply(update, () => {\n" +
-      "            if (!disposed) void subscribe();\n" +
-      "          });\n" +
-      "        });\n" +
-      "      };\n" +
-      "      await subscribe();\n" +
-      "      if (!disposed) setApi(() => publicApi);\n" +
-      "    })().catch((thrown: unknown) => {\n" +
-      "      if (!disposed) setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
-      "    });\n" +
-      "\n" +
-      "    return () => {\n" +
-      "      disposed = true;\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      publicApi[Symbol.dispose]();\n" +
-      "    };\n" +
-      "  }, [store]);\n" +
-      "\n" +
-      "  const state = useSyncExternalStore(store.subscribe, store.getState, () => undefined);\n" +
-      "  return { guestbook: state, api, error };\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/routeTree.gen.ts",
-    content:
-      "/* eslint-disable */\n" +
-      "\n" +
-      "// @ts-nocheck\n" +
-      "\n" +
-      "// noinspection JSUnusedGlobalSymbols\n" +
-      "\n" +
-      "// This file was automatically generated by TanStack Router.\n" +
-      "// You should NOT make any changes in this file as it will be overwritten.\n" +
-      "// Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.\n" +
-      "\n" +
-      "import { Route as rootRouteImport } from './routes/__root'\n" +
-      "import { Route as IndexRouteImport } from './routes/index'\n" +
-      "\n" +
-      "const IndexRoute = IndexRouteImport.update({\n" +
-      "  id: '/',\n" +
-      "  path: '/',\n" +
-      "  getParentRoute: () => rootRouteImport,\n" +
-      "} as any)\n" +
-      "\n" +
-      "export interface FileRoutesByFullPath {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesByTo {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesById {\n" +
-      "  __root__: typeof rootRouteImport\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRouteTypes {\n" +
-      "  fileRoutesByFullPath: FileRoutesByFullPath\n" +
-      "  fullPaths: '/'\n" +
-      "  fileRoutesByTo: FileRoutesByTo\n" +
-      "  to: '/'\n" +
-      "  id: '__root__' | '/'\n" +
-      "  fileRoutesById: FileRoutesById\n" +
-      "}\n" +
-      "export interface RootRouteChildren {\n" +
-      "  IndexRoute: typeof IndexRoute\n" +
-      "}\n" +
-      "\n" +
-      "declare module '@tanstack/react-router' {\n" +
-      "  interface FileRoutesByPath {\n" +
-      "    '/': {\n" +
-      "      id: '/'\n" +
-      "      path: '/'\n" +
-      "      fullPath: '/'\n" +
-      "      preLoaderRoute: typeof IndexRouteImport\n" +
-      "      parentRoute: typeof rootRouteImport\n" +
-      "    }\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "const rootRouteChildren: RootRouteChildren = {\n" +
-      "  IndexRoute: IndexRoute,\n" +
-      "}\n" +
-      "export const routeTree = rootRouteImport\n" +
-      "  ._addFileChildren(rootRouteChildren)\n" +
-      "  ._addFileTypes<FileRouteTypes>()\n" +
-      "\n" +
-      "import type { getRouter } from './router.tsx'\n" +
-      "import type { createStart } from '@tanstack/react-start'\n" +
-      "declare module '@tanstack/react-start' {\n" +
-      "  interface Register {\n" +
-      "    ssr: true\n" +
-      "    router: Awaited<ReturnType<typeof getRouter>>\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/router.tsx",
-    content:
-      "import { createRouter } from \"@tanstack/react-router\";\n" +
-      "import { routeTree } from \"./routeTree.gen.ts\";\n" +
-      "\n" +
-      "export function getRouter() {\n" +
-      "  return createRouter({ routeTree });\n" +
-      "}\n" +
-      "\n" +
-      "declare module \"@tanstack/react-router\" {\n" +
-      "  interface Register {\n" +
-      "    router: ReturnType<typeof getRouter>;\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/routes/__root.tsx",
-    content:
-      "import type { ReactNode } from \"react\";\n" +
-      "import { createRootRoute, HeadContent, Outlet, Scripts } from \"@tanstack/react-router\";\n" +
-      "import appCss from \"../styles.css?url\";\n" +
-      "\n" +
-      "export const Route = createRootRoute({\n" +
-      "  head: () => ({\n" +
-      "    meta: [\n" +
-      "      { charSet: \"utf-8\" },\n" +
-      "      { name: \"viewport\", content: \"width=device-width, initial-scale=1\" },\n" +
-      "      { title: \"Guestbook\" },\n" +
-      "    ],\n" +
-      "    links: [{ rel: \"stylesheet\", href: appCss }],\n" +
-      "  }),\n" +
-      "  component: RootComponent,\n" +
-      "});\n" +
-      "\n" +
-      "function RootComponent() {\n" +
-      "  return (\n" +
-      "    <RootDocument>\n" +
-      "      <Outlet />\n" +
-      "    </RootDocument>\n" +
-      "  );\n" +
-      "}\n" +
-      "\n" +
-      "function RootDocument({ children }: Readonly<{ children: ReactNode }>) {\n" +
-      "  return (\n" +
-      "    <html lang=\"en\">\n" +
-      "      <head>\n" +
-      "        <HeadContent />\n" +
-      "      </head>\n" +
-      "      <body className=\"min-h-screen bg-stone-100 text-stone-900 antialiased\">\n" +
-      "        {children}\n" +
-      "        <Scripts />\n" +
-      "      </body>\n" +
-      "    </html>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/routes/index.tsx",
-    content:
-      "import { createFileRoute } from \"@tanstack/react-router\";\n" +
-      "import { useState } from \"react\";\n" +
-      "import { useGuestbook } from \"../lib/use-guestbook.ts\";\n" +
-      "\n" +
-      "export const Route = createFileRoute(\"/\")({ component: Guestbook });\n" +
-      "\n" +
-      "// The project's public guestbook. Its state is a stream-processor fold on the\n" +
-      "// project stream at /guestbook (src/guestbook-app.ts hosts the processor);\n" +
-      "// this page hydrates, opens /api, and stays live — every open tab repaints the\n" +
-      "// moment anyone signs, and every fifth signature earns a milestone from the\n" +
-      "// processor's at-head reconcile.\n" +
-      "function Guestbook() {\n" +
-      "  const { guestbook, api, error } = useGuestbook();\n" +
-      "  const [name, setName] = useState(\"\");\n" +
+      "export function GuestbookClient() {\n" +
+      "  const [entries, setEntries] = useState<Entry[]>([]);\n" +
+      "  const [error, setError] = useState(\"\");\n" +
+      "  const [loading, setLoading] = useState(true);\n" +
       "  const [message, setMessage] = useState(\"\");\n" +
-      "  const ready = api !== null && guestbook !== undefined;\n" +
+      "  const [name, setName] = useState(\"\");\n" +
       "\n" +
-      "  return (\n" +
-      "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
-      "      <header className=\"flex items-baseline justify-between gap-4\">\n" +
-      "        <h1 className=\"text-3xl font-semibold tracking-tight\">\n" +
-      "          {guestbook?.birthCertificate?.config.title ?? \"Guestbook\"}\n" +
-      "        </h1>\n" +
-      "        {guestbook !== undefined ? (\n" +
-      "          <p className=\"text-sm text-stone-500\">\n" +
-      "            {guestbook.entries.length === 0\n" +
-      "              ? \"no signatures yet\"\n" +
-      "              : `${guestbook.entries.length} signature${guestbook.entries.length === 1 ? \"\" : \"s\"}`}\n" +
-      "            {guestbook.lastMilestone > 0 ? (\n" +
-      "              <span className=\"ml-2 inline-flex items-baseline gap-1.5\">\n" +
-      "                <span className=\"inline-block size-1.5 translate-y-px rounded-full bg-amber-400\" />\n" +
-      "                milestone {guestbook.lastMilestone}\n" +
-      "              </span>\n" +
-      "            ) : null}\n" +
-      "          </p>\n" +
-      "        ) : null}\n" +
-      "      </header>\n" +
-      "\n" +
-      "      {error !== null ? (\n" +
-      "        <p className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\">\n" +
-      "          {error}\n" +
-      "        </p>\n" +
-      "      ) : null}\n" +
-      "\n" +
-      "      <form\n" +
-      "        className=\"mt-8 space-y-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm\"\n" +
-      "        onSubmit={(event) => {\n" +
-      "          event.preventDefault();\n" +
-      "          if (api && name.trim() && message.trim()) {\n" +
-      "            void api.sign(name, message);\n" +
-      "            setMessage(\"\");\n" +
-      "          }\n" +
-      "        }}\n" +
-      "      >\n" +
-      "        <div className=\"flex gap-3\">\n" +
-      "          <input\n" +
-      "            className=\"w-40 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none transition focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-100\"\n" +
-      "            value={name}\n" +
-      "            onChange={(event) => setName(event.target.value)}\n" +
-      "            placeholder=\"name\"\n" +
-      "            aria-label=\"your name\"\n" +
-      "            disabled={!ready}\n" +
-      "          />\n" +
-      "          <input\n" +
-      "            className=\"flex-1 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm outline-none transition focus:border-amber-400 focus:bg-white focus:ring-2 focus:ring-amber-100\"\n" +
-      "            value={message}\n" +
-      "            onChange={(event) => setMessage(event.target.value)}\n" +
-      "            placeholder=\"leave a message\"\n" +
-      "            aria-label=\"your message\"\n" +
-      "            disabled={!ready}\n" +
-      "          />\n" +
-      "        </div>\n" +
-      "        <div className=\"flex items-center justify-between\">\n" +
-      "          <p className=\"text-xs text-stone-400\" aria-live=\"polite\">\n" +
-      "            {ready ? \"signatures appear live in every open tab\" : \"connecting…\"}\n" +
-      "          </p>\n" +
-      "          <button\n" +
-      "            type=\"submit\"\n" +
-      "            className=\"rounded-lg bg-stone-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-stone-700 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "            disabled={!ready || name.trim() === \"\" || message.trim() === \"\"}\n" +
-      "          >\n" +
-      "            Sign\n" +
-      "          </button>\n" +
-      "        </div>\n" +
-      "      </form>\n" +
-      "\n" +
-      "      <section className=\"mt-8 space-y-3\" aria-label=\"signatures\">\n" +
-      "        {guestbook === undefined ? (\n" +
-      "          <p className=\"text-sm text-stone-400\">loading signatures…</p>\n" +
-      "        ) : guestbook.entries.length === 0 ? (\n" +
-      "          <p className=\"rounded-2xl border border-dashed border-stone-300 px-4 py-8 text-center text-sm text-stone-400\">\n" +
-      "            Nobody has signed yet — be the first.\n" +
-      "          </p>\n" +
-      "        ) : (\n" +
-      "          guestbook.entries\n" +
-      "            .map((entry, index) => ({ entry, index }))\n" +
-      "            .reverse()\n" +
-      "            // The pre-reverse index: entries are append-only in the fold, so\n" +
-      "            // it identifies a row for its whole lifetime — a new signature\n" +
-      "            // inserts one element instead of remounting the list.\n" +
-      "            .map(({ entry, index }) => (\n" +
-      "              <article\n" +
-      "                key={index}\n" +
-      "                className=\"flex gap-3 rounded-2xl border border-stone-200 bg-white p-4 shadow-sm\"\n" +
-      "              >\n" +
-      "                <span\n" +
-      "                  aria-hidden\n" +
-      "                  className=\"flex size-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-semibold text-amber-800\"\n" +
-      "                >\n" +
-      "                  {entry.name.slice(0, 1).toUpperCase()}\n" +
-      "                </span>\n" +
-      "                <div className=\"min-w-0\">\n" +
-      "                  <p className=\"flex items-baseline gap-2\">\n" +
-      "                    <span className=\"truncate font-medium\">{entry.name}</span>\n" +
-      "                    <time\n" +
-      "                      className=\"shrink-0 text-xs text-stone-400\"\n" +
-      "                      dateTime={entry.signedAt}\n" +
-      "                      title={entry.signedAt}\n" +
-      "                    >\n" +
-      "                      {new Date(entry.signedAt).toLocaleString(undefined, {\n" +
-      "                        month: \"short\",\n" +
-      "                        day: \"numeric\",\n" +
-      "                        hour: \"numeric\",\n" +
-      "                        minute: \"2-digit\",\n" +
-      "                      })}\n" +
-      "                    </time>\n" +
-      "                  </p>\n" +
-      "                  <p className=\"mt-0.5 break-words text-sm text-stone-600\">{entry.message}</p>\n" +
-      "                </div>\n" +
-      "              </article>\n" +
-      "            ))\n" +
-      "        )}\n" +
-      "      </section>\n" +
-      "    </main>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/src/styles.css",
-    content:
-      "@import \"tailwindcss\";\n",
-  },
-  {
-    path: "apps/guestbook/src/worker.ts",
-    content:
-      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
-      "\n" +
-      "// Page worker only. The stateful /api entry lives in guestbook-app.ts so\n" +
-      "// waking the guestbook never has to load the TanStack server-rendering bundle.\n" +
-      "export default createServerEntry({\n" +
-      "  fetch(request) {\n" +
-      "    return handler.fetch(request);\n" +
-      "  },\n" +
-      "});\n",
-  },
-  {
-    path: "apps/guestbook/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"strict\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"jsx\": \"react-jsx\",\n" +
-      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\"]\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\", \"src/**/*.tsx\", \"vite.config.ts\"]\n" +
-      "}\n",
-  },
-  {
-    path: "apps/guestbook/vite.config.ts",
-    content:
-      "import { tanstackStart } from \"@tanstack/react-start/plugin/vite\";\n" +
-      "import viteReact from \"@vitejs/plugin-react\";\n" +
-      "import { cloudflare } from \"@cloudflare/vite-plugin\";\n" +
-      "import tailwindcss from \"@tailwindcss/vite\";\n" +
-      "import { defineConfig } from \"vite\";\n" +
-      "\n" +
-      "export default defineConfig({\n" +
-      "  plugins: [\n" +
-      "    cloudflare({ viteEnvironment: { name: \"ssr\" } }),\n" +
-      "    tailwindcss(),\n" +
-      "    tanstackStart(),\n" +
-      "    viteReact(),\n" +
-      "  ],\n" +
-      "});\n",
-  },
-  {
-    path: "apps/guestbook/wrangler.jsonc",
-    content:
-      "// Read only by the Vite build (@cloudflare/vite-plugin): the platform hosts\n" +
-      "// the built worker itself, so no deployment config lives here.\n" +
-      "{\n" +
-      "  \"name\": \"project-guestbook\",\n" +
-      "  \"main\": \"./src/worker.ts\",\n" +
-      "  \"compatibility_date\": \"2026-05-01\",\n" +
-      "  \"compatibility_flags\": [\"nodejs_compat\"],\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/package.json",
-    content:
-      "{\n" +
-      "  \"name\": \"project-tanstack\",\n" +
-      "  \"private\": true,\n" +
-      "  \"type\": \"module\",\n" +
-      "  \"description\": \"The project's TanStack Start todo app: pages built by Vite (the platform's vite worker-build pipeline runs `npm run build`), todos stored in this app's own Durable Object SQLite via sqlfu, every open tab converging over Cap'n Web live state.\",\n" +
-      "  \"scripts\": {\n" +
-      "    \"build\": \"vite build\"\n" +
-      "  },\n" +
-      "  \"dependencies\": {\n" +
-      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"@tanstack/react-router\": \"1.170.15\",\n" +
-      "    \"@tanstack/react-start\": \"1.168.18\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
-      "    \"react\": \"19.1.1\",\n" +
-      "    \"react-dom\": \"19.1.1\",\n" +
-      "    \"sqlfu\": \"0.1.1\"\n" +
-      "  },\n" +
-      "  \"devDependencies\": {\n" +
-      "    \"@cloudflare/vite-plugin\": \"1.43.0\",\n" +
-      "    \"@tailwindcss/vite\": \"4.3.2\",\n" +
-      "    \"@types/react\": \"19.2.17\",\n" +
-      "    \"@types/react-dom\": \"19.2.3\",\n" +
-      "    \"@vitejs/plugin-react\": \"6.0.2\",\n" +
-      "    \"tailwindcss\": \"4.3.2\",\n" +
-      "    \"typescript\": \"5.9.3\",\n" +
-      "    \"vite\": \"8.0.16\",\n" +
-      "    \"wrangler\": \"4.107.0\"\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/lib/state.ts",
-    content:
-      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
-      "\n" +
-      "/** One todo row, exactly as the Durable Object's SQLite stores it. */\n" +
-      "export type Todo = { id: string; title: string; done: boolean; createdAt: string };\n" +
-      "\n" +
-      "/** The whole list — the live-state value every connected browser mirrors. */\n" +
-      "export type TodoListState = { todos: Todo[] };\n" +
-      "\n" +
-      "/** What the browser holds after authenticating the /api Cap'n Web session. */\n" +
-      "export type TodoSessionApi = {\n" +
-      "  liveState: LiveStateRpc<TodoListState>;\n" +
-      "  add(title: string): Promise<string | undefined>;\n" +
-      "  setDone(id: string, done: boolean): Promise<void>;\n" +
-      "  rename(id: string, title: string): Promise<void>;\n" +
-      "  remove(id: string): Promise<void>;\n" +
-      "};\n",
-  },
-  {
-    path: "apps/tanstack/src/lib/use-todos.ts",
-    content:
-      "import { newWebSocketRpcSession } from \"@iterate-com/capnweb\";\n" +
-      "import { createLiveStateStore } from \"iterate/live-state\";\n" +
-      "import { useEffect, useRef, useState, useSyncExternalStore } from \"react\";\n" +
-      "import type { TodoListState, TodoSessionApi } from \"./state.ts\";\n" +
-      "\n" +
-      "/**\n" +
-      " * The whole client: one Cap'n Web WebSocket to /api, authenticated from the\n" +
-      " * app's exact-origin cookie, its live state folded into the platform's\n" +
-      " * `createLiveStateStore` (snapshot + patches) and read with\n" +
-      " * `useSyncExternalStore`. Mutations are plain calls on the session — the\n" +
-      " * Durable Object refreshes its one LiveState and every open tab, this one\n" +
-      " * included, repaints from the pushed patch.\n" +
-      " */\n" +
-      "export function useTodos() {\n" +
-      "  const [api, setApi] = useState<TodoSessionApi | null>(null);\n" +
-      "  const [error, setError] = useState<string | null>(null);\n" +
-      "  const storeRef = useRef(createLiveStateStore<TodoListState>());\n" +
-      "  const store = storeRef.current;\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    store.reset();\n" +
-      "    // Updater form is LOAD-BEARING everywhere a Cap'n Web stub meets React\n" +
-      "    // state: stubs are callable Proxies (that is what makes pipelining\n" +
-      "    // work), so setApi(stub) would make React CALL it as an updater.\n" +
-      "    setApi(() => null);\n" +
-      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
-      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
-      "    const publicApi = newWebSocketRpcSession<{\n" +
-      "      authenticate(credentials: { type: \"from-server-cookie\" }): Promise<TodoSessionApi>;\n" +
-      "    }>(endpoint.toString());\n" +
-      "\n" +
-      "    let disposed = false;\n" +
-      "    let subscription: { unsubscribe(): void } | undefined;\n" +
-      "    void (async () => {\n" +
-      "      const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
-      "      const subscribe = async () => {\n" +
-      "        // A revision gap means a missed patch; resubscribing makes the server\n" +
-      "        // lead with a fresh snapshot. Both lanes gate on disposal so a dying\n" +
-      "        // socket's stragglers cannot repopulate the store.\n" +
-      "        subscription?.unsubscribe();\n" +
-      "        subscription = await session.liveState.subscribe((update) => {\n" +
-      "          if (disposed) return;\n" +
-      "          store.apply(update, () => {\n" +
-      "            if (!disposed) void subscribe();\n" +
-      "          });\n" +
-      "        });\n" +
-      "      };\n" +
-      "      await subscribe();\n" +
-      "      if (!disposed) setApi(() => session);\n" +
-      "    })().catch((thrown: unknown) => {\n" +
-      "      if (!disposed) setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
-      "    });\n" +
-      "\n" +
-      "    return () => {\n" +
-      "      disposed = true;\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      publicApi[Symbol.dispose]();\n" +
-      "    };\n" +
-      "  }, [store]);\n" +
-      "\n" +
-      "  const state = useSyncExternalStore(store.subscribe, store.getState, () => undefined);\n" +
-      "  return { todos: state?.todos, api, error };\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/routeTree.gen.ts",
-    content:
-      "/* eslint-disable */\n" +
-      "\n" +
-      "// @ts-nocheck\n" +
-      "\n" +
-      "// noinspection JSUnusedGlobalSymbols\n" +
-      "\n" +
-      "// This file was automatically generated by TanStack Router.\n" +
-      "// You should NOT make any changes in this file as it will be overwritten.\n" +
-      "// Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.\n" +
-      "\n" +
-      "import { Route as rootRouteImport } from './routes/__root'\n" +
-      "import { Route as IndexRouteImport } from './routes/index'\n" +
-      "\n" +
-      "const IndexRoute = IndexRouteImport.update({\n" +
-      "  id: '/',\n" +
-      "  path: '/',\n" +
-      "  getParentRoute: () => rootRouteImport,\n" +
-      "} as any)\n" +
-      "\n" +
-      "export interface FileRoutesByFullPath {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesByTo {\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRoutesById {\n" +
-      "  __root__: typeof rootRouteImport\n" +
-      "  '/': typeof IndexRoute\n" +
-      "}\n" +
-      "export interface FileRouteTypes {\n" +
-      "  fileRoutesByFullPath: FileRoutesByFullPath\n" +
-      "  fullPaths: '/'\n" +
-      "  fileRoutesByTo: FileRoutesByTo\n" +
-      "  to: '/'\n" +
-      "  id: '__root__' | '/'\n" +
-      "  fileRoutesById: FileRoutesById\n" +
-      "}\n" +
-      "export interface RootRouteChildren {\n" +
-      "  IndexRoute: typeof IndexRoute\n" +
-      "}\n" +
-      "\n" +
-      "declare module '@tanstack/react-router' {\n" +
-      "  interface FileRoutesByPath {\n" +
-      "    '/': {\n" +
-      "      id: '/'\n" +
-      "      path: '/'\n" +
-      "      fullPath: '/'\n" +
-      "      preLoaderRoute: typeof IndexRouteImport\n" +
-      "      parentRoute: typeof rootRouteImport\n" +
+      "  const load = useCallback(async () => {\n" +
+      "    try {\n" +
+      "      setEntries(await api<Entry[]>());\n" +
+      "      setError(\"\");\n" +
+      "    } catch (cause) {\n" +
+      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "    } finally {\n" +
+      "      setLoading(false);\n" +
       "    }\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "const rootRouteChildren: RootRouteChildren = {\n" +
-      "  IndexRoute: IndexRoute,\n" +
-      "}\n" +
-      "export const routeTree = rootRouteImport\n" +
-      "  ._addFileChildren(rootRouteChildren)\n" +
-      "  ._addFileTypes<FileRouteTypes>()\n" +
-      "\n" +
-      "import type { getRouter } from './router.tsx'\n" +
-      "import type { createStart } from '@tanstack/react-start'\n" +
-      "declare module '@tanstack/react-start' {\n" +
-      "  interface Register {\n" +
-      "    ssr: true\n" +
-      "    router: Awaited<ReturnType<typeof getRouter>>\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/router.tsx",
-    content:
-      "import { createRouter } from \"@tanstack/react-router\";\n" +
-      "import { routeTree } from \"./routeTree.gen.ts\";\n" +
-      "\n" +
-      "export function getRouter() {\n" +
-      "  return createRouter({ routeTree });\n" +
-      "}\n" +
-      "\n" +
-      "declare module \"@tanstack/react-router\" {\n" +
-      "  interface Register {\n" +
-      "    router: ReturnType<typeof getRouter>;\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/routes/__root.tsx",
-    content:
-      "import type { ReactNode } from \"react\";\n" +
-      "import { createRootRoute, HeadContent, Outlet, Scripts } from \"@tanstack/react-router\";\n" +
-      "import appCss from \"../styles.css?url\";\n" +
-      "\n" +
-      "export const Route = createRootRoute({\n" +
-      "  head: () => ({\n" +
-      "    meta: [\n" +
-      "      { charSet: \"utf-8\" },\n" +
-      "      { name: \"viewport\", content: \"width=device-width, initial-scale=1\" },\n" +
-      "      { title: \"TanStack todos\" },\n" +
-      "    ],\n" +
-      "    links: [{ rel: \"stylesheet\", href: appCss }],\n" +
-      "  }),\n" +
-      "  component: RootComponent,\n" +
-      "});\n" +
-      "\n" +
-      "function RootComponent() {\n" +
-      "  return (\n" +
-      "    <RootDocument>\n" +
-      "      <Outlet />\n" +
-      "    </RootDocument>\n" +
-      "  );\n" +
-      "}\n" +
-      "\n" +
-      "function RootDocument({ children }: Readonly<{ children: ReactNode }>) {\n" +
-      "  return (\n" +
-      "    <html lang=\"en\">\n" +
-      "      <head>\n" +
-      "        <HeadContent />\n" +
-      "      </head>\n" +
-      "      <body className=\"min-h-screen bg-slate-100 text-slate-900 antialiased\">\n" +
-      "        {children}\n" +
-      "        <Scripts />\n" +
-      "      </body>\n" +
-      "    </html>\n" +
-      "  );\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/routes/index.tsx",
-    content:
-      "import { createFileRoute } from \"@tanstack/react-router\";\n" +
-      "import { useEffect, useState } from \"react\";\n" +
-      "import { useTodos } from \"../lib/use-todos.ts\";\n" +
-      "\n" +
-      "export const Route = createFileRoute(\"/\")({ component: Todos });\n" +
-      "\n" +
-      "// The project's shared todo list. Rows live in the app's Durable Object\n" +
-      "// SQLite (src/todos-app.ts); this page hydrates, authenticates /api from the\n" +
-      "// app cookie, and stays live — every project member's tab converges.\n" +
-      "export function Todos() {\n" +
-      "  const { todos, api, error } = useTodos();\n" +
-      "  const [draft, setDraft] = useState(\"\");\n" +
-      "  const [pendingAdd, setPendingAdd] = useState<{\n" +
-      "    acceptNewMatchingTodo: boolean;\n" +
-      "    existingTodoIds: readonly string[];\n" +
-      "    id: string | null;\n" +
-      "    title: string;\n" +
-      "  } | null>(null);\n" +
-      "  const [mutationError, setMutationError] = useState<string | null>(null);\n" +
-      "  const remaining = todos?.filter((todo) => !todo.done).length ?? 0;\n" +
-      "  const visibleError = error ?? mutationError;\n" +
+      "  }, []);\n" +
       "\n" +
       "  useEffect(() => {\n" +
-      "    if (pendingAdd === null || todos === undefined) return;\n" +
-      "    const observed =\n" +
-      "      (pendingAdd.id !== null && todos.some((todo) => todo.id === pendingAdd.id)) ||\n" +
-      "      (pendingAdd.acceptNewMatchingTodo &&\n" +
-      "        todos.some(\n" +
-      "          (todo) =>\n" +
-      "            todo.title === pendingAdd.title && !pendingAdd.existingTodoIds.includes(todo.id),\n" +
-      "        ));\n" +
-      "    if (observed) {\n" +
-      "      setPendingAdd(null);\n" +
-      "      setMutationError(null);\n" +
+      "    void load();\n" +
+      "  }, [load]);\n" +
+      "\n" +
+      "  const sign = async (event: FormEvent) => {\n" +
+      "    event.preventDefault();\n" +
+      "    try {\n" +
+      "      await api<Entry>({\n" +
+      "        body: JSON.stringify({ message, name }),\n" +
+      "        headers: { \"content-type\": \"application/json\" },\n" +
+      "        method: \"POST\",\n" +
+      "      });\n" +
+      "      setMessage(\"\");\n" +
+      "      await load();\n" +
+      "    } catch (cause) {\n" +
+      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
       "    }\n" +
-      "  }, [pendingAdd, todos]);\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    if (pendingAdd === null) return;\n" +
-      "    const timeout = window.setTimeout(() => {\n" +
-      "      // The RPC cannot be cancelled. Keep the composer locked so a late\n" +
-      "      // success cannot leave a stale error or allow a duplicate submission.\n" +
-      "      setMutationError(\"Adding this todo is taking too long. Reload before retrying.\");\n" +
-      "    }, 15_000);\n" +
-      "    return () => window.clearTimeout(timeout);\n" +
-      "  }, [pendingAdd]);\n" +
+      "  };\n" +
       "\n" +
       "  return (\n" +
-      "    <main className=\"mx-auto max-w-xl px-4 py-12\">\n" +
-      "      <header className=\"flex items-baseline justify-between gap-4\">\n" +
-      "        <h1 className=\"text-3xl font-semibold tracking-tight\">TanStack todos</h1>\n" +
-      "        <form action=\"/_iterate/auth/logout\" method=\"post\">\n" +
-      "          <button className=\"text-sm text-slate-400 transition hover:text-slate-600\">\n" +
-      "            Sign out\n" +
-      "          </button>\n" +
-      "        </form>\n" +
-      "      </header>\n" +
-      "      <p className=\"mt-1 text-sm text-slate-500\" aria-live=\"polite\">\n" +
-      "        {todos === undefined\n" +
-      "          ? \"connecting…\"\n" +
-      "          : todos.length === 0\n" +
-      "            ? \"the project's shared list — every member sees the same todos, live\"\n" +
-      "            : remaining === 0\n" +
-      "              ? \"all done\"\n" +
-      "              : `${remaining} of ${todos.length} left`}\n" +
-      "      </p>\n" +
-      "\n" +
-      "      {visibleError !== null ? (\n" +
-      "        <p\n" +
-      "          className=\"mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700\"\n" +
-      "          data-type=\"error\"\n" +
-      "        >\n" +
-      "          {visibleError}\n" +
-      "        </p>\n" +
-      "      ) : null}\n" +
-      "\n" +
-      "      <form\n" +
-      "        className=\"mt-8 flex gap-3\"\n" +
-      "        onSubmit={(event) => {\n" +
-      "          event.preventDefault();\n" +
-      "          const title = draft.trim().slice(0, 500);\n" +
-      "          if (api === null || todos === undefined || title === \"\" || pendingAdd !== null) return;\n" +
-      "          setMutationError(null);\n" +
-      "          setPendingAdd({\n" +
-      "            acceptNewMatchingTodo: false,\n" +
-      "            existingTodoIds: todos.map((todo) => todo.id),\n" +
-      "            id: null,\n" +
-      "            title,\n" +
-      "          });\n" +
-      "          setDraft(\"\");\n" +
-      "          void api\n" +
-      "            .add(title)\n" +
-      "            .then((id) => {\n" +
-      "              // The pre-return-id API can answer briefly while its\n" +
-      "              // stale-while-rebuild facet swaps. Its void response still\n" +
-      "              // confirms success; identify that call by the first new\n" +
-      "              // equal-title live-state row instead of inviting a duplicate.\n" +
-      "              setPendingAdd((current) =>\n" +
-      "                current === null\n" +
-      "                  ? null\n" +
-      "                  : id === undefined\n" +
-      "                    ? { ...current, acceptNewMatchingTodo: true }\n" +
-      "                    : { ...current, id },\n" +
-      "              );\n" +
-      "            })\n" +
-      "            .catch((thrown: unknown) => {\n" +
-      "              // A transport rejection can lose a successful call's ack. Keep\n" +
-      "              // the composer locked until live state confirms the row (or a\n" +
-      "              // reload proves otherwise), so retry cannot duplicate it.\n" +
-      "              const message = thrown instanceof Error ? thrown.message : String(thrown);\n" +
-      "              setMutationError(`${message} Reload before retrying.`);\n" +
-      "            });\n" +
-      "        }}\n" +
-      "      >\n" +
+      "    <>\n" +
+      "      <h1>Guestbook</h1>\n" +
+      "      <form onSubmit={sign}>\n" +
+      "        <label htmlFor=\"name\">Name</label>\n" +
       "        <input\n" +
-      "          className=\"flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100\"\n" +
-      "          value={draft}\n" +
-      "          onChange={(event) => setDraft(event.target.value)}\n" +
-      "          placeholder=\"add a todo\"\n" +
-      "          aria-label=\"add a todo\"\n" +
-      "          disabled={api === null || todos === undefined || pendingAdd !== null}\n" +
+      "          id=\"name\"\n" +
+      "          maxLength={80}\n" +
+      "          onChange={(event) => setName(event.currentTarget.value)}\n" +
+      "          required\n" +
+      "          value={name}\n" +
       "        />\n" +
-      "        <button\n" +
-      "          type=\"submit\"\n" +
-      "          className=\"rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40\"\n" +
-      "          disabled={\n" +
-      "            api === null || todos === undefined || draft.trim() === \"\" || pendingAdd !== null\n" +
-      "          }\n" +
-      "        >\n" +
-      "          add\n" +
-      "        </button>\n" +
+      "        <label htmlFor=\"message\">Message</label>\n" +
+      "        <textarea\n" +
+      "          id=\"message\"\n" +
+      "          maxLength={500}\n" +
+      "          onChange={(event) => setMessage(event.currentTarget.value)}\n" +
+      "          required\n" +
+      "          rows={4}\n" +
+      "          value={message}\n" +
+      "        />\n" +
+      "        <button type=\"submit\">Sign guestbook</button>\n" +
       "      </form>\n" +
+      "      {error.length > 0 && <p role=\"alert\">{error}</p>}\n" +
+      "      {loading ? (\n" +
+      "        <p>Loading…</p>\n" +
+      "      ) : entries.length === 0 ? (\n" +
+      "        <p>No entries yet.</p>\n" +
+      "      ) : (\n" +
+      "        <section aria-label=\"Guestbook entries\">\n" +
+      "          {entries.map((entry) => (\n" +
+      "            <article key={entry.id}>\n" +
+      "              <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>\n" +
+      "              <p>{entry.message}</p>\n" +
+      "            </article>\n" +
+      "          ))}\n" +
+      "        </section>\n" +
+      "      )}\n" +
+      "    </>\n" +
+      "  );\n" +
+      "}\n" +
       "\n" +
-      "      {pendingAdd !== null && mutationError === null ? (\n" +
-      "        <p className=\"mt-2 text-sm text-slate-500\" data-spinner=\"true\" aria-live=\"polite\">\n" +
-      "          adding “{pendingAdd.title}”…\n" +
-      "        </p>\n" +
-      "      ) : null}\n" +
+      "const root = document.getElementById(\"root\");\n" +
+      "if (root === null) throw new Error(\"missing #root\");\n" +
+      "createRoot(root).render(<GuestbookClient />);\n",
+  },
+  {
+    path: "apps/guestbook/server.tsx",
+    content:
+      "import { DurableObject } from \"cloudflare:workers\";\n" +
       "\n" +
-      "      {todos !== undefined && todos.length > 0 ? (\n" +
-      "        <ul className=\"mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white shadow-sm\">\n" +
+      "export class GuestbookApp extends DurableObject {\n" +
+      "  constructor(ctx: DurableObjectState, env: unknown) {\n" +
+      "    super(ctx, env);\n" +
+      "    this.ctx.storage.sql.exec(`\n" +
+      "      CREATE TABLE IF NOT EXISTS entries (\n" +
+      "        id TEXT PRIMARY KEY,\n" +
+      "        name TEXT NOT NULL,\n" +
+      "        message TEXT NOT NULL,\n" +
+      "        signed_at TEXT NOT NULL\n" +
+      "      )\n" +
+      "    `);\n" +
+      "  }\n" +
+      "\n" +
+      "  async fetch(request: Request): Promise<Response> {\n" +
+      "    const url = new URL(request.url);\n" +
+      "    if (url.pathname === \"/api/entries\") {\n" +
+      "      if (request.method === \"GET\") {\n" +
+      "        const entries = this.ctx.storage.sql\n" +
+      "          .exec<{ id: string; message: string; name: string; signed_at: string }>(\n" +
+      "            \"SELECT id, name, message, signed_at FROM entries ORDER BY signed_at DESC, id DESC LIMIT 100\",\n" +
+      "          )\n" +
+      "          .toArray()\n" +
+      "          .map((entry) => ({\n" +
+      "            id: entry.id,\n" +
+      "            message: entry.message,\n" +
+      "            name: entry.name,\n" +
+      "            signedAt: entry.signed_at,\n" +
+      "          }));\n" +
+      "        return Response.json(entries);\n" +
+      "      }\n" +
+      "      if (request.method === \"POST\") {\n" +
+      "        const body = await request.json<{ message?: unknown; name?: unknown }>();\n" +
+      "        const name = typeof body.name === \"string\" ? body.name.trim().slice(0, 80) : \"\";\n" +
+      "        const message = typeof body.message === \"string\" ? body.message.trim().slice(0, 500) : \"\";\n" +
+      "        if (name.length === 0 || message.length === 0) {\n" +
+      "          return new Response(\"name and message are required\", { status: 400 });\n" +
+      "        }\n" +
+      "        const entry = {\n" +
+      "          id: crypto.randomUUID(),\n" +
+      "          message,\n" +
+      "          name,\n" +
+      "          signedAt: new Date().toISOString(),\n" +
+      "        };\n" +
+      "        this.ctx.storage.sql.exec(\n" +
+      "          \"INSERT INTO entries (id, name, message, signed_at) VALUES (?, ?, ?, ?)\",\n" +
+      "          entry.id,\n" +
+      "          entry.name,\n" +
+      "          entry.message,\n" +
+      "          entry.signedAt,\n" +
+      "        );\n" +
+      "        return Response.json(entry, { status: 201 });\n" +
+      "      }\n" +
+      "      return new Response(\"method not allowed\", { status: 405 });\n" +
+      "    }\n" +
+      "\n" +
+      "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
+      "      return new Response(\"not found\", { status: 404 });\n" +
+      "    }\n" +
+      "    return new Response(\n" +
+      "      `<!doctype html>\n" +
+      "<html lang=\"en\">\n" +
+      "  <head>\n" +
+      "    <meta charset=\"utf-8\">\n" +
+      "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+      "    <title>Guestbook</title>\n" +
+      "    <style>\n" +
+      "      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }\n" +
+      "      body { margin: 0; padding: 2rem; }\n" +
+      "      main { margin: 0 auto; max-width: 38rem; }\n" +
+      "      form { display: grid; gap: .75rem; }\n" +
+      "      input, textarea, button { font: inherit; padding: .6rem; }\n" +
+      "      article { border-block-start: 1px solid #8886; margin-block-start: 1.25rem; padding-block-start: 1rem; }\n" +
+      "      time { opacity: .65; }\n" +
+      "      [role=\"alert\"] { color: #c33; }\n" +
+      "    </style>\n" +
+      "  </head>\n" +
+      "  <body>\n" +
+      "    <main id=\"root\"><p>Loading…</p></main>\n" +
+      "    <script type=\"module\" src=\"/apps/guestbook/client.js\"></script>\n" +
+      "  </body>\n" +
+      "</html>`,\n" +
+      "      {\n" +
+      "        headers: {\n" +
+      "          \"content-type\": \"text/html; charset=utf-8\",\n" +
+      "          \"x-content-type-options\": \"nosniff\",\n" +
+      "        },\n" +
+      "      },\n" +
+      "    );\n" +
+      "  }\n" +
+      "}\n",
+  },
+  {
+    path: "apps/todo/client.tsx",
+    content:
+      "import React, {\n" +
+      "  type FormEvent,\n" +
+      "  useCallback,\n" +
+      "  useEffect,\n" +
+      "  useState,\n" +
+      "} from \"https://esm.sh/react@19.2.4\";\n" +
+      "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
+      "\n" +
+      "type Todo = {\n" +
+      "  createdAt: string;\n" +
+      "  done: boolean;\n" +
+      "  id: string;\n" +
+      "  title: string;\n" +
+      "};\n" +
+      "\n" +
+      "async function api<T>(path: string, init?: RequestInit): Promise<T> {\n" +
+      "  const response = await fetch(path, init);\n" +
+      "  if (!response.ok)\n" +
+      "    throw new Error((await response.text()) || `request failed (${response.status})`);\n" +
+      "  return (response.status === 204 ? undefined : await response.json()) as T;\n" +
+      "}\n" +
+      "\n" +
+      "export function TodoClient() {\n" +
+      "  const [error, setError] = useState(\"\");\n" +
+      "  const [loading, setLoading] = useState(true);\n" +
+      "  const [title, setTitle] = useState(\"\");\n" +
+      "  const [todos, setTodos] = useState<Todo[]>([]);\n" +
+      "\n" +
+      "  const load = useCallback(async () => {\n" +
+      "    try {\n" +
+      "      setTodos(await api<Todo[]>(\"/api/todos\"));\n" +
+      "      setError(\"\");\n" +
+      "    } catch (cause) {\n" +
+      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "    } finally {\n" +
+      "      setLoading(false);\n" +
+      "    }\n" +
+      "  }, []);\n" +
+      "\n" +
+      "  useEffect(() => {\n" +
+      "    void load();\n" +
+      "  }, [load]);\n" +
+      "\n" +
+      "  const mutate = async (mutation: () => Promise<unknown>) => {\n" +
+      "    try {\n" +
+      "      await mutation();\n" +
+      "      await load();\n" +
+      "    } catch (cause) {\n" +
+      "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "    }\n" +
+      "  };\n" +
+      "\n" +
+      "  const add = async (event: FormEvent) => {\n" +
+      "    event.preventDefault();\n" +
+      "    if (title.trim().length === 0) return;\n" +
+      "    await mutate(async () => {\n" +
+      "      await api<Todo>(\"/api/todos\", {\n" +
+      "        body: JSON.stringify({ title }),\n" +
+      "        headers: { \"content-type\": \"application/json\" },\n" +
+      "        method: \"POST\",\n" +
+      "      });\n" +
+      "      setTitle(\"\");\n" +
+      "    });\n" +
+      "  };\n" +
+      "\n" +
+      "  return (\n" +
+      "    <>\n" +
+      "      <h1>Todo</h1>\n" +
+      "      <form onSubmit={add}>\n" +
+      "        <input\n" +
+      "          aria-label=\"New todo\"\n" +
+      "          id=\"new-todo\"\n" +
+      "          maxLength={200}\n" +
+      "          onChange={(event) => setTitle(event.currentTarget.value)}\n" +
+      "          placeholder=\"What needs doing?\"\n" +
+      "          required\n" +
+      "          type=\"text\"\n" +
+      "          value={title}\n" +
+      "        />\n" +
+      "        <button type=\"submit\">Add</button>\n" +
+      "      </form>\n" +
+      "      {error.length > 0 && <p role=\"alert\">{error}</p>}\n" +
+      "      {loading ? (\n" +
+      "        <p>Loading…</p>\n" +
+      "      ) : todos.length === 0 ? (\n" +
+      "        <p>No todos yet.</p>\n" +
+      "      ) : (\n" +
+      "        <ul>\n" +
       "          {todos.map((todo) => (\n" +
-      "            <li key={todo.id} className=\"group flex items-center gap-3 px-4 py-3\">\n" +
+      "            <li key={todo.id}>\n" +
       "              <input\n" +
-      "                type=\"checkbox\"\n" +
-      "                className=\"size-4 shrink-0 accent-indigo-600\"\n" +
+      "                aria-label={`Mark ${todo.title} ${todo.done ? \"not done\" : \"done\"}`}\n" +
       "                checked={todo.done}\n" +
-      "                onChange={(event) => void api?.setDone(todo.id, event.target.checked)}\n" +
-      "                aria-label={`done: ${todo.title}`}\n" +
-      "              />\n" +
-      "              <span\n" +
-      "                className={`min-w-0 flex-1 truncate text-sm transition ${\n" +
-      "                  todo.done ? \"text-slate-400 line-through\" : \"\"\n" +
-      "                }`}\n" +
-      "                title=\"double-click to rename\"\n" +
-      "                onDoubleClick={() => {\n" +
-      "                  const title = window.prompt(\"rename todo\", todo.title);\n" +
-      "                  if (title) void api?.rename(todo.id, title);\n" +
+      "                onChange={(event) => {\n" +
+      "                  const done = event.currentTarget.checked;\n" +
+      "                  void mutate(async () => {\n" +
+      "                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {\n" +
+      "                      body: JSON.stringify({ done }),\n" +
+      "                      headers: { \"content-type\": \"application/json\" },\n" +
+      "                      method: \"PATCH\",\n" +
+      "                    });\n" +
+      "                  });\n" +
       "                }}\n" +
-      "              >\n" +
-      "                {todo.title}\n" +
-      "              </span>\n" +
+      "                type=\"checkbox\"\n" +
+      "              />\n" +
+      "              <span className={todo.done ? \"done\" : \"\"}>{todo.title}</span>\n" +
       "              <button\n" +
+      "                onClick={() => {\n" +
+      "                  void mutate(async () => {\n" +
+      "                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {\n" +
+      "                      method: \"DELETE\",\n" +
+      "                    });\n" +
+      "                  });\n" +
+      "                }}\n" +
       "                type=\"button\"\n" +
-      "                className=\"shrink-0 text-slate-300 transition hover:text-red-500\"\n" +
-      "                onClick={() => void api?.remove(todo.id)}\n" +
-      "                aria-label={`delete: ${todo.title}`}\n" +
       "              >\n" +
-      "                ✕\n" +
+      "                Delete\n" +
       "              </button>\n" +
       "            </li>\n" +
       "          ))}\n" +
       "        </ul>\n" +
-      "      ) : null}\n" +
-      "    </main>\n" +
+      "      )}\n" +
+      "    </>\n" +
       "  );\n" +
-      "}\n",
+      "}\n" +
+      "\n" +
+      "const root = document.getElementById(\"root\");\n" +
+      "if (root === null) throw new Error(\"missing #root\");\n" +
+      "createRoot(root).render(<TodoClient />);\n",
   },
   {
-    path: "apps/tanstack/src/styles.css",
+    path: "apps/todo/server.tsx",
     content:
-      "@import \"tailwindcss\";\n",
-  },
-  {
-    path: "apps/tanstack/src/todos-app.ts",
-    content:
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import { IterateDurableObject, type ProjectAuthCredentials } from \"iterate/sdk\";\n" +
-      "import { createDurableObjectClient, defineConfig, sql } from \"sqlfu\";\n" +
-      "import type { Todo, TodoListState } from \"./lib/state.ts\";\n" +
+      "import { DurableObject } from \"cloudflare:workers\";\n" +
       "\n" +
-      "// The small, stateful half of the todo app. It has its own Wrangler entry so\n" +
-      "// a cold /api WebSocket loads only the Durable Object and its data/runtime\n" +
-      "// dependencies, never the unrelated TanStack SSR bundle in worker.ts.\n" +
-      "export class TanstackTodos extends IterateDurableObject {\n" +
-      "  static db = defineConfig({\n" +
-      "    // The desired schema now (`sqlfu draft` diffs new migrations against it).\n" +
-      "    definitions: sql`\n" +
-      "      create table todos (\n" +
-      "        id text primary key,\n" +
-      "        title text not null,\n" +
-      "        done integer not null default 0,\n" +
-      "        created_at text not null\n" +
-      "      );\n" +
-      "    `,\n" +
-      "    migrations: [\n" +
-      "      {\n" +
-      "        name: \"20260718000001_create_todos\",\n" +
-      "        content: sql`\n" +
-      "          create table if not exists todos (\n" +
-      "            id text primary key,\n" +
-      "            title text not null,\n" +
-      "            done integer not null default 0,\n" +
-      "            created_at text not null\n" +
-      "          );\n" +
-      "        `,\n" +
-      "      },\n" +
-      "    ],\n" +
-      "    queries: {\n" +
-      "      list: sql.many<{ result: { id: string; title: string; done: number; created_at: string } }>`\n" +
-      "        select id, title, done, created_at from todos order by created_at asc, id asc\n" +
-      "      `,\n" +
-      "      insert: sql.run<{ parameters: { id: string; title: string; createdAt: string } }>`\n" +
-      "        insert into todos (id, title, done, created_at) values (:id, :title, 0, :createdAt)\n" +
-      "      `,\n" +
-      "      setDone: sql.run<{ parameters: { id: string; done: number } }>`\n" +
-      "        update todos set done = :done where id = :id\n" +
-      "      `,\n" +
-      "      rename: sql.run<{ parameters: { id: string; title: string } }>`\n" +
-      "        update todos set title = :title where id = :id\n" +
-      "      `,\n" +
-      "      remove: sql.run<{ parameters: { id: string } }>`\n" +
-      "        delete from todos where id = :id\n" +
-      "      `,\n" +
-      "    },\n" +
-      "  });\n" +
-      "\n" +
-      "  // {sql} without transactionSync: initialization is await-free and Durable\n" +
-      "  // Object SQLite commits one event-loop task atomically, so the single\n" +
-      "  // migration cannot persist half-applied.\n" +
-      "  readonly #db = TanstackTodos.db(createDurableObjectClient({ sql: this.ctx.storage.sql }));\n" +
-      "  readonly #live: LiveState<TodoListState>;\n" +
-      "\n" +
-      "  constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {\n" +
-      "    super(...args);\n" +
-      "    this.#db.migrate();\n" +
-      "    this.#live = new LiveState<TodoListState>({ todos: this.#load() });\n" +
+      "export class TodoApp extends DurableObject {\n" +
+      "  constructor(ctx: DurableObjectState, env: unknown) {\n" +
+      "    super(ctx, env);\n" +
+      "    this.ctx.storage.sql.exec(`\n" +
+      "      CREATE TABLE IF NOT EXISTS todos (\n" +
+      "        id TEXT PRIMARY KEY,\n" +
+      "        title TEXT NOT NULL,\n" +
+      "        done INTEGER NOT NULL DEFAULT 0,\n" +
+      "        created_at TEXT NOT NULL\n" +
+      "      )\n" +
+      "    `);\n" +
       "  }\n" +
       "\n" +
-      "  #load(): Todo[] {\n" +
-      "    return this.#db.list().map((row) => ({\n" +
-      "      id: row.id,\n" +
-      "      title: row.title,\n" +
-      "      done: row.done !== 0,\n" +
-      "      createdAt: row.created_at,\n" +
-      "    }));\n" +
-      "  }\n" +
-      "\n" +
-      "  #refresh(): void {\n" +
-      "    this.#live.setState({ todos: this.#load() });\n" +
-      "  }\n" +
-      "\n" +
-      "  addTodo(title: string): string | undefined {\n" +
-      "    const trimmed = title.trim().slice(0, 500);\n" +
-      "    if (trimmed.length === 0) return;\n" +
-      "    const id = crypto.randomUUID();\n" +
-      "    this.#db.insert({\n" +
-      "      id,\n" +
-      "      title: trimmed,\n" +
-      "      createdAt: new Date().toISOString(),\n" +
-      "    });\n" +
-      "    this.#refresh();\n" +
-      "    return id;\n" +
-      "  }\n" +
-      "\n" +
-      "  setTodoDone(id: string, done: boolean): void {\n" +
-      "    this.#db.setDone({ id, done: done ? 1 : 0 });\n" +
-      "    this.#refresh();\n" +
-      "  }\n" +
-      "\n" +
-      "  renameTodo(id: string, title: string): void {\n" +
-      "    const trimmed = title.trim().slice(0, 500);\n" +
-      "    if (trimmed.length === 0) return;\n" +
-      "    this.#db.rename({ id, title: trimmed });\n" +
-      "    this.#refresh();\n" +
-      "  }\n" +
-      "\n" +
-      "  removeTodo(id: string): void {\n" +
-      "    this.#db.remove({ id });\n" +
-      "    this.#refresh();\n" +
-      "  }\n" +
-      "\n" +
-      "  liveStateTarget(): LiveStateRpcTarget<TodoListState> {\n" +
-      "    return new LiveStateRpcTarget(this.#live);\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The Cap'n Web door: every /api WebSocket upgrade terminates here. */\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
-      "    return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, request));\n" +
+      "    const url = new URL(request.url);\n" +
+      "    if (url.pathname === \"/api/todos\") {\n" +
+      "      if (request.method === \"GET\") {\n" +
+      "        const todos = this.ctx.storage.sql\n" +
+      "          .exec<{ created_at: string; done: number; id: string; title: string }>(\n" +
+      "            \"SELECT id, title, done, created_at FROM todos ORDER BY created_at, id\",\n" +
+      "          )\n" +
+      "          .toArray()\n" +
+      "          .map((todo) => ({\n" +
+      "            createdAt: todo.created_at,\n" +
+      "            done: todo.done !== 0,\n" +
+      "            id: todo.id,\n" +
+      "            title: todo.title,\n" +
+      "          }));\n" +
+      "        return Response.json(todos);\n" +
+      "      }\n" +
+      "      if (request.method === \"POST\") {\n" +
+      "        const body = await request.json<{ title?: unknown }>();\n" +
+      "        const title = typeof body.title === \"string\" ? body.title.trim().slice(0, 200) : \"\";\n" +
+      "        if (title.length === 0) return new Response(\"title is required\", { status: 400 });\n" +
+      "        const todo = {\n" +
+      "          createdAt: new Date().toISOString(),\n" +
+      "          done: false,\n" +
+      "          id: crypto.randomUUID(),\n" +
+      "          title,\n" +
+      "        };\n" +
+      "        this.ctx.storage.sql.exec(\n" +
+      "          \"INSERT INTO todos (id, title, done, created_at) VALUES (?, ?, 0, ?)\",\n" +
+      "          todo.id,\n" +
+      "          todo.title,\n" +
+      "          todo.createdAt,\n" +
+      "        );\n" +
+      "        return Response.json(todo, { status: 201 });\n" +
+      "      }\n" +
+      "      return new Response(\"method not allowed\", { status: 405 });\n" +
+      "    }\n" +
+      "\n" +
+      "    const match = /^\\/api\\/todos\\/([^/]+)$/.exec(url.pathname);\n" +
+      "    if (match !== null) {\n" +
+      "      const id = match[1] ?? \"\";\n" +
+      "      if (request.method === \"PATCH\") {\n" +
+      "        const body = await request.json<{ done?: unknown }>();\n" +
+      "        if (typeof body.done !== \"boolean\") {\n" +
+      "          return new Response(\"done must be a boolean\", { status: 400 });\n" +
+      "        }\n" +
+      "        this.ctx.storage.sql.exec(\"UPDATE todos SET done = ? WHERE id = ?\", body.done ? 1 : 0, id);\n" +
+      "        return new Response(null, { status: 204 });\n" +
+      "      }\n" +
+      "      if (request.method === \"DELETE\") {\n" +
+      "        this.ctx.storage.sql.exec(\"DELETE FROM todos WHERE id = ?\", id);\n" +
+      "        return new Response(null, { status: 204 });\n" +
+      "      }\n" +
+      "      return new Response(\"method not allowed\", { status: 405 });\n" +
+      "    }\n" +
+      "\n" +
+      "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
+      "      return new Response(\"not found\", { status: 404 });\n" +
+      "    }\n" +
+      "    return new Response(\n" +
+      "      `<!doctype html>\n" +
+      "<html lang=\"en\">\n" +
+      "  <head>\n" +
+      "    <meta charset=\"utf-8\">\n" +
+      "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+      "    <title>Todo</title>\n" +
+      "    <style>\n" +
+      "      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }\n" +
+      "      body { margin: 0; padding: 2rem; }\n" +
+      "      main { margin: 0 auto; max-width: 38rem; }\n" +
+      "      form, li { display: flex; gap: .75rem; margin-block: .75rem; }\n" +
+      "      input[type=\"text\"] { flex: 1; padding: .6rem; }\n" +
+      "      button { padding: .45rem .75rem; }\n" +
+      "      .done { text-decoration: line-through; opacity: .65; }\n" +
+      "      [role=\"alert\"] { color: #c33; }\n" +
+      "    </style>\n" +
+      "  </head>\n" +
+      "  <body>\n" +
+      "    <main id=\"root\"><p>Loading…</p></main>\n" +
+      "    <script type=\"module\" src=\"/apps/todo/client.js\"></script>\n" +
+      "  </body>\n" +
+      "</html>`,\n" +
+      "      {\n" +
+      "        headers: {\n" +
+      "          \"content-type\": \"text/html; charset=utf-8\",\n" +
+      "          \"x-content-type-options\": \"nosniff\",\n" +
+      "        },\n" +
+      "      },\n" +
+      "    );\n" +
       "  }\n" +
-      "}\n" +
-      "\n" +
-      "// The unauthenticated Cap'n Web root: exactly the internal app's pattern —\n" +
-      "// the browser exchanges this app's exact-origin cookie in-band and gets an\n" +
-      "// attenuated session capability, never the project itx.\n" +
-      "class PublicTodoApi extends RpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly app: TanstackTodos,\n" +
-      "    private readonly request: Request,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  async authenticate(credentials: ProjectAuthCredentials): Promise<TodoSession> {\n" +
-      "    using itx = await this.app.env.ITX.get();\n" +
-      "    await itx.auth.get({ policy: \"project-member\" }).authenticate(this.request, credentials);\n" +
-      "    return new TodoSession(this.app);\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "// The authority an authenticated browser holds: the live list (read-only by\n" +
-      "// construction) and four verbs. Every mutation refreshes the one LiveState,\n" +
-      "// so every open tab repaints from the pushed patch — that IS the multiplayer.\n" +
-      "class TodoSession extends RpcTarget {\n" +
-      "  constructor(private readonly app: TanstackTodos) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpc<TodoListState> {\n" +
-      "    return this.app.liveStateTarget();\n" +
-      "  }\n" +
-      "\n" +
-      "  async add(title: string): Promise<string | undefined> {\n" +
-      "    return this.app.addTodo(title);\n" +
-      "  }\n" +
-      "\n" +
-      "  async setDone(id: string, done: boolean): Promise<void> {\n" +
-      "    this.app.setTodoDone(id, done);\n" +
-      "  }\n" +
-      "\n" +
-      "  async rename(id: string, title: string): Promise<void> {\n" +
-      "    this.app.renameTodo(id, title);\n" +
-      "  }\n" +
-      "\n" +
-      "  async remove(id: string): Promise<void> {\n" +
-      "    this.app.removeTodo(id);\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/src/todos-ref.ts",
-    content:
-      "import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
-      "\n" +
-      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
-      "\n" +
-      "/** TanStack Start pages and browser assets, built by the app's Vite pipeline. */\n" +
-      "export const tanstackPageSource = {\n" +
-      "  files: repoFiles,\n" +
-      "  options: { pipeline: \"vite\", rootDir: \"apps/tanstack\" },\n" +
-      "} satisfies DynamicWorkerSource;\n" +
-      "\n" +
-      "/** The todo API's durable identity and deliberately small build. The stale\n" +
-      " * policy lets a still-running facet answer while the host checks for a newer\n" +
-      " * repo version in the background; a cold facet mounts this exact cached\n" +
-      " * artifact. */\n" +
-      "export const tanstackTodosRef = {\n" +
-      "  type: \"stateful\",\n" +
-      "  path: \"/\",\n" +
-      "  className: \"TanstackTodos\",\n" +
-      "  durableWorkerKey: \"app-tanstack\",\n" +
-      "  updatePolicy: \"stale-while-rebuild\",\n" +
-      "  source: {\n" +
-      "    files: repoFiles,\n" +
-      "    options: {\n" +
-      "      entryPoint: \"src/todos-app.ts\",\n" +
-      "      minify: true,\n" +
-      "      rootDir: \"apps/tanstack\",\n" +
-      "    },\n" +
-      "  },\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n",
-  },
-  {
-    path: "apps/tanstack/src/worker.ts",
-    content:
-      "import handler, { createServerEntry } from \"@tanstack/react-start/server-entry\";\n" +
-      "\n" +
-      "// Page worker only. The stateful /api entry lives in todos-app.ts so waking a\n" +
-      "// todo Durable Object never has to load the TanStack server-rendering bundle.\n" +
-      "\n" +
-      "export default createServerEntry({\n" +
-      "  fetch(request) {\n" +
-      "    return handler.fetch(request);\n" +
-      "  },\n" +
-      "});\n",
-  },
-  {
-    path: "apps/tanstack/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"strict\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"jsx\": \"react-jsx\",\n" +
-      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\"]\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\", \"src/**/*.tsx\", \"vite.config.ts\"]\n" +
-      "}\n",
-  },
-  {
-    path: "apps/tanstack/vite.config.ts",
-    content:
-      "import { tanstackStart } from \"@tanstack/react-start/plugin/vite\";\n" +
-      "import viteReact from \"@vitejs/plugin-react\";\n" +
-      "import { cloudflare } from \"@cloudflare/vite-plugin\";\n" +
-      "import tailwindcss from \"@tailwindcss/vite\";\n" +
-      "import { defineConfig } from \"vite\";\n" +
-      "\n" +
-      "export default defineConfig({\n" +
-      "  plugins: [\n" +
-      "    cloudflare({ viteEnvironment: { name: \"ssr\" } }),\n" +
-      "    tailwindcss(),\n" +
-      "    tanstackStart(),\n" +
-      "    viteReact(),\n" +
-      "  ],\n" +
-      "});\n",
-  },
-  {
-    path: "apps/tanstack/wrangler.jsonc",
-    content:
-      "// Read only by the Vite build (@cloudflare/vite-plugin): the platform hosts\n" +
-      "// the built worker itself, so no deployment config lives here.\n" +
-      "{\n" +
-      "  \"name\": \"project-tanstack\",\n" +
-      "  \"main\": \"./src/worker.ts\",\n" +
-      "  \"compatibility_date\": \"2026-05-01\",\n" +
-      "  \"compatibility_flags\": [\"nodejs_compat\"],\n" +
       "}\n",
   },
   {
@@ -1767,12 +662,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Dependencies listed here are installed by the worker build pipeline when the worker is bundled. `iterate` stays a devDependency even though worker.ts imports its runtime subpaths: the platform supplies those modules to every worker build, so the devDependency is only for typechecking and editor support after `npm install`.\",\n" +
-      "  \"dependencies\": {\n" +
-      "    \"@iterate-com/capnweb\": \"0.10.0\"\n" +
-      "  },\n" +
+      "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
+      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"typescript\": \"^5.9.3\"\n" +
       "  }\n" +
@@ -1807,13 +700,42 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type Project,\n" +
       "  type ProjectAuthActor,\n" +
       "  type ProjectAuthCredentials,\n" +
+      "  type StatefulDynamicWorkerRef,\n" +
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
-      "import { guestbookAppRef, guestbookPageSource } from \"./apps/guestbook/src/guestbook-ref.ts\";\n" +
-      "import { tanstackPageSource, tanstackTodosRef } from \"./apps/tanstack/src/todos-ref.ts\";\n" +
+      "\n" +
+      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
+      "const todoAppRef = {\n" +
+      "  className: \"TodoApp\",\n" +
+      "  durableWorkerKey: \"app-todo\",\n" +
+      "  path: \"/\",\n" +
+      "  source: {\n" +
+      "    createApp: {\n" +
+      "      bundle: false,\n" +
+      "      client: \"apps/todo/client.tsx\",\n" +
+      "      files: repoFiles,\n" +
+      "      server: \"apps/todo/server.tsx\",\n" +
+      "    },\n" +
+      "  },\n" +
+      "  type: \"stateful\",\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
+      "const guestbookAppRef = {\n" +
+      "  className: \"GuestbookApp\",\n" +
+      "  durableWorkerKey: \"app-guestbook\",\n" +
+      "  path: \"/\",\n" +
+      "  source: {\n" +
+      "    createApp: {\n" +
+      "      bundle: false,\n" +
+      "      client: \"apps/guestbook/client.tsx\",\n" +
+      "      files: repoFiles,\n" +
+      "      server: \"apps/guestbook/server.tsx\",\n" +
+      "    },\n" +
+      "  },\n" +
+      "  type: \"stateful\",\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
       "\n" +
       "// This is ordinary project policy. Every GitHub-linked project repository is\n" +
       "// in scope; no platform GitHub code knows that pull-request agents exist.\n" +
@@ -1871,10 +793,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        break;\n" +
       "      }\n" +
       "      default:\n" +
-      "        // The guestbook needs no lane here: its events reach GuestbookApp\n" +
-      "        // through the durable WAKE subscription its creation batch configures\n" +
-      "        // (guestbookCreationEvents in apps/guestbook/src/guestbook.ts) — the\n" +
-      "        // stream spine dials the app directly.\n" +
       "        break;\n" +
       "    }\n" +
       "  }\n" +
@@ -1887,8 +805,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        path: \"/\",\n" +
       "        entrypoint: \"HelloApp\",\n" +
       "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
+      "          createWorker: {\n" +
+      "            entryPoint: \"worker.ts\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "          },\n" +
       "        },\n" +
       "      });\n" +
       "    }\n" +
@@ -1898,31 +818,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        path: \"/\",\n" +
       "        entrypoint: \"InternalApp\",\n" +
       "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
+      "          createWorker: {\n" +
+      "            entryPoint: \"worker.ts\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "          },\n" +
       "        },\n" +
       "      });\n" +
       "    }\n" +
-      "    if (app === \"tanstack\") {\n" +
-      "      // A real TanStack Start app living at apps/tanstack in this repo: the\n" +
-      "      // platform's \"vite\" pipeline runs ITS OWN `npm run build` and serves\n" +
-      "      // the built pages + client assets; its /api rides into the app's\n" +
-      "      // Durable Object (TanstackTodos — SQLite todos via sqlfu, live state\n" +
-      "      // over Cap'n Web). Pages are gated to project members HERE; /api is\n" +
-      "      // the unauthenticated Cap'n Web root that authenticates in-band from\n" +
-      "      // the app cookie, exactly like the internal app.\n" +
-      "      const url = new URL(req.url);\n" +
-      "      if (url.pathname === \"/api\") {\n" +
-      "        return this.fetchDynamicWorker(req, tanstackTodosRef);\n" +
-      "      }\n" +
+      "    if (app === \"todo\") {\n" +
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
-      "      return this.fetchDynamicWorker(req, {\n" +
-      "        type: \"stateless\",\n" +
-      "        path: \"/\",\n" +
-      "        source: tanstackPageSource,\n" +
-      "      });\n" +
+      "      return this.fetchDynamicWorker(req, todoAppRef);\n" +
       "    }\n" +
       "    if (app === \"counter\") {\n" +
       "      return this.fetchDynamicWorker(req, {\n" +
@@ -1931,29 +838,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        className: \"CounterApp\",\n" +
       "        durableWorkerKey: \"app-counter\",\n" +
       "        source: {\n" +
-      "          files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "          options: { entryPoint: \"worker.ts\" },\n" +
+      "          createWorker: {\n" +
+      "            entryPoint: \"worker.ts\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "          },\n" +
       "        },\n" +
       "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
-      "      // A second TanStack Start app at apps/guestbook, and a second SHAPE of\n" +
-      "      // state: where the tanstack todo app keeps rows in its Durable Object's\n" +
-      "      // SQLite, the guestbook's state is a stream-processor FOLD of durable\n" +
-      "      // events at /guestbook. The imported ref is the ONE identity the wake\n" +
-      "      // subscription persists too (guestbook-ref.ts), so ingress and the\n" +
-      "      // stream spine always dial the same Durable Object and the same build.\n" +
-      "      // The guestbook is deliberately public: anyone can read and sign, so\n" +
-      "      // no auth partial gates the pages and /api needs no authenticate step.\n" +
-      "      const url = new URL(req.url);\n" +
-      "      if (url.pathname === \"/api\") {\n" +
-      "        return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
-      "      }\n" +
-      "      return this.fetchDynamicWorker(req, {\n" +
-      "        type: \"stateless\",\n" +
-      "        path: \"/\",\n" +
-      "        source: guestbookPageSource,\n" +
-      "      });\n" +
+      "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "    }\n" +
       "    if (app) return new Response(`unknown app: ${app}`, { status: 404 });\n" +
       "\n" +
@@ -1970,9 +863,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"tanstack\")}\">tanstack</a> (TanStack Start todos: SQLite Durable Object, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (basic React + SQLite Durable Object, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
-      "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor + TanStack Start, public)</li>\n" +
+      "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (basic React + SQLite Durable Object, public)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +
       "            </main>\n" +

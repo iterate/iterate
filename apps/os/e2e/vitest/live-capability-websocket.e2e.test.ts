@@ -131,8 +131,10 @@ test.fails(
     type: "stateless",
     path: "/",
     source: {
-      files: { type: "repo", repoPath: "/repos/config", include: ["apps/livews/**"] },
-      options: { entryPoint: "apps/livews/worker.ts" },
+      createWorker: {
+        entryPoint: "apps/livews/worker.ts",
+        files: { type: "repo", repoPath: "/repos/config", include: ["apps/livews/**"] },
+      },
     },
   },
 ${anchor}`,

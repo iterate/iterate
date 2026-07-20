@@ -4313,21 +4313,24 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   // `invokeCapability({ path: ["__describe"] })` loads the worker and calls a
   // `__describe` the user code may export.
   async __describe() {
-    const source =
-      this.#ref.source.files.type === "inline"
+    const source = this.#ref.source;
+    const build = "createApp" in source ? source.createApp : source.createWorker;
+    const describedFiles =
+      build.files.type === "inline"
         ? {
-            ...this.#ref.source,
-            files: {
-              type: "inline" as const,
-              files: Object.fromEntries(
-                Object.entries(this.#ref.source.files.files).map(([name, text]) => [
-                  name,
-                  `${text.length} bytes`,
-                ]),
-              ),
-            },
+            files: Object.fromEntries(
+              Object.entries(build.files.files).map(([name, text]) => [
+                name,
+                `${text.length} bytes`,
+              ]),
+            ),
+            type: "inline" as const,
           }
-        : this.#ref.source;
+        : build.files;
+    const describedSource =
+      "createApp" in source
+        ? { createApp: { ...source.createApp, files: describedFiles } }
+        : { createWorker: { ...source.createWorker, files: describedFiles } };
     return describeNode({
       instructions:
         `A ${this.#ref.type} dynamic worker (described from its ref — the worker was NOT loaded). ` +
@@ -4347,7 +4350,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
           ? { entrypoint: this.#ref.entrypoint, propKeys: Object.keys(this.#ref.props ?? {}) }
           : { className: this.#ref.className, durableWorkerKey: this.#ref.durableWorkerKey }),
         path: this.#ref.path,
-        source,
+        source: describedSource,
         type: this.#ref.type,
       },
     });

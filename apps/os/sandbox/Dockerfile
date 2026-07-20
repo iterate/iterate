@@ -4,10 +4,9 @@
 # cached on effectively every container host, while any per-account derived
 # LAYER is not and puts a cold image pull (observed in MINUTES, hanging every
 # sandbox exec in the deployment) on each fresh placement. That is why the
-# dynamic-worker build toolchain is NOT installed here: the builder sandbox
-# installs its pinned wrangler once per container life at build time
-# (src/domains/workers/build-backend.ts), taxing only builds — never the
-# sandboxes that build nothing. Sandboxes are pets (see docs/sandboxes.md):
+# dynamic-worker build toolchain is NOT installed here: dynamic Workers build
+# directly inside workerd and this image exists only for user sandboxes.
+# Sandboxes are pets (see docs/sandboxes.md):
 # anything a workload needs beyond the stock tools (Ubuntu 22.04, Node 20,
 # Bun, git, curl, jq, …) is installed inside the sandbox at runtime and
 # persists under /workspace via snapshots — not here.

@@ -6,7 +6,7 @@ import { normalizePath } from "../durable-object-names.ts";
 const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
 
 // -----------------------------------------------------------------------------
-// Dynamic worker recipe types.
+// Dynamic worker source and reference types.
 //
 // These hand-authored shapes ARE the public itx contract for dynamic workers
 // (docstrings included) and each is pinned to its zod schema below via
@@ -23,8 +23,8 @@ const DURABLE_WORKER_KEY = /^[a-z][a-z0-9-]{0,62}$/;
  * worker-backed provided capabilities where the caller hands over a small
  * TypeScript entry file, helpers, and optionally a `package.json`. `repo` names
  * a project repo snapshot: a branch (late-bound, so future commits affect the
- * next use) or a pinned commit, narrowed by include/exclude glob masks so a
- * large repo does not become build input by default.
+ * next use) or a pinned commit. The whole snapshot is passed through by
+ * default; optional include/exclude glob masks let callers narrow it.
  */
 export type WorkerFileSource =
   | {
@@ -44,54 +44,82 @@ export type WorkerFileSource =
       exclude?: string[];
     };
 
+/** Portable loader names accepted by `@cloudflare/worker-bundler`. */
+export type WorkerBundlerLoader =
+  | "js"
+  | "jsx"
+  | "ts"
+  | "tsx"
+  | "json"
+  | "css"
+  | "text"
+  | "binary"
+  | "base64"
+  | "dataurl";
+
 /**
- * Build options for a dynamic worker.
+ * The serializable `@cloudflare/worker-bundler` options shared by
+ * `createWorker` and `createApp`.
  *
- * Deliberately small: exactly what the build recipe (build-recipe.ts — real
- * `npm install` plus wrangler's canonical bundling pipeline) expresses.
- * When the file map has a `package.json`, dependencies are installed from
- * the npm registry at build time (`--ignore-scripts`, lockfiles honored).
+ * These fields are passed through unchanged. The method-specific types below
+ * replace only `files` with a repo-aware value and omit callbacks that cannot
+ * cross the isolated bundler Worker's RPC boundary.
  */
-export type WorkerBuildOptions = {
-  /** Entry point file path relative to the source root. Default: "worker.ts". */
-  entryPoint?: string;
-  /** Bundle to loader-ready output (default: true). `bundle: false` is the
-   * run-script fast path: inline JavaScript that is ALREADY loader-ready
-   * skips the build pipeline entirely. */
+export type WorkerBundlerOptions = {
   bundle?: boolean;
+  conditions?: string[];
+  define?: Record<string, string>;
+  externals?: string[];
+  jsx?: "transform" | "preserve" | "automatic";
+  jsxImportSource?: string;
+  loader?: Record<string, WorkerBundlerLoader>;
   minify?: boolean;
-  /**
-   * Which build pipeline turns the source into loader-ready modules.
-   * "wrangler" (default): the platform's own bundle — npm install + wrangler
-   * dry-run, source code is PARSED but never executed. "vite": the source's
-   * OWN `npm run build` (a real Vite/TanStack-Start app) — install includes
-   * devDependencies and the build EXECUTES project code in the builder, so
-   * runtime artifacts stay project-scoped and the output is collected from
-   * `dist/` (a @cloudflare/vite-plugin layout: dist/server worker modules +
-   * dist/client assets, served by a generated wrapper entry).
-   */
-  pipeline?: "wrangler" | "vite";
-  /** Build from this subdirectory of the resolved source: files outside it
-   * are dropped and paths are re-rooted, so a repo can host an app at e.g.
-   * `apps/tanstack/` with its own package.json and config. */
-  rootDir?: string;
-  /** Platform-supplied modules resolvable by exact specifier (the `iterate/sdk`
-   * runtime rides in this way). A source's own entry wins over the platform's. */
+  registry?: string;
+  sourcemap?: boolean;
+  target?: string;
+};
+
+/** JSON-safe `AssetConfig` accepted by worker-bundler's asset handler. */
+export type WorkerBundlerAssetConfig = {
+  headers?: Record<string, { set?: Record<string, string>; unset?: string[] }>;
+  html_handling?: "auto-trailing-slash" | "force-trailing-slash" | "drop-trailing-slash" | "none";
+  not_found_handling?: "single-page-application" | "404-page" | "none";
+  redirects?: {
+    dynamic?: Record<string, { status: number; to: string }>;
+    static?: Record<string, { status: number; to: string }>;
+  };
+};
+
+/** Serializable `createWorker` input. `files` is repo-aware; after resolving
+ * it, OS passes the resulting path-to-source map to worker-bundler unchanged.
+ * The plugin callback and custom `FileSystem` variants cannot cross Workers
+ * RPC, so those are the only upstream inputs omitted here. */
+export type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {
+  files: WorkerFileSource;
+  entryPoint?: string;
   virtualModules?: Record<string, string>;
 };
 
-/**
- * Declarative source for a dynamic worker: an orthogonal file source plus
- * Cloudflare-compatible build options.
- *
- * Materialization resolves `files` to a file map and builds it through
- * Cloudflare's worker bundler; the loader-ready output is cached by a
- * deterministic build key, so the same source+options never builds twice.
- */
-export type DynamicWorkerSource = {
+/** Serializable `createApp` input. The generated browser bundles and explicit
+ * text assets are retained in the host and served by worker-bundler's own
+ * asset handler. ArrayBuffer assets and the esbuild plugin callback are the
+ * only upstream inputs omitted from this data-only boundary. */
+export type WorkerBundlerCreateAppOptions = WorkerBundlerOptions & {
+  assetConfig?: WorkerBundlerAssetConfig;
+  assets?: Record<string, string>;
+  client?: string | string[];
   files: WorkerFileSource;
-  options?: WorkerBuildOptions;
+  server?: string;
 };
+
+/**
+ * One direct worker-bundler call. The wrapper names deliberately match the
+ * upstream functions; OS only resolves the repo-aware `files` value, adds its
+ * platform virtual modules to `createWorker`, and caches the returned build.
+ */
+export type DynamicWorkerSource =
+  | { createApp: WorkerBundlerCreateAppOptions }
+  | { createWorker: WorkerBundlerCreateWorkerOptions };
 
 /** Fields shared by every dynamic worker ref (stateless and stateful): the
  * itx scope `path` the worker binds to and the declarative `source` it is
@@ -134,20 +162,9 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   type: "stateful";
   className: string;
   durableWorkerKey: string;
-  /**
-   * What a call does when the worker's source changed since the running
-   * version. `"block"` (default) waits for the rebuild — commit-then-call
-   * sees the new code. `"stale-while-rebuild"` keeps answering with the
-   * running version and swaps to the new build in the background: better
-   * availability, but the next few calls after a commit may see old code.
-   * The policy rides the REF, not the durable identity — callers sharing one
-   * `durableWorkerKey` should agree on it (and on `source`), or each call
-   * flips the facet to its own version.
-   */
-  updatePolicy?: "block" | "stale-while-rebuild";
 };
 
-/** Worker recipe accepted by `workers.get` and worker-backed capabilities. */
+/** Worker reference accepted by `workers.get` and worker-backed capabilities. */
 export type DynamicWorkerRef = StatelessDynamicWorkerRef | StatefulDynamicWorkerRef;
 
 /**
@@ -251,19 +268,80 @@ const WorkerFileSource = z.discriminatedUnion("type", [
   }),
 ]) satisfies z.ZodType<WorkerFileSource, unknown>;
 
-export const WorkerBuildOptions = z.strictObject({
-  bundle: z.boolean().optional(),
-  entryPoint: z.string().optional(),
-  minify: z.boolean().optional(),
-  pipeline: z.enum(["wrangler", "vite"]).optional(),
-  rootDir: z.string().optional(),
-  virtualModules: z.record(z.string(), z.string()).optional(),
-}) satisfies z.ZodType<WorkerBuildOptions, unknown>;
+const WorkerBundlerLoader = z.enum([
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "json",
+  "css",
+  "text",
+  "binary",
+  "base64",
+  "dataurl",
+]) satisfies z.ZodType<WorkerBundlerLoader, unknown>;
 
-export const DynamicWorkerSource = z.strictObject({
+const WorkerBundlerOptions = {
+  bundle: z.boolean().optional(),
+  conditions: z.array(z.string()).optional(),
+  define: z.record(z.string(), z.string()).optional(),
+  externals: z.array(z.string()).optional(),
+  jsx: z.enum(["transform", "preserve", "automatic"]).optional(),
+  jsxImportSource: z.string().optional(),
+  loader: z.record(z.string(), WorkerBundlerLoader).optional(),
+  minify: z.boolean().optional(),
+  registry: z.string().optional(),
+  sourcemap: z.boolean().optional(),
+  target: z.string().optional(),
+};
+
+const WorkerBundlerAssetRule = z.strictObject({
+  status: z.number(),
+  to: z.string(),
+});
+
+const WorkerBundlerAssetConfig = z.strictObject({
+  headers: z
+    .record(
+      z.string(),
+      z.strictObject({
+        set: z.record(z.string(), z.string()).optional(),
+        unset: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
+  html_handling: z
+    .enum(["auto-trailing-slash", "force-trailing-slash", "drop-trailing-slash", "none"])
+    .optional(),
+  not_found_handling: z.enum(["single-page-application", "404-page", "none"]).optional(),
+  redirects: z
+    .strictObject({
+      dynamic: z.record(z.string(), WorkerBundlerAssetRule).optional(),
+      static: z.record(z.string(), WorkerBundlerAssetRule).optional(),
+    })
+    .optional(),
+}) satisfies z.ZodType<WorkerBundlerAssetConfig, unknown>;
+
+export const WorkerBundlerCreateWorkerOptions = z.strictObject({
+  ...WorkerBundlerOptions,
+  entryPoint: z.string().optional(),
   files: WorkerFileSource,
-  options: WorkerBuildOptions.optional(),
-}) satisfies z.ZodType<DynamicWorkerSource, unknown>;
+  virtualModules: z.record(z.string(), z.string()).optional(),
+}) satisfies z.ZodType<WorkerBundlerCreateWorkerOptions, unknown>;
+
+export const WorkerBundlerCreateAppOptions = z.strictObject({
+  ...WorkerBundlerOptions,
+  assetConfig: WorkerBundlerAssetConfig.optional(),
+  assets: z.record(z.string(), z.string()).optional(),
+  client: z.union([z.string(), z.array(z.string())]).optional(),
+  files: WorkerFileSource,
+  server: z.string().optional(),
+}) satisfies z.ZodType<WorkerBundlerCreateAppOptions, unknown>;
+
+export const DynamicWorkerSource = z.union([
+  z.strictObject({ createApp: WorkerBundlerCreateAppOptions }),
+  z.strictObject({ createWorker: WorkerBundlerCreateWorkerOptions }),
+]) satisfies z.ZodType<DynamicWorkerSource, unknown>;
 
 const WorkerRefBase = {
   path: z.string().transform(normalizePath),
@@ -282,7 +360,6 @@ const StatefulDynamicWorkerRef = z.strictObject({
   className: z.string(),
   durableWorkerKey: z.string().regex(DURABLE_WORKER_KEY),
   type: z.literal("stateful"),
-  updatePolicy: z.enum(["block", "stale-while-rebuild"]).optional(),
 }) satisfies z.ZodType<StatefulDynamicWorkerRef, unknown>;
 
 export const DynamicWorkerRef = z.discriminatedUnion("type", [

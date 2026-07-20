@@ -288,17 +288,19 @@ Loader. Runners are `DynamicWorkerRunner`
 dynamic isolate gets its scoped itx binding and egress fetcher. A `DynamicWorkerRef` is
 `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
-`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
-orthogonal file source plus build options: files come `inline` or
-from a `repo` snapshot (branch late-bound or commit-pinned, masked by
-include/exclude globs), and the build pipeline — real `npm install` plus
-pinned wrangler, run in the project's builder sandbox (local dev: the same
-recipe on the host toolchain; `domains/workers/build-recipe.ts`) — bundles
-them, multi-file TypeScript and `package.json` npm dependencies included,
-into a KV-cached, loader-ready artifact keyed deterministically (see
-`docs/dynamic-worker-build-requirements.md`). Builds pass files by value and
-leave no events in the journal; build failures reach the
-caller as plain errors. Inside
+`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is a
+direct `createWorker` or `createApp` call: each function's `files` option may
+come `inline` or from a `repo` snapshot (branch late-bound or commit-pinned,
+masked by include/exclude globs), and an isolated workerd sidecar runs
+`@cloudflare/worker-bundler` (`worker-bundler.ts`). OS resolves that one
+repo-aware value and otherwise passes the serializable options and unchanged
+paths to the named library function. App layouts and entry points are not
+fixed, and worker-bundler may install root `package.json` dependencies.
+Project build commands do not run. One JSON artifact record is
+cached in KV under a deterministic key shared by identical inputs. Builds pass
+inert source text by value and leave no events in the journal; errors returned
+by worker-bundler are cached briefly, while sidecar/KV/repo errors remain
+retryable. Inside
 loaded code, `await env.ITX.get()` returns a full itx at the ref's scope path.
 `itx.worker` is the seeded project worker — the same mechanism pointed at the
 default repo's `worker.ts`.

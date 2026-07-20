@@ -91,15 +91,14 @@ should never gain generic `--force`, `--rotate`, or deletion flags.
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Repository    | OS and Semaphore resource IDs; derived Auth, Streams, Dummy Petshop, OAuth-audience, mobile, and lease projections                           |
 | Doppler       | `preview_N` in `os`, `auth`, `semaphore`, `streams-example-app`, and `dummy-petshop`                                                         |
-| Cloudflare    | Two zones, six Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, seven container apps, and email routing |
+| Cloudflare    | Two zones, seven Workers, two D1 databases, two KV namespaces, two R2 buckets, one Queue, DNS, routes, six container apps, and email routing |
 | External apps | One GitHub App and one Slack app for full integration parity                                                                                 |
 | Lease fleet   | One production Semaphore `environment-config-lease` resource                                                                                 |
 
-The six Workers are OS, its typechecker sidecar, Auth, Semaphore, Streams, and
-Dummy Petshop. OS deploys six sandbox container classes plus one
-`standard-3` builder-pool class. AI Search and the separate builder Worker were
-removed in July 2026; old account objects may still exist and are not a slot
-template.
+The seven Workers are OS, its typechecker and worker-bundler sidecars, Auth,
+Semaphore, Streams, and Dummy Petshop. OS deploys six sandbox container
+classes. AI Search and the container-backed builder were removed in July 2026;
+old account objects may still exist and are not a slot template.
 
 ## 0. Build the expansion plan
 
@@ -132,15 +131,15 @@ Recheck; live state wins over this note.
 
 ### Capacity
 
-Ten slots currently add 60 Workers, 20 D1 databases, 20 KV namespaces, 20 R2
+Ten slots currently add 70 Workers, 20 D1 databases, 20 KV namespaces, 20 R2
 buckets, and 10 Queues. The 2026-07-20 preview account held 123 Workers, 27 D1
 databases, 18 KV namespaces, 29 R2 buckets, and 11 Queues before expansion.
 Some are retired objects, which explains differences from slot-count maths.
 
-The current caps reserve 99 GiB memory, 23.25 vCPU, and 244 GB disk per slot.
-Nineteen slots reserve 1,881 GiB, 441.75 vCPU, and 4,636 GB. Recalculate from
-`SANDBOX_MAX_INSTANCES`, `WORKER_BUILDER_POOL_SIZE`, and Cloudflare's current
-limits immediately before applying the plan.
+The current caps reserve 67 GiB memory, 15.25 vCPU, and 180 GB disk per slot.
+Nineteen slots reserve 1,273 GiB, 289.75 vCPU, and 3,420 GB. Recalculate from
+`SANDBOX_MAX_INSTANCES` and Cloudflare's current limits immediately before
+applying the plan.
 
 References: [Workers](https://developers.cloudflare.com/workers/platform/limits/),
 [Containers](https://developers.cloudflare.com/containers/platform-details/limits/),
@@ -443,6 +442,6 @@ explicitly approved.
   generated config uses both.
 - Streams lacked its Auth dependency; the expansion change fixes the deploy
   graph.
-- AI Search and the standalone builder Worker were removed after the first
+- AI Search and the container-backed builder were removed after the first
   audit. Their retired account objects demonstrate why code and live state
   must both be checked immediately before expansion.

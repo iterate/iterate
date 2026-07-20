@@ -94,11 +94,9 @@ jobs:
     # deliberately serialized to cap slot load (measured green runs ~9m30
     # without container builds); each remote lane retains its own 180-480s
     # watchdog, and this outer bound catches combined lane, setup, or deploy
-    # degeneration (2026-07-09 saw 31m and ~90m runaway attempts). 20, not
-    # 15: the sandbox-build pipeline adds real builder-pool container builds
-    # (~15-45s each across the worker specs) and the ceiling must also fit
-    # one retry of the slowest container-heavy spec — 15 killed a 55/56-green
-    # run mid-retry, which also lost its failure artifacts.
+    # degeneration (2026-07-09 saw 31m and ~90m runaway attempts). Twenty
+    # minutes leaves room for one retry of the slowest remote spec — 15 killed
+    # a 55/56-green run mid-retry, which also lost its failure artifacts.
     timeout-minutes: 20
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number || inputs.pull-request-number }}
