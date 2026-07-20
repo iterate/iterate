@@ -202,7 +202,7 @@ export const envs = {
   preview_10: previewSlot(10, {
     projectDirectoryKvId: UNPROVISIONED,
     workerBuildCacheKvId: UNPROVISIONED,
-    authDbId: UNPROVISIONED,
+    authDbId: "7f7562b4-f76a-4c4d-a51e-003e6995f591",
   }),
   preview_11: previewSlot(11, {
     projectDirectoryKvId: UNPROVISIONED,
@@ -375,7 +375,7 @@ export const semaphoreEnvs = {
   preview_7: semaphorePreviewSlot(7, "f4b1b641-71bd-4952-8726-3c2c543383fe"),
   preview_8: semaphorePreviewSlot(8, "77af433e-c870-43a6-be8e-1d2452feb23d"),
   preview_9: semaphorePreviewSlot(9, "53522759-5f82-4055-b0c2-248d66988b7d"),
-  preview_10: semaphorePreviewSlot(10, UNPROVISIONED),
+  preview_10: semaphorePreviewSlot(10, "384502bd-21e2-47df-88dd-b1b76c8ccb40"),
   preview_11: semaphorePreviewSlot(11, UNPROVISIONED),
   preview_12: semaphorePreviewSlot(12, UNPROVISIONED),
   preview_13: semaphorePreviewSlot(13, UNPROVISIONED),

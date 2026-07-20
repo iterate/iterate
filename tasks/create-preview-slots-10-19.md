@@ -11,10 +11,10 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 ## Status
 
 Read-only planning is complete and the exact non-production batch was approved
-on 2026-07-20. The repository map and all fifty Doppler configs are complete;
-required Auth/OAuth secret-name shape is verified for every new slot. External
-integration apps and Cloudflare resources remain. Production deployment and
-Semaphore lease publication remain later, separate approval boundaries.
+on 2026-07-20. The repository map, all fifty Doppler configs, and all ten
+GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
+has started with preview-10 Auth and Semaphore resources. Production deployment
+and Semaphore lease publication remain later, separate approval boundaries.
 
 ## Goal
 
@@ -96,8 +96,12 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _Created all fifty app configs. The provisioner targeted only slots 10–19,
   reported `rotated: false`, and every slot passed config and required-key
   read-back without exposing values._
-- [ ] Create approved GitHub and Slack apps and pipe credentials directly into
+- [x] Create approved GitHub and Slack apps and pipe credentials directly into
   the matching `os/preview_N` configs.
+  _GitHub preview-10 was repaired in place; preview-11–19 were created through
+  the state-checked manifest callback flow. Ten Slack bootstrap manifests were
+  validated and created sequentially. All twenty Doppler JSON values passed
+  read-back and every provider app name/ID was read back without secrets._
 - [ ] Create Cloudflare resources sequentially, record returned IDs in
   `envs.ts`, and prove idempotence with a clean second ensure pass.
 - [ ] Run focused preview/config tests, Auth tests, typecheck, lint, and format
@@ -121,16 +125,16 @@ read back from the owning system.
 
 | Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
 | ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 11   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 12   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 13   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 14   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 15   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 16   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 17   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 18   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
-| 19   | ☑       | ☑       | ☐                          | ☐      | ☐     | ☐         | ☐     | ☐         |
+| 10   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 11   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 12   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 13   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 14   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 15   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 16   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 17   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 18   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 19   | ☑       | ☑       | ☐                          | ☑      | ☑     | ☐         | ☐     | ☐         |
 
 ## Read-only inventory
 
@@ -297,3 +301,14 @@ the recorded projection.
   creating 10–19. Added and tested `--slots 10-19`, then used it to create only
   the approved configs/secrets. All fifty configs and required inherited/local
   secret names passed read-back; no values were printed.
+- 2026-07-20: Created GitHub Apps 11–19 through a loopback callback that
+  validated per-slot state and wrote conversion responses directly to Doppler.
+  Repaired preview-10's `.com` URLs, four permissions, and two events; generated
+  additive credentials without deleting the old client secret/private key.
+  All ten slugs and credential shapes passed provider/Doppler read-back.
+- 2026-07-20: Validated and created Slack bootstrap apps 10–19 through one
+  short-lived workspace-scoped configuration token, respecting the Tier-1
+  creation interval. Dashboard IDs are `A0BJLTR3K17`, `A0BJK0RRN1Y`,
+  `A0BJK11HY1G`, `A0BJCPH0RMZ`, `A0BJFNL8WRK`, `A0BJFNV85LM`, `A0BJFP3960M`,
+  `A0BJ3M8628P`, `A0BJM0DSH0R`, and `A0BJCR32X3M`. The clipboard and temporary
+  helpers/copies were removed; the token expires within twelve hours.
