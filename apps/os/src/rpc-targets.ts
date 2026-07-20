@@ -96,6 +96,7 @@ import { ProjectProcessorContract } from "./domains/projects/project-processor-c
 import { NotificationProcessorContract } from "./domains/notifications/notification-processor-contract.ts";
 import { projectEgressFetcher } from "./domains/projects/utils.ts";
 import {
+  RepoCreateFailure,
   RepoCreateRequest,
   RepoProcessorContract,
 } from "./domains/repos/repo-processor-contract.ts";
@@ -1137,15 +1138,22 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     );
   }
 
-  /** Request creation and wait for the repo processor saga's `repos/created`
-   * terminal fact. The request chooses an empty seed, a private GitHub pull at
-   * depth one, or a public full-history import performed by Cloudflare
-   * Artifacts outside the Worker isolate. */
+  /** Request creation and wait for the repo processor saga's terminal fact.
+   * The request chooses an empty seed, a private GitHub pull at depth one, or
+   * a public import performed by Cloudflare Artifacts outside the Worker
+   * isolate (full history unless `depth` is provided). Throws the saga's
+   * recorded error if creation fails. */
   async create(
     input:
       | { type: "empty" }
       | { type: "github-private"; connection: string; owner: string; repo: string }
-      | { type: "github-public"; connection: string; owner: string; repo: string },
+      | {
+          type: "github-public";
+          connection: string;
+          depth?: number;
+          owner: string;
+          repo: string;
+        },
   ): Promise<void> {
     const request = RepoCreateRequest.parse(input);
     const path = normalizePath(this.props.path);
@@ -1185,13 +1193,23 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     if (!jsonValuesEqual(recordedRequest, request)) {
       throw new Error(`${path} was already requested with a different creation source.`);
     }
-    await stream.waitForEvent({
+    const terminal = await stream.waitForEvent({
       afterOffset: committed[0]!.offset - 1,
-      eventTypes: ["events.iterate.com/repos/created"],
-      predicate: (event) =>
-        jsonValuesEqual(RepoCreateRequest.parse(event.payload?.request), recordedRequest),
+      eventTypes: ["events.iterate.com/repos/created", "events.iterate.com/repos/create-failed"],
+      predicate: (event) => {
+        const terminalRequest =
+          event.type === "events.iterate.com/repos/create-failed"
+            ? RepoCreateFailure.parse(event.payload).request
+            : RepoCreateRequest.parse(event.payload?.request);
+        return jsonValuesEqual(terminalRequest, recordedRequest);
+      },
       timeoutMs: 300_000,
     });
+    if (terminal.type === "events.iterate.com/repos/create-failed") {
+      throw new Error(
+        `${path} could not be created: ${RepoCreateFailure.parse(terminal.payload).error}`,
+      );
+    }
   }
 
   /** Repo identity string (debug). */

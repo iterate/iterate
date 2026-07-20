@@ -1,4 +1,4 @@
-import { StreamProcessor } from "iterate/processors";
+import { StreamProcessor, type EmittedInput } from "iterate/processors";
 import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
 import {
   repoArtifactPushFromEventPayload,
@@ -12,7 +12,7 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
-  importPublicGithubArtifact(input: { owner: string; repo: string }): Promise<{
+  importPublicGithubArtifact(input: { depth?: number; owner: string; repo: string }): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;
@@ -63,6 +63,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           defaultBranch: event.payload.defaultBranch,
           remote: event.payload.remote,
         };
+      case "events.iterate.com/repos/create-failed":
+        return { ...state, createFailure: event.payload };
       case "events.iterate.com/repo/created":
         if (state.birthCertificate !== null) {
           throw new Error("repo received more than one created event");
@@ -145,10 +147,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // registration order, so the at-head registration below must come after
     // them — its appends must land after this frame's per-event appends.
     if (event !== null) this.#processConsumedEvent(args, event);
-    // AT-HEAD reconcile (was onCaughtUp): drive the repo's two durable
-    // obligations (create, github-import) from the whole fold. ONE outer
-    // blocking closure so the create seed+append is awaited before this head
-    // event's deferred commit; a mid-catch-up fold never reaches it.
+    // AT-HEAD reconcile (was onCaughtUp): derive both durable obligations from
+    // the whole fold. The fast reconciliation is checkpoint-blocking; the
+    // consequential vendor work it registers is keepalive-backed background
+    // work, so slow imports cannot hold stream delivery.
     if (args.delivery.caughtUp) {
       args.blockProcessorWhile(() => this.#reconcileObligations(args));
     }
@@ -166,6 +168,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (
       event.type === "events.iterate.com/repos/create-requested" ||
       event.type === "events.iterate.com/repos/created" ||
+      event.type === "events.iterate.com/repos/create-failed" ||
       event.type === "events.iterate.com/repo/created" ||
       event.type === "events.iterate.com/repo/ready"
     ) {
@@ -274,6 +277,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * idempotent current-head sync. A vendor failure is journaled and closes the
    * attempt instead of wedging every later repo event. */
   readonly #liveGithubImports = new Set<string>();
+  #creationAttemptedThisIncarnation = false;
 
   /**
    * At-head reconciliation of the repo's two durable obligations against the
@@ -287,23 +291,30 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * and runs this reconcile, where the undriven obligations are re-driven.
    *
    * CREATION is an OBLIGATION driven from the at-head fold, never a per-event
-   * reaction. `repos/create-requested` is durable intent; `repos/created` is its
-   * terminal fact. A refold sees both in the final fold and does no external
-   * work. If an incarnation dies between a retry-safe side effect and the
-   * terminal append, redelivery runs the same saga again and the fixed
-   * `repos/created` idempotency key collapses the outcome. No expiry on
-   * purpose: "this repo should exist" does not go stale.
+   * reaction. `repos/create-requested` is durable intent; `repos/created` or
+   * `repos/create-failed` is its terminal fact. The external work runs in the
+   * background so a slow vendor import cannot hold the stream checkpoint.
    */
   async #reconcileObligations(
     args: Parameters<StreamProcessor<RepoProcessorContract>["processEvent"]>[0],
   ): Promise<void> {
     const request = args.state.createRequest;
-    if (request !== null && args.state.birthCertificate === null) {
-      const artifact = await this.#createRepo(request);
-      await args.append({
-        type: "events.iterate.com/repos/created",
-        idempotencyKey: this.idempotencyKey("created"),
-        payload: { ...artifact, request },
+    if (
+      request !== null &&
+      args.state.birthCertificate === null &&
+      args.state.createFailure === null &&
+      !this.#creationAttemptedThisIncarnation
+    ) {
+      this.#creationAttemptedThisIncarnation = true;
+      args.runInBackground(async () => {
+        try {
+          await args.append(await this.#createRepoTerminal(request));
+        } catch (error) {
+          // No terminal fact landed, so a later at-head/revival pass in this
+          // incarnation must be allowed to re-drive the obligation.
+          this.#creationAttemptedThisIncarnation = false;
+          throw error;
+        }
       });
     }
 
@@ -360,6 +371,28 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         this.#liveGithubImports.delete(githubImport.requestId);
       }
     });
+  }
+
+  async #createRepoTerminal(
+    request: RepoCreateRequest,
+  ): Promise<EmittedInput<RepoProcessorContract>> {
+    try {
+      const artifact = await this.#createRepo(request);
+      return {
+        type: "events.iterate.com/repos/created",
+        idempotencyKey: this.idempotencyKey("created"),
+        payload: { ...artifact, request },
+      };
+    } catch (error) {
+      return {
+        type: "events.iterate.com/repos/create-failed",
+        idempotencyKey: this.idempotencyKey("create-failed"),
+        payload: {
+          error: error instanceof Error ? error.message : String(error),
+          request,
+        },
+      };
+    }
   }
 
   async #createRepo(request: RepoCreateRequest) {

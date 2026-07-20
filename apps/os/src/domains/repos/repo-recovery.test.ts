@@ -69,6 +69,7 @@ function makeHarness() {
       throw new Error("must not create empty artifact in this scenario");
     },
     importPublic: async (_input: {
+      depth?: number;
       owner: string;
       repo: string;
     }): Promise<typeof CREATED_ARTIFACT> => {
@@ -200,19 +201,68 @@ describe("RepoProcessor creation saga", () => {
     const h = makeHarness();
     const order: string[] = [];
     h.effects.importPublic = async (input) => {
-      order.push(`import:${input.owner}/${input.repo}`);
+      order.push(`import:${input.owner}/${input.repo}:depth-${input.depth ?? "full"}`);
       return CREATED_ARTIFACT;
     };
     h.effects.link = async (input) => void order.push(`link:${input.connection}`);
     await h.stream.append({
       type: "events.iterate.com/repos/create-requested",
-      payload: { type: "github-public", connection: "install-789", owner: "acme", repo: "widgets" },
+      payload: {
+        type: "github-public",
+        connection: "install-789",
+        depth: 1,
+        owner: "acme",
+        repo: "widgets",
+      },
     });
 
     await h.deliverPending();
 
-    expect(order).toEqual(["import:acme/widgets", "link:install-789"]);
+    expect(order).toEqual(["import:acme/widgets:depth-1", "link:install-789"]);
     expect(h.stream.events.at(-1)?.type).toBe("events.iterate.com/repos/created");
+  });
+
+  it("journals a creation failure instead of claiming the repo is ready", async () => {
+    const h = makeHarness();
+    let calls = 0;
+    h.effects.importPublic = async () => {
+      calls += 1;
+      throw new Error("Cloudflare Artifacts 10400: An internal error occurred");
+    };
+    const request = {
+      type: "github-public" as const,
+      connection: "install-789",
+      owner: "acme",
+      repo: "widgets",
+    };
+    await h.stream.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: request,
+    });
+
+    await h.deliverPending();
+    await vi.waitFor(() => {
+      expect(h.stream.events.at(-1)).toMatchObject({
+        type: "events.iterate.com/repos/create-failed",
+        idempotencyKey: "repo/create-failed",
+        payload: {
+          error: "Cloudflare Artifacts 10400: An internal error occurred",
+          request,
+        },
+      });
+    });
+    await h.deliverPending();
+
+    expect(calls).toBe(1);
+    expect(h.state()).toMatchObject({
+      createFailure: {
+        error: "Cloudflare Artifacts 10400: An internal error occurred",
+        request,
+      },
+    });
+    expect(
+      h.stream.events.filter((event) => event.type === "events.iterate.com/repos/created"),
+    ).toHaveLength(0);
   });
 
   it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {

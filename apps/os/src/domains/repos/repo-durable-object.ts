@@ -118,21 +118,20 @@ export class RepoDurableObject extends DurableObject<Env> {
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
-  // Registered WITH recovery: GitHub imports are consequential
+  // Registered WITH recovery: creation and GitHub imports are consequential
   // `runInBackground` work (journaled requested/started obligations whose
-  // OUTCOME matters), and repo creation is a blocking at-head obligation — an
-  // incarnation that dies owing either must be revived. The keepalive alarm
-  // appends the `stream/processor-revived` fact, whose ordinary delivery lands at head and
-  // `processEvent`'s at-head reconcile (`delivery.caughtUp`) re-drives the
-  // obligations (see the registry module doc's recovery rule).
+  // OUTCOME matters). An incarnation that dies owing either must be revived.
+  // The keepalive alarm appends the `stream/processor-revived` fact, whose
+  // ordinary delivery lands at head and lets the at-head reconcile re-drive
+  // the obligations (see the registry module doc's recovery rule).
   readonly #repoProcessor = this.#registry.register(
     new RepoProcessor({
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      // Creation and public mutations all move the same branch. A duplicate
-      // at-head creation drive is harmless (the seed is idempotent below), but
-      // it must not move the ref between a mutation's checked clone and push.
+      // Creation and public mutations all move the same branch. A recovered
+      // creation attempt is retry-safe, but it must not move the ref between a
+      // mutation's checked clone and push.
       createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
@@ -1466,12 +1465,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  private async importPublicGithubArtifact(input: { owner: string; repo: string }) {
+  private async importPublicGithubArtifact(input: { depth?: number; owner: string; repo: string }) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     await timedStep("create-timing", timing, "artifact-import", async () => {
       await importGithubArtifact(this.requireArtifacts(), {
         branch: REPO_DEFAULT_BRANCH,
+        ...(input.depth === undefined ? {} : { depth: input.depth }),
         name: artifactName,
         owner: input.owner,
         repo: input.repo,

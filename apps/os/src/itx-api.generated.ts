@@ -1036,15 +1036,22 @@ export interface SecretCollection {
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   __describe(): Promise<Description>;
-  /** Request creation and wait for the repo processor saga's `repos/created`
-   * terminal fact. The request chooses an empty seed, a private GitHub pull at
-   * depth one, or a public full-history import performed by Cloudflare
-   * Artifacts outside the Worker isolate. */
+  /** Request creation and wait for the repo processor saga's terminal fact.
+   * The request chooses an empty seed, a private GitHub pull at depth one, or
+   * a public import performed by Cloudflare Artifacts outside the Worker
+   * isolate (full history unless `depth` is provided). Throws the saga's
+   * recorded error if creation fails. */
   create(
     input:
       | { type: "empty" }
       | { type: "github-private"; connection: string; owner: string; repo: string }
-      | { type: "github-public"; connection: string; owner: string; repo: string },
+      | {
+          type: "github-public";
+          connection: string;
+          depth?: number;
+          owner: string;
+          repo: string;
+        },
   ): Promise<void>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
@@ -3332,7 +3339,13 @@ export type RepoProcessorState = {
         request:
           | { type: "empty" }
           | { type: "github-private"; connection: string; owner: string; repo: string }
-          | { type: "github-public"; connection: string; owner: string; repo: string };
+          | {
+              type: "github-public";
+              connection: string;
+              depth?: number | undefined;
+              owner: string;
+              repo: string;
+            };
         artifactName: string;
         defaultBranch: string;
         remote: string;
@@ -3342,8 +3355,27 @@ export type RepoProcessorState = {
   createRequest:
     | { type: "empty" }
     | { type: "github-private"; connection: string; owner: string; repo: string }
-    | { type: "github-public"; connection: string; owner: string; repo: string }
+    | {
+        type: "github-public";
+        connection: string;
+        depth?: number | undefined;
+        owner: string;
+        repo: string;
+      }
     | null;
+  createFailure: {
+    error: string;
+    request:
+      | { type: "empty" }
+      | { type: "github-private"; connection: string; owner: string; repo: string }
+      | {
+          type: "github-public";
+          connection: string;
+          depth?: number | undefined;
+          owner: string;
+          repo: string;
+        };
+  } | null;
   artifactName: string | null;
   defaultBranch: string | null;
   github: {

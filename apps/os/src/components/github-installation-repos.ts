@@ -11,6 +11,16 @@ export type InstallationRepo = {
   pushedAt: string | null;
 };
 
+/** Translate one installation selection into the durable creation request.
+ * The wizard optimizes for a usable current checkout; callers of Repo.create
+ * can still omit public depth when they explicitly want full history. */
+export function githubRepoCreateRequest(repo: InstallationRepo, connection: string) {
+  const github = { connection, owner: repo.owner, repo: repo.name };
+  return repo.private
+    ? ({ ...github, type: "github-private" } as const)
+    : ({ ...github, depth: 1, type: "github-public" } as const);
+}
+
 /** Repo creation currently adopts GitHub's `main` history. Reject unsupported
  * selections before committing a durable saga request rather than leaving a
  * seeded repo whose GitHub adoption can never complete. */
