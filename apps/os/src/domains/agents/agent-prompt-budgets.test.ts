@@ -17,8 +17,6 @@ import {
 import {
   AGENT_SUMMARY_INSTRUCTION,
   DEFAULT_AGENT_SYSTEM_PROMPT,
-} from "./agent-processor-contract.ts";
-import {
   EMAIL_AGENT_SYSTEM_PROMPT,
   agentCreationForPath,
   slackAgentSystemPrompt,

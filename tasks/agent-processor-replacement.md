@@ -95,4 +95,12 @@ parallel run.
 ## Status
 
 - [x] #2154 merged (4fae30c14); branch `agent-processor-replacement` off main
-- [ ] Steps 1–7
+- [x] Steps 1–7 complete: clean room moved in under slug "agent" (contract
+  v5.0.0), superset context payload + legacy settlement consumes + compaction
+  fold + bridge events all in place; prompt building, workers-ai transport
+  seam, script feedback/spill, live-state derivation ported; consumers
+  (shared UI reducer → TUI/mobile/projector, llm-request-replay) additive;
+  e2e state-shape reads updated; docs examples on all 14 owned events with
+  the docs path pinned to "agents" (first-event namespace); itx-api
+  regenerated; full apps/os suite (2002 tests), packages/iterate (148),
+  typecheck, lint, knip green.

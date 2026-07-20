@@ -769,7 +769,7 @@ function reduceAgentUiEvent(
       // pointing back at the requested event's offset via `requestOffset`.
       const payload = readPayloadRecord(event);
       const requestOffset = payload?.requestOffset;
-      if (typeof requestOffset !== "number") return state;
+      if (payload == null || typeof requestOffset !== "number") return state;
       const result = isRecord(payload.result) ? payload.result : undefined;
       const status = typeof result?.status === "string" ? result.status : "succeeded";
       const usage = readUsageTokens(result?.usage);
