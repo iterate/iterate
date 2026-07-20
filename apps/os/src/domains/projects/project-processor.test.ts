@@ -55,7 +55,6 @@ function makeHarness(
         return response ?? new Response(null, { status: 204 });
       },
     },
-    search: { ensureIndex: async () => ({ created: true }) },
   } as unknown as ProjectRpcTarget;
   const stream = network.get("/");
   const processor = new ProjectProcessor({

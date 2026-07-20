@@ -23,7 +23,6 @@ import {
   ensureR2ObjectExpiryLifecycle,
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
-  PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
   SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
 } from "../../../scripts/lib/deploy-helpers.ts";
@@ -49,42 +48,6 @@ export async function ensureR2Bucket(
   }
   await cf(`/r2/buckets`, { method: "POST", body: JSON.stringify({ name }) });
   console.log(`created R2 bucket ${name}`);
-}
-
-/**
- * Create-if-missing for the deployment's AI Search NAMESPACE — the container
- * `itx.search` creates per-project instances in at runtime (via the
- * SEARCH_INSTANCES worker binding; see domains/search/search-index.ts).
- * Best-effort: the AI Search management API needs "AI Search Edit" on the
- * token, and each ACCOUNT additionally needs its dashboard-minted service
- * token registered once (AI > AI Search > tokens) before instance creation
- * works — a failure prints the recipe and lets the rest of the run proceed.
- */
-export async function ensureAiSearchNamespace(
-  cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>,
-  input: { namespaceName: string },
-): Promise<void> {
-  try {
-    const namespaces = await cf<{ name: string }[]>(`/ai-search/namespaces?per_page=100`);
-    if (namespaces.some((namespace) => namespace.name === input.namespaceName)) {
-      console.log(`AI Search namespace ${input.namespaceName} exists`);
-      return;
-    }
-    await cf(`/ai-search/namespaces`, {
-      method: "POST",
-      body: JSON.stringify({ name: input.namespaceName }),
-    });
-    console.log(`created AI Search namespace ${input.namespaceName}`);
-  } catch (error) {
-    console.warn(
-      [
-        `Could not ensure AI Search namespace ${input.namespaceName}: ${String(error)}`,
-        `Create it once via wrangler: npx wrangler ai-search namespace create ${input.namespaceName}`,
-        `(and register the account's AI Search service token in the dashboard first:`,
-        `AI > AI Search > tokens). itx.search creates per-project instances at runtime.`,
-      ].join("\n"),
-    );
-  }
 }
 
 /** Ensure apps/os's Cloudflare resources exist for an environment (create-only, idempotent). */
@@ -123,22 +86,16 @@ export default async function ensureResources(
   const kv = await ensureKv(`${env.osWorkerName}-project-directory`);
   const buildCacheKv = await ensureKv(`${env.osWorkerName}-worker-build-cache`);
 
-  // ---- R2 buckets + AI Search namespace -----------------------------------
+  // ---- R2 buckets ----------------------------------------------------------
   // Sandboxes snapshot /workspace into the `-sandboxes` bucket when they idle
   // out and restore it on the next start (container disk is ephemeral). The
-  // worker mirrors stream events / itx.files / repo snapshots /
-  // itx.search.index() documents into `-search-index`, and itx.search creates
-  // ONE AI Search INSTANCE PER PROJECT (structural tenancy) in the deployment's
-  // namespace, each indexing only that project's `{projectId}/**` slice.
-  // `-files` is itx.files project storage. All are name-addressed, so — unlike
+  // `-files` is itx.files project storage. Both are name-addressed, so — unlike
   // KV/D1 — there is nothing to reconcile into envs.ts; create-if-missing is
   // the whole story. Wiping their data is erase-data's / lifecycle's job.
   const isPreview = ctx.name.startsWith("preview");
   const sandboxesBucket = `${env.osWorkerName}-sandboxes`;
   await ensureR2Bucket(cf, sandboxesBucket);
   await ensureR2Bucket(cf, `${env.osWorkerName}-files`);
-  await ensureR2Bucket(cf, `${env.osWorkerName}-search-index`);
-  await ensureAiSearchNamespace(cf, { namespaceName: env.osWorkerName });
 
   // R2 lifecycle: Cloudflare expires objects server-side so cleanup never has
   // to delete them one-by-one — the 429 storm that used to leak preview leases
@@ -149,7 +106,7 @@ export default async function ensureResources(
   //
   // Preview slots expire everything disposable 3h after last write (synthetic
   // data; pure cost). Prd keeps its data — sandbox backups at 90 days, the
-  // search corpus + files with no rule at all. A preview sandbox's DO still
+  // project files with no rule at all. A preview sandbox's DO still
   // writes its backup with the 90-day ttl, but this 3h rule deletes it first;
   // restoring a reaped backup degrades to an empty workspace, so the sandbox
   // simply comes back fresh after ~3h of no use.
@@ -158,11 +115,6 @@ export default async function ensureResources(
     ttlSeconds: isPreview ? PREVIEW_DISPOSABLE_TTL_SECONDS : SANDBOX_BACKUP_TTL_SECONDS_PRD,
   });
   if (isPreview) {
-    await ensureR2ObjectExpiryLifecycle(
-      ctx,
-      `${env.osWorkerName}-search-index`,
-      PREVIEW_SEARCH_INDEX_OBJECT_EXPIRY,
-    );
     await ensureR2ObjectExpiryLifecycle(
       ctx,
       `${env.osWorkerName}-files`,

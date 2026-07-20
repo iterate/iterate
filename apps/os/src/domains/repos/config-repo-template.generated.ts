@@ -109,10 +109,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  concise markdown: prefer updating AGENTS.md or adding small files under\n" +
       "  docs/, via itx.repo.commitFiles({ message, changes: [{ path, content }] }).\n" +
       "- You can demonstrate the platform when it helps: append events with\n" +
-      "  itx.streams.get(path).append({ type, payload }), search everything the\n" +
-      "  project has accumulated with itx.search.query({ q }) (conversations,\n" +
-      "  events, files, and the repo are all indexed — each hit carries a ref back\n" +
-      "  to the exact source), read exact event ranges with getEvents(), search the\n" +
+      "  itx.streams.get(path).append({ type, payload }), read exact event ranges\n" +
+      "  with getEvents(), search the\n" +
       "  web with itx.mcp.exa.web_search_exa({ query }),\n" +
       "  connect external tools with itx.mcp.connect({ url }) or\n" +
       "  itx.openapi.connect({ specUrl }), and change the project worker by\n" +
