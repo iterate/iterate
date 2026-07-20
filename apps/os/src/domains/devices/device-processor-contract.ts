@@ -6,17 +6,16 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DeviceNotificationDestination = NotificationDestination;
 
-const DeviceConfig = z.strictObject({
-  appVersion: z.string().trim().min(1),
-  label: z.string().trim().min(1),
-  notificationsStatus: z.literal("granted"),
-  ownerId: z.string().trim().min(1),
-  platform: z.enum(["ios", "android"]),
-});
-
 const DeviceBirthCertificate = z.strictObject({
-  config: DeviceConfig.extend({
+  config: z.strictObject({
+    appVersion: z.string().trim().min(1),
+    label: z.string().trim().min(1),
+    notificationsStatus: z.literal("granted"),
+    ownerId: z.string().trim().min(1),
+    platform: z.enum(["ios", "android"]),
     pushTokenSecretPath: z.string().trim().min(1),
+    // Compare-and-clear revision: an invalid response for an older Expo
+    // request must not erase Secret material rotated while it was in flight.
     pushTokenSecretUpdatedOffset: z.number().int().positive(),
   }),
 });
