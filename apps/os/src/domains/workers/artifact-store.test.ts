@@ -50,7 +50,7 @@ describe("KvWorkerBuildArtifactStore", () => {
     const kv = new FakeKv();
     await store(kv).put(artifact);
 
-    expect([...kv.data.keys()]).toEqual([`${PREFIX}/abc123.json`]);
+    expect([...kv.data.keys()]).toEqual([`${PREFIX}/complete/abc123.json`]);
     expect(await store(kv).get("abc123")).toEqual(artifact);
     expect(kv.putTtls[0]).toBeGreaterThan(0);
   });
@@ -66,9 +66,29 @@ describe("KvWorkerBuildArtifactStore", () => {
     };
     await store(kv).put(failure);
 
+    expect([...kv.data.keys()]).toEqual([`${PREFIX}/failed/abc123.json`]);
     expect(await store(kv).get("abc123")).toEqual(failure);
     expect(kv.putTtls[0]).toBeGreaterThanOrEqual(10 * 60);
     expect(kv.putTtls[0]).toBeLessThanOrEqual(60 * 60);
+  });
+
+  it("never lets a later failed attempt replace a complete build", async () => {
+    const kv = new FakeKv();
+    const failure: WorkerBuildFailure = {
+      buildKey: "abc123",
+      createdAt: "2026-07-20T00:00:01.000Z",
+      message: "transient registry failure",
+      status: "failed",
+    };
+
+    await store(kv).put(artifact);
+    await store(kv).put(failure);
+
+    expect([...kv.data.keys()].sort()).toEqual([
+      `${PREFIX}/complete/abc123.json`,
+      `${PREFIX}/failed/abc123.json`,
+    ]);
+    expect(await store(kv).get("abc123")).toEqual(artifact);
   });
 
   it("bounds compiler messages shown on the build-failed page", () => {

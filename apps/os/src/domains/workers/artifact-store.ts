@@ -2,8 +2,9 @@
 
 import type { WorkerBundlerAssetConfig } from "./schemas.ts";
 
-// v8 preserves worker-bundler's Wrangler compatibility settings.
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 8;
+// v9 keeps successful artifacts separate from short-lived failure records so
+// a concurrent failed attempt cannot replace a completed build.
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 9;
 
 const ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const FAILURE_TTL_SECONDS = 15 * 60;
@@ -74,19 +75,26 @@ export function buildFailureMessageFromError(error: unknown): string {
     : message;
 }
 
-function recordKey(buildKey: string): string {
-  return `${KV_PREFIX}/${buildKey}.json`;
+function artifactKey(buildKey: string): string {
+  return `${KV_PREFIX}/complete/${buildKey}.json`;
+}
+
+function failureKey(buildKey: string): string {
+  return `${KV_PREFIX}/failed/${buildKey}.json`;
 }
 
 export class KvWorkerBuildArtifactStore {
   constructor(readonly kv: KVNamespace) {}
 
   async get(buildKey: string): Promise<WorkerBuildRecord | null> {
-    return await this.kv.get<WorkerBuildRecord>(recordKey(buildKey), "json");
+    const artifact = await this.kv.get<WorkerBuildArtifact>(artifactKey(buildKey), "json");
+    return artifact ?? (await this.kv.get<WorkerBuildFailure>(failureKey(buildKey), "json"));
   }
 
   async put(record: WorkerBuildRecord): Promise<void> {
-    await this.kv.put(recordKey(record.buildKey), JSON.stringify(record), {
+    const key =
+      record.status === "complete" ? artifactKey(record.buildKey) : failureKey(record.buildKey);
+    await this.kv.put(key, JSON.stringify(record), {
       expirationTtl: record.status === "complete" ? ARTIFACT_TTL_SECONDS : FAILURE_TTL_SECONDS,
     });
   }

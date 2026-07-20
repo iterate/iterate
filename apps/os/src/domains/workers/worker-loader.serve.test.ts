@@ -131,7 +131,9 @@ describe("resolveWorkerSource", () => {
     expect(first.commitOid).toBe("c1");
     expect(first.modules["worker.js"]).toContain("A1");
     expect(h.state.buildCalls).toEqual(["A1"]);
-    expect([...h.kv.data.keys()]).toEqual([expect.stringMatching(/^worker-build\/v8\/.+\.json$/)]);
+    expect([...h.kv.data.keys()]).toEqual([
+      expect.stringMatching(/^worker-build\/v9\/complete\/.+\.json$/),
+    ]);
 
     const second = await resolveWorkerSource({
       projectId: "prj_a",
