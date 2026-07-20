@@ -5042,6 +5042,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   integrations:
     'Integration connection families: get() selects the first connected account and get("<connection>") selects an exact one; e.g. itx.integrations.slack.get().chat.postMessage(...), gmail.get().request(...), github.get().octokit.rest.repos.get(...). list() enumerates all connections; other slugs resolve through the project capability table. Cloudflare first-party bindings live at itx.integrations.cf.{ai,browser,images,videos}.',
   kill: "Restart the project's server-side object; the next request boots it fresh.",
+  kv: "Durable project key-value store for small policy knobs: get(key), set(key, value), delete(key), list({ prefix? }).",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
   parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
@@ -5297,6 +5298,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
   get liveDemo(): LiveDemoRpcTarget {
     return new LiveDemoRpcTarget(() => this.#projectDo.incrementLiveDemo());
+  }
+
+  /** Small durable project key-value store: get/set/delete/list. */
+  get kv(): KvRpcTarget {
+    return new KvRpcTarget(this.#props.projectId);
   }
 
   /** Workers AI: run(model, body), models(). */
@@ -6713,6 +6719,85 @@ class LiveDemoRpcTarget extends IterateRpcTarget<"LiveDemo"> {
   /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
   increment(): Promise<void> {
     return this.#incrementCounter();
+  }
+}
+
+/**
+ * `itx.kv` — a small durable project key-value store on Workers KV (the
+ * deployment's PROJECT_DIRECTORY namespace, keys prefixed with the project
+ * id). Stateless by design: no Durable Object in the path, so a config
+ * worker can read a policy knob on every request for microseconds (the
+ * canonical example: its reverse-proxy target, flipped between the deployed
+ * app and a dev tunnel). KV is eventually consistent across the edge —
+ * writes are visible immediately in the writing location and within ~60s
+ * everywhere else — which is the right trade for knobs and exactly the
+ * wrong one for data (streams), files (files), or credentials (secrets).
+ * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.
+ */
+class KvRpcTarget extends IterateRpcTarget<"Kv"> {
+  readonly #projectId: string;
+
+  constructor(projectId: string) {
+    super();
+    this.#projectId = projectId;
+  }
+
+  #key(key: string): string {
+    // 256 chars leaves comfortable headroom under Workers KV's 512-BYTE
+    // limit on the full stored key (prefix + project id included); the byte
+    // check catches multibyte keys the char count alone would let through.
+    if (typeof key !== "string" || key.length === 0 || key.length > 256) {
+      throw new Error("kv keys are non-empty strings of at most 256 characters");
+    }
+    const stored = `projectkv:${this.#projectId}:${key}`;
+    if (new TextEncoder().encode(stored).length > 512) {
+      throw new Error("kv key too large once encoded (the full stored key must fit 512 bytes)");
+    }
+    return stored;
+  }
+
+  /** The stored value, or null when the key is absent. */
+  get(key: string): Promise<unknown> {
+    return env.PROJECT_DIRECTORY.get(this.#key(key), "json");
+  }
+
+  /** Store a JSON-serializable value (≤64KiB) under a key (≤512 chars). */
+  async set(key: string, value: unknown): Promise<void> {
+    if (value === undefined || value === null) {
+      throw new Error("kv.set requires a value; use kv.delete to remove a key");
+    }
+    const serialized = JSON.stringify(value);
+    // NaN/Infinity stringify to the literal "null", which would make get()
+    // indistinguishable from an absent key while list() still shows it.
+    if (serialized === undefined || serialized === "null") {
+      throw new Error("kv values must be JSON-serializable (null, NaN, and Infinity are not)");
+    }
+    const serializedBytes = new TextEncoder().encode(serialized).length;
+    if (serializedBytes > 64 * 1024) {
+      throw new Error(`kv value too large (${serializedBytes} > 65536 JSON bytes)`);
+    }
+    await env.PROJECT_DIRECTORY.put(this.#key(key), serialized);
+  }
+
+  /** Remove a key; absent keys are a no-op. */
+  async delete(key: string): Promise<void> {
+    await env.PROJECT_DIRECTORY.delete(this.#key(key));
+  }
+
+  /** Keys only (values are one get away), optionally under a prefix. */
+  async list(input?: { prefix?: string }): Promise<string[]> {
+    const namespacePrefix = `projectkv:${this.#projectId}:`;
+    const prefix = input?.prefix ? this.#key(input.prefix) : namespacePrefix;
+    const names: string[] = [];
+    let cursor: string | undefined;
+    // Paginate to completion — this is a knob store, so the loop is one
+    // iteration in practice, but a truncated list must never look complete.
+    do {
+      const listed = await env.PROJECT_DIRECTORY.list({ prefix, limit: 1000, cursor });
+      for (const entry of listed.keys) names.push(entry.name.slice(namespacePrefix.length));
+      cursor = listed.list_complete ? undefined : listed.cursor;
+    } while (cursor !== undefined);
+    return names;
   }
 }
 

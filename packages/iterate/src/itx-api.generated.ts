@@ -113,6 +113,8 @@ export interface Project {
   liveState: LiveStateRpc<ProjectLiveState>;
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
   liveDemo: LiveDemo;
+  /** Small durable project key-value store: get/set/delete/list. */
+  kv: Kv;
   /** Workers AI: run(model, body), models(). */
   ai: Ai;
   /** Browser auth for project-host web apps. */
@@ -291,6 +293,29 @@ export interface LiveDemo {
   ticker: LiveStateRpc<{ tick: number; startedAt: number }>;
   /** Stateful live state: bump the project DO's counter (visible on `itx.liveState`). */
   increment(): Promise<void>;
+}
+
+/**
+ * `itx.kv` — a small durable project key-value store on Workers KV (the
+ * deployment's PROJECT_DIRECTORY namespace, keys prefixed with the project
+ * id). Stateless by design: no Durable Object in the path, so a config
+ * worker can read a policy knob on every request for microseconds (the
+ * canonical example: its reverse-proxy target, flipped between the deployed
+ * app and a dev tunnel). KV is eventually consistent across the edge —
+ * writes are visible immediately in the writing location and within ~60s
+ * everywhere else — which is the right trade for knobs and exactly the
+ * wrong one for data (streams), files (files), or credentials (secrets).
+ * Values are JSON-serializable, ≤64KiB; keys ≤256 characters.
+ */
+export interface Kv {
+  /** The stored value, or null when the key is absent. */
+  get(key: string): Promise<unknown>;
+  /** Store a JSON-serializable value (≤64KiB) under a key (≤512 chars). */
+  set(key: string, value: unknown): Promise<void>;
+  /** Remove a key; absent keys are a no-op. */
+  delete(key: string): Promise<void>;
+  /** Keys only (values are one get away), optionally under a prefix. */
+  list(input?: { prefix?: string }): Promise<string[]>;
 }
 
 /** Workers AI binding exposed through itx as a project/agent capability. */

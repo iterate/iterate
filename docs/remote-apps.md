@@ -109,6 +109,66 @@ Treat that key as the project's root credential: prefer the user lane
 wherever a human is present, and rotate the key with an ordinary
 `update({ egress: { urls: [] }, material: newValue })` if it ever leaks.
 
+## Developing your app against a live project
+
+The proxy target is just a hostname your config worker computes, which makes
+"run the vessel on my laptop, use it with my production project" a two-piece
+trick: a tunnel, and a knob.
+
+**The tunnel** is captun (`apps/tunnels`, `tunnels.iterate.com`) — public
+local URLs that forward HTTP _and_ WebSockets, packaged as a Vite plugin:
+
+```ts
+// vite.config.ts of your app
+import captunVite from "captun/vite";
+export default defineConfig({ plugins: [captunVite() /* … */] });
+```
+
+```bash
+CAPTUN_TUNNEL_NAME=jonas-tasks CAPTUN_TOKEN=… pnpm dev
+# → https://jonas-tasks.tunnels.iterate.com → localhost:5173, HMR included
+```
+
+**The knob** is `itx.kv` — the small durable project key-value store
+(Workers KV, project-scoped, no Durable Object in the read path, so the
+config worker can consult it on every request for microseconds). Make the
+proxy target dynamic with prod as the fallback:
+
+```ts
+const target =
+  ((await itx.kv.get("tasks-app-origin")) as string | null) ?? "tasks.iterate.workers.dev";
+url.host = target;
+```
+
+Flip to your laptop and back with one CLI call — no commit, no rebuild:
+
+```bash
+pnpm cli itx run --context prj_… -e 'await itx.kv.set("tasks-app-origin", "jonas-tasks.tunnels.iterate.com")'
+pnpm cli itx run --context prj_… -e 'await itx.kv.delete("tasks-app-origin")'
+```
+
+Better still, **route per-user**: the gate already knows who the member is,
+so production can send only you to your laptop while everyone else stays on
+the deployed app — live development against real data with zero blast
+radius:
+
+```ts
+const actor = await itx.auth
+  .get({ policy: "project-member" })
+  .authenticate(req, { type: "from-server-cookie" });
+const devOrigin =
+  actor.userId === MY_USER_ID ? await itx.kv.get(`dev-origin:${actor.userId}`) : null;
+url.host = (devOrigin as string | null) ?? "tasks.iterate.workers.dev";
+```
+
+The security posture is unchanged: the tunnel URL is public but the vessel
+is credential-free, so direct hits see only the landing page — board data
+exists only for requests the proxy stamped with a valid platform token. Your
+local vessel will make **real commits to the real repo** as you; that is the
+point, but know it. KV is eventually consistent across the edge (writes are
+immediate where written, global within ~60s) — the right trade for a routing
+knob, the wrong one for anything that is data.
+
 ## Current semantics and limits
 
 - **Proxy hops**: browser traffic pays ingress → config worker → vessel.
