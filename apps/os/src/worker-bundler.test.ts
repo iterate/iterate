@@ -190,6 +190,19 @@ describe("worker-bundler RPC boundary", () => {
       error: expect.stringMatching(/build cache currently supports text assets only/),
     });
   });
+
+  it("leaves failure-message bounding to the artifact boundary", async () => {
+    const message = "x".repeat(3_000);
+    createWorker.mockRejectedValue(new Error(message));
+
+    await expect(
+      bundler.createWorker({
+        entryPoint: "worker.ts",
+        files: { "worker.ts": "invalid source" },
+        virtualModules: {},
+      }),
+    ).resolves.toEqual({ error: message });
+  });
 });
 
 describe("handleAssetRequest", () => {

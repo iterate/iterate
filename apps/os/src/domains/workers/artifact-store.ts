@@ -79,10 +79,7 @@ function recordKey(buildKey: string): string {
 }
 
 export class KvWorkerBuildArtifactStore {
-  constructor(
-    readonly kv: KVNamespace,
-    readonly options: { expirationTtlSeconds?: number } = {},
-  ) {}
+  constructor(readonly kv: KVNamespace) {}
 
   async get(buildKey: string): Promise<WorkerBuildRecord | null> {
     return await this.kv.get<WorkerBuildRecord>(recordKey(buildKey), "json");
@@ -90,10 +87,7 @@ export class KvWorkerBuildArtifactStore {
 
   async put(record: WorkerBuildRecord): Promise<void> {
     await this.kv.put(recordKey(record.buildKey), JSON.stringify(record), {
-      expirationTtl:
-        record.status === "complete"
-          ? (this.options.expirationTtlSeconds ?? ARTIFACT_TTL_SECONDS)
-          : FAILURE_TTL_SECONDS,
+      expirationTtl: record.status === "complete" ? ARTIFACT_TTL_SECONDS : FAILURE_TTL_SECONDS,
     });
   }
 }

@@ -234,7 +234,7 @@ const DO_EXPORTS = {
  * `max_instances × instance memory` against the account's concurrent-memory
  * quota AT DEPLOY TIME, summed across every container app — and the preview
  * account is shared by every preview slot — so preview caps are deliberately
- * small (a slot's sandbox fleet reserves ~75 GiB vs production's ~260 GiB).
+ * small (a slot's sandbox fleet reserves ~67 GiB vs production's ~260 GiB).
  * Billing is while-running only (idle sandboxes are torn down and snapshotted),
  * so production headroom is cheap; raise a cap here if a real workload hits it
  * (exceeding one surfaces as HTTP 503 on sandbox start).

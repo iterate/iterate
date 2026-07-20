@@ -177,4 +177,26 @@ describe("createApp asset dispatch", () => {
     expect(h.handleAssetRequest).toHaveBeenCalledOnce();
     expect(h.workerGetByName).not.toHaveBeenCalled();
   });
+
+  it("sends a stateful app WebSocket upgrade directly to its Durable Object", async () => {
+    h.statefulFetch.mockResolvedValue(new Response("upgrade lane"));
+    const runner = new DynamicWorkerRunner({
+      exports: {} as ExecutionContext["exports"],
+      projectId: "prj_private",
+      scopePath: statefulAppRef.path,
+      waitUntil: () => undefined,
+    });
+
+    const response = await runner.fetch({
+      ref: statefulAppRef,
+      request: new Request("https://example.com/socket", {
+        headers: { Upgrade: "websocket" },
+      }),
+    });
+
+    expect(await response.text()).toBe("upgrade lane");
+    expect(h.resolveWorkerSource).not.toHaveBeenCalled();
+    expect(h.handleAssetRequest).not.toHaveBeenCalled();
+    expect(h.workerGetByName).toHaveBeenCalledOnce();
+  });
 });

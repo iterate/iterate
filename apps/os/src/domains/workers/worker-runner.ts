@@ -141,7 +141,11 @@ export class DynamicWorkerRunner {
   }): Promise<Response> {
     return this.#trace(ref, "fetch", traceRole, async (span) => {
       let resolved: ResolvedWorkerSource | undefined;
-      if ("createApp" in ref.source && (request.method === "GET" || request.method === "HEAD")) {
+      if (
+        "createApp" in ref.source &&
+        !isWebSocketUpgradeRequest(request) &&
+        (request.method === "GET" || request.method === "HEAD")
+      ) {
         resolved = await resolveWorkerSource({
           buildBudgetMs,
           projectId: this.#projectId,

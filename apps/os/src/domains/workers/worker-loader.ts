@@ -164,13 +164,22 @@ async function runBuild(
     return memoizeArtifact(artifact);
   } catch (error) {
     if (isWorkerBuildFailedError(error)) {
-      await store.put({
-        buildKey,
-        ...(context.resolved.type === "repo" ? { commitOid: context.resolved.commitOid } : {}),
-        createdAt: new Date().toISOString(),
-        message: buildFailureMessageFromError(error),
-        status: "failed",
-      });
+      try {
+        await store.put({
+          buildKey,
+          ...(context.resolved.type === "repo" ? { commitOid: context.resolved.commitOid } : {}),
+          createdAt: new Date().toISOString(),
+          message: buildFailureMessageFromError(error),
+          status: "failed",
+        });
+      } catch (cacheError) {
+        // The source failure is the request's real outcome. Preserve it while
+        // making the independent cache defect observable.
+        console.error("failed to cache dynamic worker build failure", {
+          buildKey,
+          error: cacheError,
+        });
+      }
     }
     throw error;
   }

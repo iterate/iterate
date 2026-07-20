@@ -202,10 +202,11 @@ deployment: a single worker ([worker-topology.md](./worker-topology.md))
 carrying every Durable Object class same-script, the `PROJECT_DIRECTORY` and
 `WORKER_BUILD_CACHE` KV namespaces, the Worker Loader, the Workers AI
 binding, Cloudflare Artifacts for repos, and routes for the app base URL,
-the MCP base URL, and each project hostname base. One sidecar rides along:
-the typechecker worker (`wrangler.typechecker.jsonc`, deployed first by
-deploy.ts), the only script carrying the TypeScript compiler wasm. Deploys
-take the env explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
+the MCP base URL, and each project hostname base. Two compiler sidecars ride
+along: the typechecker (`wrangler.typechecker.jsonc`) carries the TypeScript
+compiler wasm, while worker-bundler (`wrangler.worker-bundler.jsonc`) carries
+esbuild wasm. `deploy.ts` deploys both before OS. Deploys take the env
+explicitly: `pnpm run deploy --env preview_2` / `--env prd`.
 
 ## Smoke Tests
 

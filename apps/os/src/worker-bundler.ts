@@ -93,7 +93,7 @@ async function captureBuildResult<T>(
     return { result: await build() };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { error: message.slice(0, 2_000) };
+    return { error: message };
   }
 }
 

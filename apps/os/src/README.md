@@ -288,7 +288,7 @@ Loader. Runners are `DynamicWorkerRunner`
 dynamic isolate gets its scoped itx binding and egress fetcher. A `DynamicWorkerRef` is
 `stateless` (a WorkerEntrypoint export, with
 optional `props`) or `stateful` (a DurableObject class export hosted by
-`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is an
+`StatefulWorkerDurableObject` under a `durableWorkerKey`). Its source is a
 direct `createWorker` or `createApp` call: each function's `files` option may
 come `inline` or from a `repo` snapshot (branch late-bound or commit-pinned,
 masked by include/exclude globs), and an isolated workerd sidecar runs

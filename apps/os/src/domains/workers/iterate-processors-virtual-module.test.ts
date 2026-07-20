@@ -26,9 +26,9 @@ test("the embedded iterate/processors runtime is loader-ready plain JavaScript",
   expect(ITERATE_PROCESSORS_VIRTUAL_MODULE).not.toContain("createStreamProcessorRegistry");
 
   // Cap'n Web is another platform virtual module so every generated module
-  // shares one class identity. Zod and the remaining implementation are
-  // bundled here; no project dependency install is needed.
-  expect(externals(ITERATE_PROCESSORS_VIRTUAL_MODULE)).toEqual(["@iterate-com/capnweb"]);
+  // shares one class identity. Zod stays external so the SDK and
+  // worker-authored schemas use the worker's one declared dependency.
+  expect(externals(ITERATE_PROCESSORS_VIRTUAL_MODULE)).toEqual(["@iterate-com/capnweb", "zod"]);
 });
 
 test("the embedded iterate/processors/cloudflare hosting layer shares the pure module", async () => {

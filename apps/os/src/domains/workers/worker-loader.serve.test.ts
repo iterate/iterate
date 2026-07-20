@@ -12,6 +12,7 @@ const h = vi.hoisted(() => {
     }
 
     async put(key: string, value: string): Promise<void> {
+      if (state.failCacheWrites) throw new Error("KV unavailable");
       this.data.set(key, value);
     }
   }
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => {
     buildCalls: [] as string[],
     buildGate: undefined as Promise<void> | undefined,
     failBuilds: false,
+    failCacheWrites: false,
     failRuntime: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
@@ -110,6 +112,7 @@ beforeEach(async () => {
   h.state.buildCalls.splice(0);
   h.state.buildGate = undefined;
   h.state.failBuilds = false;
+  h.state.failCacheWrites = false;
   h.state.failRuntime = false;
   h.state.loaderCalls.splice(0);
   h.state.snapshotCalls.splice(0);
@@ -179,6 +182,31 @@ describe("resolveWorkerSource", () => {
     const recovered = await resolveWorkerSource({ projectId: "prj_retry", source, waitUntil });
     expect(recovered.modules["worker.js"]).toContain("RETRY");
     expect(h.state.buildCalls).toEqual(["RETRY", "RETRY"]);
+  });
+
+  test("preserves a source failure when its failure record cannot be cached", async () => {
+    setCommit("c1", "uncached-broken-build", "BROKEN");
+    h.state.failBuilds = true;
+    h.state.failCacheWrites = true;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        resolveWorkerSource({
+          projectId: "prj_uncached_broken",
+          source: repoSource("/repos/uncached-broken-build"),
+          waitUntil,
+        }),
+      ).rejects.toThrow("esbuild exploded");
+      expect(consoleError).toHaveBeenCalledWith(
+        "failed to cache dynamic worker build failure",
+        expect.objectContaining({ error: expect.objectContaining({ message: "KV unavailable" }) }),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+
+    expect(h.kv.data.size).toBe(0);
   });
 
   test("passes omitted repo masks through without platform defaults", async () => {
