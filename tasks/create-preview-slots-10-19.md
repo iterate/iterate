@@ -1,5 +1,5 @@
 ---
-status: planning-awaiting-approval
+status: applying-approved-batch
 size: large
 branch: ops/create-preview-slots-10-19
 started: 2026-07-20
@@ -10,11 +10,9 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 
 ## Status
 
-Read-only planning is complete. Repository, Semaphore, Doppler, Cloudflare,
-domain, capacity, GitHub, and Slack inventories are recorded below; no external
-state has been changed. The exact non-production batch is ready for explicit
-approval. Production deployment and Semaphore lease publication remain later,
-separate approval boundaries.
+Read-only planning is complete and the exact non-production batch was approved
+on 2026-07-20. Application is now in progress. Production deployment and
+Semaphore lease publication remain later, separate approval boundaries.
 
 ## Goal
 
@@ -84,7 +82,9 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   writes, current prices, price ceiling request, and stop conditions below.
   _The batch has no purchases. Provider writes, credential generation, and
   stop conditions are enumerated below; production leasing is excluded._
-- [ ] Obtain explicit approval for the concrete non-production batch.
+- [x] Obtain explicit approval for the concrete non-production batch.
+  _The user approved the six-item batch below on 2026-07-20, requested roughly
+  one second between operations, and requested audible `say` progress._
 - [ ] Add `preview_10`–`preview_19` to `envs.ts` with `UNPROVISIONED` IDs and
   update live operational prose derived from a nine-slot fleet.
 - [ ] Create only approved missing Doppler configs and Auth client/runtime
@@ -284,3 +284,5 @@ the recorded projection.
   runbook. Corrected the manifest to GitHub's API keys, added the Merge-queue
   permission required by `merge_group`, and reached the final review page
   without clicking Create.
+- 2026-07-20: The user explicitly approved the intended non-production writes.
+  Production deployment and Semaphore lease creation remain unapproved.
