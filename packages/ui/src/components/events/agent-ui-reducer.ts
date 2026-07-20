@@ -540,8 +540,11 @@ function emitItem(state: AgentUiState, items: AgentUiItem[], item: AgentUiItem):
 // ---------------------------------------------------------------------------
 
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
+// Legacy lifecycle events: no longer emitted, but historical journals carry
+// them forever, so their handling stays alongside the settled handler.
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
+const AGENT_LLM_REQUEST_SETTLED = "events.iterate.com/agent/llm-request-settled";
 const AGENT_CONTEXT_ADDED = "events.iterate.com/agents/context-added";
 const AGENT_TOKEN_USAGE_REPORTED = "events.iterate.com/agent/token-usage-reported";
 const AGENT_LLM_REQUEST_STARTED = "events.iterate.com/agent/llm-request-started";
@@ -757,6 +760,41 @@ function reduceAgentUiEvent(
               outcome: "cancelled",
               ...(cancelReason == null ? {} : { cancelReason }),
               durationMs: Math.max(0, timestampMs - step.startedAtMs),
+            },
+      );
+    }
+
+    case AGENT_LLM_REQUEST_SETTLED: {
+      // The ONE terminal fact for a request (succeeded | failed | cancelled),
+      // pointing back at the requested event's offset via `requestOffset`.
+      const payload = readPayloadRecord(event);
+      const requestOffset = payload?.requestOffset;
+      if (typeof requestOffset !== "number") return state;
+      const result = isRecord(payload.result) ? payload.result : undefined;
+      const status = typeof result?.status === "string" ? result.status : "succeeded";
+      const usage = readUsageTokens(result?.usage);
+      const errorMessage =
+        typeof result?.errorMessage === "string" ? result.errorMessage : undefined;
+      // "expired" has no legacy cancel-reason mapping; it renders as a plain
+      // cancelled step.
+      const cancelReason = result?.reason === "interrupted-by-user-input" ? result.reason : null;
+      return updateLlmStep(state, requestOffset, (step) =>
+        step.outcome != null
+          ? step
+          : {
+              ...step,
+              status: "done",
+              outcome:
+                status === "succeeded" ? "completed" : status === "failed" ? "failed" : "cancelled",
+              ...(typeof payload.durationMs === "number"
+                ? { durationMs: payload.durationMs }
+                : status === "cancelled"
+                  ? { durationMs: Math.max(0, timestampMs - step.startedAtMs) }
+                  : {}),
+              ...(usage.input == null ? {} : { inputTokens: usage.input }),
+              ...(usage.output == null ? {} : { outputTokens: usage.output }),
+              ...(errorMessage == null ? {} : { errorMessage }),
+              ...(cancelReason == null ? {} : { cancelReason }),
             },
       );
     }
@@ -1281,8 +1319,10 @@ function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeS
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {
   if (!isRecord(usage)) return {};
-  const input = usage.input_tokens ?? usage.prompt_tokens;
-  const output = usage.output_tokens ?? usage.completion_tokens;
+  // Provider dialects (raw completed results) plus the contract's own
+  // camelCase shape (the settled event's normalized usage).
+  const input = usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens;
+  const output = usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens;
   return {
     ...(typeof input === "number" ? { input } : {}),
     ...(typeof output === "number" ? { output } : {}),

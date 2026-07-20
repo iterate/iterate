@@ -122,6 +122,19 @@ const CancelledPayloadSlice = z.looseObject({
   phase: z.literal("requested"),
   llmRequestOffset: z.number(),
 });
+const SettledPayloadSlice = z.looseObject({
+  requestOffset: z.number(),
+  durationMs: z.number().optional(),
+  result: z.union([
+    z.looseObject({ status: z.literal("succeeded"), rawResponse: z.unknown().optional() }),
+    z.looseObject({
+      status: z.literal("failed"),
+      errorMessage: z.string(),
+      rawResponse: z.unknown().optional(),
+    }),
+    z.looseObject({ status: z.literal("cancelled") }),
+  ]),
+});
 const OutputPayloadSlice = z.looseObject({
   role: z.literal("assistant"),
   content: z.string(),
@@ -277,6 +290,14 @@ function replayStats(input: {
     completedEvent === undefined
       ? undefined
       : CompletedPayloadSlice.safeParse(completedEvent.payload);
+  const settledEvent = input.events.find((event) => {
+    if (event.type !== "events.iterate.com/agent/llm-request-settled") return false;
+    const parsed = SettledPayloadSlice.safeParse(event.payload);
+    return parsed.success && parsed.data.requestOffset === input.llmRequestOffset;
+  });
+  const settledAt = timestampOf(settledEvent);
+  const settled =
+    settledEvent === undefined ? undefined : SettledPayloadSlice.safeParse(settledEvent.payload);
 
   const chunks = input.chunkEvents.filter((event) =>
     forThisRequest(event, LLM_RESPONSE_CHUNK_EVENT_TYPE),
@@ -301,7 +322,7 @@ function replayStats(input: {
 
   const timeToFirstChunkMs =
     startedAt != null && firstChunkAt != null ? Math.max(0, firstChunkAt - startedAt) : null;
-  const generationEndAt = completedAt ?? lastChunkAt;
+  const generationEndAt = completedAt ?? settledAt ?? lastChunkAt;
   const generationMs =
     firstChunkAt != null && generationEndAt != null
       ? Math.max(0, generationEndAt - firstChunkAt)
@@ -311,7 +332,12 @@ function replayStats(input: {
       ? Math.round((tokens.outputTokens / (generationMs / 1000)) * 10) / 10
       : null;
 
-  const rawResponse = completed?.success ? (completed.data.result.rawResponse ?? null) : null;
+  const settledRawResponse =
+    settled?.success && settled.data.result.status !== "cancelled"
+      ? (settled.data.result.rawResponse ?? null)
+      : null;
+  const rawResponse =
+    settledRawResponse ?? (completed?.success ? (completed.data.result.rawResponse ?? null) : null);
   const gatewayCacheStatus = GatewayCacheSlice.safeParse(rawResponse);
   return {
     tokens,
@@ -332,12 +358,29 @@ function timestampOf(event: StreamEvent | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-/** The request's settled outcome: completed beats cancelled (a late completion
- * under the shared idempotency key is the durable fact); null = in flight. */
+/** The request's settled outcome: the one settled fact wins; the legacy
+ * completed/cancelled pair (historical journals only) is the fallback, with
+ * completed beating cancelled; null = in flight. */
 function replayOutcome(
   events: readonly StreamEvent[],
   llmRequestOffset: number,
 ): LlmRequestReplay["outcome"] {
+  for (const event of events) {
+    if (event.type !== "events.iterate.com/agent/llm-request-settled") continue;
+    const parsed = SettledPayloadSlice.safeParse(event.payload);
+    if (!parsed.success || parsed.data.requestOffset !== llmRequestOffset) continue;
+    const result = parsed.data.result;
+    return {
+      status:
+        result.status === "succeeded"
+          ? "success"
+          : result.status === "failed"
+            ? "failure"
+            : "cancelled",
+      durationMs: parsed.data.durationMs ?? null,
+      errorMessage: result.status === "failed" ? result.errorMessage : null,
+    };
+  }
   for (const event of events) {
     if (event.type !== "events.iterate.com/agent/llm-request-completed") continue;
     const parsed = CompletedPayloadSlice.safeParse(event.payload);

@@ -153,6 +153,62 @@ describe("replayLlmRequest", () => {
     });
   });
 
+  it("reports outcomes from the settled event (new journals)", () => {
+    const succeeded = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows(),
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          durationMs: 1500,
+          result: {
+            status: "succeeded",
+            text: "hi again",
+            usage: { inputTokens: 10, outputTokens: 2 },
+          },
+        }),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(succeeded?.outcome).toEqual({ status: "success", durationMs: 1500, errorMessage: null });
+
+    const failed = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows(),
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          durationMs: 30012,
+          result: { status: "failed", errorMessage: "LLM request timed out" },
+        }),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(failed?.outcome).toEqual({
+      status: "failure",
+      durationMs: 30012,
+      errorMessage: "LLM request timed out",
+    });
+
+    const cancelled = replayLlmRequest({
+      rawEventJsons: [
+        ...conversationRows(),
+        row("events.iterate.com/agent/llm-request-settled", {
+          requestOffset: 7,
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "hi ag",
+          },
+        }),
+      ],
+      llmRequestOffset: 7,
+    });
+    expect(cancelled?.outcome).toEqual({
+      status: "cancelled",
+      durationMs: null,
+      errorMessage: null,
+    });
+  });
+
   it("returns the committed output as the response, with thinking from chunks", () => {
     const chunkRows = [
       row(
