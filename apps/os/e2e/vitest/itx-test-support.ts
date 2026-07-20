@@ -40,9 +40,24 @@ export async function appendSyntheticProviderOutput(
     ) {
       throw new Error("Synthetic provider output could not read the stream's maxOffset.");
     }
-    const llmRequestOffset = (coreProcessorState as { maxOffset: number }).maxOffset + 1;
+    // The requested event only folds into an open request when a trigger is
+    // pending, so the batch leads with a trigger-bearing developer item (no
+    // actor → an external trigger). Everything lands in ONE atomic append:
+    // the requested event consumes the trigger in the same frame and the
+    // settled fact closes it before the at-head pass runs, so the processor
+    // neither dials a real provider nor journals a stray debounced intent.
+    const triggerOffset = (coreProcessorState as { maxOffset: number }).maxOffset + 1;
+    const llmRequestOffset = triggerOffset + 1;
     try {
-      const [, assistantContext] = await stream.append(
+      const [, , assistantContext] = await stream.append(
+        asserted(triggerOffset, {
+          type: AGENT_CONTEXT_ADDED_TYPE,
+          payload: {
+            role: "developer",
+            content: "[e2e synthetic provider turn: the next assistant output is injected]",
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+        }),
         asserted(llmRequestOffset, {
           type: "events.iterate.com/agent/llm-request-requested",
           payload: { model, expiresAt: Date.now() + 60_000 },

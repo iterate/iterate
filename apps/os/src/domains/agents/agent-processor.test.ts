@@ -1411,6 +1411,65 @@ describe("AgentProcessor stream facts", () => {
     expect(h.state().contextItems.some((item) => item.payload.content === "too late")).toBe(false);
   });
 
+  it("a synthetic provider turn (trigger + requested + assistant + settled in ONE batch) folds fully and extracts the script without dialing", async () => {
+    // The e2e helper appendSyntheticProviderOutput's contract: a raw atomic
+    // batch stands in for a whole provider turn. The leading developer item
+    // supplies the trigger the requested fold requires; the settled fact
+    // closes the request in the same frame, so the at-head pass finds nothing
+    // to adopt (no LLM dial) and no stray debounced intent journals.
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS]);
+    const script = "async (itx) => itx.email.unreadCount()";
+    const requestedOffset = h.events().at(-1)!.offset + 2;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "developer",
+          content: "[e2e synthetic provider turn: the next assistant output is injected]",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+      {
+        type: REQUESTED,
+        payload: { model: "e2e/synthetic-provider", expiresAt: 1_000_000 + 60_000 },
+      },
+      {
+        type: "events.iterate.com/agents/context-added",
+        payload: {
+          role: "assistant",
+          content: `Checking.\n\`\`\`ts\n${script}\n\`\`\``,
+          llmRequestOffset: requestedOffset,
+        },
+      },
+      {
+        type: SETTLED,
+        payload: {
+          requestOffset: requestedOffset,
+          durationMs: 0,
+          result: { status: "succeeded", text: "Checking." },
+        },
+      },
+    ]);
+
+    // The turn folded: assistant text is in context, the request closed, the
+    // script extraction per-event effect fired — and no real dial happened.
+    expect(h.llm.calls).toHaveLength(0);
+    expect(h.state().openRequest).toBeNull();
+    expect(h.state().contextItems.some((item) => item.payload.content.includes("Checking."))).toBe(
+      true,
+    );
+    expect(h.events("events.iterate.com/capability-host/script-run-requested")).toMatchObject([
+      { payload: { code: script, executionId: `agent-output:${requestedOffset + 1}` } },
+    ]);
+    // The seed trigger was consumed by the synthetic requested event; nothing
+    // pending, and even after every window clears no stray intent journals.
+    await h.play(["advanceTime", 60_000]);
+    expect(h.events(REQUESTED)).toHaveLength(1);
+    expect(h.llm.calls).toHaveLength(0);
+  });
+
   it("agent/configured merges partial patches; omitted keys keep their values", async () => {
     const h = makeAgentHarness();
     await h.play([
