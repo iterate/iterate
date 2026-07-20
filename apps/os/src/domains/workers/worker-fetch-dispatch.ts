@@ -115,8 +115,8 @@ export function withWorkerFetchDispatchHeader(
 
 /**
  * Reads and strips the dispatch header. Returns null when the header is
- * absent; throws on a malformed value (an internal caller composed it, so a
- * parse failure is a bug, not user input).
+ * absent and throws on a malformed value. Public boundaries classify that as
+ * a bad request; internal callers treat it as a composition bug.
  */
 export function takeWorkerFetchDispatch(
   request: Request,

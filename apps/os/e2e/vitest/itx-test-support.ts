@@ -238,14 +238,17 @@ export class PathFunctionTarget extends RpcTarget {
 }
 
 /**
- * Inline plain-JavaScript worker source with bundling off — the loader-ready
- * fast path. Tests that exercise the full build pipeline (TypeScript,
- * multi-file imports, npm dependencies) construct their sources explicitly.
+ * Inline plain-JavaScript worker source using worker-bundler's transform-only
+ * path. Tests that exercise full bundling (TypeScript, multi-file imports, npm
+ * dependencies) construct their sources explicitly.
  */
 export function inlineJsSource(entryPoint: string, files: Record<string, string>) {
   return {
-    files: { files, type: "inline" as const },
-    options: { bundle: false as const, entryPoint },
+    createWorker: {
+      bundle: false as const,
+      entryPoint,
+      files: { files, type: "inline" as const },
+    },
   };
 }
 

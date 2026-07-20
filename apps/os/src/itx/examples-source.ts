@@ -367,10 +367,13 @@ return await itx.projects.get(pid).__describe();
         entrypoint: "Greeter",
         path: "/",
         source: {
-          files: {
-            type: "inline",
+          createWorker: {
+            bundle: false,
+            entryPoint: "greeter.js",
             files: {
-              "greeter.js": `
+              type: "inline",
+              files: {
+                "greeter.js": `
           import { WorkerEntrypoint } from "cloudflare:workers";
 
           export class Greeter extends WorkerEntrypoint {
@@ -383,11 +386,11 @@ return await itx.projects.get(pid).__describe();
             }
           }
         `,
+              },
             },
           },
           // Plain JavaScript with bundling off loads directly; TypeScript or
           // multi-file sources drop bundle: false and go through the build pipeline.
-          options: { bundle: false, entryPoint: "greeter.js" },
         },
       });
 
@@ -421,10 +424,13 @@ return await itx.projects.get(pid).__describe();
         durableWorkerKey: vars.counterKey ?? "repl-counter",
         path: "/",
         source: {
-          files: {
-            type: "inline",
+          createWorker: {
+            bundle: false,
+            entryPoint: "counter.js",
             files: {
-              "counter.js": `
+              type: "inline",
+              files: {
+                "counter.js": `
           import { DurableObject } from "cloudflare:workers";
 
           export class CounterDurableObject extends DurableObject {
@@ -439,9 +445,9 @@ return await itx.projects.get(pid).__describe();
             }
           }
         `,
+              },
             },
           },
-          options: { bundle: false, entryPoint: "counter.js" },
         },
       });
 

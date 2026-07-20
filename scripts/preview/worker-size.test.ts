@@ -21,11 +21,11 @@ describe("parseWorkerSizeFromDeployOutput", () => {
     ).toEqual({ totalKib: 91234.56, gzipKib: 3456.78 });
   });
 
-  it("takes the LAST line when one deploy uploads several workers (os builder sidecar first)", () => {
+  it("takes the LAST line when one deploy uploads several workers (OS sidecars first)", () => {
     expect(
       parseWorkerSizeFromDeployOutput(
         [
-          "Total Upload: 100.00 KiB / gzip: 30.00 KiB", // builder sidecar
+          "Total Upload: 100.00 KiB / gzip: 30.00 KiB", // compiler sidecar
           "some other output",
           "Total Upload: 91234.56 KiB / gzip: 3456.78 KiB", // the real worker
         ].join("\n"),

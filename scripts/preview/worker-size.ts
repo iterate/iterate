@@ -24,7 +24,7 @@ const totalUploadPattern = /Total Upload:\s*([\d,.]+)\s*KiB\s*\/\s*gzip:\s*([\d,
 /**
  * Extract the deployed worker's size from wrangler deploy output. The LAST
  * "Total Upload" line wins: a single app deploy can upload several workers
- * (os deploys its builder sidecar first, the real worker last), one line each.
+ * (OS deploys its compiler sidecars first, the real worker last), one line each.
  */
 export function parseWorkerSizeFromDeployOutput(output: string): WorkerSizeInfo | null {
   const match = [...output.matchAll(totalUploadPattern)].at(-1);
