@@ -11,7 +11,6 @@ import {
   PaperclipIcon,
   PauseIcon,
   PlayIcon,
-  RefreshCwIcon,
 } from "lucide-react";
 import {
   formatAgentUiActivitySummary,
@@ -77,6 +76,10 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
 }) {
   if (item.kind === "stream-woken") {
     return <StreamWakeRow item={item} />;
+  }
+
+  if (item.kind === "processor-revived") {
+    return <ProcessorRevivedRow item={item} />;
   }
 
   if (item.kind === "child-stream-created") {
@@ -222,13 +225,63 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
           <TooltipContent className="max-w-80 text-left leading-snug">
             <p>
               This can happen when the Durable Object is evicted or crashed, and most often when we
-              do a production deployment. All Durable Objects currently crash and do not recover
-              cleanly; we will fix that in the future.
+              do a production deployment. Processors with in-flight work are revived and adopt it; a
+              revival marker appears in the feed when that happens.
             </p>
           </TooltipContent>
         </Tooltip>
       </div>
       <div className="h-px flex-1 bg-purple-500/45" />
+    </div>
+  );
+}
+
+function ProcessorRevivedRow({
+  item,
+}: {
+  item: Extract<AgentUiItem, { kind: "processor-revived" }>;
+}) {
+  const dateTime = formatDateTimeAttribute(item.timestampMs);
+  const label =
+    item.processorSlug == null ? "Processor revived" : `${item.processorSlug} processor revived`;
+
+  return (
+    <div
+      className="flex items-center gap-3 py-3"
+      data-testid="agent-feed-processor-revived"
+      data-kind="processor-revived"
+    >
+      <div className="h-px flex-1 bg-amber-500/40" />
+      <div className="flex shrink-0 items-center gap-1.5">
+        <time
+          className="font-mono text-xs font-medium text-amber-700 dark:text-amber-300"
+          dateTime={dateTime}
+          title={formatDateTime(item.timestampMs)}
+        >
+          {label}
+        </time>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="What does a processor revival mean?"
+                className="inline-flex size-4 items-center justify-center rounded-full text-amber-700/75 transition-colors hover:text-amber-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60 dark:text-amber-300/75 dark:hover:text-amber-200"
+              />
+            }
+          >
+            <CircleQuestionMarkIcon className="size-3.5" aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-80 text-left leading-snug">
+            <p>
+              This processor's runtime died while it had work in flight (an eviction, crash, or
+              deployment) and the platform revived it. The open work was adopted and continued —
+              nothing was cancelled or lost.
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+      <div className="h-px flex-1 bg-amber-500/40" />
     </div>
   );
 }
@@ -282,7 +335,7 @@ function AgentActivityRow({
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
   const summary = summarizeAgentUiActivity(activity);
-  const failed = summary.outcome === "failed" || summary.outcome === "restart-failed";
+  const failed = summary.outcome === "failed";
 
   return (
     <div className="flex flex-col py-0.5">
@@ -301,8 +354,6 @@ function AgentActivityRow({
           <CircleAlertIcon data-icon="inline-start" className="text-destructive" />
         ) : summary.outcome === "interrupted" ? (
           <BanIcon data-icon="inline-start" className="text-destructive" />
-        ) : summary.outcome === "recovered" ? (
-          <RefreshCwIcon data-icon="inline-start" />
         ) : (
           <CodeIcon data-icon="inline-start" className="text-muted-foreground/60" />
         )}
@@ -500,7 +551,6 @@ function AgentActivityStep({
   onInspectScriptExecution?: (executionId: string) => void;
 }) {
   const failed = step.kind === "code" ? step.success === false : step.outcome === "failed";
-  const cancelReason = step.kind === "llm" ? step.cancelReason : undefined;
   const inspect =
     step.kind === "llm"
       ? onInspectLlmRequest == null
@@ -528,9 +578,7 @@ function AgentActivityStep({
           failed && "text-destructive hover:text-destructive",
         )}
       >
-        {cancelReason === "durable-object-crashed" ? (
-          <RefreshCwIcon data-icon="inline-start" />
-        ) : step.kind === "llm" && step.outcome === "cancelled" ? (
+        {step.kind === "llm" && step.outcome === "cancelled" ? (
           <BanIcon data-icon="inline-start" className="text-destructive" />
         ) : step.kind === "llm" ? (
           <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
@@ -543,14 +591,6 @@ function AgentActivityStep({
         <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
         <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
       </Button>
-      {cancelReason === "durable-object-crashed" ? (
-        <span
-          className="ml-3 text-[11px] text-muted-foreground"
-          data-testid="agent-feed-recovery-reason"
-        >
-          Platform restarted this agent.
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -560,8 +600,8 @@ function stepLabel(step: AgentUiStep): string {
     if (step.status === "running") return "Running code";
     return step.success === false ? "Code failed" : "Ran code";
   }
-  if (step.cancelReason === "durable-object-crashed") return "Agent restarted";
   if (step.cancelReason === "interrupted-by-user-input") return "Stopped for your new message";
+  if (step.cancelReason === "expired") return "Request expired";
   if (step.outcome === "cancelled") return "Request cancelled";
   return step.model ?? "LLM request";
 }
@@ -609,9 +649,7 @@ export function AgentLiveActivity({
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
   const doneSteps = live.steps.filter((step) => step.status === "done");
-  const summary = summarizeAgentUiActivity(live);
   const doneSummary = summarizeAgentUiActivity(live, doneSteps);
-  const recovering = summary.restartPending;
   const working = isAgentUiActivityWorking(live, runtime);
   const activityToggleId = `live-activity:${live.id}`;
   const activityExpanded = toggledIds.has(activityToggleId);
@@ -638,10 +676,8 @@ export function AgentLiveActivity({
     currentWorkKind === "code" || currentWorkKind === "llm"
       ? runningSteps.findLast((step) => step.kind === currentWorkKind)
       : liveStep;
-  const recoveringBetweenWork = recovering && currentWorkKind == null && currentStep == null;
-  const currentLabel = recoveringBetweenWork
-    ? "Restarted — continuing…"
-    : currentWorkKind === "code"
+  const currentLabel =
+    currentWorkKind === "code"
       ? "Running code"
       : currentWorkKind === "llm"
         ? currentStep?.kind === "llm"
@@ -650,9 +686,7 @@ export function AgentLiveActivity({
         : currentWorkKind === "queued"
           ? "Queued"
           : liveActivityLabel(currentStep == null ? [] : [currentStep]);
-  const currentStartedAtMs = recoveringBetweenWork
-    ? summary.recoveryStartedAtMs
-    : (currentStep?.startedAtMs ?? live.startedAtMs);
+  const currentStartedAtMs = currentStep?.startedAtMs ?? live.startedAtMs;
   const inspectCurrentWork =
     currentStep?.kind === "llm"
       ? onInspectLlmRequest == null

@@ -12,7 +12,7 @@ test("reduces user and assistant messages into ordered bubbles", () => {
   const thread = reduceChatEvents([
     userMessage(1, "add a healthcheck endpoint"),
     activity(2, "events.iterate.com/agent/llm-request-requested"),
-    activity(3, "events.iterate.com/capability-host/script-execution-completed"),
+    activity(3, "events.iterate.com/capability-host/script-run-settled"),
     assistantMessage(4, "Done — /health returns 200 now."),
   ]);
   expect(thread).toMatchObject({
@@ -29,7 +29,7 @@ test("working while the agent owes a reply, even through non-message activity", 
   const thread = reduceChatEvents([
     userMessage(1, "deploy it"),
     activity(2, "events.iterate.com/agent/llm-request-requested"),
-    activity(3, "events.iterate.com/agent/output-added"),
+    activity(3, "events.iterate.com/agent/token-usage-reported"),
   ]);
   expect(thread).toMatchObject({ working: true, maxOffset: 3 });
 });

@@ -5,7 +5,7 @@ import {
   maskCloudflareAiGatewayResponseCacheEntropy,
   runWorkersAiAttempt,
 } from "./workers-ai-transport.ts";
-import { DEFAULT_AGENT_MODEL } from "./agent-processor-contract.ts";
+const DEFAULT_AGENT_MODEL = "openai/gpt-5.6-sol"; // the config schema default
 
 describe("adaptMessagesForModel", () => {
   const messages = [

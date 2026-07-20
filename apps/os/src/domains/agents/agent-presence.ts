@@ -245,33 +245,33 @@ export function foldAgentSummaryUpdated({
 
 type AgentRuntimeSource = {
   activeScriptExecutionIds: readonly string[];
-  context: { system: readonly { key?: string }[] };
-  currentRequest: null | { phase: "scheduled" | "requested" };
-  llmRequests: Record<string, { status: "requested" | "started" }>;
-  pendingTriggerOffset: number | null;
+  contextItems: readonly { payload: { role: string; key?: string } }[];
+  openRequest: null | { requestedAtOffset: number };
+  pendingLlmRequestTrigger: null | { offset: number };
 };
 
 export function deriveAgentRuntime(
   state: AgentRuntimeSource,
   systemPromptContextKey: string,
 ): AgentRuntimeRecord {
-  const pending = state.pendingTriggerOffset === null ? 0 : 1;
+  const pending = state.pendingLlmRequestTrigger === null ? 0 : 1;
   const runnable =
-    pending === 1 && state.context.system.some((item) => item.key === systemPromptContextKey)
+    pending === 1 &&
+    state.contextItems.some(
+      (item) => item.payload.role === "system" && item.payload.key === systemPromptContextKey,
+    )
       ? 1
       : 0;
-  let requested = 0;
-  let started = 0;
-  for (const request of Object.values(state.llmRequests)) {
-    if (request.status === "requested") requested += 1;
-    else started += 1;
-  }
   return {
     triggers: { pending, runnable },
+    // The offset-identified request model has no scheduled/started phases:
+    // the debounce window is a parked append (no journal fact to count) and
+    // an open request IS the one turn in flight, so `scheduled`/`started`
+    // pin to 0 and `requested` counts the single open slot.
     llmRequests: {
-      scheduled: state.currentRequest?.phase === "scheduled" ? 1 : 0,
-      requested,
-      started,
+      scheduled: 0,
+      requested: state.openRequest === null ? 0 : 1,
+      started: 0,
     },
     runningScripts: state.activeScriptExecutionIds.length,
   };
