@@ -407,45 +407,54 @@ export class ResourceCoordinator extends DurableObject<Env> {
   }
 
   private async dispatchWaiters(): Promise<void> {
-    const queued = this.waiters;
-    const deferred: Waiter[] = [];
-    this.waiters = [];
-    for (const waiter of queued) {
-      if (waiter.settled) {
-        continue;
-      }
-
-      const lease = await this.tryAcquire(
-        waiter.type,
-        waiter.leaseMs,
-        waiter.holder,
-        waiter.allowedSlugs,
-      );
-      if (!lease) {
-        if (!waiter.settled) {
-          deferred.push(waiter);
+    for (;;) {
+      const queued = this.waiters;
+      const deferred: Waiter[] = [];
+      let capacityFreedDuringPass = false;
+      this.waiters = [];
+      for (const waiter of queued) {
+        if (waiter.settled) {
+          continue;
         }
-        continue;
-      }
 
-      if (waiter.settled) {
-        await this.releaseLease(
+        const lease = await this.tryAcquire(
           waiter.type,
-          lease.slug,
-          lease.leaseId,
-          "timed-out-before-delivery",
-          {
-            releasedAt: null,
-          },
+          waiter.leaseMs,
+          waiter.holder,
+          waiter.allowedSlugs,
         );
-        continue;
+        if (!lease) {
+          if (!waiter.settled) {
+            deferred.push(waiter);
+          }
+          continue;
+        }
+
+        if (waiter.settled) {
+          await this.releaseLease(
+            waiter.type,
+            lease.slug,
+            lease.leaseId,
+            "timed-out-before-delivery",
+            {
+              releasedAt: null,
+            },
+          );
+          capacityFreedDuringPass = true;
+          continue;
+        }
+
+        waiter.settled = true;
+        clearTimeout(waiter.timeoutHandle);
+        waiter.resolve(lease);
       }
 
-      waiter.settled = true;
-      clearTimeout(waiter.timeoutHandle);
-      waiter.resolve(lease);
+      const arrivals = this.waiters;
+      this.waiters = [...deferred.filter((waiter) => !waiter.settled), ...arrivals];
+      if (!capacityFreedDuringPass && arrivals.length === 0) {
+        return;
+      }
     }
-    this.waiters = [...deferred.filter((waiter) => !waiter.settled), ...this.waiters];
   }
 
   private async releaseLease(
