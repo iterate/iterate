@@ -16,8 +16,8 @@ GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
 is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
-verification and the draft PR are next. Production deployment and Semaphore
-lease publication remain later, separate approval boundaries.
+verification is green; the draft PR is next. Production deployment and
+Semaphore lease publication remain later, separate approval boundaries.
 
 ## Goal
 
@@ -110,8 +110,11 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _Auth, Semaphore, Dummy Petshop, and OS passed twice for every slot. All forty
   assigned D1/KV IDs match live state; named DNS/R2/Queue resources were reused
   on each second pass._
-- [ ] Run focused preview/config tests, Auth tests, typecheck, lint, and format
+- [x] Run focused preview/config tests, Auth tests, typecheck, lint, and format
   checks; inspect generated Wrangler config for all ten slots.
+  _149 focused preview/config tests and 65 Auth tests pass. All five generated
+  app blocks were inspected for slots 10–19; full typecheck, lint, and format
+  checks are green._
 - [ ] Push the repository change, open a draft PR early, and keep its external-
   user summary and this ledger current.
 - [ ] Merge the repository change before deploying or leasing the slots.
@@ -354,3 +357,10 @@ the recorded projection.
   Every second pass reused the exact IDs and named resources, with no creation,
   warning, collision, or drift. No `UNPROVISIONED` marker remains in the new OS
   or Semaphore entries.
+- 2026-07-20: Verification initially exposed a pre-existing pnpm peer-resolution
+  defect: `lucide-react` and `streamdown` declarations resolved mobile's React
+  19.1 types while UI used 19.2. Added package extensions declaring their
+  `@types/react` peer. UI now resolves 19.2, mobile remains on 19.1, both
+  independently typecheck, and the full monorepo typecheck is green. The 149
+  focused tests, 65 Auth tests, full lint, full format check, and generated
+  five-app config audit for every new slot all pass.
