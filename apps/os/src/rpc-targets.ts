@@ -6772,8 +6772,9 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
     if (serialized === undefined || serialized === "null") {
       throw new Error("kv values must be JSON-serializable (null, NaN, and Infinity are not)");
     }
-    if (serialized.length > 64 * 1024) {
-      throw new Error(`kv value too large (${serialized.length} > 65536 JSON bytes)`);
+    const serializedBytes = new TextEncoder().encode(serialized).length;
+    if (serializedBytes > 64 * 1024) {
+      throw new Error(`kv value too large (${serializedBytes} > 65536 JSON bytes)`);
     }
     await env.PROJECT_DIRECTORY.put(this.#key(key), serialized);
   }
@@ -6786,11 +6787,17 @@ class KvRpcTarget extends IterateRpcTarget<"Kv"> {
   /** Keys only (values are one get away), optionally under a prefix. */
   async list(input?: { prefix?: string }): Promise<string[]> {
     const namespacePrefix = `projectkv:${this.#projectId}:`;
-    const listed = await env.PROJECT_DIRECTORY.list({
-      prefix: input?.prefix ? this.#key(input.prefix) : namespacePrefix,
-      limit: 1000,
-    });
-    return listed.keys.map((entry) => entry.name.slice(namespacePrefix.length));
+    const prefix = input?.prefix ? this.#key(input.prefix) : namespacePrefix;
+    const names: string[] = [];
+    let cursor: string | undefined;
+    // Paginate to completion — this is a knob store, so the loop is one
+    // iteration in practice, but a truncated list must never look complete.
+    do {
+      const listed = await env.PROJECT_DIRECTORY.list({ prefix, limit: 1000, cursor });
+      for (const entry of listed.keys) names.push(entry.name.slice(namespacePrefix.length));
+      cursor = listed.list_complete ? undefined : listed.cursor;
+    } while (cursor !== undefined);
+    return names;
   }
 }
 
