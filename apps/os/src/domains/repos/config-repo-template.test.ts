@@ -13,9 +13,9 @@ import {
   guestbookSubscriptionConfigVersion,
 } from "../../../config-repo-template/apps/guestbook/src/guestbook-ref.ts";
 import {
-  tanstackPageSource,
-  tanstackTodosRef,
-} from "../../../config-repo-template/apps/tanstack/src/todos-ref.ts";
+  todosPageSource,
+  todosAppRef,
+} from "../../../config-repo-template/apps/todos/src/todos-ref.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
@@ -29,15 +29,13 @@ test("template ships policy only — no seeded apps, integrations, or sdk snapsh
   // workflow is userspace code in worker.ts.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  // The seeded apps: the React todo app at apps/tanstack and the guestbook
+  // The seeded apps: the React todo app at apps/todos and the guestbook
   // at apps/guestbook (each its own package.json; worker-bundler builds them
   // in-workerd). Everything else under apps/ is still the project's to grow.
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
   expect(appPaths.length).toBeGreaterThan(0);
   expect(
-    appPaths.every(
-      (path) => path.startsWith("apps/tanstack/") || path.startsWith("apps/guestbook/"),
-    ),
+    appPaths.every((path) => path.startsWith("apps/todos/") || path.startsWith("apps/guestbook/")),
   ).toBe(true);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
@@ -64,15 +62,15 @@ test("React pages and stateful APIs have independent worker entries", () => {
       "apps/guestbook/src/guestbook-app.ts",
       "apps/guestbook/src/server.ts",
       "apps/guestbook/src/client.tsx",
-      "apps/tanstack/src/todos-app.ts",
-      "apps/tanstack/src/server.ts",
-      "apps/tanstack/src/client.tsx",
+      "apps/todos/src/todos-app.ts",
+      "apps/todos/src/server.ts",
+      "apps/todos/src/client.tsx",
     ]),
   );
 
   for (const [pageSource, statefulRef] of [
     [guestbookPageSource, guestbookAppRef],
-    [tanstackPageSource, tanstackTodosRef],
+    [todosPageSource, todosAppRef],
   ] as const) {
     expect(pageSource.options.client).toBe("src/client.tsx");
     expect(pageSource.options.entryPoint).toBe("src/server.ts");

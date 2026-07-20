@@ -724,7 +724,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// by the SAME machinery that runs the platform's own domain objects\n" +
       "// (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in\n" +
       "// the repo root's worker.ts, which keeps its number in Durable Object\n" +
-      "// storage, and the tanstack todo app, which keeps rows in its own SQLite:\n" +
+      "// storage, and the todos app, which keeps rows in its own SQLite:\n" +
       "// this state is a disposable cache of `reduce` over the journal — delete it\n" +
       "// and replay rebuilds it, and every consequential outcome is an event you\n" +
       "// can read back.\n" +
@@ -983,7 +983,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "export default guestbookPage;\n",
   },
   {
-    path: "apps/tanstack/package.json",
+    path: "apps/todos/package.json",
     content:
       "{\n" +
       "  \"name\": \"project-todos\",\n" +
@@ -1007,7 +1007,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/tanstack/src/app.tsx",
+    path: "apps/todos/src/app.tsx",
     content:
       "import { useEffect, useState } from \"react\";\n" +
       "import { useTodos } from \"./lib/use-todos.ts\";\n" +
@@ -1241,7 +1241,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} as const;\n",
   },
   {
-    path: "apps/tanstack/src/client.tsx",
+    path: "apps/todos/src/client.tsx",
     content:
       "import { createRoot } from \"react-dom/client\";\n" +
       "import { Route, Switch } from \"wouter\";\n" +
@@ -1262,7 +1262,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       ");\n",
   },
   {
-    path: "apps/tanstack/src/lib/state.ts",
+    path: "apps/todos/src/lib/state.ts",
     content:
       "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
       "\n" +
@@ -1282,7 +1282,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "};\n",
   },
   {
-    path: "apps/tanstack/src/lib/use-todos.ts",
+    path: "apps/todos/src/lib/use-todos.ts",
     content:
       "import { newWebSocketRpcSession } from \"@iterate-com/capnweb\";\n" +
       "import { createLiveStateStore } from \"iterate/live-state\";\n" +
@@ -1349,13 +1349,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/tanstack/src/server.ts",
+    path: "apps/todos/src/server.ts",
     content:
       "/**\n" +
       " * Page worker: HTML shell only. No React, no SSR.\n" +
       " * /client.js is served by the platform asset wrapper (named after src/client.tsx).\n" +
       " * Deep links fall through here and get the same shell; wouter takes over in the browser.\n" +
-      " * /api is routed to TanstackTodos by the root project worker before this entry runs.\n" +
+      " * /api is routed to TodosApp by the root project worker before this entry runs.\n" +
       " */\n" +
       "const SHELL = `<!doctype html>\n" +
       "<html lang=\"en\">\n" +
@@ -1385,7 +1385,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "export default todosPage;\n",
   },
   {
-    path: "apps/tanstack/src/todos-app.ts",
+    path: "apps/todos/src/todos-app.ts",
     content:
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
@@ -1396,7 +1396,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// The small, stateful half of the todo app. It has its own worker entry so\n" +
       "// a cold /api WebSocket loads only the Durable Object and its data/runtime\n" +
       "// dependencies, never the unrelated React page bundle.\n" +
-      "export class TanstackTodos extends IterateDurableObject {\n" +
+      "export class TodosApp extends IterateDurableObject {\n" +
       "  static db = defineConfig({\n" +
       "    // The desired schema now (`sqlfu draft` diffs new migrations against it).\n" +
       "    definitions: sql`\n" +
@@ -1442,7 +1442,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // {sql} without transactionSync: initialization is await-free and Durable\n" +
       "  // Object SQLite commits one event-loop task atomically, so the single\n" +
       "  // migration cannot persist half-applied.\n" +
-      "  readonly #db = TanstackTodos.db(createDurableObjectClient({ sql: this.ctx.storage.sql }));\n" +
+      "  readonly #db = TodosApp.db(createDurableObjectClient({ sql: this.ctx.storage.sql }));\n" +
       "  readonly #live: LiveState<TodoListState>;\n" +
       "\n" +
       "  constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {\n" +
@@ -1505,10 +1505,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "  /** Called from the public Cap'n Web root so RpcTargets never reach into\n" +
       "   * the protected Durable Object `env` (TypeScript rejects that access). */\n" +
-      "  async openSession(\n" +
-      "    request: Request,\n" +
-      "    credentials: ProjectAuthCredentials,\n" +
-      "  ): Promise<TodoSession> {\n" +
+      "  async openSession(request: Request, credentials: ProjectAuthCredentials): Promise<TodoSession> {\n" +
       "    using itx = await this.env.ITX.get();\n" +
       "    await itx.auth.get({ policy: \"project-member\" }).authenticate(request, credentials);\n" +
       "    return new TodoSession(this);\n" +
@@ -1520,7 +1517,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// attenuated session capability, never the project itx.\n" +
       "class PublicTodoApi extends RpcTarget {\n" +
       "  constructor(\n" +
-      "    private readonly app: TanstackTodos,\n" +
+      "    private readonly app: TodosApp,\n" +
       "    private readonly request: Request,\n" +
       "  ) {\n" +
       "    super();\n" +
@@ -1535,7 +1532,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// construction) and four verbs. Every mutation refreshes the one LiveState,\n" +
       "// so every open tab repaints from the pushed patch — that IS the multiplayer.\n" +
       "class TodoSession extends RpcTarget {\n" +
-      "  constructor(private readonly app: TanstackTodos) {\n" +
+      "  constructor(private readonly app: TodosApp) {\n" +
       "    super();\n" +
       "  }\n" +
       "\n" +
@@ -1561,20 +1558,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/tanstack/src/todos-ref.ts",
+    path: "apps/todos/src/todos-ref.ts",
     content:
       "import type { DynamicWorkerSource, StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
       "/** SPA shell + client bundle (createApp). No SSR — server.ts is HTML only. */\n" +
-      "export const tanstackPageSource = {\n" +
+      "export const todosPageSource = {\n" +
       "  files: repoFiles,\n" +
       "  options: {\n" +
       "    client: \"src/client.tsx\",\n" +
       "    entryPoint: \"src/server.ts\",\n" +
       "    minify: true,\n" +
-      "    rootDir: \"apps/tanstack\",\n" +
+      "    rootDir: \"apps/todos\",\n" +
       "  },\n" +
       "} satisfies DynamicWorkerSource;\n" +
       "\n" +
@@ -1582,18 +1579,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       " * policy lets a still-running facet answer while the host checks for a newer\n" +
       " * repo version in the background; a cold facet mounts this exact cached\n" +
       " * artifact. */\n" +
-      "export const tanstackTodosRef = {\n" +
+      "export const todosAppRef = {\n" +
       "  type: \"stateful\",\n" +
       "  path: \"/\",\n" +
-      "  className: \"TanstackTodos\",\n" +
-      "  durableWorkerKey: \"app-tanstack\",\n" +
+      "  className: \"TodosApp\",\n" +
+      "  durableWorkerKey: \"app-todos\",\n" +
       "  updatePolicy: \"stale-while-rebuild\",\n" +
       "  source: {\n" +
       "    files: repoFiles,\n" +
       "    options: {\n" +
       "      entryPoint: \"src/todos-app.ts\",\n" +
       "      minify: true,\n" +
-      "      rootDir: \"apps/tanstack\",\n" +
+      "      rootDir: \"apps/todos\",\n" +
       "    },\n" +
       "  },\n" +
       "} satisfies StatefulDynamicWorkerRef;\n",
@@ -1652,7 +1649,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
       "import { guestbookAppRef, guestbookPageSource } from \"./apps/guestbook/src/guestbook-ref.ts\";\n" +
-      "import { tanstackPageSource, tanstackTodosRef } from \"./apps/tanstack/src/todos-ref.ts\";\n" +
+      "import { todosAppRef, todosPageSource } from \"./apps/todos/src/todos-ref.ts\";\n" +
       "\n" +
       "// This is ordinary project policy. Every GitHub-linked project repository is\n" +
       "// in scope; no platform GitHub code knows that pull-request agents exist.\n" +
@@ -1742,16 +1739,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        },\n" +
       "      });\n" +
       "    }\n" +
-      "    if (app === \"tanstack\") {\n" +
-      "      // A React todo app living at apps/tanstack in this repo: worker-bundler\n" +
-      "      // builds its server + client entries; /api rides into the app's Durable\n" +
-      "      // Object (TanstackTodos — SQLite todos via sqlfu, live state over Cap'n\n" +
-      "      // Web). Pages are gated to project members HERE; /api is the\n" +
+      "    if (app === \"todos\") {\n" +
+      "      // A React todo SPA living at apps/todos: worker-bundler builds the shell\n" +
+      "      // + client; /api rides into TodosApp (SQLite via sqlfu, live state over\n" +
+      "      // Cap'n Web). Pages are gated to project members HERE; /api is the\n" +
       "      // unauthenticated Cap'n Web root that authenticates in-band from the\n" +
       "      // app cookie, exactly like the internal app.\n" +
       "      const url = new URL(req.url);\n" +
       "      if (url.pathname === \"/api\") {\n" +
-      "        return this.fetchDynamicWorker(req, tanstackTodosRef);\n" +
+      "        return this.fetchDynamicWorker(req, todosAppRef);\n" +
       "      }\n" +
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
@@ -1759,7 +1755,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      return this.fetchDynamicWorker(req, {\n" +
       "        type: \"stateless\",\n" +
       "        path: \"/\",\n" +
-      "        source: tanstackPageSource,\n" +
+      "        source: todosPageSource,\n" +
       "      });\n" +
       "    }\n" +
       "    if (app === \"counter\") {\n" +
@@ -1776,8 +1772,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
       "      // A second React app at apps/guestbook, and a second SHAPE of state:\n" +
-      "      // where the tanstack todo app keeps rows in its Durable Object's SQLite,\n" +
-      "      // the guestbook's state is a stream-processor FOLD of durable events at\n" +
+      "      // where the todos app keeps rows in its Durable Object's SQLite, the\n" +
+      "      // guestbook's state is a stream-processor FOLD of durable events at\n" +
       "      // /guestbook. The imported ref is the ONE identity the wake subscription\n" +
       "      // persists too (guestbook-ref.ts), so ingress and the stream spine always\n" +
       "      // dial the same Durable Object and the same build. The guestbook is\n" +
@@ -1808,7 +1804,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"tanstack\")}\">tanstack</a> (React todos: SQLite Durable Object, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"todos\")}\">todos</a> (React SPA: SQLite Durable Object, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor + React, public)</li>\n" +
       "              </ul>\n" +

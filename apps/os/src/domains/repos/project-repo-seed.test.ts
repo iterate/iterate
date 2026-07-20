@@ -15,7 +15,7 @@ test("an override re-points the iterate dependency in every manifest that carrie
   // Seeded apps keep `iterate` as a devDependency for typechecking/editor
   // support only — the platform injects the runtime virtual modules. Preview
   // still re-points every manifest so editors and typecheck see the PR build.
-  for (const appManifest of ["apps/tanstack/package.json", "apps/guestbook/package.json"]) {
+  for (const appManifest of ["apps/todos/package.json", "apps/guestbook/package.json"]) {
     const appPackageJson = JSON.parse(files.find((file) => file.path === appManifest)!.content);
     expect(appPackageJson).toMatchObject({ devDependencies: { iterate: spec } });
   }

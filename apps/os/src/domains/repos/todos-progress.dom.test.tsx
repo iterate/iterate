@@ -3,11 +3,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { Todos } from "../../../config-repo-template/apps/tanstack/src/app.tsx";
+import { Todos } from "../../../config-repo-template/apps/todos/src/app.tsx";
 
 const mocks = vi.hoisted(() => ({ useTodos: vi.fn() }));
 
-vi.mock("../../../config-repo-template/apps/tanstack/src/lib/use-todos.ts", () => ({
+vi.mock("../../../config-repo-template/apps/todos/src/lib/use-todos.ts", () => ({
   useTodos: mocks.useTodos,
 }));
 

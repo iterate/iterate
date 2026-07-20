@@ -7,7 +7,7 @@ import type { Todo, TodoListState } from "./lib/state.ts";
 // The small, stateful half of the todo app. It has its own worker entry so
 // a cold /api WebSocket loads only the Durable Object and its data/runtime
 // dependencies, never the unrelated React page bundle.
-export class TanstackTodos extends IterateDurableObject {
+export class TodosApp extends IterateDurableObject {
   static db = defineConfig({
     // The desired schema now (`sqlfu draft` diffs new migrations against it).
     definitions: sql`
@@ -53,7 +53,7 @@ export class TanstackTodos extends IterateDurableObject {
   // {sql} without transactionSync: initialization is await-free and Durable
   // Object SQLite commits one event-loop task atomically, so the single
   // migration cannot persist half-applied.
-  readonly #db = TanstackTodos.db(createDurableObjectClient({ sql: this.ctx.storage.sql }));
+  readonly #db = TodosApp.db(createDurableObjectClient({ sql: this.ctx.storage.sql }));
   readonly #live: LiveState<TodoListState>;
 
   constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {
@@ -128,7 +128,7 @@ export class TanstackTodos extends IterateDurableObject {
 // attenuated session capability, never the project itx.
 class PublicTodoApi extends RpcTarget {
   constructor(
-    private readonly app: TanstackTodos,
+    private readonly app: TodosApp,
     private readonly request: Request,
   ) {
     super();
@@ -143,7 +143,7 @@ class PublicTodoApi extends RpcTarget {
 // construction) and four verbs. Every mutation refreshes the one LiveState,
 // so every open tab repaints from the pushed patch — that IS the multiplayer.
 class TodoSession extends RpcTarget {
-  constructor(private readonly app: TanstackTodos) {
+  constructor(private readonly app: TodosApp) {
     super();
   }
 

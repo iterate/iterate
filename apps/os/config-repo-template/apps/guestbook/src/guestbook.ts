@@ -3,7 +3,7 @@
 // by the SAME machinery that runs the platform's own domain objects
 // (agents, repos, schedulers — `iterate/processors`). Contrast CounterApp in
 // the repo root's worker.ts, which keeps its number in Durable Object
-// storage, and the tanstack todo app, which keeps rows in its own SQLite:
+// storage, and the todos app, which keeps rows in its own SQLite:
 // this state is a disposable cache of `reduce` over the journal — delete it
 // and replay rebuilds it, and every consequential outcome is an event you
 // can read back.
