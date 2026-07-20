@@ -342,12 +342,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     // getSecret placeholder must not be a way to slip a `deny`/`hold` rule —
     // just without the secret-path matchers. A request that then matches no
     // rule falls to the egress lanes, which report the canonical error.
-    let secretPaths: string[] = [];
-    try {
-      secretPaths = await secretReferencePathsFromRequest(request);
-    } catch {
-      secretPaths = [];
-    }
+    const { paths: secretPaths } = await secretReferencePathsFromRequest(request);
 
     const rule = matchEgressRule(rules, { method: request.method, url: request.url, secretPaths });
     if (rule === undefined) return this.#egress(request);
@@ -627,15 +622,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */
   async #egress(request: Request): Promise<Response> {
-    let secretPaths: string[];
-    try {
-      // Placeholders live in the request envelope: headers, or the URL for
-      // providers that authenticate in the URL path (Telegram).
-      secretPaths = await secretReferencePathsFromRequest(request);
-    } catch (error) {
-      if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
-      return secretErrorResponse("secret_reference_required");
-    }
+    // Placeholders live in the request envelope: headers, the URL path, or an
+    // explicitly marked JSON body.
+    const { paths: secretPaths, problems } = await secretReferencePathsFromRequest(request);
+    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
     const platformReferences = platformReferencesFromHeaders(request.headers);
     if (request.headers.has(SECRET_JSON_TEMPLATE_HEADER) && secretPaths.length === 0) {
       return secretErrorResponse("secret_reference_required");

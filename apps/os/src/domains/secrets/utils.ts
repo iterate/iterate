@@ -83,13 +83,18 @@ export function secretReferencesFromHeaders(headers: Headers): SecretReference[]
  * query must still route to the Secret DO, where substitution rejects it
  * loudly (see {@link substituteSecretRequest}) instead of the request sailing
  * through egress with the literal placeholder in it. */
-export async function secretReferencesFromRequest(request: Request): Promise<SecretReference[]> {
+export async function secretReferencesFromRequest(
+  request: Request,
+): Promise<{ problems: SecretSubstitutionError[]; references: SecretReference[] }> {
   const byKey = new Map<string, SecretReference>();
   request.headers.forEach((value) => collectSecretReferences(byKey, value));
   collectSecretReferences(byKey, decodedUrl(request.url));
-  const jsonTemplate = await parseSecretJsonTemplate(request);
-  if (jsonTemplate !== undefined) collectJsonSecretReferences(byKey, jsonTemplate);
-  return [...byKey.values()];
+  const jsonTemplate = await inspectSecretJsonTemplate(request);
+  if (jsonTemplate.problem !== undefined) {
+    return { problems: [jsonTemplate.problem], references: [...byKey.values()] };
+  }
+  if (jsonTemplate.value !== undefined) collectJsonSecretReferences(byKey, jsonTemplate.value);
+  return { problems: [], references: [...byKey.values()] };
 }
 
 /** The distinct secret PATHS referenced across a request's headers, URL, and
@@ -97,10 +102,11 @@ export async function secretReferencesFromRequest(request: Request): Promise<Sec
  * used by the project egress door to pick which Secret DO to hand the request
  * to (exactly one; multi-secret requests are not supported) and as a cheap
  * presence check. */
-export async function secretReferencePathsFromRequest(request: Request): Promise<string[]> {
-  return [
-    ...new Set((await secretReferencesFromRequest(request)).map((reference) => reference.path)),
-  ];
+export async function secretReferencePathsFromRequest(
+  request: Request,
+): Promise<{ paths: string[]; problems: SecretSubstitutionError[] }> {
+  const { problems, references } = await secretReferencesFromRequest(request);
+  return { paths: [...new Set(references.map((reference) => reference.path))], problems };
 }
 
 function collectSecretReferences(byKey: Map<string, SecretReference>, value: string): void {
@@ -331,7 +337,9 @@ export async function substituteSecretRequest(
   request: Request,
   resolve: (reference: SecretReference) => string,
 ): Promise<Request> {
-  const jsonTemplate = await parseSecretJsonTemplate(request);
+  const inspectedJsonTemplate = await inspectSecretJsonTemplate(request);
+  if (inspectedJsonTemplate.problem !== undefined) throw inspectedJsonTemplate.problem;
+  const jsonTemplate = inspectedJsonTemplate.value;
   let substituted = substituteSecretHeaders(request, resolve);
   if (jsonTemplate !== undefined) {
     const headers = new Headers(substituted.headers);
@@ -374,22 +382,26 @@ export async function substituteSecretRequest(
   return new Request(url.toString(), substituted);
 }
 
-async function parseSecretJsonTemplate(request: Request): Promise<unknown | undefined> {
+async function inspectSecretJsonTemplate(
+  request: Request,
+): Promise<{ problem?: SecretSubstitutionError; value?: unknown }> {
   const mode = request.headers.get(SECRET_JSON_TEMPLATE_HEADER);
-  if (mode === null) return undefined;
-  if (mode !== "json") throw new SecretSubstitutionError("secret_json_template_invalid_mode");
+  if (mode === null) return {};
+  if (mode !== "json") {
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_mode") };
+  }
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json" && !contentType?.endsWith("+json")) {
-    throw new SecretSubstitutionError("secret_json_template_invalid_content_type");
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_content_type") };
   }
   const body = await request.clone().text();
   if (new TextEncoder().encode(body).byteLength > MAX_SECRET_JSON_TEMPLATE_BYTES) {
-    throw new SecretSubstitutionError("secret_json_template_body_too_large");
+    return { problem: new SecretSubstitutionError("secret_json_template_body_too_large") };
   }
   try {
-    return JSON.parse(body) as unknown;
+    return { value: JSON.parse(body) as unknown };
   } catch {
-    throw new SecretSubstitutionError("secret_json_template_invalid_body");
+    return { problem: new SecretSubstitutionError("secret_json_template_invalid_body") };
   }
 }
 

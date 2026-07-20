@@ -320,13 +320,8 @@ export class SecretDurableObject extends DurableObject<Env> {
    * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
-    let references;
-    try {
-      references = await secretReferencesFromRequest(request);
-    } catch (error) {
-      if (error instanceof SecretSubstitutionError) return secretErrorResponse(error.code);
-      return secretErrorResponse("secret_reference_required");
-    }
+    const { problems, references } = await secretReferencesFromRequest(request);
+    if (problems[0] !== undefined) return secretErrorResponse(problems[0].code);
     if (references.length === 0) return secretErrorResponse("secret_reference_required");
     if (references.some((reference) => reference.path !== this.#name.path)) {
       // One request, one secret: cross-secret chaining is not supported.
