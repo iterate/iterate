@@ -20,7 +20,7 @@ test("flags a package.json schema violation with a red squiggle", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
   // `name` must be a string per the package.json schema — a number is a clear,
   // stable violation.
   await project.repos.get("/repos/ide").commitFiles({

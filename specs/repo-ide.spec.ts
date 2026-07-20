@@ -19,7 +19,7 @@ test("edit, stage, inspect the Index, and commit through the repo IDE", async ({
   // Repos are template-seeded on create, so the IDE opens onto real files.
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
 
@@ -84,7 +84,7 @@ test("discarding a new file confirms before permanently removing it", async ({
 
   using itx = await connectAdminItx(baseURL!);
   using project = itx.projects.get(fixture.project.id);
-  await project.repos.create({ path: "/repos/ide" });
+  await project.repos.get("/repos/ide").create({ type: "empty" });
 
   await page.goto(`/projects/${fixture.project.slug}/repos/ide`);
   page.videoMode?.setStartTime();
