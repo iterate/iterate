@@ -118,10 +118,9 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   const read = await fetchApp(`counter--${slug}`);
   expect(await read.text()).toContain('count: <span id="n">2</span>');
 
-  // createApp keeps the server in transform-only mode, compiles the browser
-  // entry at its unchanged repo path, and lets worker-bundler's asset handler
-  // serve the result. URL imports remain external instead of copying React
-  // into the generated asset.
+  // createApp compiles the browser entry at its unchanged repo path, resolves
+  // ordinary package.json dependencies (including iterate/live-state/react),
+  // and lets worker-bundler's asset handler serve the result.
   const guestbook = await fetchAppReady(`guestbook--${slug}`);
   expect(guestbook).toMatchObject({ status: 200 });
   const guestbookHtml = await guestbook.text();
@@ -136,8 +135,8 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(guestbookClient).toMatchObject({ status: 200 });
   expect(guestbookClient.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
   const guestbookClientSource = await guestbookClient.text();
-  expect(guestbookClientSource).toContain("https://esm.sh/react@19.2.4");
-  expect(guestbookClientSource).toContain("https://esm.sh/react-dom@19.2.4/client");
+  expect(guestbookClientSource).not.toContain("esm.sh");
+  expect(guestbookClientSource).toContain("useLiveState needs <CapnWebProvider>");
 
   // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.ts" });

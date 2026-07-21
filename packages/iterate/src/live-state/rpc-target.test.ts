@@ -1,6 +1,6 @@
 import { newMessagePortRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LiveStateRpcTarget, type LiveStateRpc } from "../../live-state.ts";
+import { LiveStateRpcTarget, type LiveStateRpc } from "./index.ts";
 import { LiveState } from "./engine.ts";
 import { createLiveStateStore } from "./store.ts";
 

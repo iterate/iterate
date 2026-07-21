@@ -12,7 +12,7 @@ import type { LiveUpdate } from "./protocol.ts";
  * subscription's revision line) — the store calls `resync` and holds its value
  * until the fresh snapshot lands, so a gap can never silently corrupt state.
  */
-type LiveStateStore<State> = {
+export type LiveStateStore<State> = {
   getState: () => State | undefined;
   subscribe: (listener: () => void) => () => void;
   reset: () => void;

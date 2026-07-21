@@ -65,8 +65,10 @@ worker-bundler unchanged.
 
 `apps/todo` and `apps/guestbook` show the intentionally smallest browser-app
 shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per
-app. The client entry is served separately and imports React directly from
-`esm.sh`; those browser dependencies are not copied into the Worker bundle.
+app. The client entry is served separately and imports React, React DOM, and
+Cap'n Web as ordinary package dependencies. `iterate/live-state` and
+`iterate/live-state/react` resolve from the ordinary `iterate` dependency too;
+preview builds pin it to that deployment's exact pkg.pr.new artifact.
 This is an example, not a platform file-layout rule. The apps deliberately
 avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform
 can inject the small Iterate status overlay in the corner.

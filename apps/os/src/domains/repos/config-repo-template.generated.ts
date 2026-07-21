@@ -75,8 +75,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app\n" +
       "shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per\n" +
-      "app. The client entry is served separately and imports React directly from\n" +
-      "`esm.sh`; those browser dependencies are not copied into the Worker bundle.\n" +
+      "app. The client entry is served separately and imports React, React DOM, and\n" +
+      "Cap'n Web as ordinary package dependencies. `iterate/live-state` and\n" +
+      "`iterate/live-state/react` resolve from the ordinary `iterate` dependency too;\n" +
+      "preview builds pin it to that deployment's exact pkg.pr.new artifact.\n" +
       "This is an example, not a platform file-layout rule. The apps deliberately\n" +
       "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
       "can inject the small Iterate status overlay in the corner.\n" +
@@ -150,10 +152,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`apps/todo` and `apps/guestbook` are deliberately basic browser examples.\n" +
       "Each contains only `server.tsx` and `client.tsx`: the server exports a\n" +
       "Durable Object and the client becomes a separately served browser module. JSX is\n" +
-      "compiled with the classic transform, so the explicit React imports remain\n" +
-      "direct `esm.sh` URLs instead of becoming npm dependencies. There is no\n" +
-      "app-local install, Vite config, router generator, or framework adapter. Iterate\n" +
-      "injects its small status overlay into the HTML response in production.\n" +
+      "compiled by `createApp`; React, React DOM, and Cap'n Web are ordinary\n" +
+      "`package.json` dependencies. The same is true of `iterate/live-state` and\n" +
+      "`iterate/live-state/react`; preview builds replace the declared `iterate` spec\n" +
+      "with that deployment's exact pkg.pr.new artifact before bundling. There is no\n" +
+      "app-local Vite config, router generator, or framework adapter. Iterate injects\n" +
+      "its small status overlay into the HTML response in production.\n" +
       "Their two-file layout is only an example: app refs may choose arbitrary server\n" +
       "and client entry points from the complete `files` map passed to the bundler.\n" +
       "\n" +
@@ -211,18 +215,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/client.tsx",
     content:
       "/**\n" +
-      " * Public guestbook UI. Live reduced state over Cap'n Web + shared\n" +
-      " * useLiveStateRpc (see apps/use-live-state-rpc.ts / packages/iterate).\n" +
+      " * Public guestbook UI. The provider owns the reconnectable Cap'n Web root;\n" +
+      " * useLiveState consumes the nearest root.\n" +
       " */\n" +
-      "import React, { type FormEvent, useEffect, useState } from \"https://esm.sh/react@19.2.4\";\n" +
-      "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
-      "import { newWebSocketRpcSession } from \"https://esm.sh/@iterate-com/capnweb@0.10.0\";\n" +
-      "import { useLiveStateRpc, type LiveStateRpc } from \"../use-live-state-rpc.ts\";\n" +
+      "import { newWebSocketRpcSession, type RpcStub } from \"@iterate-com/capnweb\";\n" +
+      "import React, { type FormEvent, useState } from \"react\";\n" +
+      "import { createRoot } from \"react-dom/client\";\n" +
+      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/live-state/react\";\n" +
       "\n" +
       "type GuestbookState = {\n" +
       "  birthCertificate: { config: { title: string } } | null;\n" +
       "  entries: Array<{ name: string; message: string; signedAt: string }>;\n" +
-      "  lastMilestone: number;\n" +
       "};\n" +
       "\n" +
       "type GuestbookApi = {\n" +
@@ -230,31 +234,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  sign(name: string, message: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
-      "function useGuestbookApi() {\n" +
-      "  const [api, setApi] = useState<GuestbookApi | null>(null);\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so\n" +
-      "    // setApi(stub) would make React CALL the stub as an updater.\n" +
-      "    setApi(() => null);\n" +
-      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
-      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
-      "    const publicApi = newWebSocketRpcSession<GuestbookApi>(endpoint.toString());\n" +
-      "    setApi(() => publicApi);\n" +
-      "    return () => {\n" +
-      "      publicApi[Symbol.dispose]();\n" +
-      "      setApi(() => null);\n" +
-      "    };\n" +
-      "  }, []);\n" +
-      "\n" +
-      "  return api;\n" +
+      "function makeConnection() {\n" +
+      "  const endpoint = new URL(\"/api\", window.location.href);\n" +
+      "  endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
+      "  return newWebSocketRpcSession<GuestbookApi>(endpoint.toString());\n" +
       "}\n" +
       "\n" +
       "export function GuestbookClient() {\n" +
-      "  const api = useGuestbookApi();\n" +
-      "  const { value: state, error: liveError } = useLiveStateRpc(\n" +
-      "    api,\n" +
-      "    (session) => session.liveState,\n" +
+      "  const api = useCapnWebRoot<RpcStub<GuestbookApi>>();\n" +
+      "  const { value: state, error: liveError } = useLiveState(\n" +
+      "    (session: RpcStub<GuestbookApi>) => session.liveState,\n" +
       "    (s) => s,\n" +
       "  );\n" +
       "  const [name, setName] = useState(\"\");\n" +
@@ -331,182 +320,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const root = document.getElementById(\"root\");\n" +
       "if (root === null) throw new Error(\"missing #root\");\n" +
-      "createRoot(root).render(<GuestbookClient />);\n",
-  },
-  {
-    path: "apps/guestbook/host.ts",
-    content:
-      "// Stream-processor host for the guestbook. createWorker gets platform virtual\n" +
-      "// modules (iterate/processors, iterate/sdk, iterate/live-state, capnweb).\n" +
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import {\n" +
-      "  type StreamEventInput,\n" +
-      "  type StreamSubscriberWakeRequest,\n" +
-      "  type StreamSubscriberWakeResponse,\n" +
-      "} from \"iterate/processors\";\n" +
-      "import {\n" +
-      "  createStreamProcessorRegistry,\n" +
-      "  type StreamProcessorRegistry,\n" +
-      "} from \"iterate/processors/cloudflare\";\n" +
-      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
-      "import {\n" +
-      "  guestbookCreationEvents,\n" +
-      "  guestbookStreamPath,\n" +
-      "  guestbookSubscriptionConfigVersion,\n" +
-      "} from \"./ref.ts\";\n" +
-      "import { GuestbookProcessor, type GuestbookState } from \"./processor.ts\";\n" +
-      "\n" +
-      "const SUBSCRIPTION_VERSION_STORAGE_KEY = \"guestbook:subscription-config-version\";\n" +
-      "\n" +
-      "/** Public Cap'n Web root: live reduced state + sign. */\n" +
-      "export type GuestbookApi = {\n" +
-      "  liveState: LiveStateRpc<GuestbookState>;\n" +
-      "  sign(name: string, message: string): Promise<void>;\n" +
-      "};\n" +
-      "\n" +
-      "export class GuestbookApp extends IterateDurableObject {\n" +
-      "  #host:\n" +
-      "    | {\n" +
-      "        registry: StreamProcessorRegistry<GuestbookState>;\n" +
-      "        reads: { currentState: GuestbookState };\n" +
-      "      }\n" +
-      "    | undefined;\n" +
-      "  #configurationInFlight: Promise<void> | undefined;\n" +
-      "\n" +
-      "  #ensureHost(projectId: string): {\n" +
-      "    registry: StreamProcessorRegistry<GuestbookState>;\n" +
-      "    reads: { currentState: GuestbookState };\n" +
-      "  } {\n" +
-      "    if (this.#host === undefined) {\n" +
-      "      this.ctx.storage.kv.put(\"guestbook:project-id\", projectId);\n" +
-      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
-      "      // getLiveState is called only after register assigns `reads` (registry\n" +
-      "      // refreshes run after construction). The `!` is the same lazy-init race\n" +
-      "      // the platform secret DO uses — typed as optional only for the first\n" +
-      "      // line of construction, never observed null at call time.\n" +
-      "      let reads: { currentState: GuestbookState } | undefined;\n" +
-      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
-      "        path: guestbookStreamPath,\n" +
-      "        projectId,\n" +
-      "        stream,\n" +
-      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "        getLiveState: () => reads!.currentState,\n" +
-      "      });\n" +
-      "      const guestbook = registry.register(\n" +
-      "        new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }),\n" +
-      "        { recovery: true },\n" +
-      "      );\n" +
-      "      reads = registry.reads(guestbook);\n" +
-      "      this.#host = { registry, reads };\n" +
-      "    }\n" +
-      "    return this.#host;\n" +
-      "  }\n" +
-      "\n" +
-      "  async #freshHost(): Promise<{\n" +
-      "    registry: StreamProcessorRegistry<GuestbookState>;\n" +
-      "    reads: { currentState: GuestbookState };\n" +
-      "  }> {\n" +
-      "    let projectId = this.ctx.storage.kv.get<string>(\"guestbook:project-id\");\n" +
-      "    if (projectId === undefined) {\n" +
-      "      using project = await this.env.ITX.get();\n" +
-      "      projectId = await project.projectId;\n" +
-      "    }\n" +
-      "    return this.#ensureHost(projectId);\n" +
-      "  }\n" +
-      "\n" +
-      "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    await registry.handleAlarm(alarmInfo);\n" +
-      "  }\n" +
-      "\n" +
-      "  async #appendWithCurrentSubscription(...events: StreamEventInput[]): Promise<void> {\n" +
-      "    using project = await this.env.ITX.get();\n" +
-      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
-      "    this.ctx.storage.kv.put(SUBSCRIPTION_VERSION_STORAGE_KEY, guestbookSubscriptionConfigVersion);\n" +
-      "  }\n" +
-      "\n" +
-      "  async #ensureCurrentSubscription(): Promise<void> {\n" +
-      "    if (\n" +
-      "      this.ctx.storage.kv.get<number>(SUBSCRIPTION_VERSION_STORAGE_KEY) ===\n" +
-      "      guestbookSubscriptionConfigVersion\n" +
-      "    ) {\n" +
-      "      return;\n" +
-      "    }\n" +
-      "    if (this.#configurationInFlight === undefined) {\n" +
-      "      this.#configurationInFlight = this.#appendWithCurrentSubscription();\n" +
-      "    }\n" +
-      "    const pending = this.#configurationInFlight;\n" +
-      "    try {\n" +
-      "      await pending;\n" +
-      "    } finally {\n" +
-      "      if (this.#configurationInFlight === pending) this.#configurationInFlight = undefined;\n" +
-      "    }\n" +
-      "  }\n" +
-      "\n" +
-      "  get processor() {\n" +
-      "    return {\n" +
-      "      wakeStreamSubscriber: async (\n" +
-      "        request: StreamSubscriberWakeRequest,\n" +
-      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
-      "        if (request.stream.projectId === null) {\n" +
-      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
-      "        }\n" +
-      "        const { registry } = this.#ensureHost(request.stream.projectId);\n" +
-      "        return await registry.wakeStreamSubscriber(request);\n" +
-      "      },\n" +
-      "    };\n" +
-      "  }\n" +
-      "\n" +
-      "  async sign(name: string, message: string): Promise<void> {\n" +
-      "    const trimmedName = name.trim().slice(0, 80);\n" +
-      "    const trimmedMessage = message.trim().slice(0, 500);\n" +
-      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
-      "    await this.#appendWithCurrentSubscription({\n" +
-      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
-      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
-      "    });\n" +
-      "    // Pull the append into this host's reduce so liveState subscribers (this\n" +
-      "    // tab and any peer) refresh without waiting on the wake spine's async hop.\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    await registry.catchUp(\"guestbook\");\n" +
-      "    registry.refreshLive();\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Cap'n Web door: public live state + sign. Creates /guestbook on first contact. */\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
-      "    await this.#ensureCurrentSubscription();\n" +
-      "    const { registry } = await this.#freshHost();\n" +
-      "    // Reduce through stream head before the first live snapshot so a cold\n" +
-      "    // reload after a successful sign shows entries without racing wake.\n" +
-      "    await registry.catchUp(\"guestbook\");\n" +
-      "    await registry.loadAndRefreshLive();\n" +
-      "    return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "class PublicGuestbookApi extends RpcTarget implements GuestbookApi {\n" +
-      "  // One LiveStateRpcTarget per session: Cap'n Web property gets that mint a\n" +
-      "  // fresh target every access thrash client subscriptions keyed on identity.\n" +
-      "  readonly #liveState: LiveStateRpcTarget<GuestbookState>;\n" +
-      "\n" +
-      "  constructor(\n" +
-      "    private readonly app: GuestbookApp,\n" +
-      "    registry: StreamProcessorRegistry<GuestbookState>,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "    this.#liveState = new LiveStateRpcTarget<GuestbookState>(registry);\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpc<GuestbookState> {\n" +
-      "    return this.#liveState;\n" +
-      "  }\n" +
-      "\n" +
-      "  async sign(name: string, message: string): Promise<void> {\n" +
-      "    await this.app.sign(name, message);\n" +
-      "  }\n" +
-      "}\n",
+      "createRoot(root).render(\n" +
+      "  <CapnWebProvider makeConnection={makeConnection}>\n" +
+      "    <GuestbookClient />\n" +
+      "  </CapnWebProvider>,\n" +
+      ");\n",
   },
   {
     path: "apps/guestbook/processor.ts",
@@ -515,20 +333,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// at /guestbook. Style matches the agent processor — inline contract schemas,\n" +
       "// long switch reduce/processEvent, no event-type constants.\n" +
       "import { z } from \"zod\";\n" +
-      "import {\n" +
-      "  defineProcessorContract,\n" +
-      "  PLATFORM_STREAM_EVENTS,\n" +
-      "  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
-      "  StreamProcessor,\n" +
-      "  type ProcessEventArgs,\n" +
-      "  type ProcessorState,\n" +
-      "} from \"iterate/processors\";\n" +
+      "import { defineProcessorContract, StreamProcessor, type ProcessorState } from \"iterate/processors\";\n" +
       "\n" +
       "export const GuestbookProcessorContract = defineProcessorContract({\n" +
       "  slug: \"guestbook\",\n" +
       "  version: \"0.1.0\",\n" +
-      "  description:\n" +
-      "    \"Reduces guestbook signatures on /guestbook and emits a milestone fact every five entries.\",\n" +
+      "  description: \"Reduces guestbook signatures on /guestbook.\",\n" +
       "  stateSchema: z.object({\n" +
       "    birthCertificate: z\n" +
       "      .object({\n" +
@@ -553,9 +363,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      )\n" +
       "      .default([])\n" +
       "      .meta({ description: \"Signatures in stream order (oldest first).\" }),\n" +
-      "    lastMilestone: z.number().int().nonnegative().default(0).meta({\n" +
-      "      description: \"Highest multiple-of-five entry count already journaled as milestone-reached.\",\n" +
-      "    }),\n" +
       "  }),\n" +
       "  events: {\n" +
       "    \"events.iterate.com/guestbook/created\": {\n" +
@@ -593,38 +400,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        },\n" +
       "      ],\n" +
       "    },\n" +
-      "    \"events.iterate.com/guestbook/milestone-reached\": {\n" +
-      "      description:\n" +
-      "        \"The entry count crossed a multiple of five. Emitted at-head from reduced state, \" +\n" +
-      "        \"idempotency-keyed by count so redeliveries and refolds collapse to one fact.\",\n" +
-      "      payloadSchema: z.object({\n" +
-      "        count: z\n" +
-      "          .number()\n" +
-      "          .int()\n" +
-      "          .positive()\n" +
-      "          .meta({ description: \"Entry count at the milestone (5, 10, 15, …).\" }),\n" +
-      "      }),\n" +
-      "      examples: [\n" +
-      "        {\n" +
-      "          description: \"The fifth signature landed.\",\n" +
-      "          payload: { count: 5 },\n" +
-      "        },\n" +
-      "        {\n" +
-      "          description: \"Catch-up past ten signatures emits the tenth milestone.\",\n" +
-      "          payload: { count: 10 },\n" +
-      "        },\n" +
-      "      ],\n" +
-      "    },\n" +
       "  },\n" +
-      "  // Required by `{ recovery: true }` on the host.\n" +
-      "  processorDeps: [PLATFORM_STREAM_EVENTS],\n" +
-      "  consumes: [\n" +
-      "    \"events.iterate.com/guestbook/created\",\n" +
-      "    \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "    \"events.iterate.com/guestbook/milestone-reached\",\n" +
-      "    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,\n" +
-      "  ],\n" +
-      "  emits: [\"events.iterate.com/guestbook/milestone-reached\"],\n" +
+      "  consumes: [\"events.iterate.com/guestbook/created\", \"events.iterate.com/guestbook/entry-signed\"],\n" +
+      "  emits: [],\n" +
       "});\n" +
       "\n" +
       "export type GuestbookState = ProcessorState<typeof GuestbookProcessorContract>;\n" +
@@ -644,59 +422,17 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        return { ...state, birthCertificate: event.payload };\n" +
       "      }\n" +
       "      case \"events.iterate.com/guestbook/entry-signed\": {\n" +
+      "        if (state.birthCertificate === null) {\n" +
+      "          throw new Error(\"guestbook received an entry before its created event\");\n" +
+      "        }\n" +
       "        return {\n" +
       "          ...state,\n" +
       "          entries: [...state.entries, { ...event.payload, signedAt: event.createdAt }],\n" +
       "        };\n" +
       "      }\n" +
-      "      case \"events.iterate.com/guestbook/milestone-reached\": {\n" +
-      "        return {\n" +
-      "          ...state,\n" +
-      "          lastMilestone: Math.max(state.lastMilestone, event.payload.count),\n" +
-      "        };\n" +
-      "      }\n" +
       "      default:\n" +
       "        return state;\n" +
       "    }\n" +
-      "  }\n" +
-      "\n" +
-      "  protected override processEvent(\n" +
-      "    args: ProcessEventArgs<typeof GuestbookProcessorContract>,\n" +
-      "  ): undefined {\n" +
-      "    const { blockProcessorWhile, delivery, state } = args;\n" +
-      "\n" +
-      "    // State-derived side effects only: milestones are computed from the full\n" +
-      "    // reduced entry list at head, never from a single event. Per-event work is\n" +
-      "    // none — signing is an external append, not a processor consequence.\n" +
-      "    if (!delivery.caughtUp) return;\n" +
-      "    if (state.birthCertificate === null) return;\n" +
-      "\n" +
-      "    const reached = Math.floor(state.entries.length / 5) * 5;\n" +
-      "    if (reached <= state.lastMilestone) return;\n" +
-      "\n" +
-      "    const missed: number[] = [];\n" +
-      "    for (let count = state.lastMilestone + 5; count <= reached; count += 5) {\n" +
-      "      missed.push(count);\n" +
-      "    }\n" +
-      "\n" +
-      "    // At-least-once milestone facts: cursor must not advance past the triggering\n" +
-      "    // delivery until the idempotent appends land (or redelivery will re-emit).\n" +
-      "    // Named function = the reason argument (see agent style notes).\n" +
-      "    const { append } = args;\n" +
-      "    const processor = this;\n" +
-      "    blockProcessorWhile(async function appendMilestoneFactsFromReducedEntryCount() {\n" +
-      "      // `as const` on `type` keeps the mapped array a ConsumedInput union member\n" +
-      "      // rather than `{ type: string }` — without it append() rejects the event\n" +
-      "      // as untyped stream input. buildEvent cannot be used here without a\n" +
-      "      // circular contract import at each map step.\n" +
-      "      await append(\n" +
-      "        ...missed.map((count) => ({\n" +
-      "          type: \"events.iterate.com/guestbook/milestone-reached\" as const,\n" +
-      "          payload: { count },\n" +
-      "          idempotencyKey: processor.idempotencyKey(`milestone:${count}`),\n" +
-      "        })),\n" +
-      "      );\n" +
-      "    });\n" +
       "  }\n" +
       "}\n",
   },
@@ -717,20 +453,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
       "/**\n" +
-      " * Stream-processor host. Uses createWorker (not createApp) so the platform\n" +
-      " * injects iterate/processors + iterate/sdk virtual modules. A new\n" +
-      " * durableWorkerKey keeps the SQLite-era app-guestbook facet from answering\n" +
-      " * wake/API traffic with the wrong class.\n" +
+      " * The one createApp facet that serves the page, browser bundle, API, and wake\n" +
+      " * delivery door. Platform modules are available to both app bundles.\n" +
       " */\n" +
-      "export const guestbookHostRef = {\n" +
+      "export const guestbookAppRef = {\n" +
       "  type: \"stateful\",\n" +
       "  path: \"/\",\n" +
       "  className: \"GuestbookApp\",\n" +
       "  durableWorkerKey: \"app-guestbook-stream\",\n" +
       "  source: {\n" +
-      "    createWorker: {\n" +
-      "      entryPoint: \"apps/guestbook/host.ts\",\n" +
+      "    createApp: {\n" +
+      "      client: \"apps/guestbook/client.tsx\",\n" +
       "      files: repoFiles,\n" +
+      "      server: \"apps/guestbook/server.tsx\",\n" +
       "    },\n" +
       "  },\n" +
       "} satisfies StatefulDynamicWorkerRef;\n" +
@@ -749,7 +484,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
       "        delivery: {\n" +
       "          mode: \"wake\",\n" +
-      "          expression: [\"workers\", [\"get\", guestbookHostRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
+      "          expression: [\"workers\", [\"get\", guestbookAppRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
       "          processorSlug: \"guestbook\",\n" +
       "        },\n" +
       "      },\n" +
@@ -761,16 +496,96 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/guestbook/server.tsx",
     content:
-      "import { DurableObject } from \"cloudflare:workers\";\n" +
+      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
+      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import type {\n" +
+      "  StreamEventInput,\n" +
+      "  StreamSubscriberWakeRequest,\n" +
+      "  StreamSubscriberWakeResponse,\n" +
+      "} from \"iterate/processors\";\n" +
+      "import {\n" +
+      "  createStreamProcessorRegistry,\n" +
+      "  type StreamProcessorRegistry,\n" +
+      "} from \"iterate/processors/cloudflare\";\n" +
+      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
+      "import { GuestbookProcessor, type GuestbookState } from \"./processor.ts\";\n" +
+      "import { guestbookCreationEvents, guestbookStreamPath } from \"./ref.ts\";\n" +
       "\n" +
-      "/**\n" +
-      " * Page-only half of the guestbook. The stream-processor host lives in\n" +
-      " * host.ts (createWorker); /api/* is routed there by worker.ts. This class\n" +
-      " * only serves the HTML shell so createApp can still compile client.tsx.\n" +
-      " */\n" +
-      "export class GuestbookPage extends DurableObject {\n" +
+      "type GuestbookApi = {\n" +
+      "  liveState: LiveStateRpc<GuestbookState>;\n" +
+      "  sign(name: string, message: string): Promise<void>;\n" +
+      "};\n" +
+      "\n" +
+      "/** One createApp Durable Object owns the page, API, processor, and live value. */\n" +
+      "export class GuestbookApp extends IterateDurableObject {\n" +
+      "  #registry: StreamProcessorRegistry<GuestbookState> | undefined;\n" +
+      "\n" +
+      "  #ensureRegistry(projectId: string): StreamProcessorRegistry<GuestbookState> {\n" +
+      "    if (this.#registry === undefined) {\n" +
+      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
+      "      const registry = createStreamProcessorRegistry<GuestbookState>(this.ctx, {\n" +
+      "        path: guestbookStreamPath,\n" +
+      "        projectId,\n" +
+      "        stream,\n" +
+      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
+      "      });\n" +
+      "      registry.register(new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }));\n" +
+      "      this.#registry = registry;\n" +
+      "    }\n" +
+      "    return this.#registry;\n" +
+      "  }\n" +
+      "\n" +
+      "  async #freshRegistry(): Promise<StreamProcessorRegistry<GuestbookState>> {\n" +
+      "    if (this.#registry !== undefined) return this.#registry;\n" +
+      "    using project = await this.env.ITX.get();\n" +
+      "    return this.#ensureRegistry(await project.projectId);\n" +
+      "  }\n" +
+      "\n" +
+      "  async #append(...events: StreamEventInput[]): Promise<void> {\n" +
+      "    using project = await this.env.ITX.get();\n" +
+      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
+      "  }\n" +
+      "\n" +
+      "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
+      "    await (await this.#freshRegistry()).handleAlarm(alarmInfo);\n" +
+      "  }\n" +
+      "\n" +
+      "  get processor() {\n" +
+      "    return {\n" +
+      "      wakeStreamSubscriber: async (\n" +
+      "        request: StreamSubscriberWakeRequest,\n" +
+      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
+      "        if (request.stream.projectId === null) {\n" +
+      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
+      "        }\n" +
+      "        return await this.#ensureRegistry(request.stream.projectId).wakeStreamSubscriber(request);\n" +
+      "      },\n" +
+      "    };\n" +
+      "  }\n" +
+      "\n" +
+      "  async sign(name: string, message: string): Promise<void> {\n" +
+      "    const trimmedName = name.trim().slice(0, 80);\n" +
+      "    const trimmedMessage = message.trim().slice(0, 500);\n" +
+      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
+      "    await this.#append({\n" +
+      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
+      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
+      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
+      "    });\n" +
+      "    const registry = await this.#freshRegistry();\n" +
+      "    await registry.catchUp(\"guestbook\");\n" +
+      "    registry.refreshLive();\n" +
+      "  }\n" +
+      "\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
+      "    if (url.pathname === \"/api\") {\n" +
+      "      await this.#append();\n" +
+      "      const registry = await this.#freshRegistry();\n" +
+      "      await registry.catchUp(\"guestbook\");\n" +
+      "      await registry.loadAndRefreshLive();\n" +
+      "      return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
+      "    }\n" +
       "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
       "      return new Response(\"not found\", { status: 404 });\n" +
       "    }\n" +
@@ -805,19 +620,39 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      },\n" +
       "    );\n" +
       "  }\n" +
+      "}\n" +
+      "\n" +
+      "class PublicGuestbookApi extends RpcTarget implements GuestbookApi {\n" +
+      "  readonly #liveState: LiveStateRpcTarget<GuestbookState>;\n" +
+      "\n" +
+      "  constructor(\n" +
+      "    private readonly app: GuestbookApp,\n" +
+      "    registry: StreamProcessorRegistry<GuestbookState>,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "    this.#liveState = new LiveStateRpcTarget(registry);\n" +
+      "  }\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpc<GuestbookState> {\n" +
+      "    return this.#liveState;\n" +
+      "  }\n" +
+      "\n" +
+      "  async sign(name: string, message: string): Promise<void> {\n" +
+      "    await this.app.sign(name, message);\n" +
+      "  }\n" +
       "}\n",
   },
   {
     path: "apps/todo/client.tsx",
     content:
       "/**\n" +
-      " * Todo UI — Cap'n Web live state via shared useLiveStateRpc\n" +
-      " * (apps/use-live-state-rpc.ts / packages/iterate).\n" +
+      " * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.\n" +
       " */\n" +
-      "import React, { type FormEvent, useEffect, useState } from \"https://esm.sh/react@19.2.4\";\n" +
-      "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
-      "import { newWebSocketRpcSession } from \"https://esm.sh/@iterate-com/capnweb@0.10.0\";\n" +
-      "import { useLiveStateRpc, type LiveStateRpc } from \"../use-live-state-rpc.ts\";\n" +
+      "import { newWebSocketRpcSession, type RpcStub } from \"@iterate-com/capnweb\";\n" +
+      "import React, { type FormEvent, useState } from \"react\";\n" +
+      "import { createRoot } from \"react-dom/client\";\n" +
+      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/live-state/react\";\n" +
       "\n" +
       "type TodoApi = {\n" +
       "  liveState: LiveStateRpc<{\n" +
@@ -828,29 +663,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  remove(id: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
-      "function useTodoApi() {\n" +
-      "  const [api, setApi] = useState<TodoApi | null>(null);\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    setApi(() => null);\n" +
-      "    const endpoint = new URL(\"/api\", window.location.href);\n" +
-      "    endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
-      "    const publicApi = newWebSocketRpcSession<TodoApi>(endpoint.toString());\n" +
-      "    setApi(() => publicApi);\n" +
-      "    return () => {\n" +
-      "      publicApi[Symbol.dispose]();\n" +
-      "      setApi(() => null);\n" +
-      "    };\n" +
-      "  }, []);\n" +
-      "\n" +
-      "  return api;\n" +
+      "function makeConnection() {\n" +
+      "  const endpoint = new URL(\"/api\", window.location.href);\n" +
+      "  endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
+      "  return newWebSocketRpcSession<TodoApi>(endpoint.toString());\n" +
       "}\n" +
       "\n" +
       "export function TodoClient() {\n" +
-      "  const api = useTodoApi();\n" +
-      "  const { value: state, error: liveError } = useLiveStateRpc(\n" +
-      "    api,\n" +
-      "    (session) => session.liveState,\n" +
+      "  const api = useCapnWebRoot<RpcStub<TodoApi>>();\n" +
+      "  const { value: state, error: liveError } = useLiveState(\n" +
+      "    (session: RpcStub<TodoApi>) => session.liveState,\n" +
       "    (s) => s,\n" +
       "  );\n" +
       "  const [title, setTitle] = useState(\"\");\n" +
@@ -933,15 +755,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const root = document.getElementById(\"root\");\n" +
       "if (root === null) throw new Error(\"missing #root\");\n" +
-      "createRoot(root).render(<TodoClient />);\n",
+      "createRoot(root).render(\n" +
+      "  <CapnWebProvider makeConnection={makeConnection}>\n" +
+      "    <TodoClient />\n" +
+      "  </CapnWebProvider>,\n" +
+      ");\n",
   },
   {
-    path: "apps/todo/host.ts",
+    path: "apps/todo/server.tsx",
     content:
-      "// Stateful todo host: SQLite rows projected into LiveState, Cap'n Web to the\n" +
-      "// browser. createWorker so platform virtual modules inject iterate/live-state\n" +
-      "// and capnweb. Mutations refresh live state; every open tab repaints via\n" +
-      "// useLiveStateRpc (same hook shape as the guestbook).\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
       "import { IterateDurableObject } from \"iterate/sdk\";\n" +
@@ -953,15 +775,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  title: string;\n" +
       "};\n" +
       "\n" +
-      "export type TodoListState = { todos: Todo[] };\n" +
+      "type TodoListState = { todos: Todo[] };\n" +
       "\n" +
-      "export type TodoApi = {\n" +
+      "type TodoApi = {\n" +
       "  liveState: LiveStateRpc<TodoListState>;\n" +
       "  add(title: string): Promise<void>;\n" +
       "  setDone(id: string, done: boolean): Promise<void>;\n" +
       "  remove(id: string): Promise<void>;\n" +
       "};\n" +
       "\n" +
+      "/** One createApp Durable Object owns the page, API, persistence, and live value. */\n" +
       "export class TodoApp extends IterateDurableObject {\n" +
       "  readonly #live: LiveState<TodoListState>;\n" +
       "\n" +
@@ -1019,52 +842,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  async fetch(request: Request): Promise<Response> {\n" +
-      "    return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, this.#live));\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "class PublicTodoApi extends RpcTarget implements TodoApi {\n" +
-      "  // Cached for the session — see guestbook host: fresh stubs thrash clients.\n" +
-      "  readonly #liveState: LiveStateRpcTarget<TodoListState>;\n" +
-      "\n" +
-      "  constructor(\n" +
-      "    private readonly app: TodoApp,\n" +
-      "    live: LiveState<TodoListState>,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "    this.#liveState = new LiveStateRpcTarget(live);\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpc<TodoListState> {\n" +
-      "    return this.#liveState;\n" +
-      "  }\n" +
-      "\n" +
-      "  async add(title: string): Promise<void> {\n" +
-      "    this.app.add(title);\n" +
-      "  }\n" +
-      "\n" +
-      "  async setDone(id: string, done: boolean): Promise<void> {\n" +
-      "    this.app.setDone(id, done);\n" +
-      "  }\n" +
-      "\n" +
-      "  async remove(id: string): Promise<void> {\n" +
-      "    this.app.remove(id);\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/todo/server.tsx",
-    content:
-      "import { DurableObject } from \"cloudflare:workers\";\n" +
-      "\n" +
-      "/**\n" +
-      " * Page-only half of the todo app. The LiveState host lives in host.ts\n" +
-      " * (createWorker); /api is routed there by worker.ts. This class only serves\n" +
-      " * the HTML shell so createApp can compile client.tsx.\n" +
-      " */\n" +
-      "export class TodoPage extends DurableObject {\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
+      "    if (url.pathname === \"/api\") {\n" +
+      "      return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, this.#live));\n" +
+      "    }\n" +
       "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
       "      return new Response(\"not found\", { status: 404 });\n" +
       "    }\n" +
@@ -1099,164 +880,34 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      },\n" +
       "    );\n" +
       "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/use-live-state-rpc.ts",
-    content:
-      "/**\n" +
-      " * Browser-side live-state hook for createApp clients.\n" +
-      " *\n" +
-      " * Same protocol as `useLiveStateRpc` from `packages/iterate` (`iterate/react`).\n" +
-      " * Inlined in the seeded template because createApp does not inject platform\n" +
-      " * virtual modules the way createWorker does — both guestbook and todo import\n" +
-      " * this one module so the patch/resync logic is not duplicated.\n" +
-      " *\n" +
-      " * React is an esm.sh URL import to match the clients.\n" +
-      " */\n" +
-      "import { useEffect, useRef, useState, useSyncExternalStore } from \"https://esm.sh/react@19.2.4\";\n" +
-      "\n" +
-      "type LiveUpdate<State> =\n" +
-      "  | { type: \"snapshot\"; revision: number; state: State }\n" +
-      "  | { type: \"patch\"; from: number; to: number; patch: LiveStatePatch };\n" +
-      "\n" +
-      "type LiveStatePatch =\n" +
-      "  | { set: unknown }\n" +
-      "  | { fields?: Record<string, LiveStatePatch>; drop?: string[] };\n" +
-      "\n" +
-      "function isPlainObject(value: unknown): value is Record<string, unknown> {\n" +
-      "  if (typeof value !== \"object\" || value === null) return false;\n" +
-      "  const proto = Object.getPrototypeOf(value);\n" +
-      "  return proto === Object.prototype || proto === null;\n" +
       "}\n" +
       "\n" +
-      "function applyPatch<State>(prev: State, patch: LiveStatePatch): State {\n" +
-      "  // Live-state wire protocol: a `set` patch replaces the whole subtree with\n" +
-      "  // the value the server serialized for this State. The channel is typed at\n" +
-      "  // subscribe time; TypeScript cannot thread State through the recursive\n" +
-      "  // patch tree without a cast at the boundary.\n" +
-      "  if (\"set\" in patch) return patch.set as State;\n" +
-      "  const base = isPlainObject(prev) ? prev : {};\n" +
-      "  const next: Record<string, unknown> = { ...base };\n" +
-      "  if (patch.fields) {\n" +
-      "    for (const [key, childPatch] of Object.entries(patch.fields)) {\n" +
-      "      next[key] = applyPatch(Object.hasOwn(base, key) ? base[key] : undefined, childPatch);\n" +
-      "    }\n" +
+      "class PublicTodoApi extends RpcTarget implements TodoApi {\n" +
+      "  readonly #liveState: LiveStateRpcTarget<TodoListState>;\n" +
+      "\n" +
+      "  constructor(\n" +
+      "    private readonly app: TodoApp,\n" +
+      "    live: LiveState<TodoListState>,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "    this.#liveState = new LiveStateRpcTarget(live);\n" +
       "  }\n" +
-      "  if (patch.drop) {\n" +
-      "    for (const key of patch.drop) delete next[key];\n" +
+      "\n" +
+      "  get liveState(): LiveStateRpc<TodoListState> {\n" +
+      "    return this.#liveState;\n" +
       "  }\n" +
-      "  // Reconstructed object graph has the same shape as State because each\n" +
-      "  // field/drop was applied from a server patch for that State; the generic\n" +
-      "  // recursion cannot prove that without dependent types.\n" +
-      "  return next as State;\n" +
-      "}\n" +
       "\n" +
-      "function createLiveStateStore<State>() {\n" +
-      "  let held: { revision: number; state: State | undefined } = { revision: -1, state: undefined };\n" +
-      "  const listeners = new Set<() => void>();\n" +
-      "  const notify = () => listeners.forEach((listener) => listener());\n" +
-      "  return {\n" +
-      "    getState: () => held.state,\n" +
-      "    subscribe: (listener: () => void) => {\n" +
-      "      listeners.add(listener);\n" +
-      "      return () => void listeners.delete(listener);\n" +
-      "    },\n" +
-      "    reset: () => {\n" +
-      "      held = { revision: -1, state: undefined };\n" +
-      "      notify();\n" +
-      "    },\n" +
-      "    apply: (update: LiveUpdate<State>, resync: () => void) => {\n" +
-      "      if (update.type === \"snapshot\") {\n" +
-      "        held = { revision: update.revision, state: update.state };\n" +
-      "      } else if (update.from !== held.revision) {\n" +
-      "        resync();\n" +
-      "        return;\n" +
-      "      } else {\n" +
-      "        // Patch branches only run after a snapshot initialized `held.state`\n" +
-      "        // (revision starts at -1; snapshots set state). TypeScript cannot\n" +
-      "        // retain that control-flow narrowing across the held object.\n" +
-      "        held = { revision: update.to, state: applyPatch(held.state as State, update.patch) };\n" +
-      "      }\n" +
-      "      notify();\n" +
-      "    },\n" +
-      "  };\n" +
-      "}\n" +
+      "  async add(title: string): Promise<void> {\n" +
+      "    this.app.add(title);\n" +
+      "  }\n" +
       "\n" +
-      "export type LiveStateRpc<State> = {\n" +
-      "  get(): Promise<State>;\n" +
-      "  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<{ unsubscribe(): void }>;\n" +
-      "};\n" +
+      "  async setDone(id: string, done: boolean): Promise<void> {\n" +
+      "    this.app.setDone(id, done);\n" +
+      "  }\n" +
       "\n" +
-      "/**\n" +
-      " * Subscribe a React tree to a Cap'n Web `LiveStateRpc` reached from a stable\n" +
-      " * root. The live accessor runs once per root so Cap'n Web property stubs\n" +
-      " * (fresh proxy each get) do not thrash the effect.\n" +
-      " */\n" +
-      "export function useLiveStateRpc<Root extends object, State, Selected = State>(\n" +
-      "  root: Root | null | undefined,\n" +
-      "  live: (root: Root) => LiveStateRpc<State>,\n" +
-      "  selector: (state: State) => Selected,\n" +
-      "): { value: Selected | undefined; error: string | undefined } {\n" +
-      "  const [store] = useState(() => createLiveStateStore<State>());\n" +
-      "  const [error, setError] = useState<string | undefined>(undefined);\n" +
-      "  const selectorRef = useRef(selector);\n" +
-      "  selectorRef.current = selector;\n" +
-      "  const liveRef = useRef(live);\n" +
-      "  liveRef.current = live;\n" +
-      "\n" +
-      "  useEffect(() => {\n" +
-      "    store.reset();\n" +
-      "    setError(undefined);\n" +
-      "    if (root == null) return;\n" +
-      "\n" +
-      "    const liveState = liveRef.current(root);\n" +
-      "\n" +
-      "    let disposed = false;\n" +
-      "    let subscription: { unsubscribe(): void } | undefined;\n" +
-      "\n" +
-      "    const subscribe = async () => {\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      subscription = await liveState.subscribe((update) => {\n" +
-      "        if (disposed) return;\n" +
-      "        store.apply(update, () => {\n" +
-      "          if (!disposed) void subscribe().catch(report);\n" +
-      "        });\n" +
-      "      });\n" +
-      "    };\n" +
-      "\n" +
-      "    const report = (thrown: unknown) => {\n" +
-      "      if (disposed) return;\n" +
-      "      setError(thrown instanceof Error ? thrown.message : String(thrown));\n" +
-      "    };\n" +
-      "\n" +
-      "    void subscribe().catch(report);\n" +
-      "\n" +
-      "    return () => {\n" +
-      "      disposed = true;\n" +
-      "      subscription?.unsubscribe();\n" +
-      "      store.reset();\n" +
-      "    };\n" +
-      "  }, [root, store]);\n" +
-      "\n" +
-      "  const cache = useRef<{ state: State | undefined; value: Selected | undefined }>({\n" +
-      "    state: undefined,\n" +
-      "    value: undefined,\n" +
-      "  });\n" +
-      "  const getSelected = () => {\n" +
-      "    const state = store.getState();\n" +
-      "    if (state === undefined) {\n" +
-      "      cache.current = { state: undefined, value: undefined };\n" +
-      "      return undefined;\n" +
-      "    }\n" +
-      "    if (Object.is(cache.current.state, state)) return cache.current.value;\n" +
-      "    const value = selectorRef.current(state);\n" +
-      "    cache.current = { state, value };\n" +
-      "    return value;\n" +
-      "  };\n" +
-      "\n" +
-      "  const value = useSyncExternalStore(store.subscribe, getSelected, () => undefined);\n" +
-      "  return { value, error };\n" +
+      "  async remove(id: string): Promise<void> {\n" +
+      "    this.app.remove(id);\n" +
+      "  }\n" +
       "}\n",
   },
   {
@@ -1267,14 +918,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"description\": \"Iterate project worker and bundled full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
+      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
+      "    \"react\": \"19.2.4\",\n" +
+      "    \"react-dom\": \"19.2.4\",\n" +
       "    \"zod\": \"4.3.6\"\n" +
       "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
-      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
+      "    \"@types/react\": \"^19.2.17\",\n" +
+      "    \"@types/react-dom\": \"^19.2.3\",\n" +
       "    \"typescript\": \"^5.9.3\"\n" +
       "  }\n" +
       "}\n",
@@ -1314,52 +969,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} from \"iterate/sdk\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
-      "import { guestbookHostRef } from \"./apps/guestbook/ref.ts\";\n" +
+      "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
-      "// Todo: LiveState host (createWorker) + createApp page shell. /api is Cap'n\n" +
-      "// Web; the browser uses useLiveStateRpc against liveState.\n" +
-      "const todoHostRef = {\n" +
+      "const todoAppRef = {\n" +
       "  className: \"TodoApp\",\n" +
       "  durableWorkerKey: \"app-todo-live\",\n" +
       "  path: \"/\",\n" +
       "  source: {\n" +
-      "    createWorker: {\n" +
-      "      entryPoint: \"apps/todo/host.ts\",\n" +
-      "      files: repoFiles,\n" +
-      "    },\n" +
-      "  },\n" +
-      "  type: \"stateful\",\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n" +
-      "const todoPageRef = {\n" +
-      "  className: \"TodoPage\",\n" +
-      "  durableWorkerKey: \"app-todo-page\",\n" +
-      "  path: \"/\",\n" +
-      "  source: {\n" +
       "    createApp: {\n" +
-      "      bundle: false,\n" +
       "      client: \"apps/todo/client.tsx\",\n" +
       "      files: repoFiles,\n" +
       "      server: \"apps/todo/server.tsx\",\n" +
-      "    },\n" +
-      "  },\n" +
-      "  type: \"stateful\",\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n" +
-      "\n" +
-      "// Guestbook: stream-processor host (createWorker) + createApp page. Shared\n" +
-      "// host ref lives in apps/guestbook/ref.ts so the wake subscription expression\n" +
-      "// cannot drift from the HTTP route.\n" +
-      "const guestbookPageRef = {\n" +
-      "  className: \"GuestbookPage\",\n" +
-      "  durableWorkerKey: \"app-guestbook-page\",\n" +
-      "  path: \"/\",\n" +
-      "  source: {\n" +
-      "    createApp: {\n" +
-      "      bundle: false,\n" +
-      "      client: \"apps/guestbook/client.tsx\",\n" +
-      "      files: repoFiles,\n" +
-      "      server: \"apps/guestbook/server.tsx\",\n" +
       "    },\n" +
       "  },\n" +
       "  type: \"stateful\",\n" +
@@ -1457,11 +1079,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
-      "      const todoUrl = new URL(req.url);\n" +
-      "      if (todoUrl.pathname.startsWith(\"/api\")) {\n" +
-      "        return this.fetchDynamicWorker(req, todoHostRef);\n" +
-      "      }\n" +
-      "      return this.fetchDynamicWorker(req, todoPageRef);\n" +
+      "      return this.fetchDynamicWorker(req, todoAppRef);\n" +
       "    }\n" +
       "    if (app === \"counter\") {\n" +
       "      return this.fetchDynamicWorker(req, {\n" +
@@ -1478,13 +1096,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
-      "      // API hits the stream-processor host (createWorker); pages hit the\n" +
-      "      // createApp shell. First /api contact creates the /guestbook stream.\n" +
-      "      const guestbookUrl = new URL(req.url);\n" +
-      "      if (guestbookUrl.pathname.startsWith(\"/api\")) {\n" +
-      "        return this.fetchDynamicWorker(req, guestbookHostRef);\n" +
-      "      }\n" +
-      "      return this.fetchDynamicWorker(req, guestbookPageRef);\n" +
+      "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +
       "      // A collaborative Kanban board over this repo's tasks/ markdown\n" +

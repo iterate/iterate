@@ -46,6 +46,7 @@ describe("workerBuildKey", () => {
     const variants: WorkerBuildInput[] = [
       { ...baseInput, compatibilityDate: "2026-06-01" },
       { ...baseInput, compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"] },
+      { ...baseInput, iteratePackageSpec: "https://pkg.pr.new/iterate/iterate/iterate@abc123" },
       { ...baseInput, source: buildSource("different.ts") },
       {
         ...baseInput,

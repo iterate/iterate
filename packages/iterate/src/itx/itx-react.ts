@@ -27,7 +27,7 @@
  *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  project snapshot + diffs
  *               useIterateSessionLiveState(...)                 session snapshot + diffs
  *   SUBSCRIBE   useItxSubscription((itx) => handle, deps)   raw event stream (escape hatch)
- *   MOUNT       <ProjectScope slug>   ambient project + socket pre-warm (no provider)
+ *   MOUNT       <ProjectScope slug>   ambient project + reconnectable Cap'n Web provider
  *
  *   ACTIONS (mutations) — imperative on the handle, no extra primitive:
  *     const itx = useItx();
@@ -53,12 +53,10 @@
 import {
   createContext,
   createElement,
-  Suspense,
   use,
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -70,6 +68,11 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { LiveStateRpc } from "../itx-api.generated.ts";
+import {
+  CapnWebProvider,
+  useLiveState as useCapnWebLiveState,
+  type LiveStateStatus,
+} from "../live-state/react.tsx";
 import {
   connectIterateSession,
   connectItx,
@@ -85,7 +88,6 @@ import {
   type ProjectStub,
   type SessionStub,
 } from "./itx-session.ts";
-import { createLiveStateStore } from "./live-state/store.ts";
 
 // The React entry is one-stop: everything a component file needs — hooks AND
 // the imperative/keeper surface — importable from one place.
@@ -142,30 +144,20 @@ export function useItx(explicitSlug?: string): ProjectStub {
   return projectStubFor(useIterateSession(), slug);
 }
 
-function SessionPrewarm() {
-  useIterateSession();
-  return null;
-}
-
 /**
- * Set the ambient project for a subtree AND pre-warm the one shared socket. It
- * carries the URL slug so `useItx()` / `useItxQuery()` resolve without an
- * explicit argument, and dials the socket in a SIBLING null-fallback boundary so
- * children paint immediately (each component that reads through itx suspends into
- * its own nearest boundary — usually the router's per-route `<Suspense>`).
+ * Set the ambient project for a subtree and provide its reconnectable Cap'n Web
+ * root. The project-specific layer is deliberately only a connection factory;
+ * live-state ownership and recovery live in `iterate/live-state/react`.
  *
- * It never SSRs (dialing throws on the server), so mount it under an
- * `ssr: false` route (or `<ClientOnly>`). No provider wraps it: the socket is
- * module-global and every hook dials it lazily, so a component can use itx with
- * no `<ProjectScope>` above it (the sidebar, ⌘K, admin) — the scope is only the
- * ambient-slug convenience.
+ * The duplicate belongs to the provider; the lower-level session keeper keeps
+ * owning and reconnecting the shared socket beneath it.
  */
 export function ProjectScope({ slug, children }: { slug: string; children?: ReactNode }) {
+  const makeConnection = useCallback(async () => (await connectItx(slug)).dup(), [slug]);
   return createElement(
     ProjectScopeContext,
     { value: slug },
-    createElement(Suspense, { fallback: null }, createElement(SessionPrewarm)),
-    children,
+    createElement(CapnWebProvider, { makeConnection }, children),
   );
 }
 
@@ -370,7 +362,7 @@ const SUBSCRIBE_RETRY_MS = 10_000;
 const SUBSCRIBE_TIMEOUT_MS = 15_000;
 const SUBSCRIBE_TIMED_OUT = Symbol("itx-subscribe-timed-out");
 
-export type ItxSubscriptionStatus = "connecting" | "live" | "error";
+export type ItxSubscriptionStatus = LiveStateStatus;
 
 /** Shared reconnect and watchdog engine behind the public subscription hooks. */
 function useRecoveringSubscription<Root>(
@@ -527,7 +519,7 @@ export function useItxSubscription(
 /**
  * THE live-state primitive: subscribe to any `.liveState` node, render the slice
  * you pick. The server pushes a snapshot then minimal diffs; this hook
- * reassembles them (see ./live-state/store) and hands back `selector(state)`.
+ * reassembles them (see ../live-state/store) and hands back `selector(state)`.
  *
  *   const streams = useLiveState((itx) => itx.liveState, (s) => s.streamsIndex);
  *
@@ -559,20 +551,21 @@ export function useLiveState<State, Selected = State>(
 } {
   const scopedSlug = useContext(ProjectScopeContext);
   const slug = opts?.slug ?? scopedSlug;
-  return useLiveStateForRoot(
+  const useAmbientProvider =
+    scopedSlug !== undefined && (opts?.slug === undefined || slug === scopedSlug);
+  const makeConnection = useCallback(async () => {
+    if (slug === undefined) {
+      throw new Error(
+        "useLiveState needs a project: pass { slug } or render under <ProjectScope slug>.",
+      );
+    }
+    return (await connectItx(slug)).dup();
+  }, [slug]);
+  return useCapnWebLiveState(
     live,
     selector,
     deps,
-    {
-      key: slug,
-      ...(slug === undefined
-        ? {
-            missingMessage:
-              "useLiveState needs a project: pass { slug } or render under <ProjectScope slug>.",
-          }
-        : { connect: () => connectItx(slug) }),
-    },
-    opts?.enabled,
+    useAmbientProvider ? { enabled: opts?.enabled } : { enabled: opts?.enabled, makeConnection },
   );
 }
 
@@ -588,116 +581,6 @@ export function useIterateSessionLiveState<State, Selected = State>(
   error?: string;
   refresh: () => void;
 } {
-  return useLiveStateForRoot(
-    live,
-    selector,
-    deps,
-    {
-      key: "session",
-      connect: connectIterateSession,
-    },
-    opts?.enabled,
-  );
-}
-
-function useLiveStateForRoot<Root, State, Selected>(
-  live: (root: Root) => LiveStateRpc<State>,
-  selector: (state: State) => Selected,
-  deps: unknown[],
-  connection: RootConnection<Root>,
-  enabled = true,
-): {
-  value: Selected | undefined;
-  status: ItxSubscriptionStatus;
-  error?: string;
-  refresh: () => void;
-} {
-  // useState, not useMemo: the store holds the accumulated live value.
-  const [store] = useState(() => createLiveStateStore<State>());
-  // The node key includes the project/session connection and the caller's deps.
-  // A route param change therefore cannot render the previous node's state.
-  const nodeKey = [connection.key, ...deps];
-  // Node change = a different node: drop the held state (its slice is
-  // meaningless now).
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- node identity by design
-  useEffect(() => () => store.reset(), nodeKey);
-
-  // The sink needs `refresh` to resync on a gap, but `refresh` comes from the
-  // subscription below — a ref bridges the cycle (the sink only fires later).
-  const refreshRef = useRef<() => void>(() => {});
-  const subscription = useRecoveringSubscription(
-    async (root) => {
-      // The stale-sink guard: revision lines RESTART per subscription, so a
-      // straggler push from a dying subscription could apply a wrong patch — or
-      // read as a gap and tear the healthy subscription down. Marking the sink
-      // stale on unsubscribe closes both.
-      let stale = false;
-      const handle = await live(root).subscribe((update) => {
-        if (stale) return;
-        store.apply(update, () => refreshRef.current());
-      });
-      return {
-        ping: () => handle.ping(),
-        unsubscribe: () => {
-          stale = true;
-          return handle.unsubscribe();
-        },
-        // Forward the stub release so the hook's teardown frees the capnweb
-        // import-table entry (the wrapper would otherwise swallow it).
-        [Symbol.dispose]: () => (handle as Partial<Disposable>)[Symbol.dispose]?.(),
-      };
-    },
-    deps,
-    connection,
-    enabled,
-  );
-  // In an effect, not during render (a discarded concurrent render must not
-  // write refs); `refresh` is stable, so this runs once.
-  useEffect(() => {
-    refreshRef.current = subscription.refresh;
-  }, [subscription.refresh]);
-
-  // Selector memo cache keyed on STATE identity: same `Selected` ref while state
-  // is unchanged, so useSyncExternalStore bails out (and can never loop). Also
-  // keyed on the NODE: the store resets in a passive effect, so the render that
-  // re-points the hook could otherwise still read the previous node's state. On
-  // a node switch the pre-switch state becomes a BARRIER — selection returns
-  // `undefined` until the store moves past it (the reset, then the new node's
-  // first push) — so the previous node's value can never render under the new.
-  // Two accepted edges, both self-healing within one push: the barrier compares
-  // by identity, so an old-node diff landing in the commit gap produces a fresh
-  // object that slips past it for one frame (the reset then clears it); and a
-  // DISCARDED concurrent render with a different key re-arms the barrier
-  // against the still-current node (blanking until its next push) — a
-  // blocked-until-reset latch would close both but could wedge permanently in
-  // the discarded-render case, so transient-and-healing wins.
-  const cache = useRef<{
-    key: unknown[];
-    barrier: State | undefined;
-    state: State | undefined;
-    value: Selected | undefined;
-  }>({ key: nodeKey, barrier: undefined, state: undefined, value: undefined });
-  const getSelected = () => {
-    const sameNode =
-      cache.current.key.length === nodeKey.length &&
-      cache.current.key.every((part, index) => part === nodeKey[index]);
-    if (!sameNode) {
-      cache.current = {
-        key: nodeKey,
-        barrier: store.getState(),
-        state: undefined,
-        value: undefined,
-      };
-      return undefined;
-    }
-    const state = store.getState();
-    if (state !== undefined && state === cache.current.barrier) return undefined;
-    if (state === cache.current.state) return cache.current.value;
-    cache.current.state = state;
-    cache.current.value = state === undefined ? undefined : selector(state);
-    return cache.current.value;
-  };
-  const value = useSyncExternalStore(store.subscribe, getSelected, getSelected);
-
-  return { value, ...subscription };
+  const makeConnection = useCallback(async () => (await connectIterateSession()).dup(), []);
+  return useCapnWebLiveState(live, selector, deps, { enabled: opts?.enabled, makeConnection });
 }

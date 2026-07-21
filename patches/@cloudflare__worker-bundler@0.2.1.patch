@@ -1,0 +1,69 @@
+diff --git a/dist/installer-Ns4ivVf5.js b/dist/installer-Ns4ivVf5.js
+index 04fb1df..131a8c6 100644
+--- a/dist/installer-Ns4ivVf5.js
++++ b/dist/installer-Ns4ivVf5.js
+@@ -75,20 +75,35 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+ 	if (existing) return existing;
+ 	const installPromise = (async () => {
+ 		try {
+-			const metadata = await fetchPackageMetadata(name, registry);
+-			const version = resolveVersion(versionRange, metadata);
+-			if (!version) {
+-				result.warnings.push(`Could not resolve version for ${name}@${versionRange}`);
+-				return;
+-			}
+-			const versionMetadata = metadata.versions[version];
+-			if (!versionMetadata) {
+-				result.warnings.push(`Version ${version} not found for ${name}`);
+-				return;
++			const alias = parseNpmAlias(versionRange);
++			const metadataName = alias?.name ?? name;
++			const metadataRange = alias?.range ?? versionRange;
++			let packageFiles;
++			let versionMetadata;
++			if (/^https?:\/\//.test(metadataRange)) {
++				packageFiles = await fetchPackageFiles(name, {
++					dist: { tarball: metadataRange },
++					version: metadataRange
++				});
++				const packageJson = packageFiles["package.json"];
++				if (!packageJson) throw new Error(`Tarball for ${name} does not contain package.json`);
++				versionMetadata = JSON.parse(packageJson);
++			} else {
++				const metadata = await fetchPackageMetadata(metadataName, registry);
++				const version = resolveVersion(metadataRange, metadata);
++				if (!version) {
++					result.warnings.push(`Could not resolve version for ${name}@${versionRange}`);
++					return;
++				}
++				versionMetadata = metadata.versions[version];
++				if (!versionMetadata) {
++					result.warnings.push(`Version ${version} not found for ${metadataName}`);
++					return;
++				}
++				packageFiles = await fetchPackageFiles(metadataName, versionMetadata);
+ 			}
+-			installedPackages.set(name, version);
+-			result.installed.push(`${name}@${version}`);
+-			const packageFiles = await fetchPackageFiles(name, versionMetadata);
++			installedPackages.set(name, versionMetadata.version);
++			result.installed.push(`${name}@${versionMetadata.version}`);
+ 			for (const [filePath, content] of Object.entries(packageFiles)) fileSystem.write(`node_modules/${name}/${filePath}`, content);
+ 			const deps = versionMetadata.dependencies ?? {};
+ 			await Promise.all(Object.entries(deps).map(([depName, depVersion]) => installPackage(depName, depVersion, result, fileSystem, installedPackages, inProgress, registry)));
+@@ -105,6 +120,15 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+ 		inProgress.delete(name);
+ 	}
+ }
++function parseNpmAlias(spec) {
++	if (!spec.startsWith("npm:")) return;
++	const separator = spec.lastIndexOf("@");
++	if (separator <= 4 || separator === spec.length - 1) return;
++	return {
++		name: spec.slice(4, separator),
++		range: spec.slice(separator + 1)
++	};
++}
+ /**
+ * Fetch package metadata from npm registry.
+ */

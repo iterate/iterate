@@ -30,7 +30,7 @@ export {
 // LiveStatePatch) come via the generated-contract re-export below — the
 // contract carries structurally identical copies, and exporting both homes
 // would be ambiguous.
-export { applyPatch, createLiveStateStore, diff } from "./live-state.ts";
+export { applyPatch, createLiveStateStore, diff } from "./live-state/index.ts";
 // The generated public contract (also exported by `iterate/sdk`): here so a
 // client consumer needs exactly one import for handles AND their types.
 // `.ts`-suffixed like every relative import here; tsc's

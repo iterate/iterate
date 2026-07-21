@@ -1,16 +1,16 @@
 /**
- * Public guestbook UI. Live reduced state over Cap'n Web + shared
- * useLiveStateRpc (see apps/use-live-state-rpc.ts / packages/iterate).
+ * Public guestbook UI. The provider owns the reconnectable Cap'n Web root;
+ * useLiveState consumes the nearest root.
  */
-import React, { type FormEvent, useEffect, useState } from "https://esm.sh/react@19.2.4";
-import { createRoot } from "https://esm.sh/react-dom@19.2.4/client";
-import { newWebSocketRpcSession } from "https://esm.sh/@iterate-com/capnweb@0.10.0";
-import { useLiveStateRpc, type LiveStateRpc } from "../use-live-state-rpc.ts";
+import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
+import React, { type FormEvent, useState } from "react";
+import { createRoot } from "react-dom/client";
+import type { LiveStateRpc } from "iterate/live-state";
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/live-state/react";
 
 type GuestbookState = {
   birthCertificate: { config: { title: string } } | null;
   entries: Array<{ name: string; message: string; signedAt: string }>;
-  lastMilestone: number;
 };
 
 type GuestbookApi = {
@@ -18,31 +18,16 @@ type GuestbookApi = {
   sign(name: string, message: string): Promise<void>;
 };
 
-function useGuestbookApi() {
-  const [api, setApi] = useState<GuestbookApi | null>(null);
-
-  useEffect(() => {
-    // Updater form is load-bearing: Cap'n Web stubs are callable Proxies, so
-    // setApi(stub) would make React CALL the stub as an updater.
-    setApi(() => null);
-    const endpoint = new URL("/api", window.location.href);
-    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
-    const publicApi = newWebSocketRpcSession<GuestbookApi>(endpoint.toString());
-    setApi(() => publicApi);
-    return () => {
-      publicApi[Symbol.dispose]();
-      setApi(() => null);
-    };
-  }, []);
-
-  return api;
+function makeConnection() {
+  const endpoint = new URL("/api", window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  return newWebSocketRpcSession<GuestbookApi>(endpoint.toString());
 }
 
 export function GuestbookClient() {
-  const api = useGuestbookApi();
-  const { value: state, error: liveError } = useLiveStateRpc(
-    api,
-    (session) => session.liveState,
+  const api = useCapnWebRoot<RpcStub<GuestbookApi>>();
+  const { value: state, error: liveError } = useLiveState(
+    (session: RpcStub<GuestbookApi>) => session.liveState,
     (s) => s,
   );
   const [name, setName] = useState("");
@@ -119,4 +104,8 @@ export function GuestbookClient() {
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("missing #root");
-createRoot(root).render(<GuestbookClient />);
+createRoot(root).render(
+  <CapnWebProvider makeConnection={makeConnection}>
+    <GuestbookClient />
+  </CapnWebProvider>,
+);

@@ -21,6 +21,9 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
+  /** Preview-only exact pkg.pr.new tarball used for `iterate` dependencies in
+   * dynamic builds. Deploy writes this from PREVIEW_PULL_REQUEST_HEAD_SHA. */
+  APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?: string;
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;

@@ -5,11 +5,6 @@ import {
   type WorkerBuildAssetMetadata,
   type WorkerBuildWranglerConfig,
 } from "./artifact-store.ts";
-import { CAPNWEB_VIRTUAL_MODULE } from "./capnweb-virtual-module.generated.ts";
-import { ITERATE_LIVE_STATE_VIRTUAL_MODULE } from "./iterate-live-state-virtual-module.generated.ts";
-import { ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE } from "./iterate-processors-cloudflare-virtual-module.generated.ts";
-import { ITERATE_PROCESSORS_VIRTUAL_MODULE } from "./iterate-processors-virtual-module.generated.ts";
-import { ITERATE_SDK_VIRTUAL_MODULE } from "./iterate-sdk-virtual-module.generated.ts";
 import type { DynamicWorkerSource, WorkerBundlerAssetConfig } from "./schemas.ts";
 
 /** Keep this pin in sync with apps/os/package.json. It participates in every
@@ -20,24 +15,76 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
 export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
-const PLATFORM_VIRTUAL_MODULES = {
-  "@iterate-com/capnweb": CAPNWEB_VIRTUAL_MODULE,
-  "iterate/live-state": ITERATE_LIVE_STATE_VIRTUAL_MODULE,
-  "iterate/processors": ITERATE_PROCESSORS_VIRTUAL_MODULE,
-  "iterate/processors/cloudflare": ITERATE_PROCESSORS_CLOUDFLARE_VIRTUAL_MODULE,
-  "iterate/sdk": ITERATE_SDK_VIRTUAL_MODULE,
-};
+const PACKAGE_DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+] as const;
 
-/** The exact virtual-module map supplied to worker-bundler. Keeping this in
- * one place makes the compiler input and its content-addressed key identical. */
-export function workerVirtualModules(overrides?: Record<string, string>): Record<string, string> {
-  return { ...PLATFORM_VIRTUAL_MODULES, ...overrides };
+type PackageManifest = Record<string, unknown> &
+  Partial<Record<(typeof PACKAGE_DEPENDENCY_FIELDS)[number], Record<string, unknown>>>;
+
+/** Prepare declared `iterate` specs for worker-bundler. A deployment preview
+ * pin replaces every declaration; the root declaration is always promoted to
+ * a runtime dependency because worker-bundler deliberately ignores
+ * devDependencies. The rewrite is build-local and never changes the repo. */
+export function applyIteratePackageSpecOverride(
+  files: Record<string, string>,
+  iteratePackageSpec: string | undefined,
+): Record<string, string> {
+  const content = files["package.json"];
+  if (content === undefined) return files;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    // Preserve worker-bundler's own invalid-manifest error classification.
+    return files;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return files;
+  // Safe after the object guard; dependency fields get their own shape checks below.
+  const manifest = parsed as PackageManifest;
+
+  let declaredPackageSpec: unknown;
+  let changed = false;
+  for (const field of PACKAGE_DEPENDENCY_FIELDS) {
+    const dependencies = manifest[field];
+    if (
+      dependencies === null ||
+      typeof dependencies !== "object" ||
+      Array.isArray(dependencies) ||
+      !Object.hasOwn(dependencies, "iterate")
+    ) {
+      continue;
+    }
+    declaredPackageSpec ??= dependencies.iterate;
+    if (iteratePackageSpec !== undefined && dependencies.iterate !== iteratePackageSpec) {
+      dependencies.iterate = iteratePackageSpec;
+      changed = true;
+    }
+  }
+  if (declaredPackageSpec === undefined) return files;
+
+  const runtimeSpec = iteratePackageSpec ?? declaredPackageSpec;
+  if (manifest.dependencies?.iterate !== runtimeSpec) {
+    manifest.dependencies = {
+      ...manifest.dependencies,
+      iterate: runtimeSpec,
+    };
+    changed = true;
+  }
+  if (!changed) return files;
+
+  return { ...files, "package.json": `${JSON.stringify(manifest, null, 2)}\n` };
 }
 
 /** Resolve `files`, then make one direct createWorker/createApp call in the
  * isolated compiler sidecar. */
 export async function executeWorkerBuild(input: {
   files: Record<string, string>;
+  iteratePackageSpec?: string;
   source: DynamicWorkerSource;
   workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
 }): Promise<{
@@ -49,19 +96,22 @@ export async function executeWorkerBuild(input: {
   warnings: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
 }> {
+  const files = applyIteratePackageSpecOverride(input.files, input.iteratePackageSpec);
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
     return unwrapBuildResult(
-      await input.workerBundler.createApp({ ...options, files: input.files }),
+      await input.workerBundler.createApp({
+        ...options,
+        files,
+      }),
     );
   }
 
-  const { files: _files, virtualModules, ...options } = input.source.createWorker;
+  const { files: _files, ...options } = input.source.createWorker;
   const built = unwrapBuildResult(
     await input.workerBundler.createWorker({
       ...options,
-      files: input.files,
-      virtualModules: workerVirtualModules(virtualModules),
+      files,
     }),
   );
   return { assetManifest: {}, assets: {}, ...built };

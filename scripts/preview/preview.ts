@@ -328,9 +328,9 @@ async function deployPreviewApps({
           commandEnvironment: {
             ...runtime.commandEnvironment,
             // apps/os/scripts/deploy.ts turns this into
-            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
-            // preview install this head's pkg.pr.new `iterate` build, not
-            // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so project seeds and dynamic
+            // builds install this head's pkg.pr.new `iterate` build, not @main.
+            // The sha, not @<pr>: pkg.pr.new PR refs are moving
             // targets, while the sha pins the exact build this deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
           },

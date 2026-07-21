@@ -130,7 +130,7 @@ export function retainProcessEventBatch(
   } = {},
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
-  // the defensive onRpcBroken wiring — see lib/rpc/retain.ts for why that
+  // the defensive onRpcBroken wiring — see iterate/live-state/retain.ts for why that
   // wiring is subtle); this layer adds only the pump's delivery semantics.
   const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;

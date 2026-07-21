@@ -39,10 +39,14 @@ vi.mock("capnweb", () => ({
       authenticate: (credentials?: unknown) => {
         control.authenticateCalls += 1;
         control.lastCredentials = credentials;
-        const handleFor = (suffix: string) => ({
-          url: suffix ? `${ws.url}/${suffix}` : ws.url,
-          [Symbol.dispose]: vi.fn(),
-        });
+        const handleFor = (suffix: string) => {
+          const handle = {
+            url: suffix ? `${ws.url}/${suffix}` : ws.url,
+            [Symbol.dispose]: vi.fn(),
+            dup: () => handle,
+          };
+          return handle;
+        };
         if (control.hangFirstAuth) return new Promise(() => {});
         if (control.authError) return Promise.reject(control.authError);
         const root = Object.assign(handleFor(""), {

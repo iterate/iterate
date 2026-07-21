@@ -11,52 +11,19 @@ import {
 } from "iterate/sdk";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
-import { guestbookHostRef } from "./apps/guestbook/ref.ts";
+import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
-// Todo: LiveState host (createWorker) + createApp page shell. /api is Cap'n
-// Web; the browser uses useLiveStateRpc against liveState.
-const todoHostRef = {
+const todoAppRef = {
   className: "TodoApp",
   durableWorkerKey: "app-todo-live",
   path: "/",
   source: {
-    createWorker: {
-      entryPoint: "apps/todo/host.ts",
-      files: repoFiles,
-    },
-  },
-  type: "stateful",
-} satisfies StatefulDynamicWorkerRef;
-const todoPageRef = {
-  className: "TodoPage",
-  durableWorkerKey: "app-todo-page",
-  path: "/",
-  source: {
     createApp: {
-      bundle: false,
       client: "apps/todo/client.tsx",
       files: repoFiles,
       server: "apps/todo/server.tsx",
-    },
-  },
-  type: "stateful",
-} satisfies StatefulDynamicWorkerRef;
-
-// Guestbook: stream-processor host (createWorker) + createApp page. Shared
-// host ref lives in apps/guestbook/ref.ts so the wake subscription expression
-// cannot drift from the HTTP route.
-const guestbookPageRef = {
-  className: "GuestbookPage",
-  durableWorkerKey: "app-guestbook-page",
-  path: "/",
-  source: {
-    createApp: {
-      bundle: false,
-      client: "apps/guestbook/client.tsx",
-      files: repoFiles,
-      server: "apps/guestbook/server.tsx",
     },
   },
   type: "stateful",
@@ -154,11 +121,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      const todoUrl = new URL(req.url);
-      if (todoUrl.pathname.startsWith("/api")) {
-        return this.fetchDynamicWorker(req, todoHostRef);
-      }
-      return this.fetchDynamicWorker(req, todoPageRef);
+      return this.fetchDynamicWorker(req, todoAppRef);
     }
     if (app === "counter") {
       return this.fetchDynamicWorker(req, {
@@ -175,13 +138,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
-      // API hits the stream-processor host (createWorker); pages hit the
-      // createApp shell. First /api contact creates the /guestbook stream.
-      const guestbookUrl = new URL(req.url);
-      if (guestbookUrl.pathname.startsWith("/api")) {
-        return this.fetchDynamicWorker(req, guestbookHostRef);
-      }
-      return this.fetchDynamicWorker(req, guestbookPageRef);
+      return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app === "tasks") {
       // A collaborative Kanban board over this repo's tasks/ markdown

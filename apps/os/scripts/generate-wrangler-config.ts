@@ -511,6 +511,12 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      ...(process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim()
+        ? {
+            APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC:
+              process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.trim(),
+          }
+        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.

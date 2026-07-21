@@ -2,20 +2,12 @@
 // at /guestbook. Style matches the agent processor — inline contract schemas,
 // long switch reduce/processEvent, no event-type constants.
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  PLATFORM_STREAM_EVENTS,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-  StreamProcessor,
-  type ProcessEventArgs,
-  type ProcessorState,
-} from "iterate/processors";
+import { defineProcessorContract, StreamProcessor, type ProcessorState } from "iterate/processors";
 
 export const GuestbookProcessorContract = defineProcessorContract({
   slug: "guestbook",
   version: "0.1.0",
-  description:
-    "Reduces guestbook signatures on /guestbook and emits a milestone fact every five entries.",
+  description: "Reduces guestbook signatures on /guestbook.",
   stateSchema: z.object({
     birthCertificate: z
       .object({
@@ -40,9 +32,6 @@ export const GuestbookProcessorContract = defineProcessorContract({
       )
       .default([])
       .meta({ description: "Signatures in stream order (oldest first)." }),
-    lastMilestone: z.number().int().nonnegative().default(0).meta({
-      description: "Highest multiple-of-five entry count already journaled as milestone-reached.",
-    }),
   }),
   events: {
     "events.iterate.com/guestbook/created": {
@@ -80,38 +69,9 @@ export const GuestbookProcessorContract = defineProcessorContract({
         },
       ],
     },
-    "events.iterate.com/guestbook/milestone-reached": {
-      description:
-        "The entry count crossed a multiple of five. Emitted at-head from reduced state, " +
-        "idempotency-keyed by count so redeliveries and refolds collapse to one fact.",
-      payloadSchema: z.object({
-        count: z
-          .number()
-          .int()
-          .positive()
-          .meta({ description: "Entry count at the milestone (5, 10, 15, …)." }),
-      }),
-      examples: [
-        {
-          description: "The fifth signature landed.",
-          payload: { count: 5 },
-        },
-        {
-          description: "Catch-up past ten signatures emits the tenth milestone.",
-          payload: { count: 10 },
-        },
-      ],
-    },
   },
-  // Required by `{ recovery: true }` on the host.
-  processorDeps: [PLATFORM_STREAM_EVENTS],
-  consumes: [
-    "events.iterate.com/guestbook/created",
-    "events.iterate.com/guestbook/entry-signed",
-    "events.iterate.com/guestbook/milestone-reached",
-    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-  ],
-  emits: ["events.iterate.com/guestbook/milestone-reached"],
+  consumes: ["events.iterate.com/guestbook/created", "events.iterate.com/guestbook/entry-signed"],
+  emits: [],
 });
 
 export type GuestbookState = ProcessorState<typeof GuestbookProcessorContract>;
@@ -131,58 +91,16 @@ export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcesso
         return { ...state, birthCertificate: event.payload };
       }
       case "events.iterate.com/guestbook/entry-signed": {
+        if (state.birthCertificate === null) {
+          throw new Error("guestbook received an entry before its created event");
+        }
         return {
           ...state,
           entries: [...state.entries, { ...event.payload, signedAt: event.createdAt }],
         };
       }
-      case "events.iterate.com/guestbook/milestone-reached": {
-        return {
-          ...state,
-          lastMilestone: Math.max(state.lastMilestone, event.payload.count),
-        };
-      }
       default:
         return state;
     }
-  }
-
-  protected override processEvent(
-    args: ProcessEventArgs<typeof GuestbookProcessorContract>,
-  ): undefined {
-    const { blockProcessorWhile, delivery, state } = args;
-
-    // State-derived side effects only: milestones are computed from the full
-    // reduced entry list at head, never from a single event. Per-event work is
-    // none — signing is an external append, not a processor consequence.
-    if (!delivery.caughtUp) return;
-    if (state.birthCertificate === null) return;
-
-    const reached = Math.floor(state.entries.length / 5) * 5;
-    if (reached <= state.lastMilestone) return;
-
-    const missed: number[] = [];
-    for (let count = state.lastMilestone + 5; count <= reached; count += 5) {
-      missed.push(count);
-    }
-
-    // At-least-once milestone facts: cursor must not advance past the triggering
-    // delivery until the idempotent appends land (or redelivery will re-emit).
-    // Named function = the reason argument (see agent style notes).
-    const { append } = args;
-    const processor = this;
-    blockProcessorWhile(async function appendMilestoneFactsFromReducedEntryCount() {
-      // `as const` on `type` keeps the mapped array a ConsumedInput union member
-      // rather than `{ type: string }` — without it append() rejects the event
-      // as untyped stream input. buildEvent cannot be used here without a
-      // circular contract import at each map step.
-      await append(
-        ...missed.map((count) => ({
-          type: "events.iterate.com/guestbook/milestone-reached" as const,
-          payload: { count },
-          idempotencyKey: processor.idempotencyKey(`milestone:${count}`),
-        })),
-      );
-    });
   }
 }

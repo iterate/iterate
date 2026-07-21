@@ -12,20 +12,19 @@ export const guestbookSubscriptionConfigVersion = 1;
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
 /**
- * Stream-processor host. Uses createWorker (not createApp) so the platform
- * injects iterate/processors + iterate/sdk virtual modules. A new
- * durableWorkerKey keeps the SQLite-era app-guestbook facet from answering
- * wake/API traffic with the wrong class.
+ * The one createApp facet that serves the page, browser bundle, API, and wake
+ * delivery door. Platform modules are available to both app bundles.
  */
-export const guestbookHostRef = {
+export const guestbookAppRef = {
   type: "stateful",
   path: "/",
   className: "GuestbookApp",
   durableWorkerKey: "app-guestbook-stream",
   source: {
-    createWorker: {
-      entryPoint: "apps/guestbook/host.ts",
+    createApp: {
+      client: "apps/guestbook/client.tsx",
       files: repoFiles,
+      server: "apps/guestbook/server.tsx",
     },
   },
 } satisfies StatefulDynamicWorkerRef;
@@ -44,7 +43,7 @@ export function guestbookCreationEvents(): StreamEventInput[] {
         subscriptionKey: "app-guestbook#guestbook",
         delivery: {
           mode: "wake",
-          expression: ["workers", ["get", guestbookHostRef], "processor", "wakeStreamSubscriber"],
+          expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
           processorSlug: "guestbook",
         },
       },

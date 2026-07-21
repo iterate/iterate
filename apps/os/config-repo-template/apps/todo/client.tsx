@@ -1,11 +1,11 @@
 /**
- * Todo UI — Cap'n Web live state via shared useLiveStateRpc
- * (apps/use-live-state-rpc.ts / packages/iterate).
+ * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.
  */
-import React, { type FormEvent, useEffect, useState } from "https://esm.sh/react@19.2.4";
-import { createRoot } from "https://esm.sh/react-dom@19.2.4/client";
-import { newWebSocketRpcSession } from "https://esm.sh/@iterate-com/capnweb@0.10.0";
-import { useLiveStateRpc, type LiveStateRpc } from "../use-live-state-rpc.ts";
+import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
+import React, { type FormEvent, useState } from "react";
+import { createRoot } from "react-dom/client";
+import type { LiveStateRpc } from "iterate/live-state";
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/live-state/react";
 
 type TodoApi = {
   liveState: LiveStateRpc<{
@@ -16,29 +16,16 @@ type TodoApi = {
   remove(id: string): Promise<void>;
 };
 
-function useTodoApi() {
-  const [api, setApi] = useState<TodoApi | null>(null);
-
-  useEffect(() => {
-    setApi(() => null);
-    const endpoint = new URL("/api", window.location.href);
-    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
-    const publicApi = newWebSocketRpcSession<TodoApi>(endpoint.toString());
-    setApi(() => publicApi);
-    return () => {
-      publicApi[Symbol.dispose]();
-      setApi(() => null);
-    };
-  }, []);
-
-  return api;
+function makeConnection() {
+  const endpoint = new URL("/api", window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  return newWebSocketRpcSession<TodoApi>(endpoint.toString());
 }
 
 export function TodoClient() {
-  const api = useTodoApi();
-  const { value: state, error: liveError } = useLiveStateRpc(
-    api,
-    (session) => session.liveState,
+  const api = useCapnWebRoot<RpcStub<TodoApi>>();
+  const { value: state, error: liveError } = useLiveState(
+    (session: RpcStub<TodoApi>) => session.liveState,
     (s) => s,
   );
   const [title, setTitle] = useState("");
@@ -121,4 +108,8 @@ export function TodoClient() {
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("missing #root");
-createRoot(root).render(<TodoClient />);
+createRoot(root).render(
+  <CapnWebProvider makeConnection={makeConnection}>
+    <TodoClient />
+  </CapnWebProvider>,
+);
