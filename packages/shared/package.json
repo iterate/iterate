@@ -36,7 +36,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --environment node src"
+    "test": "vitest run --environment node src --reporter=default --reporter=./src/test-support/e2e-policy/retry-telemetry-reporter.ts"
   },
   "dependencies": {
     "@orpc/client": "1.13.14",

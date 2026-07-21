@@ -5,10 +5,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { RetryTelemetryReporter, type RetryTelemetryFile } from "./retry-telemetry-reporter.ts";
 
 const originalTelemetryFile = process.env.E2E_RETRY_TELEMETRY_FILE;
+const originalTelemetryEnabled = process.env.TEST_TELEMETRY_ENABLED;
+const originalPostHog = process.env.APP_CONFIG_POSTHOG;
+const originalPackageName = process.env.npm_package_name;
+const originalGithubWorkspace = process.env.GITHUB_WORKSPACE;
 
 afterEach(() => {
   if (originalTelemetryFile === undefined) delete process.env.E2E_RETRY_TELEMETRY_FILE;
   else process.env.E2E_RETRY_TELEMETRY_FILE = originalTelemetryFile;
+  restoreEnv("TEST_TELEMETRY_ENABLED", originalTelemetryEnabled);
+  restoreEnv("APP_CONFIG_POSTHOG", originalPostHog);
+  restoreEnv("npm_package_name", originalPackageName);
+  restoreEnv("GITHUB_WORKSPACE", originalGithubWorkspace);
   vi.restoreAllMocks();
 });
 
@@ -25,7 +33,7 @@ it("records module timing when Vitest omits the queued callback", () => {
   }).not.toThrow();
 });
 
-it("records the first failed attempt when a retry passes", () => {
+it("records the first failed attempt when a retry passes", async () => {
   const file = join(tmpdir(), `retry-telemetry-${process.pid}-${Date.now()}.json`);
   process.env.E2E_RETRY_TELEMETRY_FILE = file;
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -58,7 +66,7 @@ it("records the first failed attempt when a retry passes", () => {
   reporter.onTestModuleCollected(testModule);
   reporter.onTestModuleStart(testModule);
   reporter.onTestModuleEnd(testModule);
-  reporter.onTestRunEnd([testModule]);
+  await reporter.onTestRunEnd([testModule]);
 
   const telemetry = JSON.parse(readFileSync(file, "utf8")) as RetryTelemetryFile;
   expect(telemetry.tests).toEqual([
@@ -93,3 +101,56 @@ it("records the first failed attempt when a retry passes", () => {
   );
   rmSync(file);
 });
+
+it("sends unit tests through the unified CI test event model", async () => {
+  delete process.env.E2E_RETRY_TELEMETRY_FILE;
+  process.env.TEST_TELEMETRY_ENABLED = "1";
+  process.env.APP_CONFIG_POSTHOG = JSON.stringify({ apiKey: "phc_test" });
+  process.env.npm_package_name = "@iterate/example";
+  process.env.GITHUB_WORKSPACE = "/repo";
+  const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  const testCase = {
+    fullName: "math > adds",
+    diagnostic: () => ({ retryCount: 0, flaky: false, duration: 12 }),
+    result: () => ({ state: "passed", errors: [] }),
+  };
+  const testModule = {
+    moduleId: "/repo/packages/example/math.test.ts",
+    children: { allTests: () => [testCase] },
+    diagnostic: () => ({
+      environmentSetupDuration: 1,
+      prepareDuration: 2,
+      collectDuration: 3,
+      setupDuration: 4,
+      duration: 12,
+      importDurations: {},
+    }),
+  };
+
+  await new RetryTelemetryReporter().onTestRunEnd([testModule]);
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+    batch: Array<{ event: string; properties: Record<string, unknown> }>;
+  };
+  expect(body.batch.map(({ event }) => event)).toEqual([
+    "ci test finished",
+    "ci test module finished",
+    "ci test run finished",
+  ]);
+  expect(body.batch[0]?.properties).toEqual(
+    expect.objectContaining({
+      framework: "vitest",
+      test_kind: "unit",
+      workspace: "@iterate/example",
+      test_module: "packages/example/math.test.ts",
+    }),
+  );
+});
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
