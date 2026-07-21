@@ -2370,7 +2370,8 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
     return this.durableObjectStub.append(...events);
   }
 
-  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
+  /** Idempotently disable push; null means this installation was never enrolled. */
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null> {
     return this.durableObjectStub.revoke(reason);
   }
 

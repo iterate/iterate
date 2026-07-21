@@ -825,11 +825,12 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Device",
     kind: "interface",
     sourceText:
-      '/** One enrolled installation. Push credentials enter only through enroll(). */\nexport interface Device {\n  __describe(): Promise<Description & DeviceDescription>;\n  /**\n   * Enroll remains a named device-vocabulary door instead of generic create:\n   * it first routes the private Expo push token into the device\'s Secret,\n   * then appends the device certificate and processor subscription atomically\n   * after that Secret offset. Re-enrollment rotates the credential without\n   * rebirthing the Device.\n   */\n  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;\n  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;\n  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;\n  kill(): Promise<void>;\n  processor: WakeableStreamProcessorRpc<DeviceDescription>;\n  liveState: LiveStateRpc<DeviceDescription>;\n}',
+      '/** One enrolled installation. Push credentials enter only through enroll(). */\nexport interface Device {\n  __describe(): Promise<Description & DeviceDescription>;\n  /**\n   * Enroll remains a named device-vocabulary door instead of generic create:\n   * it first routes the private Expo push token into the device\'s Secret,\n   * then appends the device certificate and processor subscription atomically\n   * after that Secret offset. Re-enrollment rotates the credential without\n   * rebirthing the Device.\n   */\n  enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;\n  append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;\n  /** Idempotently disable push; null means this installation was never enrolled. */\n  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null>;\n  kill(): Promise<void>;\n  processor: WakeableStreamProcessorRpc<DeviceDescription>;\n  liveState: LiveStateRpc<DeviceDescription>;\n}',
     summary: "One enrolled installation.",
     memberSummaries: {
       enroll:
         "Enroll remains a named device-vocabulary door instead of generic create: it first routes the private Expo push token into the device's Secret, then appends the device certificate and processor subscription atomically after that Secret offset.",
+      revoke: "Idempotently disable push; null means this installation was never enrolled.",
     },
     referencedTypeNames: [
       "Description",

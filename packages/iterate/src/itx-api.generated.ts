@@ -1370,7 +1370,8 @@ export interface Device {
    */
   enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;
   append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;
-  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;
+  /** Idempotently disable push; null means this installation was never enrolled. */
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null>;
   kill(): Promise<void>;
   processor: WakeableStreamProcessorRpc<DeviceDescription>;
   liveState: LiveStateRpc<DeviceDescription>;
