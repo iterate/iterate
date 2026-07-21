@@ -95,6 +95,15 @@ export async function deployApp<E extends DeployableEnv>(input: {
   ) => Promise<void> | void;
   /** Runs after a healthy deploy (e.g. auth's OAuth client seeding). */
   afterDeploy?: (ctx: EnvContext<E>, secretValues: Record<string, string>) => Promise<void> | void;
+  /**
+   * Extra `wrangler deploy` args after prepare (e.g. OS's
+   * `--containers-rollout none` on warm redeploys). Called after `prepare` so
+   * it can depend on bootstrap results. Merged with any build-mode args.
+   */
+  extraDeployArgs?: (
+    ctx: EnvContext<E>,
+    secretValues: Record<string, string>,
+  ) => string[] | undefined;
   smokes: (env: E) => SmokeProbe[];
 }) {
   const ctx = await resolveEnvContext({
@@ -125,10 +134,10 @@ export async function deployApp<E extends DeployableEnv>(input: {
     input.concurrentBuildWork?.(ctx, secretValues, credentials),
   );
   let builtConfig: string;
-  let extraDeployArgs: string[] | undefined;
+  const extraDeployArgs: string[] = [];
   if (input.build === "checked-in-config") {
     builtConfig = "wrangler.jsonc";
-    extraDeployArgs = ["--env", ctx.name];
+    extraDeployArgs.push("--env", ctx.name);
     await concurrentBuildWork;
   } else {
     rmSync(join(input.appRoot, "dist"), { recursive: true, force: true });
@@ -148,13 +157,14 @@ export async function deployApp<E extends DeployableEnv>(input: {
     }
     builtConfig = findBuiltWranglerConfig(input.appRoot);
   }
+  extraDeployArgs.push(...(input.extraDeployArgs?.(ctx, secretValues) ?? []));
 
   await deployWithSecrets({
     cwd: input.appRoot,
     builtConfig,
     secretValues,
     credentials,
-    extraDeployArgs,
+    extraDeployArgs: extraDeployArgs.length > 0 ? extraDeployArgs : undefined,
   });
 
   for (const probe of input.smokes(ctx.env)) {

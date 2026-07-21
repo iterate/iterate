@@ -123,6 +123,32 @@ export async function isExactOsProjectMiss(response: Response): Promise<boolean>
   return typeof body === "object" && body !== null && "error" in body && body.error === "not found";
 }
 
+/**
+ * Preview orchestration may explicitly skip an unchanged container rollout.
+ * Direct and production deploys stay on Wrangler's full-rollout default, and
+ * a first-time class bootstrap always overrides the optimization.
+ */
+export function resolveOsContainerDeployArgs(input: {
+  bootstrapAction: "bootstrapped" | "skipped";
+  requestedRollout: string | undefined;
+}): string[] | undefined {
+  const requestedRollout = input.requestedRollout?.trim();
+  if (
+    requestedRollout !== undefined &&
+    requestedRollout !== "" &&
+    requestedRollout !== "immediate" &&
+    requestedRollout !== "none"
+  ) {
+    throw new Error(
+      `OS_CONTAINERS_ROLLOUT must be "immediate" or "none", got ${JSON.stringify(requestedRollout)}.`,
+    );
+  }
+
+  return requestedRollout === "none" && input.bootstrapAction === "skipped"
+    ? ["--containers-rollout", "none"]
+    : undefined;
+}
+
 async function smokeAuthRpc(env: DeployedEnv, label: string) {
   const projectHostnameBase = env.projectHostnameBases[0];
   if (!projectHostnameBase) {
@@ -141,6 +167,12 @@ export default async function deploy(
     env?: string;
   } = {},
 ) {
+  // The preview orchestrator asks to skip Wrangler's six serial stock-image
+  // builds only after proving their inputs unchanged from this slot's exact
+  // prior deployment. Direct/prod deploys and first-time bootstraps retain the
+  // full rollout. See resolvePreviewOsContainerRollout in preview.ts.
+  let containerDeployArgs: string[] | undefined;
+
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
@@ -214,7 +246,7 @@ export default async function deploy(
       // it creates (upstream gap; see ensureContainerClasses). Makes
       // brand-new environments deployable from scratch; no-op everywhere
       // else.
-      await ensureContainerClasses({
+      const containerBootstrap = await ensureContainerClasses({
         ctx,
         workerName: ctx.env.osWorkerName,
         containerClassNames: SANDBOX_INSTANCE_TYPES.map(
@@ -222,12 +254,25 @@ export default async function deploy(
         ),
         compatibilityDate: COMPATIBILITY_DATE,
       });
+      containerDeployArgs = resolveOsContainerDeployArgs({
+        bootstrapAction: containerBootstrap.action,
+        requestedRollout: process.env.OS_CONTAINERS_ROLLOUT,
+      });
+      if (
+        process.env.OS_CONTAINERS_ROLLOUT?.trim() === "none" &&
+        containerBootstrap.action === "bootstrapped"
+      ) {
+        console.log(
+          "container-class bootstrap created missing classes — running Wrangler's full container rollout",
+        );
+      }
 
       // Materialize the sidecar config before the independent build lane
       // starts. The main Vite build also regenerates this file, but doing it
       // here avoids racing that write with the sidecar's Wrangler process.
       writeWranglerConfig();
     },
+    extraDeployArgs: () => containerDeployArgs,
     // Deploy both compiler sidecars while the OS Vite build runs. deployApp
     // joins this lane before uploading the main Worker, so neither service
     // binding can target a missing script.

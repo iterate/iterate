@@ -51,6 +51,7 @@ const {
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
+  resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
@@ -634,11 +635,11 @@ describe("preview test commands", () => {
   test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewDeployBudgetMs: 90_000,
-      previewReadyWorkerVersion: { stableForMs: 10_000 },
+      previewReadyWorkerVersion: { stableForMs: 0 },
       previewTestBudgetMs: 100_000,
     });
     expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
-      previewReadyWorkerVersion: { stableForMs: 10_000 },
+      previewReadyWorkerVersion: { stableForMs: 0 },
     });
 
     const workflow = parseYaml(
@@ -747,6 +748,91 @@ describe("preview compare base", () => {
         pullRequestBaseSha: "base-sha",
       }),
     ).toBe("previous-preview-sha");
+  });
+});
+
+describe("preview OS container rollout", () => {
+  const previousHead = "previous-preview-sha";
+  const currentHead = "current-preview-sha";
+  const previousState = {
+    apps: {
+      os: CloudflarePreviewAppEntry.parse({
+        appDisplayName: "OS",
+        appSlug: "os",
+        deployedWorkerName: "os-preview-7",
+        deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
+        headSha: previousHead,
+        status: "deployed",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+      }),
+    },
+    environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
+    notice: null,
+  };
+
+  test("skips serial stock-image builds when exact same-slot inputs are unchanged", async () => {
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-7",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare: async (basehead) => {
+          expect(basehead).toBe(`${previousHead}...${currentHead}`);
+          return {
+            status: "ahead",
+            changedFilenames: ["scripts/preview/preview.ts", "apps/os/scripts/deploy.ts"],
+          };
+        },
+      }),
+    ).resolves.toEqual({
+      mode: "none",
+      reason: `no container input changed since ${previousHead.slice(0, 7)}`,
+    });
+  });
+
+  test("keeps the full rollout when a container input changed", async () => {
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-7",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare: async () => ({
+          status: "ahead",
+          changedFilenames: ["apps/os/sandbox/Dockerfile"],
+        }),
+      }),
+    ).resolves.toEqual({
+      mode: "immediate",
+      reason: "container input apps/os/sandbox/Dockerfile changed",
+    });
+  });
+
+  test("keeps the full rollout for a different slot without trusting a diff", async () => {
+    const fetchCompare = vi.fn();
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-6",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare,
+      }),
+    ).resolves.toEqual({
+      mode: "immediate",
+      reason: "the preview slot is new or changed",
+    });
+    expect(fetchCompare).not.toHaveBeenCalled();
   });
 });
 

@@ -843,10 +843,10 @@ updated`.** `wrangler deploy` can return while Cloudflare is still propagating
   still failed. A retry was not a sufficient boundary. OS `/api/health` now
   reports its `CF_VERSION_METADATA` id, and the preview orchestrator parses the
   final `Current Version ID` from the deploy (the main Worker follows its two
-  sidecars) and requires that exact version to remain continuously visible for
-  ten seconds before the test phase can create a project. A plain 2xx no longer
-  counts as post-deploy readiness. The next fully settled run then exposed a
-  separate deterministic problem: E2E fixtures still relying on implicit
+  sidecars) and requires that exact version on the health probe before the test
+  phase can create a project (first match; no multi-second dwell). A plain 2xx
+  no longer counts as post-deploy readiness. The next fully settled run then
+  exposed a separate deterministic problem: E2E fixtures still relying on implicit
   processor births. Those fixtures now create their agents, repos, secrets,
   and integration routers explicitly.
 

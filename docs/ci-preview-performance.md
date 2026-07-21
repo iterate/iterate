@@ -69,8 +69,17 @@ serially because they intentionally share one warm container.
   workflow backstop.
 - **Readiness proves the uploaded edge version.** OS and the streams example
   report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
-  final version to remain continuously visible for 10 seconds. The probe is a
-  cheap public health request and never wakes synthetic Durable Objects.
+  final version on the health probe (no multi-second dwell after first match).
+  The probe is a cheap public health request and never wakes synthetic Durable
+  Objects.
+- **Warm OS deploys skip only proven-unchanged container work.** Wrangler
+  otherwise builds and reconciles the six stock sandbox image applications
+  serially even when all six report `no changes`. The orchestrator requests
+  `--containers-rollout none` only when the same slot has an exact prior OS
+  deployment and GitHub's ancestry diff contains no image, generated config,
+  cap, package, or Wrangler-config input. New slots, bootstraps, force-pushes,
+  truncated/unavailable comparisons, and relevant changes use the full
+  rollout.
 - **Durable Object resets are handled by product operations.** Cloudflare may
   still move an individual Durable Object to new code after edge readiness.
   Idempotent operations must redeliver after that explicit lifecycle outcome

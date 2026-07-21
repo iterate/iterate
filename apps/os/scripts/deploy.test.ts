@@ -13,9 +13,45 @@ import {
   assertPreviewPetshopIntegrationConfigured,
   isExactOsProjectMiss,
   posthogBuildEnv,
+  resolveOsContainerDeployArgs,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+describe("OS container rollout", () => {
+  it("skips only when preview explicitly proved an unchanged warm deployment", () => {
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: "none",
+      }),
+    ).toEqual(["--containers-rollout", "none"]);
+  });
+
+  it("keeps the full rollout by default and after a first-time bootstrap", () => {
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "bootstrapped",
+        requestedRollout: "none",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects an unknown rollout mode", () => {
+    expect(() =>
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: "maybe",
+      }),
+    ).toThrow(/OS_CONTAINERS_ROLLOUT/);
+  });
+});
 
 describe("preview Petshop deployment invariant", () => {
   it("requires first-party Petshop credentials in every preview OS config", () => {

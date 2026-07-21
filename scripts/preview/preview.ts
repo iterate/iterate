@@ -328,14 +328,29 @@ async function deployPreviewApps({
     notice: claimNotice,
   }));
 
-  // Best-effort: a missing or unreadable baseline only costs the "vs main"
-  // delta in the size column, never the deploy.
-  const workerSizeBaselines = await fetchMainWorkerSizeBaselines(context).catch(
-    (error): Record<string, WorkerSizeInfo> => {
+  // Both are read-only GitHub lookups, so overlap them before starting the
+  // deploy fleet. A missing size baseline only costs the "vs main" delta;
+  // uncertainty about container inputs safely chooses Wrangler's full rollout.
+  const [workerSizeBaselines, osContainerRollout] = await Promise.all([
+    fetchMainWorkerSizeBaselines(context).catch((error): Record<string, WorkerSizeInfo> => {
       logPreview(`worker-size baselines unavailable: ${formatPreviewErrorMessage(error)}`);
       return {};
-    },
-  );
+    }),
+    appsToDeploy.some((app) => app.slug === "os")
+      ? resolvePreviewOsContainerRollout({
+          dopplerConfig: environmentConfigLease.dopplerConfig,
+          githubToken: context.githubToken,
+          nextSlotSlug: environmentConfigLease.slug,
+          previousSlotSlug: previousSlug,
+          previousState: current.state,
+          pullRequestHeadSha: context.pullRequestHeadSha,
+          repositoryFullName: context.repositoryFullName,
+        })
+      : Promise.resolve(null),
+  ]);
+  if (osContainerRollout) {
+    logPreview(`OS container rollout: ${osContainerRollout.mode} — ${osContainerRollout.reason}`);
+  }
 
   let ok = true;
   let latestState = leaseUpdate.state;
@@ -359,6 +374,9 @@ async function deployPreviewApps({
             // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
             // targets, while the sha pins the exact build this deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
+            ...(app.slug === "os" && osContainerRollout
+              ? { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }
+              : {}),
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
@@ -1409,8 +1427,9 @@ export type CloudflarePreviewApp = {
   previewReadyUrlPath?: string;
   /**
    * Require the readiness route to report wrangler's newly deployed Worker
-   * version continuously before tests start. Durable Object lifecycle resets
-   * are handled by each idempotent product operation instead of sampled here.
+   * version before tests start (`stableForMs: 0` = first match). Durable Object
+   * lifecycle resets are handled by each idempotent product operation instead
+   * of sampled here.
    */
   previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
   previewTestBaseUrlEnvVar: string;
@@ -1638,6 +1657,28 @@ export const cloudflarePreviewSharedPaths = [
   "scripts/lib/**",
 ] as const;
 
+/**
+ * The complete source closure for Wrangler's OS container applications.
+ * Preview may use `--containers-rollout none` only when GitHub proves none of
+ * these changed from the exact OS revision already serving on the same slot.
+ * Keep this deliberately conservative: an unnecessary rollout costs seconds;
+ * a missed input silently leaves stale image or capacity configuration live.
+ */
+const osContainerRolloutInputPaths = [
+  "apps/os/package.json",
+  "apps/os/sandbox/**",
+  "apps/os/scripts/canonicalize-output-wrangler-config.ts",
+  "apps/os/scripts/generate-wrangler-config.ts",
+  "apps/os/src/domains/sandboxes/instance-types.ts",
+  "apps/os/vite.config.ts",
+  "apps/os/wrangler.jsonc",
+  "envs.ts",
+  "patches/**",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "scripts/lib/wrangler-config.ts",
+] as const;
+
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
 export const cloudflarePreviewAdditionalTriggerPaths = ["apps/auth-example/**"] as const;
 
@@ -1673,7 +1714,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
-    previewReadyWorkerVersion: { stableForMs: 10_000 },
+    // First matching version is enough: the signal is "health reports this
+    // exact CF_VERSION_METADATA id". A multi-second dwell was a post-flake
+    // hedge that fixed ~11s onto every OS deploy after the signal was already
+    // true; product ops still handle later DO code-update resets.
+    previewReadyWorkerVersion: { stableForMs: 0 },
     paths: [
       "apps/os/**",
       // The root Playwright suite is part of OS preview e2e. A test or
@@ -1852,7 +1897,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
-    previewReadyWorkerVersion: { stableForMs: 10_000 },
+    previewReadyWorkerVersion: { stableForMs: 0 },
     previewTestBaseUrlEnvVar: "WORKER_URL",
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3
@@ -4713,6 +4758,89 @@ function makeGithubCompareFetcher(input: {
   };
 }
 
+type PreviewOsContainerRolloutDecision = {
+  mode: "immediate" | "none";
+  reason: string;
+};
+
+/**
+ * Skip Wrangler's serial container reconciliation only across one proven,
+ * same-slot OS ancestry where every container input is unchanged. This is an
+ * optimization boundary, so every unknown shape fails open to the normal full
+ * rollout rather than risking stale deployed container configuration.
+ */
+async function resolvePreviewOsContainerRollout(input: {
+  dopplerConfig: string;
+  githubToken: string;
+  nextSlotSlug: string;
+  previousSlotSlug: string | null;
+  previousState: CloudflarePreviewState;
+  pullRequestHeadSha: string;
+  repositoryFullName: string;
+  /** Injectable for unit tests; defaults to GitHub's commit comparison. */
+  fetchCompare?: PreviewCompareFetcher;
+}): Promise<PreviewOsContainerRolloutDecision> {
+  const immediate = (reason: string): PreviewOsContainerRolloutDecision => ({
+    mode: "immediate",
+    reason,
+  });
+  if (input.previousSlotSlug !== input.nextSlotSlug) {
+    return immediate("the preview slot is new or changed");
+  }
+
+  const previous = input.previousState.apps.os;
+  const currentWorkerName = readPreviewAppConfig({
+    app: cloudflarePreviewApps.os,
+    dopplerConfig: input.dopplerConfig,
+  }).workerName;
+  if (
+    !previous?.headSha ||
+    !previous.deployedWorkerVersion ||
+    previous.deployedWorkerName !== currentWorkerName ||
+    !["awaiting-tests", "deployed", "tests-failed"].includes(previous.status)
+  ) {
+    return immediate("the same slot has no exact prior OS deployment identity");
+  }
+  if (previous.headSha === input.pullRequestHeadSha) {
+    return {
+      mode: "none",
+      reason: "the exact OS revision is already proven on this slot",
+    };
+  }
+
+  const fetchCompare = input.fetchCompare ?? makeGithubCompareFetcher(input);
+  let compared: Awaited<ReturnType<PreviewCompareFetcher>>;
+  try {
+    compared = await fetchCompare(`${previous.headSha}...${input.pullRequestHeadSha}`);
+  } catch (error) {
+    return immediate(
+      `the OS ancestry comparison was unavailable: ${formatPreviewErrorMessage(error)}`,
+    );
+  }
+
+  const compareHazard = describeForcePushCompareHazard(compared.status);
+  if (compareHazard) {
+    return immediate(compareHazard);
+  }
+  // GitHub's compare response caps its file list at 300. Exactly hitting the
+  // cap cannot prove that an omitted file was not a container input.
+  if (compared.changedFilenames.length >= 300) {
+    return immediate("the OS ancestry comparison hit GitHub's 300-file response cap");
+  }
+
+  const changedInput = compared.changedFilenames.find((filename) =>
+    matchesPreviewPath(filename, osContainerRolloutInputPaths),
+  );
+  if (changedInput) {
+    return immediate(`container input ${changedInput} changed`);
+  }
+
+  return {
+    mode: "none",
+    reason: `no container input changed since ${previous.headSha.slice(0, 7)}`,
+  };
+}
+
 /**
  * GitHub's three-dot compare diffs the head against the MERGE BASE of the two
  * commits, not against the base commit itself. When the previously deployed
@@ -5360,6 +5488,7 @@ export const previewInternals = {
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
+  resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
