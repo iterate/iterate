@@ -347,7 +347,36 @@ describe("RepoProcessor creation saga", () => {
 });
 
 describe("RepoProcessor eviction recovery", () => {
-  it("re-drives a transient creation error after revival without recording failure", async () => {
+  it("redelivers empty creation interrupted by a deployment without poisoning the repo", async () => {
+    const h = makeHarness();
+    let calls = 0;
+    h.effects.createEmpty = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw Object.assign(new Error("Durable Object reset because its code was updated."), {
+          durableObjectReset: true,
+        });
+      }
+      return CREATED_ARTIFACT;
+    };
+    await h.stream.append(EMPTY_REQUEST);
+
+    await expect(h.deliverPending()).rejects.toThrow(
+      "Durable Object reset because its code was updated.",
+    );
+    expect(
+      h.stream.events.some((event) => event.type === "events.iterate.com/repos/create-failed"),
+    ).toBe(false);
+
+    await h.deliverPending();
+
+    expect(calls).toBe(2);
+    expect(
+      h.stream.events.filter((event) => event.type === "events.iterate.com/repos/created"),
+    ).toHaveLength(1);
+  });
+
+  it("redelivers a still-materializing empty Artifact without recording failure", async () => {
     const h = makeHarness();
     let calls = 0;
     h.effects.createEmpty = async () => {
@@ -356,15 +385,12 @@ describe("RepoProcessor eviction recovery", () => {
       return CREATED_ARTIFACT;
     };
     await h.stream.append(EMPTY_REQUEST);
-    await h.deliverPending();
-    await vi.waitFor(() => expect(calls).toBe(1));
+    await expect(h.deliverPending()).rejects.toThrow("Artifact import is still in progress");
 
     expect(
       h.stream.events.some((event) => event.type === "events.iterate.com/repos/create-failed"),
     ).toBe(false);
 
-    h.crash();
-    await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
     await h.deliverPending();
 
     expect(calls).toBe(2);
