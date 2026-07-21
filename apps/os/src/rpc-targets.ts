@@ -474,6 +474,25 @@ function detachPlainRpcResult(result: object): object {
  * behind domain methods. Domain helpers can construct common event shapes, but
  * callers and processors still work with explicit events.
  */
+/**
+ * One replay of an idempotent Durable Object call with the absorbed first
+ * failure logged — the single onRetry shape shared by every retrying door in
+ * this file (stream reads, keyed appends, workspace reads, script rejoins,
+ * the agent-create wait).
+ */
+function retryLoggedIdempotentOperation<Result>(input: {
+  context: Record<string, unknown>;
+  message: string;
+  operation: () => Promise<Result>;
+}): Promise<Result> {
+  return retryIdempotentDurableObjectOperation({
+    operation: input.operation,
+    onRetry: ({ error }) => {
+      console.info(input.message, { error, ...input.context });
+    },
+  });
+}
+
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
@@ -540,15 +559,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       events.every(
         (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
       )
-        ? retryIdempotentDurableObjectOperation({
+        ? retryLoggedIdempotentOperation({
+            context: { path: this.props.path, projectId: this.props.projectId },
+            message: "keyed stream append retrying after Durable Object reset",
             operation: append,
-            onRetry: ({ error }) => {
-              console.info("keyed stream append retrying after Durable Object reset", {
-                error,
-                path: this.props.path,
-                projectId: this.props.projectId,
-              });
-            },
           })
         : append()
     ).catch(rethrowStreamUnavailable);
@@ -735,16 +749,10 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
-    return retryIdempotentDurableObjectOperation({
+    return retryLoggedIdempotentOperation({
+      context: { operation, path: this.props.path, projectId: this.props.projectId },
+      message: "stream read retrying after Durable Object reset",
       operation: call,
-      onRetry: ({ error }) => {
-        console.info("stream read retrying after Durable Object reset", {
-          error,
-          operation,
-          path: this.props.path,
-          projectId: this.props.projectId,
-        });
-      },
     });
   }
 
@@ -2007,11 +2015,10 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
-    return retryIdempotentWorkspaceRead({
-      call,
-      operation,
-      path: this.props.path,
-      projectId: this.props.projectId,
+    return retryLoggedIdempotentOperation({
+      context: { operation, path: this.props.path, projectId: this.props.projectId },
+      message: "workspace read retrying after Durable Object reset",
+      operation: call,
     });
   }
 }
@@ -2055,12 +2062,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Changes grouped by owning mount, plus the unmounted local scratch. */
   status(): Promise<WorkspaceStatus> {
-    return retryIdempotentWorkspaceRead({
-      call: () => this.durableObjectStub.gitStatus(),
-      operation: "git.status",
-      path: this.props.path,
-      projectId: this.props.projectId,
-    });
+    return this.#read("git.status", () => this.durableObjectStub.gitStatus());
   }
 
   /** Commit one mount's changes to its repo's main branch. */
@@ -2070,32 +2072,16 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]> {
-    return retryIdempotentWorkspaceRead({
-      call: () => this.durableObjectStub.gitLog(input),
-      operation: "git.log",
-      path: this.props.path,
-      projectId: this.props.projectId,
+    return this.#read("git.log", () => this.durableObjectStub.gitLog(input));
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryLoggedIdempotentOperation({
+      context: { operation, path: this.props.path, projectId: this.props.projectId },
+      message: "workspace read retrying after Durable Object reset",
+      operation: call,
     });
   }
-}
-
-function retryIdempotentWorkspaceRead<Result>(input: {
-  call: () => Promise<Result>;
-  operation: string;
-  path: string;
-  projectId: string;
-}): Promise<Result> {
-  return retryIdempotentDurableObjectOperation({
-    operation: input.call,
-    onRetry: ({ error }) => {
-      console.info("workspace read retrying after Durable Object reset", {
-        error,
-        operation: input.operation,
-        path: input.path,
-        projectId: input.projectId,
-      });
-    },
-  });
 }
 
 /** Secret catalog within one project. */
@@ -4125,7 +4111,9 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
-      retryIdempotentDurableObjectOperation({
+      retryLoggedIdempotentOperation({
+        context: { path: this.#path },
+        message: "agent collection call restarting after Durable Object reset",
         operation: async () => {
           const timeoutMs = Math.ceil(agentCollectionDeadline - Date.now());
           if (timeoutMs <= 0) {
@@ -4134,12 +4122,6 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           await env.AGENT_COLLECTION.getByName(agentCollectionName).waitUntilAgentCreated({
             path: this.#path,
             timeoutMs,
-          });
-        },
-        onRetry: ({ error }) => {
-          console.warn("agent collection call restarting after Durable Object reset", {
-            error,
-            path: this.#path,
           });
         },
       }),
@@ -4835,16 +4817,14 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       executionId: crypto.randomUUID(),
       expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
     };
-    return await retryIdempotentDurableObjectOperation({
-      operation: async () => await this.#durableObject.runScript(command),
-      onRetry: ({ error }) => {
-        console.info("script run rejoining after Durable Object reset", {
-          error,
-          executionId: command.executionId,
-          path: this.#props.path,
-          projectId: this.#props.projectId,
-        });
+    return await retryLoggedIdempotentOperation({
+      context: {
+        executionId: command.executionId,
+        path: this.#props.path,
+        projectId: this.#props.projectId,
       },
+      message: "script run rejoining after Durable Object reset",
+      operation: async () => await this.#durableObject.runScript(command),
     });
   }
 

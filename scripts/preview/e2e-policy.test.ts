@@ -9,6 +9,7 @@ import {
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
+  PREVIEW_RUN_PROOF_BUDGET_SECS,
   PREVIEW_RUN_WATCHDOG_SECS,
   SPEC_ACTION_TIMEOUT_MS,
   SPEC_EXPECT_TIMEOUT_MS,
@@ -146,7 +147,9 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain(
       `RUN_TIMEOUT_SECS="\${RUN_TIMEOUT_SECS:-${PREVIEW_RUN_WATCHDOG_SECS}}"`,
     );
-    expect(source).toContain('MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-300}"');
+    expect(source).toContain(
+      `MAX_RUN_DURATION_SECS="\${MAX_RUN_DURATION_SECS:-${PREVIEW_RUN_PROOF_BUDGET_SECS}}"`,
+    );
 
     const marathonWorkflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
@@ -160,6 +163,25 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(marathonWorkflow).toContain("cancel-in-progress: false");
     // Uncounted priming runs are a masking layer; every run counts.
     expect(marathonWorkflow).not.toContain("warmup-runs");
+  });
+
+  it("keeps the retry annotation parseable by the marathon's ledger", () => {
+    // flake-hunt-loop.sh cannot import renderPreviewRetrySummary, so it seds
+    // the annotation preview.ts prints. Pin the sed pattern in the shell and
+    // prove a real rendered summary still matches its JS mirror — a wording
+    // change in either file fails here instead of silently zeroing the
+    // ledger's retry column.
+    const shell = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
+    expect(shell).toContain("s/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\\1/p");
+
+    const rendered = previewInternals.renderPreviewRetrySummary({
+      retried: [
+        { lane: "vitest", name: "a", retryCount: 1, passedAfterRetry: true },
+        { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
+      ],
+    });
+    const annotation = `::notice title=Preview e2e retries::os: ${rendered}. A retried test is a real failure.`;
+    expect(annotation.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
   });
 });
 

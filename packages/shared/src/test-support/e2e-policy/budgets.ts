@@ -116,3 +116,13 @@ export const OS_PREVIEW_LANE_TIMEOUT_SECS = 480;
  * watchdog kills were genuine infra wedges where retrying was hopeless.
  */
 export const PREVIEW_RUN_WATCHDOG_SECS = 600;
+
+/**
+ * The marathon's per-run PROOF ceiling (flake-hunt-loop.sh
+ * MAX_RUN_DURATION_SECS): a green run at or above this still fails the
+ * marathon, because the round-5 goal is distributional — every full
+ * deploy-plus-e2e run under five minutes. Not part of the watchdog ladder:
+ * watchdogs bound wedged runs (one lane may legitimately hold a 480s wedge
+ * watchdog), while this bounds what counts as a healthy whole run.
+ */
+export const PREVIEW_RUN_PROOF_BUDGET_SECS = 300;

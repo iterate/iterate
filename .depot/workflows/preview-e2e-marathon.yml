@@ -20,13 +20,11 @@ on:
         description: PR whose preview slot to marathon
         required: true
       runs:
-        description: consecutive green sub-five-minute runs required
+        description: consecutive green runs required (empty = the script's default)
         required: false
-        default: "25"
       max-run-seconds:
-        description: strict end-to-end duration ceiling per run
+        description: per-run proof ceiling (empty = PREVIEW_RUN_PROOF_BUDGET_SECS)
         required: false
-        default: "300"
 
 # A marathon must never race the ordinary preview workflow or cleanup for the
 # same PR. Queue behind an existing run; a newer PR event may cancel this stale
@@ -70,8 +68,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           PR_NUMBER: ${{ inputs.pull-request-number }}
-          RUNS: ${{ inputs.runs || '25' }}
-          MAX_RUN_DURATION_SECS: ${{ inputs.max-run-seconds || '300' }}
+          # Empty inputs fall through to the script's own defaults, which the
+          # e2e-policy guard keeps synced to budgets.ts.
+          RUNS: ${{ inputs.runs }}
+          MAX_RUN_DURATION_SECS: ${{ inputs.max-run-seconds }}
           LOG_DIR: /tmp/marathon
         # The loop exits non-zero on the first deploy/test failure, skip,
         # partial fleet, watchdog, or duration-budget breach.
