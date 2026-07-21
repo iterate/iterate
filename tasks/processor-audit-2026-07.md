@@ -388,6 +388,8 @@ failures.
 
 **Recommendation:** (a).
 
+Doc rule shipped in the docs PR; code half still open.
+
 ### D2. slack-agent blocks a cosmetic repaint that telegram-agent backgrounds
 
 **Status:** needs decision.
@@ -459,6 +461,8 @@ keys; raw literal ONLY for intentional cross-processor convergence, flagged
 by comment). Telegram's committed keys are declared stable wire formats
 (`telegram-agent:20-21`) — migrate new streams only, note the fan-in caveat.
 
+Doc rule shipped in the docs PR; code half still open.
+
 ### D6. Birth-gate placement varies four ways
 
 **Status:** open (doc rule only).
@@ -475,9 +479,11 @@ Nothing records which choice is deliberate.
 legitimately has a consequence; then gate per-case with a comment." No
 mechanical alignment (agent semantics look intentional).
 
+Doc rule shipped in the docs PR; code half still open.
+
 ### D7. Only the agent emits `stream/error-occurred`
 
-**Status:** tracked elsewhere; doc truth needed.
+**Status:** in-pr #2188.
 
 The style guide says failures journal `stream/error-occurred` next to
 settlements; in code only the agent does (`:562,699`). Everyone else uses
@@ -485,6 +491,8 @@ settle unions, domain `-failed` events, console, or throw-to-hold-frame.
 Runner-side emission is already on the simplify-streams outstanding list —
 that's the right long-term home. Meanwhile reword the style rule to match
 reality (settle unions ARE the error record outside agent-visible streams).
+
+Doc rule shipped in the docs PR; code half still open.
 
 ### D8. Scheduler: base-class background lane + synthetic UUID, both unjustified in-file
 
@@ -511,22 +519,26 @@ ever wanted.
   slack-agent:677, slack:151, capability-host:991, projects:542), two inline
   `(this.deps.now ?? Date.now)()` (telegram-agent:240,300), and
   optional-vs-required `now` dep split with no principle. Doc rule: required
-  `now` for anything with expiry logic.
+  `now` for anything with expiry logic. Doc rule shipped in the docs PR; code
+  half still open.
 - Expiry stamp types drift: epoch-ms (agent, capability-host, devices,
   notifications) vs ISO strings (project approvals, scheduler) — visible
   where `notification-processor-implementation.ts:55` converts at the
-  boundary. Pick epoch-ms for new contracts (majority).
+  boundary. Pick epoch-ms for new contracts (majority). Doc rule shipped in
+  the docs PR; code half still open.
 - `<slug>/configured` implies three different merge semantics (agent/workspace
   patch-merge via `mergeProcessorConfig`; sandbox per-key null-unset;
   telegram wholesale replace). Fine per-domain; one doc sentence so the
-  suffix stops implying the recipe.
+  suffix stops implying the recipe. Doc rule shipped in the docs PR; code half
+  still open.
 - `.meta`/examples coverage is bimodal: agent contract 105 descriptions,
   repos 87, projects 74 — vs email-agent 5, telegram-agent 7, slack-agent 9,
   notifications 2, browser-feed 1; four facet contracts have zero examples.
   Backfill opportunistically.
 - `repo-processor-implementation.ts:126-130` — the only laneless synchronous
   side effect in the fleet (idempotent in-memory cache poke); one doc
-  sentence legitimizes it.
+  sentence legitimizes it. Doc rule shipped in the docs PR; code half still
+  open.
 - 10 inline `error instanceof Error ? error.message : String(error)` across
   8 files plus two named variants — below the threshold where a shared
   helper beats visible code; leave.
@@ -537,7 +549,7 @@ ever wanted.
 
 ### E1. `docs/writing-stream-processors.md` teaches the pre-#2168 contract
 
-**Status:** open. **Urgent and free.**
+**Status:** in-pr #2188. **Urgent and free.**
 
 - `:199-201` and `:290-292` narrate `llm-request-scheduled` and
   `llm-request-completed {failure: orphaned}` — both deleted by #2168 (the
@@ -554,7 +566,7 @@ home).
 
 ### E2. The same-key-different-body conflict rule is implemented 5×, documented 0×
 
-**Status:** open.
+**Status:** in-pr #2188.
 
 The doc's replay story (`:170-172`) stops at "races collapse at the append
 dedup layer" — identical bodies only. Real settle bodies carry
@@ -567,7 +579,7 @@ when each applies (pairs with A1's predicate).
 
 ### E3. "Deterministic body: anchor to `event.createdAt`, never `now`" — codify
 
-**Status:** open.
+**Status:** in-pr #2188.
 
 The replay-wedge rule (a `now`-stamped expiry turns redelivery into a
 same-key conflict forever) is re-explained in near-identical comments at 5+
@@ -578,7 +590,7 @@ shrink to one line naming the concrete hazard.
 
 ### E4. `<domain>-defaults.ts` creation-batch convention — write it down
 
-**Status:** open.
+**Status:** in-pr #2188.
 
 ~9 files export deterministic birth batches (`capabilityHostCreationEvents`,
 `schedulerCreationEvents`, `agentCreationForPath`, …); the load-bearing
@@ -595,7 +607,7 @@ contact, shared by create doors and birthing routers.
 
 ### E5. Chat-facet transcription wire shape — convention, not code
 
-**Status:** open.
+**Status:** in-pr #2188.
 
 slack-agent/telegram-agent/email-agent share an identical `refs` block
 (email:141-148, telegram:225-232, slack:191-197), identical YAML transcript
@@ -610,7 +622,7 @@ three files become greppable checks of each other.
 
 ### E6. At-head memo repaint pattern
 
-**Status:** open (one sentence).
+**Status:** in-pr #2188 (one sentence).
 
 slack-agent `#unpaintedPresenceFact` (`:91-109,525-588`) and telegram-agent
 `#unpaintedTypingFact` (`:75-79,296-308`) deliberately mirror each other with
