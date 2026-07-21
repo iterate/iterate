@@ -19,6 +19,6 @@ export default defineConfig({
     // object retry form (delay landed in 4.1). Fine here — like semaphore's,
     // this suite is a plain HTTP contract check against a live worker.
     retry: process.env.CI ? E2E_CI_RETRIES : 0,
-    reporters: ["default", new RetryTelemetryReporter()],
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
   },
 });

@@ -63,6 +63,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
           PR_NUMBER: ${{ inputs.pull-request-number }}
           # Empty inputs fall through to the script's own defaults, which the
           # e2e-policy guard keeps synced to budgets.ts.
@@ -72,15 +73,19 @@ jobs:
         # The loop exits non-zero on the first deploy/test failure, skip,
         # partial fleet, watchdog, or duration-budget breach.
         run: ./scripts/preview/flake-hunt-loop.sh
+      - name: Normalize and send marathon test telemetry
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts ${{ cancelled() && '--cancelled' || '' }}
       - name: Collect marathon test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload marathon logs
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: preview-e2e-marathon-logs
           path: test-results
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: error

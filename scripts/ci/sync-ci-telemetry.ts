@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { Octokit } from "@octokit/rest";
 import { durationMs, sendPostHogEvents, systemEvent, type PostHogEvent } from "./posthog-events.ts";
+import { buildReviewEvents, reviewProviderKey, selectReviewSources } from "./review-telemetry.ts";
 
 const execFile = promisify(execFileCallback);
 const repository = process.env.GITHUB_REPOSITORY ?? "iterate/iterate";
@@ -66,6 +67,7 @@ async function githubEvents(): Promise<PostHogEvent[]> {
           duration_ms: durationMs(run.run_started_at, run.updated_at),
           total_wall_duration_ms: durationMs(run.created_at, run.updated_at),
         },
+        run.updated_at,
       ),
     );
     const jobs = await octokit.paginate(octokit.rest.actions.listJobsForWorkflowRun, {
@@ -99,6 +101,7 @@ async function githubEvents(): Promise<PostHogEvent[]> {
                 (step) => !["success", "skipped", "neutral"].includes(step.conclusion ?? ""),
               ).length ?? 0,
           },
+          job.completed_at ?? run.updated_at,
         ),
       );
     }
@@ -107,87 +110,33 @@ async function githubEvents(): Promise<PostHogEvent[]> {
   const pulls = await recentPullRequests(octokit);
   for (const pull of pulls) {
     if (Date.parse(pull.updated_at) < cutoff) break;
-    const checks = (
-      await octokit.rest.checks.listForRef({
-        owner,
-        repo,
-        ref: pull.head.sha,
-        per_page: 100,
-      })
-    ).data.check_runs;
-    const reviewChecks = checks.filter((check) =>
-      /bugbot|code.?review|iterate review/i.test(`${check.name} ${check.app?.slug ?? ""}`),
-    );
-    if (reviewChecks.length === 0) continue;
-    const threadCounts = await reviewThreadCounts(octokit, pull.number, pull.head.sha);
-    for (const check of reviewChecks) {
-      if (check.status !== "completed") continue;
-      const provider = check.app?.slug ?? check.name;
-      events.push(
-        systemEvent(
-          "ci review finished",
-          `github-review-check:${check.id}:${check.completed_at}:${check.conclusion}`,
-          `ci-review:${provider}:${pull.number}:${pull.head.sha}`,
-          {
-            repository,
-            automation_platform: "github",
-            data_source: "github-checks-api",
-            pull_request_number: pull.number,
-            pull_request_url: pull.html_url,
-            head_sha: pull.head.sha,
-            review_provider: provider,
-            review_name: check.name,
-            review_url: check.details_url,
-            status: check.status,
-            conclusion: check.conclusion,
-            started_at: check.started_at,
-            finished_at: check.completed_at,
-            duration_ms: durationMs(check.started_at, check.completed_at),
-            finding_count: threadCounts.byAuthor.get(provider) ?? threadCounts.total,
-            unresolved_finding_count:
-              threadCounts.unresolvedByAuthor.get(provider) ?? threadCounts.unresolved,
-          },
-        ),
-      );
-    }
-
+    const checks = await octokit.paginate(octokit.rest.checks.listForRef, {
+      owner,
+      repo,
+      ref: pull.head.sha,
+      per_page: 100,
+    });
     // Iterate Review is a GitHub App review, not a check-run. Capture the
     // review submission itself so the shared review model does not silently
     // cover Cursor while omitting our own bot.
-    const reviews = (
-      await octokit.rest.pulls.listReviews({ owner, repo, pull_number: pull.number, per_page: 100 })
-    ).data.filter(
-      (review) =>
-        review.commit_id === pull.head.sha &&
-        /^iterate(?:\[bot\])?$/iu.test(review.user?.login ?? "") &&
-        review.submitted_at,
+    const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+      owner,
+      repo,
+      pull_number: pull.number,
+      per_page: 100,
+    });
+    const reviewSources = selectReviewSources(checks, reviews, pull.head.sha);
+    if (reviewSources.checks.length === 0 && reviewSources.reviews.length === 0) continue;
+    const threadCounts = await reviewThreadCounts(octokit, pull.number, pull.head.sha);
+    events.push(
+      ...buildReviewEvents({
+        repository,
+        pull,
+        ...reviewSources,
+        threadCounts,
+        observedAt: new Date().toISOString(),
+      }),
     );
-    for (const review of reviews) {
-      const provider = "iterate";
-      events.push(
-        systemEvent(
-          "ci review finished",
-          `github-review:${review.id}:${review.submitted_at}:${review.state}`,
-          `ci-review:${provider}:${pull.number}:${pull.head.sha}`,
-          {
-            repository,
-            automation_platform: "github",
-            data_source: "github-pull-reviews-api",
-            pull_request_number: pull.number,
-            pull_request_url: pull.html_url,
-            head_sha: pull.head.sha,
-            review_provider: provider,
-            review_name: "Iterate Review",
-            review_url: review.html_url,
-            status: "completed",
-            conclusion: review.state.toLowerCase(),
-            finished_at: review.submitted_at,
-            finding_count: threadCounts.byAuthor.get(provider) ?? 0,
-            unresolved_finding_count: threadCounts.unresolvedByAuthor.get(provider) ?? 0,
-          },
-        ),
-      );
-    }
   }
   return events;
 }
@@ -217,7 +166,7 @@ async function recentPullRequests(octokit: Octokit) {
 }
 
 async function reviewThreadCounts(octokit: Octokit, pullRequestNumber: number, headSha: string) {
-  const result = await octokit.graphql<{
+  type ReviewThreadPage = {
     repository: {
       pullRequest: {
         reviewThreads: {
@@ -230,36 +179,50 @@ async function reviewThreadCounts(octokit: Octokit, pullRequestNumber: number, h
               }>;
             };
           }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
         };
       } | null;
     };
-  }>(
-    `query($owner:String!,$repo:String!,$number:Int!) {
+  };
+  const threads: Array<
+    NonNullable<ReviewThreadPage["repository"]["pullRequest"]>["reviewThreads"]["nodes"][number]
+  > = [];
+  let after: string | null = null;
+  for (;;) {
+    const result: ReviewThreadPage = await octokit.graphql(
+      `query($owner:String!,$repo:String!,$number:Int!,$after:String) {
       repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
-        reviewThreads(first:100) { nodes { isResolved comments(first:1) {
+        reviewThreads(first:100,after:$after) { nodes { isResolved comments(first:1) {
           nodes { author { login } originalCommit { oid } }
-        } } }
+        } } pageInfo { hasNextPage endCursor } }
       } }
     }`,
-    { owner, repo, number: pullRequestNumber },
-  );
-  const threads = (result.repository.pullRequest?.reviewThreads.nodes ?? []).filter(
+      { owner, repo, number: pullRequestNumber, after },
+    );
+    const page = result.repository.pullRequest?.reviewThreads;
+    if (!page) break;
+    threads.push(...page.nodes);
+    if (!page.pageInfo.hasNextPage || !page.pageInfo.endCursor) break;
+    after = page.pageInfo.endCursor;
+  }
+  const currentHeadThreads = threads.filter(
     (thread) => thread.comments.nodes[0]?.originalCommit?.oid === headSha,
   );
-  const byAuthor = new Map<string, number>();
-  const unresolvedByAuthor = new Map<string, number>();
-  for (const thread of threads) {
+  const byProvider = new Map<string, number>();
+  const unresolvedByProvider = new Map<string, number>();
+  for (const thread of currentHeadThreads) {
     const author = thread.comments.nodes[0]?.author?.login;
     if (!author) continue;
-    byAuthor.set(author, (byAuthor.get(author) ?? 0) + 1);
+    const provider = reviewProviderKey(author);
+    byProvider.set(provider, (byProvider.get(provider) ?? 0) + 1);
     if (!thread.isResolved)
-      unresolvedByAuthor.set(author, (unresolvedByAuthor.get(author) ?? 0) + 1);
+      unresolvedByProvider.set(provider, (unresolvedByProvider.get(provider) ?? 0) + 1);
   }
   return {
-    total: threads.length,
-    unresolved: threads.filter((thread) => !thread.isResolved).length,
-    byAuthor,
-    unresolvedByAuthor,
+    total: currentHeadThreads.length,
+    unresolved: currentHeadThreads.filter((thread) => !thread.isResolved).length,
+    byProvider,
+    unresolvedByProvider,
   };
 }
 
@@ -402,6 +365,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
             detail.workflow.finished_at,
           ),
         },
+        detail.workflow.finished_at,
       ),
     );
     for (const entry of workflowMetrics?.jobs ?? []) {
@@ -425,6 +389,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
             total_wall_duration_ms: durationMs(job.created_at, job.finished_at),
             attempt_count: entry.attempts.length,
           },
+          job.finished_at,
         ),
       );
       for (const entryAttempt of entry.attempts) {
@@ -455,6 +420,7 @@ async function depotEvents(): Promise<PostHogEvent[]> {
               peak_memory_utilization: entryAttempt.stats?.peak_memory_utilization,
               average_memory_utilization: entryAttempt.stats?.average_memory_utilization,
             },
+            attempt.finished_at,
           ),
         );
       }

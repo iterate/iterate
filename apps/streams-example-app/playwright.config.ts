@@ -34,6 +34,7 @@ export default defineConfig({
     // Retry telemetry (policy rule 5): the preview lane folds this JSON into
     // the PR-body table via scripts/preview/preview.ts.
     ["json", { outputFile: "test-results/playwright-results.json" }],
+    ["../../scripts/ci/playwright-telemetry-reporter.ts"],
   ],
   webServer:
     workerUrl === undefined

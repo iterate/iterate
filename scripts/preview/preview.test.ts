@@ -55,6 +55,7 @@ const {
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestTargetPlan,
+  resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
@@ -267,7 +268,11 @@ describe("preview workflow scope", () => {
       appPath: "apps/auth",
       previewReadyUrlPath: "/api/auth/ok",
       previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-      previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
+      previewTestCommandArgs: [
+        "bash",
+        "-c",
+        expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
+      ],
     });
   });
 
@@ -279,7 +284,11 @@ describe("preview workflow scope", () => {
       paths: ["apps/dummy-petshop/**"],
       previewReadyUrlPath: "/",
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
-      previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
+      previewTestCommandArgs: [
+        "bash",
+        "-c",
+        expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
+      ],
     });
     await expect(
       readPreviewAppConfig({
@@ -604,6 +613,12 @@ describe("auth preview root secrets", () => {
 });
 
 describe("preview test commands", () => {
+  test("uses the canonical artifact file variable for targeted test telemetry", () => {
+    const source = readFileSync(resolve(repoRoot, "scripts/preview/preview.ts"), "utf8");
+
+    expect(source).not.toContain("E2E_RETRY_TELEMETRY_FILE");
+  });
+
   test("builds a focused Vitest invocation from the OS app", () => {
     expect(
       resolvePreviewTestTargetPlan({
@@ -622,24 +637,55 @@ describe("preview test commands", () => {
         "Agent scripts can send web-chat messages",
       ],
       command: "pnpm",
+      runnerResultFiles: [],
       telemetryFile: resolve(repoRoot, "test-results/preview-target-vitest.json"),
       workingDirectory: resolve(repoRoot, "apps/os"),
     });
   });
 
   test("builds a focused Playwright invocation from the repository root", () => {
-    expect(
-      resolvePreviewTestTargetPlan({
-        grep: "discarding a new file",
-        repositoryRoot: repoRoot,
-        runner: "playwright",
-        target: "specs/repo-ide.spec.ts",
-      }),
-    ).toEqual({
+    const plan = resolvePreviewTestTargetPlan({
+      grep: "discarding a new file",
+      repositoryRoot: repoRoot,
+      runner: "playwright",
+      target: "specs/repo-ide.spec.ts",
+    });
+
+    expect(plan).toEqual({
       args: ["spec", "specs/repo-ide.spec.ts", "--grep", "discarding a new file"],
       command: "pnpm",
-      telemetryFile: resolve(repoRoot, "test-results/playwright-results.json"),
+      runnerResultFiles: [resolve(repoRoot, "test-results/playwright-results.json")],
+      telemetryFile: resolve(repoRoot, "test-results/preview-target-playwright-telemetry.json"),
       workingDirectory: repoRoot,
+    });
+    expect(plan.runnerResultFiles).not.toContain(plan.telemetryFile);
+  });
+
+  test("gives targeted and full preview tests the same exact PR identity", () => {
+    expect(
+      resolvePreviewTestTelemetryEnvironment({
+        app: "os",
+        context: {
+          githubToken: "token",
+          pullRequestBaseSha: "base-sha",
+          pullRequestBody: "",
+          pullRequestHeadSha: "head-sha",
+          pullRequestHeadRef: "telemetry-branch",
+          pullRequestIsDraft: false,
+          pullRequestLabels: [],
+          pullRequestNumber: 2237,
+          repositoryFullName: "iterate/iterate",
+          workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
+        },
+        previewSlot: "preview-19",
+      }),
+    ).toEqual({
+      TEST_TELEMETRY_APP: "os",
+      TEST_TELEMETRY_BRANCH: "telemetry-branch",
+      TEST_TELEMETRY_HEAD_SHA: "head-sha",
+      TEST_TELEMETRY_KIND: "e2e",
+      TEST_TELEMETRY_PREVIEW_SLOT: "preview-19",
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: "2237",
     });
   });
 
@@ -659,6 +705,8 @@ describe("preview test commands", () => {
       "utf8",
     );
     expect(collector).toContain('copy_dir_contents "apps/os/e2e/tui-test/tui-traces"');
+    expect(collector).not.toContain("preview_telemetry_candidates");
+    expect(collector).not.toContain("runner-telemetry");
   });
 
   test("normalizes marathon artifacts before Depot upload", () => {
@@ -687,7 +735,7 @@ describe("preview test commands", () => {
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain("env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
+    expect(script).toContain("env TEST_TELEMETRY_LANE=playwright PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
     expect(script).toContain("TUI_PID");

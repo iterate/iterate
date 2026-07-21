@@ -66,7 +66,7 @@ export default defineConfig({
     // test-support/e2e-policy/budgets.ts): reporters DO belong at the root
     // test level and apply across projects — unlike `retry`, which vitest
     // only reads from each project config (see the note on the node project).
-    reporters: ["default", new RetryTelemetryReporter()],
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
     projects: [
       {
         resolve: sharedResolve,
