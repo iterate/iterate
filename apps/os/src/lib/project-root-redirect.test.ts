@@ -14,59 +14,42 @@ const project = (
 });
 
 describe("chooseRootProjectRedirect", () => {
-  test("prefers the current project host when that project is ready", () => {
+  test("opens a preferred ready project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: "beta",
-        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha" }), project({ id: "prj_b", slug: "beta" })],
       }),
     ).toMatchObject({
       kind: "project",
       project: { slug: "beta" },
-      onboarding: false,
+      welcome: false,
     });
   });
 
-  test("checks onboarding for the most recently active project", () => {
-    expect(
-      chooseRootProjectRedirect({
-        preferredProjectSlug: "beta",
-        preferredProjectOnboarding: true,
-        projects: [project({ id: "prj_a", slug: "alpha" }), project({ id: "prj_b", slug: "beta" })],
-      }),
-    ).toMatchObject({
-      kind: "project",
-      project: { slug: "beta" },
-      onboarding: true,
-    });
-  });
-
-  test("sends the only ready project to onboarding", () => {
+  test("opens the only ready project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
-        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha" })],
       }),
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      onboarding: true,
+      welcome: false,
     });
   });
 
-  test("sends a single auth-created missing project to onboarding", () => {
+  test("welcomes a single auth-created missing project through its creation flow", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
-        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "missing" })],
       }),
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      onboarding: true,
+      welcome: true,
     });
   });
 
@@ -74,7 +57,6 @@ describe("chooseRootProjectRedirect", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
-        preferredProjectOnboarding: false,
         projects: [
           project({ id: "prj_a", slug: "alpha", deploymentStatus: "missing" }),
           project({ id: "prj_b", slug: "beta", deploymentStatus: "missing" }),
@@ -85,7 +67,6 @@ describe("chooseRootProjectRedirect", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
-        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
       }),
     ).toEqual({ kind: "projects" });
