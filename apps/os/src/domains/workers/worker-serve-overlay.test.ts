@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   OVERLAY_OPT_OUT_HEADER,
   WORKER_BUILD_FAILED_HEADER,
+  WORKER_SERVE_ERROR_HEADER,
   WORKER_SERVE_HEADER,
   withWorkerCommit,
 } from "./worker-serve-info.ts";
@@ -9,6 +10,7 @@ import {
   workerBuildFailedResponse,
   workerOverlayDecision,
   workerOverlayHtml,
+  workerServeErrorResponse,
 } from "./worker-serve-overlay.ts";
 
 // The HTMLRewriter injection itself is workerd-only. These tests cover the
@@ -103,6 +105,21 @@ describe("workerOverlayHtml", () => {
     // Only the fragment's own tags — the payload's are <-escaped inert.
     expect(html.match(/<\/script>/g)).toHaveLength(1);
     expect(html).toContain("\\u003c/script>");
+  });
+});
+
+describe("workerServeErrorResponse", () => {
+  test("marked, self-retrying, overlay-exempt 500 that keeps internals in the logs", async () => {
+    const response = workerServeErrorResponse();
+    expect(response.status).toBe(500);
+    expect(response.headers.get(WORKER_SERVE_ERROR_HEADER)).toBe("1");
+    expect(response.headers.get(OVERLAY_OPT_OUT_HEADER)).toBe("1");
+    expect(response.headers.get("retry-after")).not.toBeNull();
+    const body = await response.text();
+    // JS clients poll for the marker to clear; no-JS clients meta-refresh.
+    expect(body).toContain(WORKER_SERVE_ERROR_HEADER);
+    expect(body).toContain('<noscript><meta http-equiv="refresh"');
+    expect(body).toContain("iterate");
   });
 });
 

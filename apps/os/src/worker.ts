@@ -20,13 +20,8 @@ import type { Env } from "./env.ts";
 import { decideIngressRoute, type IngressResolvers } from "./ingress.ts";
 import { readProjectByHostname } from "./project-hostname-directory.ts";
 import { readProjectById, readProjectBySlug, resolveProjectIdBySlug } from "./project-directory.ts";
-import {
-  WORKER_BUILDING_HEADER,
-  WORKER_FETCH_DISPATCH_HEADER,
-  workerBuildStatus,
-} from "./domains/workers/worker-fetch-dispatch.ts";
-import { WORKER_BUILD_FAILED_HEADER } from "./domains/workers/worker-serve-info.ts";
-import { applyProjectWorkerOverlay } from "./domains/workers/worker-serve-overlay.ts";
+import { WORKER_FETCH_DISPATCH_HEADER } from "./domains/workers/worker-fetch-dispatch.ts";
+import { serveProjectResponse } from "./domains/workers/project-serve.ts";
 import { DynamicWorkerRunner } from "./domains/workers/worker-runner.ts";
 import { UnauthenticatedOsRpcTarget } from "./rpc-targets.ts";
 import { defaultProjectWorkerRef } from "./domains/repos/utils.ts";
@@ -44,10 +39,7 @@ import {
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
-import { withPosthogExceptionCapture } from "./observability/posthog.ts";
-
-/** Long enough for warm-cache loads and quick bundles; past it, show the page. */
-const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
+import { schedulePosthogException, withPosthogExceptionCapture } from "./observability/posthog.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
@@ -228,32 +220,34 @@ async function apiFetch(
       scopePath: ref.path,
       waitUntil: (promise) => ctx.waitUntil(promise),
     });
-    try {
-      const response = await runner.fetch({
-        buildBudgetMs: PROJECT_HOST_BUILD_BUDGET_MS,
-        ref,
-        request: new Request(route.fetch.url, init),
-        traceRole: "project_config",
-      });
-      if (response.headers.has(WORKER_BUILDING_HEADER)) {
-        wideLogger.setOutcome("worker_building");
-      } else if (response.headers.has(WORKER_BUILD_FAILED_HEADER)) {
-        wideLogger.setOutcome("worker_build_failed");
-      }
-      // HTML documents get the @iterate overlay (build status in the corner)
-      // injected from the serve header the runner just stamped.
-      return applyProjectWorkerOverlay(request, response);
-    } catch (error) {
-      // A cold build shows the polling "building" page rather than hanging
-      // the request (the in-workerd build keeps running). A build failure
-      // shows the bundler's error; the next good commit heals it.
-      const buildStatus = workerBuildStatus(error);
-      if (buildStatus !== null) {
-        wideLogger.setOutcome(buildStatus.outcome);
-        return buildStatus.response;
-      }
-      throw error;
-    }
+    // The serve envelope (domains/workers/project-serve.ts) owns everything a
+    // browser sees around the dispatch: cold-build budget, building /
+    // build-failed / serve-error stand-in pages, the @iterate overlay.
+    const { outcome, response } = await serveProjectResponse({
+      fetchWorker: (buildBudgetMs) =>
+        runner.fetch({
+          buildBudgetMs,
+          ref,
+          request: new Request(route.fetch.url, init),
+          traceRole: "project_config",
+        }),
+      // The catch-all page swallows the throw, so the capture boundary above
+      // never sees the error — report it from here instead.
+      onError: (error) => {
+        console.error("project serve failed", error);
+        schedulePosthogException({
+          config,
+          error,
+          operation: ctx,
+          projectId: route.resolved.projectId,
+          request,
+          waitUntil: (promise) => ctx.waitUntil(promise),
+        });
+      },
+      request,
+    });
+    if (outcome !== null) wideLogger.setOutcome(outcome);
+    return response;
   }
 
   if (route.lane === "notFound") {

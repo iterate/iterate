@@ -2,6 +2,7 @@ import { buildFailureMessageFromError } from "./artifact-store.ts";
 import {
   OVERLAY_OPT_OUT_HEADER,
   WORKER_BUILD_FAILED_HEADER,
+  WORKER_SERVE_ERROR_HEADER,
   WORKER_SERVE_HEADER,
 } from "./worker-serve-info.ts";
 
@@ -16,6 +17,8 @@ import {
  *   worker-fetch-dispatch.ts) and the build-failed page: nothing built yet, so
  *   a page stands in for the worker. The transient building page polls; the
  *   terminal failure page waits for an explicit reload.
+ * - The serve-error page: the platform (not the app's source) failed to
+ *   serve. Usually transient, so it polls like the building page.
  */
 
 /** The iterate mark — the letter i from the product logo. */
@@ -113,6 +116,38 @@ export function workerBuildFailedResponse(error: unknown): Response {
       headers: {
         "content-type": "text/html; charset=utf-8",
         [WORKER_BUILD_FAILED_HEADER]: "1",
+        // Platform chrome, not a worker page — the overlay stays out.
+        [OVERLAY_OPT_OUT_HEADER]: "1",
+      },
+      status: 500,
+    },
+  );
+}
+
+/**
+ * The catch-all: something on iterate's side — not the app's source — broke
+ * while serving. The cause is usually transient (a resource mid-provision, a
+ * dependency hiccup), so unlike the terminal build-failed page this one polls
+ * its way back into the app; unlike the building page it says nothing about
+ * internals, which stay in logs.
+ */
+export function workerServeErrorResponse(): Response {
+  return new Response(
+    servePageHtml({
+      body: `<main data-spinner="true">
+      <div class="pulse">${ITERATE_MARK_SVG}</div>
+      <h1>Something went wrong serving this app</h1>
+      <p>The fault is on iterate's side, not this app's code. It's usually transient — the page retries by itself.</p>
+    </main>
+    <script>${reloadWhenHeaderClearsScript(WORKER_SERVE_ERROR_HEADER, 3_000)}</script>`,
+      head: `<noscript><meta http-equiv="refresh" content="5" /></noscript>`,
+      title: "Something went wrong",
+    }),
+    {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "retry-after": "3",
+        [WORKER_SERVE_ERROR_HEADER]: "1",
         // Platform chrome, not a worker page — the overlay stays out.
         [OVERLAY_OPT_OUT_HEADER]: "1",
       },
