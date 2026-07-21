@@ -503,11 +503,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (trimmedName.length === 0 || trimmedMessage.length === 0) {\n" +
       "      throw new TypeError(\"Name and message are required\");\n" +
       "    }\n" +
-      "    await this.#append({\n" +
-      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
-      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
-      "    });\n" +
+      "    await this.#append(\n" +
+      "      {\n" +
+      "        type: \"events.iterate.com/guestbook/created\",\n" +
+      "        payload: { config: { title: \"Guestbook\" } },\n" +
+      "        idempotencyKey: \"guestbook/created\",\n" +
+      "      },\n" +
+      "      {\n" +
+      "        type: \"events.iterate.com/guestbook/entry-signed\",\n" +
+      "        payload: { message: trimmedMessage, name: trimmedName },\n" +
+      "        idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
+      "      },\n" +
+      "    );\n" +
       "    const registry = await this.#freshRegistry();\n" +
       "    await registry.catchUp(\"guestbook\");\n" +
       "    registry.refreshLive();\n" +

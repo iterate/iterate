@@ -71,11 +71,18 @@ export class GuestbookApp extends IterateDurableObject {
     if (trimmedName.length === 0 || trimmedMessage.length === 0) {
       throw new TypeError("Name and message are required");
     }
-    await this.#append({
-      type: "events.iterate.com/guestbook/entry-signed",
-      payload: { message: trimmedMessage, name: trimmedName },
-      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
-    });
+    await this.#append(
+      {
+        type: "events.iterate.com/guestbook/created",
+        payload: { config: { title: "Guestbook" } },
+        idempotencyKey: "guestbook/created",
+      },
+      {
+        type: "events.iterate.com/guestbook/entry-signed",
+        payload: { message: trimmedMessage, name: trimmedName },
+        idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
+      },
+    );
     const registry = await this.#freshRegistry();
     await registry.catchUp("guestbook");
     registry.refreshLive();
