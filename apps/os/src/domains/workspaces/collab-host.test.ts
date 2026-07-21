@@ -1,8 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
+import { ChangeSet } from "@codemirror/state";
 import { MAX_DOC_BYTES } from "./collab-engine.ts";
 import { CollabHost, type CollabSettledFs } from "./collab-host.ts";
 import { fakeSessionStore } from "./collab-store.fixtures.ts";
-import { ChangeSet } from "@codemirror/state";
 
 function fakeFs(initial: Record<string, string> = {}) {
   const files = new Map(Object.entries(initial));

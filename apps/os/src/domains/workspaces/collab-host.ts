@@ -1,5 +1,5 @@
-import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import { Text } from "@codemirror/state";
+import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import { attributedChanges, type CollabChangeSegment } from "./collab-changes.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
 import {

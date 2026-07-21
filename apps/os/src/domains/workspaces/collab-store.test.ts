@@ -1,13 +1,28 @@
+import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
-import { DatabaseSync } from "node:sqlite";
+import type { CollabSessionStore } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
 import { fakeSessionStore } from "./collab-store.fixtures.ts";
-import type { CollabSessionStore } from "./collab-host.ts";
+
+// node:sqlite needs Node ≥ 24 (stable) — on older CI runtimes the contract
+// suite still runs against the fake, and the SQLite half skips loudly.
+const sqlite = (() => {
+  try {
+    return createRequire(import.meta.url)("node:sqlite") as {
+      DatabaseSync: new (path: string) => never;
+    };
+  } catch {
+    return null;
+  }
+})();
 
 /** The SQLite store against Node's real SQLite — the exact SQL that runs in
  * the Durable Object, exercised for real instead of via the in-memory fake. */
 function nodeSqliteStore(): CollabSessionStore {
-  const db = new DatabaseSync(":memory:");
+  const db = new (sqlite!.DatabaseSync as new (path: string) => {
+    prepare(query: string): { all(...b: never[]): unknown[]; run(...b: never[]): unknown };
+    exec(query: string): void;
+  })(":memory:");
   return sqliteCollabStore({
     sql: {
       exec: (query: string, ...bindings: unknown[]) => {
@@ -45,10 +60,12 @@ const op = (version: number, clientId = "a", clientSeq = version) => ({
 
 /** ONE behavioral contract, run against BOTH implementations — the retention
  * math (min of snapshot/base pruning) must never drift between them. */
-describe.each([
+const implementations: [string, () => CollabSessionStore][] = [
   ["fake", () => fakeSessionStore().store],
-  ["sqlite", nodeSqliteStore],
-])("collab store contract (%s)", (_name, makeStore) => {
+];
+if (sqlite !== null) implementations.push(["sqlite", nodeSqliteStore]);
+
+describe.each(implementations)("collab store contract (%s)", (_name, makeStore) => {
   test("birth: putSnapshot creates session + base idempotently", async () => {
     const store = makeStore();
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "seed", epoch: EPOCH, version: 0 });
