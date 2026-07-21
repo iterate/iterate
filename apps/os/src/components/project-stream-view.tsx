@@ -363,7 +363,7 @@ function MirroredProjectStreamView({
             <QueuedMessagesPanel
               messages={queuedUserMessages}
               isInterrupting={interrupt?.isInterrupting ?? false}
-              {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
+              {...(interrupt == null || !streamIsLive ? {} : { onInterrupt: interrupt.run })}
             />
             <StreamViewComposer
               autoFocusMessage={autoFocusMessageComposer}
