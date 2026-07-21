@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import type {
@@ -42,14 +43,11 @@ export function PresenceAvatar({
 }) {
   const label = presenceLabel(entry);
   return (
-    <span
-      className={cn(
-        "relative grid size-6 shrink-0 place-items-center rounded-full font-mono text-[9px] font-bold",
-        presenceColorClasses(label),
-        className,
-      )}
-    >
-      {presenceInitials(label)}
+    <Avatar className={cn("size-6 font-mono text-[9px] font-bold", className)}>
+      {entry.user?.picture ? <AvatarImage src={entry.user.picture} alt="" /> : null}
+      <AvatarFallback className={cn("text-[9px] font-bold", presenceColorClasses(label))}>
+        {presenceInitials(label)}
+      </AvatarFallback>
       <span
         className={cn(
           "absolute -bottom-px -right-px size-2 rounded-full border-[1.5px] border-background",
@@ -60,7 +58,7 @@ export function PresenceAvatar({
             : "bg-zinc-300 dark:bg-zinc-600",
         )}
       />
-    </span>
+    </Avatar>
   );
 }
 

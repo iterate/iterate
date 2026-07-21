@@ -2,6 +2,7 @@
 export type BrowserStreamSubscriberUser = {
   email: string;
   name?: string;
+  picture?: string;
 };
 
 /**
@@ -15,7 +16,9 @@ export function browserStreamSubscriberUserUpdate(args: {
   started: boolean;
 }): { user: BrowserStreamSubscriberUser | undefined; reconnect: boolean } {
   const unchanged =
-    args.current?.email === args.next?.email && args.current?.name === args.next?.name;
+    args.current?.email === args.next?.email &&
+    args.current?.name === args.next?.name &&
+    args.current?.picture === args.next?.picture;
   return {
     user: args.next,
     reconnect: !unchanged && args.started,
