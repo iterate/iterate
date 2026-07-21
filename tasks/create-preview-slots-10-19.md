@@ -17,7 +17,7 @@ is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
 verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Six valid Bugbot findings now have regression
+ready for review against `main`. Eight valid Bugbot findings now have regression
 coverage: requested-slot adoption erases unknown-provenance data, seeded
 repository lookup no longer depends on Cloudflare subscription setup, and a
 server-side GitHub import records its initial commit even though the exact-repo
@@ -26,8 +26,10 @@ PR-body-directed slot moves are also reported as requested moves, not expired
 lease takeovers. Pre-deploy Email Routing reports a missing zone as deferred so
 resource-ID reconciliation can finish, while post-deploy reconciliation still
 fails hard. Interrupted exact-slot moves also resume from the requested lease
-and release the old recorded slot instead of self-blocking. Local OS tests and
-typecheck are green; fresh CI and Bugbot review remain before merge.
+and release the old recorded slot instead of self-blocking; a failed exact-slot
+request releases any unrelated adopted lease. Markdown examples and comments
+cannot activate the PR-body selector. Local OS tests and typecheck are green;
+fresh CI and Bugbot review remain before merge.
 Production deployment and Semaphore lease publication remain later, separate
 approval boundaries. The strict PR-body slot selector makes it possible to
 canary one expanded slot without exposing all ten to old clients.
@@ -427,3 +429,9 @@ the recorded projection.
   releases the old recorded lease. It never force-evicts another holder. All
   188 scripts tests, scripts typecheck, and changed-file lint/format checks
   pass locally.
+- 2026-07-21: Fixed two further Bugbot findings test-first. Failed exact-slot
+  acquisition now releases any unrelated lease adopted earlier in the attempt,
+  combining assignment and release errors if both fail. The directive parser
+  ignores fenced Markdown examples and HTML comments while still accepting one
+  actionable whole-line directive. All 190 scripts tests, scripts typecheck,
+  and changed-file lint/format checks pass locally.

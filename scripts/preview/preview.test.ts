@@ -85,6 +85,32 @@ preview_environment=preview-18
   ).toThrow(/at most one preview_environment directive/);
 });
 
+test("preview environment examples and comments are not active directives", () => {
+  expect(
+    resolveRequestedPreviewEnvironment(`
+Example:
+
+\`\`\`
+preview_environment=preview-17
+\`\`\`
+
+<!--
+preview_environment=preview-18
+-->
+`),
+  ).toBeNull();
+
+  expect(
+    resolveRequestedPreviewEnvironment(`
+\`\`\`text
+preview_environment=preview-18
+\`\`\`
+
+preview_environment=preview-17
+`),
+  ).toBe("preview-17");
+});
+
 test("a requested slot move is not reported as a stolen lapsed lease", () => {
   expect(
     describePreviewSlotChange({
@@ -2715,6 +2741,41 @@ describe("assignEnvironmentConfigLease", () => {
         wantedSlug: "preview-5",
       }),
     ).rejects.toThrow(/pr-1601[\s\S]*--force/);
+  });
+
+  test("releases an unrelated adopted lease when the requested slot is unavailable", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async (input: { force?: boolean; slug: string }) =>
+        input.slug === "preview-2" && input.force
+          ? fakeLease({
+              slug: "preview-2",
+              leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+            })
+          : null,
+      ),
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-5", "pr-1601"),
+      ]),
+      release,
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedSlug: null,
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/preview-5 is leased by pr-1601/);
+    expect(release).toHaveBeenCalledWith({
+      leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+      slug: "preview-2",
+      type: "environment-config-lease",
+    });
   });
 
   test("passes force through to evict the current holder", async () => {

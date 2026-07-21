@@ -2048,7 +2048,8 @@ export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map
 const previewEnvironmentSlugs = environmentConfigLeaseInventory.map((resource) => resource.slug);
 
 function resolveRequestedPreviewEnvironment(body: string): string | null {
-  const matches = [...body.matchAll(/^preview_environment=(preview-\d+)\r?$/gm)];
+  const actionableBody = withoutMarkdownExamplesOrComments(body);
+  const matches = [...actionableBody.matchAll(/^preview_environment=(preview-\d+)\r?$/gm)];
   if (matches.length === 0) return null;
   if (matches.length > 1) {
     throw new Error("PR body must contain at most one preview_environment directive");
@@ -2061,6 +2062,29 @@ function resolveRequestedPreviewEnvironment(body: string): string | null {
     );
   }
   return slug;
+}
+
+function withoutMarkdownExamplesOrComments(body: string): string {
+  const lines = body.replace(/<!--[\s\S]*?-->/g, "").split("\n");
+  const actionable: string[] = [];
+  let fence: { length: number; marker: "`" | "~" } | null = null;
+
+  for (const line of lines) {
+    const match = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (match && match[1]?.[0] === fence.marker && match[1].length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (match?.[1]) {
+      fence = { length: match[1].length, marker: match[1][0] as "`" | "~" };
+      continue;
+    }
+    actionable.push(line);
+  }
+
+  return actionable.join("\n");
 }
 
 function describePreviewSlotChange(input: {
@@ -4408,65 +4432,90 @@ async function assignEnvironmentConfigLease(input: {
 
   let lease: EnvironmentConfigLease;
   if (input.wantedSlug) {
-    const currentHolder = await findEnvironmentConfigLeaseHolder(input.semaphore, input.wantedSlug);
-    const resumeInterruptedMove = currentHolder === input.holder;
-    if (resumeInterruptedMove) {
-      logPreview(
-        `continuing interrupted move: ${input.holder} already holds requested slot ${input.wantedSlug}`,
-      );
-    } else if (input.force && currentHolder) {
-      logPreview(
-        `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
-      );
-    }
-
-    const acquired = await input.semaphore.acquireSpecific({
-      allowedSlugs: previewEnvironmentSlugs,
-      leaseMs: input.leaseMs,
-      slug: input.wantedSlug,
-      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-      holder: input.holder,
-      // Semaphore intentionally rejects every active lease without force,
-      // including another lease held by this same holder. Re-issue that one
-      // exactly like adoption, then release the old recorded slot below.
-      force: input.force || resumeInterruptedMove,
-    });
-    if (!acquired) {
+    try {
       const currentHolder = await findEnvironmentConfigLeaseHolder(
         input.semaphore,
         input.wantedSlug,
       );
-      if (currentHolder) {
-        const prUrl = holderPullRequestUrl(currentHolder);
+      const resumeInterruptedMove = currentHolder === input.holder;
+      if (resumeInterruptedMove) {
+        logPreview(
+          `continuing interrupted move: ${input.holder} already holds requested slot ${input.wantedSlug}`,
+        );
+      } else if (input.force && currentHolder) {
+        logPreview(
+          `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
+        );
+      }
+
+      const acquired = await input.semaphore.acquireSpecific({
+        allowedSlugs: previewEnvironmentSlugs,
+        leaseMs: input.leaseMs,
+        slug: input.wantedSlug,
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        holder: input.holder,
+        // Semaphore intentionally rejects every active lease without force,
+        // including another lease held by this same holder. Re-issue that one
+        // exactly like adoption, then release the old recorded slot below.
+        force: input.force || resumeInterruptedMove,
+      });
+      if (!acquired) {
+        const currentHolder = await findEnvironmentConfigLeaseHolder(
+          input.semaphore,
+          input.wantedSlug,
+        );
+        if (currentHolder) {
+          const prUrl = holderPullRequestUrl(currentHolder);
+          throw new Error(
+            [
+              `${input.wantedSlug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
+              "Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:",
+              await describeEnvironmentConfigLeases(input.semaphore),
+            ].join("\n"),
+          );
+        }
+
         throw new Error(
           [
-            `${input.wantedSlug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
-            "Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:",
+            `${input.wantedSlug} is not a known preview slot. Known slots:`,
             await describeEnvironmentConfigLeases(input.semaphore),
           ].join("\n"),
         );
       }
-
-      throw new Error(
-        [
-          `${input.wantedSlug} is not a known preview slot. Known slots:`,
-          await describeEnvironmentConfigLeases(input.semaphore),
-        ].join("\n"),
-      );
+      // Same entry invariant as every other handover — this also covers a
+      // --force eviction, where the acquired slot holds the evicted PR's data.
+      const clean = await eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        lease: acquired,
+        semaphore: input.semaphore,
+      });
+      if (!clean) {
+        throw new Error(
+          `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
+        );
+      }
+      lease = toEnvironmentConfigLease(acquired);
+    } catch (error) {
+      if (!heldLease) throw error;
+      try {
+        const released = await input.semaphore.release({
+          type: heldLease.type,
+          slug: heldLease.slug,
+          leaseId: heldLease.leaseId,
+        });
+        logPreview(
+          released.released
+            ? `requested slot assignment failed; released unrelated held slot ${heldLease.slug}`
+            : `requested slot assignment failed; unrelated held slot ${heldLease.slug} was already gone`,
+        );
+      } catch (releaseError) {
+        throw new AggregateError(
+          [error, releaseError],
+          `Requested slot ${input.wantedSlug} could not be assigned, and releasing unrelated held slot ${heldLease.slug} also failed.`,
+        );
+      }
+      throw error;
     }
-    // Same entry invariant as every other handover — this also covers a
-    // --force eviction, where the acquired slot holds the evicted PR's data.
-    const clean = await eraseAcquiredSlotOrGiveItBack({
-      eraseSlotData: input.eraseSlotData,
-      lease: acquired,
-      semaphore: input.semaphore,
-    });
-    if (!clean) {
-      throw new Error(
-        `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
-      );
-    }
-    lease = toEnvironmentConfigLease(acquired);
   } else {
     // A human is asking right now — fail fast with the holder table instead
     // of queueing like CI does.
