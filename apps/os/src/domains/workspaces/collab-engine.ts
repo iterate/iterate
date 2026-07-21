@@ -44,7 +44,10 @@ export interface CollabSnapshot {
 export interface CollabStore {
   append(path: string, epoch: string, ops: PersistedCollabOp[]): Promise<void>;
   getSnapshot(path: string): Promise<CollabSnapshot | null>;
-  putSnapshot(path: string, snapshot: CollabSnapshot): Promise<void>;
+  /** `birth` creates the session rows idempotently; a compaction (no birth)
+   * must be epoch-conditional like append — a snapshot landing after the
+   * session durably ended must throw, never resurrect the rows. */
+  putSnapshot(path: string, snapshot: CollabSnapshot, opts?: { birth?: boolean }): Promise<void>;
   /** Ops with version > afterVersion for the given epoch, ascending. */
   readOps(path: string, epoch: string, afterVersion: number): Promise<PersistedCollabOp[]>;
 }
@@ -267,7 +270,8 @@ export class CollabEngine {
       return json;
     });
     if (bytes > MAX_PUSH_BYTES) return { maxBytes: MAX_PUSH_BYTES, status: "too-large" };
-    if (file.doc.length + growth > MAX_DOC_BYTES) {
+    const resultLength = file.doc.length + growth;
+    if (resultLength > MAX_DOC_BYTES) {
       return { maxBytes: MAX_DOC_BYTES, status: "too-large" };
     }
 
@@ -284,6 +288,15 @@ export class CollabEngine {
         createdAt: acceptedAt,
         version: version++,
       });
+    }
+
+    // The cap is UTF-8 BYTES (the snapshot's SQLite cell), not UTF-16 units.
+    // Chars are a lower bound on bytes, so only the gray zone (where 3×chars
+    // could cross) pays a full encode — and only until the next commit prunes.
+    if (resultLength * 3 > MAX_DOC_BYTES) {
+      if (encoder.encode(doc.toString()).length > MAX_DOC_BYTES) {
+        return { maxBytes: MAX_DOC_BYTES, status: "too-large" };
+      }
     }
 
     // Durability before ack; on failure nothing was applied and the client
@@ -397,7 +410,7 @@ export class CollabEngine {
     if (snapshot === null) {
       const seeded = await seed();
       const file = fileEngine(seeded.content, seeded.epoch, 0);
-      await this.#snapshot(path, file);
+      await this.#snapshot(path, file, { birth: true });
       return file;
     }
     const file = fileEngine(snapshot.content, snapshot.epoch, snapshot.version);
@@ -416,13 +429,17 @@ export class CollabEngine {
     return file;
   }
 
-  async #snapshot(path: string, file: FileEngine): Promise<void> {
-    await this.#store.putSnapshot(path, {
-      clientSeqs: Object.fromEntries(file.clientSeqs),
-      content: file.doc.toString(),
-      epoch: file.epoch,
-      version: file.version,
-    });
+  async #snapshot(path: string, file: FileEngine, opts?: { birth?: boolean }): Promise<void> {
+    await this.#store.putSnapshot(
+      path,
+      {
+        clientSeqs: Object.fromEntries(file.clientSeqs),
+        content: file.doc.toString(),
+        epoch: file.epoch,
+        version: file.version,
+      },
+      opts,
+    );
     file.opsSinceSnapshot = 0;
   }
 }

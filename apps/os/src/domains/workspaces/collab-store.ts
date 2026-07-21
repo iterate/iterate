@@ -87,8 +87,21 @@ export function sqliteCollabStore(storage: {
     // AND baseline birth (idempotent) are one atomic move. Pruning keeps ops
     // back to the redline baseline — the op log is the tracked-changes data,
     // bounded by commit cadence.
-    putSnapshot: async (path, snapshot) => {
+    putSnapshot: async (path, snapshot, opts) => {
       storage.transactionSync(() => {
+        // A compaction is epoch-conditional exactly like append: after
+        // endSession deleted the rows, a still-in-flight engine snapshot
+        // must die loudly instead of re-birthing the session.
+        if (opts?.birth !== true) {
+          const live = sql
+            .exec(
+              `SELECT 1 FROM collab_sessions WHERE path = ? AND epoch = ?`,
+              path,
+              snapshot.epoch,
+            )
+            .toArray();
+          if (live.length === 0) throw new Error(`stale collab session for ${path} — reopen`);
+        }
         sql.exec(
           `INSERT OR REPLACE INTO collab_snapshots(path, epoch, version, content, client_seqs)
            VALUES (?, ?, ?, ?, ?)`,
@@ -152,6 +165,11 @@ export function sqliteCollabStore(storage: {
         .exec(`SELECT path FROM collab_sessions`)
         .toArray()
         .map((row) => row.path as string),
+    sessionHeads: () =>
+      sql
+        .exec(`SELECT path, head_version FROM collab_sessions`)
+        .toArray()
+        .map((row) => ({ headVersion: row.head_version as number, path: row.path as string })),
     hasSession: (path) =>
       sql.exec(`SELECT 1 FROM collab_sessions WHERE path = ?`, path).toArray().length > 0,
     markFlushed: (path, version, epoch) => {

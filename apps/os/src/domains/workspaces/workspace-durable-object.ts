@@ -232,30 +232,32 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       input.config.mounts === undefined
         ? input.config
         : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
-    // Settle live sessions first so their dirtiness is visible to the
-    // transition-safety check — an unflushed session is exactly the
-    // "uncommitted work bound to a repo identity" that guard protects.
-    await this.#collab.reconcile();
-    // Serialized with the core's mutations and commits: an unmount or repo
-    // swap must never interleave a commit that already classified against the
-    // old table.
-    return this.#core.runExclusive(() =>
-      this.#applyConfigTransition((current) => {
-        // The reduce is deliberately TOLERANT (a committed event must never
-        // wedge the reducer), so the door supplies the loudness — validated
-        // against the exact state this append will land on (the offset
-        // assertion makes an interleaved append a retry, not a silent drop):
-        // every non-null patch entry must survive into a complete mount.
-        const merged = mergeWorkspaceConfigPatch(current, config);
-        for (const [key, value] of Object.entries(config.mounts ?? {})) {
-          if (value !== null && !(key in merged.mounts)) {
-            throw new Error(
-              `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
-            );
+    // Under the collab BARRIER (settle + run as ONE coordinated job): live
+    // sessions settle so their dirtiness is visible to the transition-safety
+    // check, and no debounce flush can interleave between that settle and the
+    // transition itself — the same fence commits use.
+    return this.#collab.barrier(() =>
+      // Serialized with the core's mutations and commits: an unmount or repo
+      // swap must never interleave a commit that already classified against
+      // the old table.
+      this.#core.runExclusive(() =>
+        this.#applyConfigTransition((current) => {
+          // The reduce is deliberately TOLERANT (a committed event must never
+          // wedge the reducer), so the door supplies the loudness — validated
+          // against the exact state this append will land on (the offset
+          // assertion makes an interleaved append a retry, not a silent drop):
+          // every non-null patch entry must survive into a complete mount.
+          const merged = mergeWorkspaceConfigPatch(current, config);
+          for (const [key, value] of Object.entries(config.mounts ?? {})) {
+            if (value !== null && !(key in merged.mounts)) {
+              throw new Error(
+                `mount "${key}" patch does not produce a complete mount — new mounts need { repoPath, policy }`,
+              );
+            }
           }
-        }
-        return config;
-      }),
+          return config;
+        }),
+      ),
     );
   }
 
@@ -307,6 +309,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           result[path] = local;
           return;
         }
+        // Delete whiteouts mask mount fall-through exactly as in readFile —
+        // a deleted mount file must not resurrect in batched reads.
+        if (this.#core.isMaskedFromMount(path)) {
+          result[path] = null;
+          return;
+        }
         const resolved = routeMount(mounts, path);
         if (resolved === null || resolved.repoRelativePath === "") {
           result[path] = null;
@@ -341,7 +349,9 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async exists(path: string): Promise<boolean> {
     await this.#assertCreated();
-    return this.#core.exists(path);
+    // A live session IS existence: a collab-created file can be readable
+    // before its first flush lands in the overlay.
+    return this.#collab.isLive(path) || this.#core.exists(path);
   }
 
   async writeFile(path: string, content: string): Promise<void> {

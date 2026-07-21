@@ -26,7 +26,13 @@ export function fakeSessionStore() {
       session.head = batch.at(-1)!.version + 1;
     },
     getSnapshot: async (path) => structuredClone(snapshots.get(path) ?? null),
-    putSnapshot: async (path, snapshot) => {
+    putSnapshot: async (path, snapshot, opts) => {
+      if (opts?.birth !== true) {
+        const session = sessions.get(path);
+        if (session === undefined || session.epoch !== snapshot.epoch) {
+          throw new Error(`stale collab session for ${path} — reopen`);
+        }
+      }
       snapshots.set(path, structuredClone(snapshot));
       if (!sessions.has(path)) {
         sessions.set(path, {
@@ -45,6 +51,8 @@ export function fakeSessionStore() {
     dirtySessions: () =>
       [...sessions.entries()].filter(([, row]) => row.head > row.overlay).map(([path]) => path),
     livePaths: () => [...sessions.keys()],
+    sessionHeads: () =>
+      [...sessions.entries()].map(([path, row]) => ({ headVersion: row.head, path })),
     hasSession: (path) => sessions.has(path),
     markFlushed: (path, version, epoch) => {
       const row = sessions.get(path);

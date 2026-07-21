@@ -44,6 +44,8 @@ export interface CollabSessionStore extends CollabStore {
   dirtySessions(): string[];
   /** Every durable session path (the routing truth across incarnations). */
   livePaths(): string[];
+  /** Durable head versions — the change cursor must survive eviction. */
+  sessionHeads(): { headVersion: number; path: string }[];
   /** Whether a durable session exists — one local-SQLite lookup. */
   hasSession(path: string): boolean;
   /** Record that `version` is settled into the overlay (epoch-conditional). */
@@ -170,9 +172,15 @@ export class CollabHost {
     if (this.isLive(path)) return this.#opened(path);
     const opened = await this.#engine.open(path, async () => {
       const content = (await this.#fs.readFile(path)) ?? "";
-      if (content.length > MAX_DOC_BYTES) {
+      // The cap is UTF-8 bytes; chars lower-bound bytes, so only the gray
+      // zone pays an encode.
+      const bytes =
+        content.length * 3 > MAX_DOC_BYTES
+          ? new TextEncoder().encode(content).length
+          : content.length;
+      if (bytes > MAX_DOC_BYTES) {
         throw new Error(
-          `file-too-large: ${path} is ${content.length} bytes; live collaboration caps at ${MAX_DOC_BYTES}`,
+          `file-too-large: ${path} is ${bytes} bytes; live collaboration caps at ${MAX_DOC_BYTES}`,
         );
       }
       return { content, epoch: crypto.randomUUID() };
@@ -207,10 +215,11 @@ export class CollabHost {
   /** Long-poll: resolves when ops land past afterVersion (or ~20s). */
   /** Head versions of every live session — the board's cheap change cursor. */
   versions(): Record<string, number> {
+    // DURABLE heads, not memory: after an eviction the sessions are still
+    // live and the board's cursor must see them before anyone re-opens.
     const map: Record<string, number> = {};
-    for (const path of this.#store.livePaths()) {
-      const head = this.#engine.head(path);
-      if (head !== null) map[path] = head.version;
+    for (const { headVersion, path } of this.#store.sessionHeads()) {
+      map[path] = this.#engine.head(path)?.version ?? headVersion;
     }
     return map;
   }
@@ -382,13 +391,27 @@ export class CollabHost {
       baseVersion: base.version,
       deleted: segments.flatMap((segment) =>
         segment.kind === "deleted"
-          ? [{ at: segment.at, clientId: segment.clientId, text: segment.text }]
+          ? [
+              {
+                at: segment.at,
+                clientId: segment.clientId,
+                createdAt: segment.createdAt,
+                text: segment.text,
+              },
+            ]
           : [],
       ),
       headVersion: head.version,
       inserted: segments.flatMap((segment) =>
         segment.kind === "inserted"
-          ? [{ clientId: segment.clientId, from: segment.from, to: segment.to }]
+          ? [
+              {
+                clientId: segment.clientId,
+                createdAt: segment.createdAt,
+                from: segment.from,
+                to: segment.to,
+              },
+            ]
           : [],
       ),
     };

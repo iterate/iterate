@@ -729,3 +729,15 @@ describe("virtual directory coherence", () => {
     await expect(core.deleteFile("/a/b")).rejects.toThrow(/mount point/);
   });
 });
+
+describe("delete whiteout surface", () => {
+  test("isMaskedFromMount is the batched-reader truth: set by delete, cleared by rewrite", async () => {
+    const { core } = subject();
+    expect(core.isMaskedFromMount("/config/worker.ts")).toBe(false);
+    await core.deleteFile("/config/worker.ts");
+    expect(core.isMaskedFromMount("/config/worker.ts")).toBe(true);
+    expect(core.isMaskedFromMount("config/worker.ts")).toBe(true); // canonicalized
+    await core.writeFile("/config/worker.ts", "fresh");
+    expect(core.isMaskedFromMount("/config/worker.ts")).toBe(false);
+  });
+});

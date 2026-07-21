@@ -203,7 +203,9 @@ describe("collab host", () => {
     // continues from alice's confirmed count — seq 0 would be deduped.)
     await pushOne(host, { epoch: opened.epoch, version: 3 }, "post ", 11, 1, "alice");
     const next = await host.changes(PATH);
-    expect(next.inserted).toEqual([{ clientId: "alice", from: 0, to: 5 }]);
+    expect(next.inserted).toEqual([
+      { clientId: "alice", createdAt: expect.any(Number), from: 0, to: 5 },
+    ]);
   });
 
   test("redline survives compaction: ops retained back to the baseline", async () => {
@@ -276,7 +278,9 @@ describe("collab host", () => {
     const stamped = await host.changes(PATH);
     expect([...stamped.inserted, ...stamped.deleted]).toEqual([]);
     const other = await host.changes(OTHER);
-    expect(other.inserted).toEqual([{ clientId: "peer", from: 0, to: 5 }]);
+    expect(other.inserted).toEqual([
+      { clientId: "peer", createdAt: expect.any(Number), from: 0, to: 5 },
+    ]);
   });
 
   test("first touch after eviction must NOT idle-end other live sessions", async () => {
@@ -376,7 +380,9 @@ describe("collab host", () => {
     expect(files.get(PATH)).toBe(`committed ${SEED}`);
     // …and the raced push SURVIVES in the redline instead of vanishing.
     const redline = await host.changes(PATH);
-    expect(redline.inserted).toEqual([{ clientId: "peer", from: 0, to: 5 }]);
+    expect(redline.inserted).toEqual([
+      { clientId: "peer", createdAt: expect.any(Number), from: 0, to: 5 },
+    ]);
   });
 
   test("a delete racing a slow-seeding open wins: no resurrection", async () => {
@@ -416,5 +422,48 @@ describe("collab host", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("collab host regressions", () => {
+  test("versions() reports durable session heads after eviction", async () => {
+    const { store } = fakeSessionStore();
+    const { fs } = fakeFs({ [PATH]: SEED });
+    const host = new CollabHost({ fs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "hi ", SEED.length);
+    // A fresh incarnation over the same durable store has no in-memory
+    // engines yet — the board's change cursor must still see the session.
+    const rebooted = new CollabHost({ fs, store });
+    const versions = rebooted.versions();
+    expect(versions[PATH]).toBeGreaterThanOrEqual(1);
+  });
+
+  test("changes() carries createdAt for inserted and deleted segments", async () => {
+    const { store } = fakeSessionStore();
+    const { fs } = fakeFs({ [PATH]: SEED });
+    const host = new CollabHost({ fs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "new ", SEED.length);
+    await host.push({
+      baseVersion: opened.version + 1,
+      clientId: "peer",
+      epoch: opened.epoch,
+      ops: [
+        {
+          changes: ChangeSet.of(
+            { from: 4, to: 4 + "settled".length },
+            "new settled text".length,
+          ).toJSON(),
+          clientSeq: 1,
+        },
+      ],
+      path: PATH,
+    });
+    const changes = await host.changes(PATH);
+    expect(changes.inserted.length).toBeGreaterThan(0);
+    expect(changes.deleted.length).toBeGreaterThan(0);
+    for (const span of changes.inserted) expect(typeof span.createdAt).toBe("number");
+    for (const span of changes.deleted) expect(typeof span.createdAt).toBe("number");
   });
 });

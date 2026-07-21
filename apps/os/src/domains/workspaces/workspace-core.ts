@@ -160,7 +160,7 @@ export class WorkspaceCore {
    * mounted beneath that path — cross-repository data loss. A directory
    * tombstone type can exist only if a directory-delete API ever does.
    */
-  #isMaskedFromMount(path: string): boolean {
+  isMaskedFromMount(path: string): boolean {
     return this.#whiteouts()[resolveAbsolutePath(path)] === true;
   }
 
@@ -205,7 +205,7 @@ export class WorkspaceCore {
   async readFile(path: string): Promise<string | null> {
     const local = await this.#workspace.readFile(path);
     if (local !== null) return local;
-    if (this.#isMaskedFromMount(path)) return null;
+    if (this.isMaskedFromMount(path)) return null;
     const mounts = await this.#mounts();
     // A virtual directory (a mount point or an ancestor of one) is a
     // DIRECTORY in the merged view: an outer repo's file at the same path is
@@ -242,7 +242,7 @@ export class WorkspaceCore {
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     const local = await this.#workspace.readFileBytes(path);
     if (local !== null) return local;
-    if (this.#isMaskedFromMount(path)) return null;
+    if (this.isMaskedFromMount(path)) return null;
     const mounts = await this.#mounts();
     if (isVirtualDirectoryPath(mounts, path)) return null;
     const resolved = routeMount(mounts, path);
@@ -262,13 +262,12 @@ export class WorkspaceCore {
     // masks a file, and a mounted subtree implies its ancestor chain.
     if (isVirtualDirectoryPath(mounts, path)) return true;
     const resolved = routeMount(mounts, path);
-    if (this.#isMaskedFromMount(path)) return false;
+    if (this.isMaskedFromMount(path)) return false;
     if (resolved === null) return false;
     const target = resolveAbsolutePath(path);
     const mountFiles = await this.#mountFilePaths(resolved.mountPath, resolved.mount);
     return mountFiles.some(
-      (file) =>
-        (file === target || file.startsWith(`${target}/`)) && !this.#isMaskedFromMount(file),
+      (file) => (file === target || file.startsWith(`${target}/`)) && !this.isMaskedFromMount(file),
     );
   }
 
@@ -347,7 +346,7 @@ export class WorkspaceCore {
       // it again must NOT touch the existing whiteout (retracting it would
       // resurrect the mount file). Only a local copy — visible above an
       // ancestor whiteout because the local layer wins — can remain to delete.
-      if (this.#isMaskedFromMount(path)) {
+      if (this.isMaskedFromMount(path)) {
         return this.#workspace.deleteFile(path);
       }
       // ALL fallible inspection happens BEFORE any mutation: a failed repo
@@ -385,7 +384,7 @@ export class WorkspaceCore {
     const merged = new Set(await this.#localFilePaths());
     for (const [mountPath, mount] of Object.entries(mounts)) {
       for (const path of await this.#mountFilePaths(resolveAbsolutePath(mountPath), mount)) {
-        if (this.#isMaskedFromMount(path)) continue;
+        if (this.isMaskedFromMount(path)) continue;
         // A deeper mount shadows this one's files under its point.
         if (routeMount(mounts, path)?.mount !== mount) continue;
         // A repo FILE at a deeper mount's ancestor is masked: that path is a
@@ -560,11 +559,11 @@ export class WorkspaceCore {
     const mountSet = new Set(mountFiles);
 
     const changes: WorkspaceChange[] = localPaths.map((path) => ({
-      change: mountSet.has(path) && !this.#isMaskedFromMount(path) ? "modified" : "added",
+      change: mountSet.has(path) && !this.isMaskedFromMount(path) ? "modified" : "added",
       path,
     }));
     for (const path of mountFiles) {
-      if (!this.#isMaskedFromMount(path) || ownedSet.has(path)) continue;
+      if (!this.isMaskedFromMount(path) || ownedSet.has(path)) continue;
       if (routeMount(snapshot.mounts, path)?.mountPath !== mountPath) continue;
       changes.push({ change: "deleted", path });
     }

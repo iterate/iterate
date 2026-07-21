@@ -468,3 +468,27 @@ describe("collab engine", () => {
     expect(Text.of(head.content.split("\n")).toString()).toBe(head.content);
   });
 });
+
+describe("doc size gate", () => {
+  test("caps by UTF-8 bytes: multibyte docs reject before the char cap", async () => {
+    const store = fakeStore().store;
+    const engine = new CollabEngine({ store });
+    await engine.open(PATH, async () => ({ content: "", epoch: "e-bytes" }));
+    // '€' is 1 UTF-16 unit but 3 UTF-8 bytes: ~366k of them stay far under
+    // the 1,048,576-char gate while crossing the byte cap.
+    const chunk = "€".repeat(61_000); // 183KB per splice, under MAX_PUSH_BYTES
+    let rejected = false;
+    for (let index = 0; index < 6; index++) {
+      try {
+        await engine.applyExternal(PATH, (doc) =>
+          ChangeSet.of({ from: doc.length, insert: chunk, to: doc.length }, doc.length),
+        );
+      } catch (error) {
+        rejected = true;
+        expect(String(error)).toContain("too-large");
+        break;
+      }
+    }
+    expect(rejected).toBe(true);
+  });
+});
