@@ -3068,21 +3068,14 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           `itx.integrations.gmail.get(${JSON.stringify(connection)}) exposes request(...); got "${method.join(".")}".`,
         );
       }
-      // No in-process token fetch — the Gmail call goes through the connection
-      // secret's fetch with a placeholder Authorization header; the Secret DO
-      // substitutes the access token and its oauth-refresh-token strategy
-      // refreshes on 401.
+      // No in-process token fetch — the Gmail call goes through project egress
+      // with a placeholder Authorization header; after project policy permits
+      // it, the Secret DO substitutes the access token and refreshes on 401.
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
         authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
+        projectId: this.props.projectId,
         request: args[0] as GmailRequestInput,
-        send: (request) =>
-          env.SECRET.getByName(
-            DurableObjectNameCodec.stringify({
-              path: connectionPath,
-              projectId: this.props.projectId,
-            }),
-          ).fetch(request),
       });
     }
 

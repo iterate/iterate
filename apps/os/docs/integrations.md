@@ -85,6 +85,9 @@ pick the right bot token, and how **multiple Slack workspaces in one project
 just work**. Google connections are named from the account email; tokens live
 in the connection secret, refreshed on 401 by the Secret DO's shared
 `oauth-refresh-token` strategy (nothing token-shaped ever lands on a journal).
+Gmail REST calls carry that connection's access-token placeholder through
+project egress before the Secret DO substitutes it, so the same interceptors
+and approval rules apply to reads and sends.
 
 Slack Web API calls normally never hold material: the request carries a
 `getSecret(path)` placeholder for the connection's token and traverses project
@@ -221,9 +224,9 @@ GitHub connects as a **GitHub App installation** (deep-link to
   wrapped Octokit (`rest.*`, `request(...)`, `graphql(...)`, `paginate(...)`).
   The `.octokit` namespace is mandatory: it makes the SDK boundary explicit
   and a direct `.rest` on the connection is rejected. Its transport carries a
-  `getSecret` placeholder through the connection secret's fetch. The Secret
-  DO mints the installation token on first use and re-mints on 401 — trusted
-  DO code signing the App JWT, no worker, no jail.
+  `getSecret` placeholder through project egress, so interceptors and approval
+  rules run before the Secret DO mints the installation token on first use or
+  re-mints it on 401 — trusted DO code signing the App JWT, no worker, no jail.
 - **Inbound App webhooks** land on the door, verify `x-hub-signature-256`
   with plain WebCrypto, and route on `installation_id`. Each delivery is
   appended once to `/integrations/github/<connection>` with its complete
