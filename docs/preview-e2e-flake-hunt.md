@@ -69,6 +69,15 @@ per-attempt traces before process teardown. A direct preview-7 proof completed
 both workflows on their first attempt in 8.6s max (19s including the one-time
 package build and project setup).
 
+Update (2026-07-21): the TUI lane was subsequently **skipped entirely** rather
+than hardened further. A cleanup pass found the isolation harness still
+fighting more tui-test 0.0.4 shared-global defects (the cwd transform cache
+and the tmpdir zsh dotfiles folder both race across concurrent invocations),
+and the TUI has known bugs and no users yet — so `e2e/tui-test/run.ts` is now
+a no-op stub that reports an empty retry ledger, and the specs stay on disk
+for a future revival. See the stub's header and
+`apps/os/e2e/tui-test/README.md`.
+
 ## Round 4 (2026-07-13/14, PR #1938)
 
 Goal: 25 consecutive green runs on Depot, re-validating the lane after a week

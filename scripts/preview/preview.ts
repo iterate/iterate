@@ -1623,11 +1623,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "playwright.config.ts",
       // The suite also builds and exercises the mobile web app locally.
       "apps/mobile/**",
-      // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
+      // Kept for the dormant PTY lane (OpenTUI under the repo-pinned Bun
+      // runtime); over-triggering is safe.
       ".bun-version",
-      // OS imports iterate/react, and its preview e2e lane builds and runs the
-      // iterate TUI artifact. A CLI-only change therefore still needs the OS
-      // deployment and post-deploy PTY proof.
+      // OS imports iterate/react, so a CLI/package-only change still needs
+      // the OS deployment and its e2e proof.
       "packages/iterate/**",
       "apps/auth/**",
       "apps/auth-contract/**",

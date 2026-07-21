@@ -90,21 +90,15 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
-  it("retries each TUI workflow outside the framework, on the policy retry count", () => {
-    const config = readFileSync(
-      resolve(repoRoot, "apps/os/e2e/tui-test/tui-test.config.ts"),
-      "utf8",
-    );
+  it("the TUI lane stays an explicit no-op skip, not a half-revived runner", () => {
+    // The lane is deliberately disabled (TUI has known bugs and no users;
+    // tui-test 0.0.4 has framework defects). Reviving it means rebuilding the
+    // one-retry wrapper — this guard fails the moment someone puts test
+    // execution back without that.
     const runner = readFileSync(resolve(repoRoot, "apps/os/e2e/tui-test/run.ts"), "utf8");
-
-    // The framework retry is off (TUI Test 0.0.4 reuses a dead worker); the
-    // wrapper owns the single retry and takes its count from the policy
-    // constant. How the wrapper isolates attempts is its own unit-tested
-    // business (tui-case-retry.test.ts), not pinned here.
-    expect(config).toContain("retries: 0");
-    expect(config).not.toContain("E2E_CI_RETRIES");
-    expect(runner).toContain("runTuiCaseWithRetry");
-    expect(runner).toContain("E2E_CI_RETRIES + 1");
+    expect(runner).toContain("SKIPPED");
+    expect(runner).not.toContain("tui-test-bin");
+    expect(runner).not.toContain("spawn");
   });
 
   it("the os preview lane wraps all four sub-lanes in plain watchdogs — no lane retry", () => {

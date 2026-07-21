@@ -14,8 +14,9 @@ if (!iterateBin) {
 export default defineConfig({
   testMatch: "*.spec.ts",
   // TUI Test 0.0.4 kills a timed-out worker and reuses that dead worker for
-  // its built-in retry. run.ts owns the one permitted retry instead, using a
-  // fresh process and project for the individual failed workflow.
+  // its built-in retry, so the framework retry stays off; a reviving wrapper
+  // owns the one permitted retry (see README.md — the lane is currently
+  // skipped and nothing invokes this config in CI).
   retries: 0,
   timeout: TUI_TEST_TIMEOUT_MS,
   trace: true,

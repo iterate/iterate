@@ -19,4 +19,3 @@ export {
   type RetriedTestRecord,
   type RetryTelemetryFile,
 } from "./retry-telemetry-reporter.ts";
-export { runTuiCaseWithRetry, type TuiCaseAttempt, type TuiCaseResult } from "./tui-case-retry.ts";
