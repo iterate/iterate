@@ -7,7 +7,12 @@ import {
   withWorkerCommit,
 } from "./worker-serve-info.ts";
 import {
+  relIncludesIcon,
+  WORKER_DEFAULT_FAVICON_PATH,
+  workerDefaultFaviconHtml,
+  workerDefaultFaviconResponse,
   workerBuildFailedResponse,
+  workerFaviconDecision,
   workerOverlayDecision,
   workerOverlayHtml,
   workerServeErrorResponse,
@@ -93,6 +98,44 @@ describe("workerOverlayDecision", () => {
   });
 });
 
+describe("user-space favicon", () => {
+  const documentRequest = new Request("https://app.example.com/");
+
+  test("recognizes icon as a case-insensitive rel token", () => {
+    expect(relIncludesIcon("icon")).toBe(true);
+    expect(relIncludesIcon("shortcut ICON")).toBe(true);
+    expect(relIncludesIcon("apple-touch-icon")).toBe(false);
+    expect(relIncludesIcon(null)).toBe(false);
+  });
+
+  test("uses an inverted Iterate mark", async () => {
+    const html = workerDefaultFaviconHtml();
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain("data-iterate-default-favicon");
+    expect(html).toContain(`href="${WORKER_DEFAULT_FAVICON_PATH}"`);
+    const response = workerDefaultFaviconResponse(
+      new Request(`https://app.example.com${WORKER_DEFAULT_FAVICON_PATH}`),
+    );
+    expect(response).not.toBeNull();
+    expect(response!.headers.get("content-type")).toContain("image/svg+xml");
+    const svg = await response!.text();
+    expect(svg).toContain('<rect width="500" height="500" fill="white"');
+    expect(svg.match(/fill="black"/g)).toHaveLength(2);
+  });
+
+  test("remains eligible when only the inline overlay is opted out", () => {
+    expect(
+      workerFaviconDecision(
+        documentRequest,
+        htmlResponse({
+          [OVERLAY_OPT_OUT_HEADER]: "1",
+          "content-security-policy": "default-src 'self'",
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("workerOverlayHtml", () => {
   test("carries the iterate mark and the serve info", () => {
     const html = workerOverlayHtml({ commitOid, kind: "live" });
@@ -143,6 +186,7 @@ describe("workerServeErrorResponse", () => {
     // An error pops its details open immediately; nothing spins on it.
     expect(body).toContain('<div id="panel">');
     expect(body).toContain('[data-kind="serveError"] #ring rect { stroke-dasharray: none');
+    expect(body).toContain("data-iterate-default-favicon");
   });
 });
 
@@ -159,5 +203,6 @@ describe("workerBuildFailedResponse", () => {
     expect(body).not.toContain("<b>zod</b>");
     expect(body).toContain("then reload this page");
     expect(body).not.toContain("const poll = async");
+    expect(body).toContain("data-iterate-default-favicon");
   });
 });

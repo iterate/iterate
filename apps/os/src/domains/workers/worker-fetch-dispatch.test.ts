@@ -71,6 +71,7 @@ describe("worker fetch dispatch header", () => {
     expect(body).toContain(WORKER_BUILDING_HEADER);
     expect(body).toContain('<noscript><meta http-equiv="refresh"');
     expect(body).toContain('data-spinner="true"');
+    expect(body).toContain("data-iterate-default-favicon");
   });
 
   test("the classifier answers build-lifecycle errors with their pages, nothing else", async () => {

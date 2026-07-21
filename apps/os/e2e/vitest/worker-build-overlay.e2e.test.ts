@@ -49,6 +49,23 @@ test(
     const original = await project.repo.readFile({ path: "worker.ts" });
     expect(original?.content).toContain("export default class ProjectWorker");
 
+    const customIconSource = original!.content.replace(
+      "        <html>\n          <body>",
+      '        <html>\n          <head><link rel="shortcut ICON" href="/my-icon.svg"></head>\n          <body>',
+    );
+    expect(customIconSource).not.toBe(original!.content);
+    const customized = await project.repo.commitFiles({
+      changes: [{ path: "worker.ts", content: customIconSource }],
+      message: "set a custom favicon",
+    });
+    const customIcon = await pollHome(
+      ({ commitOid, response }) => response.status === 200 && commitOid === customized.commitOid,
+      "the worker with its own favicon",
+    );
+    const customIconHomepage = await customIcon.response.text();
+    expect(customIconHomepage).toContain('rel="shortcut ICON" href="/my-icon.svg"');
+    expect(customIconHomepage).not.toContain("data-iterate-default-favicon");
+
     await project.repo.commitFiles({
       changes: [{ path: "worker.ts", content: "this is not valid typescript ((((" }],
       message: "break the worker build",
