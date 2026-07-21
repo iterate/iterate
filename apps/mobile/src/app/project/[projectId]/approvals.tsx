@@ -80,7 +80,7 @@ export default function ApprovalsScreen() {
   });
 
   const events = useLiveEvents({
-    queryKey: baseUrl ? ["approval-events", baseUrl, projectId] : ["approval-events", "pending"],
+    queryKey: ["approval-events", baseUrl || "pending", projectId],
     read: async () => {
       const project = await getProjectItx(baseUrl!, projectId);
       return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_EVENT_TYPES });
