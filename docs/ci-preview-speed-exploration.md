@@ -116,6 +116,19 @@ spent 38.93s in its deploy command, 61.29s in readiness, and 158.50s testing.
 This validates the baked runner as a small win while reinforcing that
 Cloudflare convergence and OS test execution remain the first-order work.
 
+The next selected experiment generalizes content-addressed deploy reuse to
+OS, but only for inputs that do not affect its deployed artifact. The reuse
+contract requires the same slot and Worker name, a conservative Git hash over
+OS runtime/build code plus workspace dependencies and generated-config inputs,
+an opaque hash of the complete Doppler config, a prior fully green entry, and
+a live health response from that entry's exact immutable Worker version. An
+e2e, root-spec, or mobile-only change still runs all selected deployed tests,
+but no longer needs to create a byte-identical OS version and wait for another
+global Durable Object rollout. Any missing or mismatched proof falls through
+to the ordinary deploy. OS normally derives a head-pinned pkg.pr.new SDK URL;
+reuse deliberately retains its prior immutable URL only when the fingerprint
+also proves every SDK package and publishing input is unchanged.
+
 ### Fresh-slot correctness baseline
 
 Depot run [`jfq7cp9kfk`](https://depot.dev/orgs/0p91s0lz49/workflows/p5bl4dpj76?job=qr4sf7mn3h&attempt=hld2q92zdj)
@@ -244,6 +257,9 @@ the exploration is active.
 | 2026-07-21 22:12 | Already current at `23d0ae822`.            | No additional changes.                                                                                                                                                                |
 | 2026-07-21 22:19 | Merged `2de2b7eeb` from `origin/main`.     | PR #2232 independently confirms rollout/readiness variance dominates the job tail and the eight Playwright queues are balanced; no direct pipeline speedup. PR #2230 is product-only. |
 | 2026-07-21 22:26 | Merged `9ac198982` from `origin/main`.     | PR #2235 replaces a racy post-settlement snapshot assertion with an awaited event, reducing OS e2e flake risk without adding sleeps or runtime.                                       |
+| 2026-07-21 22:35 | Merged `ed36ba327` from `origin/main`.     | PR #2223 materially changes the deployed OS template/SDK and its e2e coverage, so it correctly forces a new OS deployment; no direct pipeline speedup is expected.                    |
+| 2026-07-21 22:42 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                |
+| 2026-07-21 22:45 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                |
 
 ## Decision log
 
@@ -259,12 +275,14 @@ the exploration is active.
 
 ## Experiment log
 
-| Date       | Experiment                                   | Result                                                                                                                                                                     | Decision                                                                                                      |
-| ---------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 2026-07-21 | Merge latest `main` during exploration.      | Inherited a 57% OS Vitest improvement and unified telemetry before duplicating that work.                                                                                  | Continue the 10-minute merge cadence.                                                                         |
-| 2026-07-21 | Query seven days of preview phase telemetry. | OS deploy p50/p90 is 143.6s/183.7s; non-OS deploys are at most 16.2s p50. OS tests are independently 165.9s p50.                                                           | Treat deployment and test execution as separate workstreams.                                                  |
-| 2026-07-21 | Restore and split deployment telemetry.      | Added deploy run/lane events plus config, command, readiness, and reuse-proof phase events.                                                                                | Use the next preview run as the attributable baseline.                                                        |
-| 2026-07-21 | Instrumented warm-slot all-app baseline.     | 4m38s green; deploy run 111.61s. OS was 46.43s command + 55.48s readiness; Streams was 13.10s command + 94.16s readiness.                                                  | Cloudflare readiness, not local setup, dominates; preserve this head as the control for later comparisons.    |
-| 2026-07-21 | Fresh-slot all-app baseline on `preview-6`.  | The readiness gate passed, then real OS Durable Objects emitted 20 explicit code-update-reset logs (30 broader reset events) and one test failed after a non-atomic retry. | Treat the current gate as a finite sample, not global convergence; prioritize immutable/state-host splits.    |
-| 2026-07-21 | Start preview CI from the baked workspace.   | Startup fell 9.96s → 5.60s and Playwright launch delay fell 6.86s → 0.68s; remote variance limited the end-to-end sample to 4m38s → 4m35s.                                 | Keep the baked runner, but do not mistake its deterministic setup win for a Cloudflare-tail fix.              |
-| 2026-07-21 | Isolate retry identities per test attempt.   | A module-scoped suffix made Vitest retry against durable state left by the failed first attempt while Captun supplied a different egress URL.                              | Generate the suffix inside each test attempt so transient recovery cannot deterministically poison its retry. |
+| Date       | Experiment                                   | Result                                                                                                                                                                                                      | Decision                                                                                                                             |
+| ---------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-07-21 | Merge latest `main` during exploration.      | Inherited a 57% OS Vitest improvement and unified telemetry before duplicating that work.                                                                                                                   | Continue the 10-minute merge cadence.                                                                                                |
+| 2026-07-21 | Query seven days of preview phase telemetry. | OS deploy p50/p90 is 143.6s/183.7s; non-OS deploys are at most 16.2s p50. OS tests are independently 165.9s p50.                                                                                            | Treat deployment and test execution as separate workstreams.                                                                         |
+| 2026-07-21 | Restore and split deployment telemetry.      | Added deploy run/lane events plus config, command, readiness, and reuse-proof phase events.                                                                                                                 | Use the next preview run as the attributable baseline.                                                                               |
+| 2026-07-21 | Instrumented warm-slot all-app baseline.     | 4m38s green; deploy run 111.61s. OS was 46.43s command + 55.48s readiness; Streams was 13.10s command + 94.16s readiness.                                                                                   | Cloudflare readiness, not local setup, dominates; preserve this head as the control for later comparisons.                           |
+| 2026-07-21 | Fresh-slot all-app baseline on `preview-6`.  | The readiness gate passed, then real OS Durable Objects emitted 20 explicit code-update-reset logs (30 broader reset events) and one test failed after a non-atomic retry.                                  | Treat the current gate as a finite sample, not global convergence; prioritize immutable/state-host splits.                           |
+| 2026-07-21 | Start preview CI from the baked workspace.   | Startup fell 9.96s → 5.60s and Playwright launch delay fell 6.86s → 0.68s; remote variance limited the end-to-end sample to 4m38s → 4m35s.                                                                  | Keep the baked runner, but do not mistake its deterministic setup win for a Cloudflare-tail fix.                                     |
+| 2026-07-21 | Isolate retry identities per test attempt.   | A module-scoped suffix made Vitest retry against durable state left by the failed first attempt while Captun supplied a different egress URL.                                                               | Generate the suffix inside each test attempt so transient recovery cannot deterministically poison its retry.                        |
+| 2026-07-21 | Validate retry isolation on the warm slot.   | Depot job `q3kwz26lqm` passed the formerly poisoned integration file. OS deploy was 149.3s (38.6s command + 110.3s readiness); a different stream-subscribe timeout made OS tests 154.4s and the job 5m23s. | Keep the isolation fix; separately diagnose the visible unrelated retry and remove byte-identical OS rollouts from test-only pushes. |
+| 2026-07-21 | Add fail-closed OS deployment reuse.         | Implemented source, full-Doppler-config, same-slot/name, prior-green, and live exact-version proofs. The first run records the new identity; a subsequent e2e-only revision is the A/B arm.                 | Measure before generalizing to other apps; any absent proof retains the full deploy.                                                 |

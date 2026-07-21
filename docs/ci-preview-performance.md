@@ -65,11 +65,20 @@ serially because they intentionally share one warm container.
 - **Watchdogs fail rather than retry.** The TUI quarantine marker and
   Vitest/Playwright processes retain their own bounded `timeout`s, inside the
   workflow backstop.
-- **Readiness proves the uploaded edge version.** OS and the streams example
-  report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
-  final version on the health probe (no multi-second dwell after first match).
-  The probe is a cheap public health request and never wakes synthetic Durable
-  Objects.
+- **Readiness samples the uploaded edge and Durable Object versions.** OS and
+  the streams example report `CF_VERSION_METADATA`; the orchestrator requires
+  wrangler's exact final version across ten synthetic Durable Object placement
+  waves, waits a quiet interval, then revalidates the complete set. This is a
+  bounded rollout sample, not proof over every existing object or its first
+  post-update storage access.
+- **A skipped OS deploy has three independent identities.** The prior green
+  entry must match the same slot/Worker, a conservative Git hash of every OS
+  runtime/build/dependency input, and an opaque hash of the complete Doppler
+  config. A live health request must then be served by that entry's exact
+  immutable Worker version. E2e/spec/mobile-only changes may reuse it; any
+  absent or mismatched proof performs the normal deployment. The deploy's
+  head-pinned pkg.pr.new SDK URL may remain on the prior SHA only when the
+  fingerprint proves every SDK package and publishing input is unchanged.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests

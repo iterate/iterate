@@ -27,6 +27,7 @@ const PreviewWorkflowConcurrency = z.object({
 
 const {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  canReuseRecordedPreviewDeployment,
   acquireAnyEnvironmentConfigLease,
   adoptLeaseHeldBySemaphore,
   claimEnvironmentConfigLease,
@@ -40,6 +41,8 @@ const {
   resolveSlotWaitTotalMs,
   expandPreviewDependencies,
   orderPreviewDeployBatches,
+  previewAppContentFingerprint,
+  probePreviewAppServingOnce,
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
@@ -305,6 +308,15 @@ describe("preview workflow scope", () => {
     const os = cloudflarePreviewApps.os;
 
     expect(os).toMatchObject({
+      contentFingerprintPaths: expect.arrayContaining([
+        "apps/os/src",
+        "apps/os/scripts",
+        ".github/workflows/pkg-pr-new.yml",
+        "packages/iterate",
+        "pnpm-lock.yaml",
+        "scripts/preview/preview.ts",
+      ]),
+      fingerprintDopplerConfig: true,
       paths: expect.arrayContaining([
         "apps/dummy-petshop/**",
         "apps/mobile/**",
@@ -317,6 +329,10 @@ describe("preview workflow scope", () => {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
     });
+    expect(os.contentFingerprintPaths).not.toContain("apps/os/e2e");
+    expect(os.contentFingerprintPaths).not.toContain("apps/mobile");
+    expect(os.contentFingerprintPaths).not.toContain("specs");
+    expect(previewAppContentFingerprint(os, repoRoot)).toMatch(/^sha256-v2:[a-f0-9]{64}$/);
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- packages/iterate/**");
@@ -342,6 +358,58 @@ describe("preview workflow scope", () => {
       "APP_CONFIG_BASE_URL=https://os.iterate-preview-7.com",
       "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
     ]);
+  });
+
+  test("reuses OS only when source, Doppler config, slot, and recorded deployment match", () => {
+    const os = cloudflarePreviewApps.os;
+    const fingerprint = previewAppContentFingerprint(os, repoRoot);
+    const configFingerprint = `sha256-v1:${"a".repeat(64)}`;
+    const existingEntry = CloudflarePreviewAppEntry.parse({
+      appDisplayName: "OS",
+      appSlug: "os",
+      deployedConfigFingerprint: configFingerprint,
+      deployedFingerprint: fingerprint,
+      deployedWorkerName: "os-preview-6",
+      deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
+      headSha: "previous-head",
+      publicUrl: "https://os.iterate-preview-6.com",
+      status: "deployed",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+    const appConfig = {
+      baseUrl: "https://os.iterate-preview-6.com",
+      deploymentConfigFingerprint: configFingerprint,
+      projectHostnameBases: ["iterate-preview-6.app"],
+      workerName: "os-preview-6",
+    };
+
+    expect(
+      canReuseRecordedPreviewDeployment({ app: os, appConfig, existingEntry, fingerprint }),
+    ).toBe(true);
+    expect(
+      canReuseRecordedPreviewDeployment({
+        app: os,
+        appConfig: { ...appConfig, deploymentConfigFingerprint: `sha256-v1:${"b".repeat(64)}` },
+        existingEntry,
+        fingerprint,
+      }),
+    ).toBe(false);
+    expect(
+      canReuseRecordedPreviewDeployment({
+        app: os,
+        appConfig: { ...appConfig, workerName: "os-preview-7" },
+        existingEntry,
+        fingerprint,
+      }),
+    ).toBe(false);
+    expect(
+      canReuseRecordedPreviewDeployment({
+        app: os,
+        appConfig,
+        existingEntry,
+        fingerprint: `sha256-v2:${"c".repeat(64)}`,
+      }),
+    ).toBe(false);
   });
 
   test("selects OS and its dependencies for a root Playwright-only change", async () => {
@@ -723,6 +791,29 @@ describe("preview readiness URLs", () => {
 
   test("returns null when wrangler did not report a deployed worker version", () => {
     expect(parseLastDeployedWorkerVersionId("Uploaded os-preview-8")).toBeNull();
+  });
+
+  test("accepts deployment reuse only from the recorded exact Worker version", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, {
+        status: 200,
+        headers: { "x-iterate-worker-version": "other-version" },
+      }),
+    );
+
+    try {
+      await expect(
+        probePreviewAppServingOnce(
+          new URL("https://os.iterate-preview-8.com/api/health"),
+          "recorded-version",
+        ),
+      ).resolves.toEqual({
+        ok: false,
+        detail: "HTTP 200, Worker version other-version (expected recorded-version)",
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   test("requires the expected worker version to remain stable before declaring readiness", async () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
 import { readFile } from "node:fs/promises";
 import { userInfo } from "node:os";
@@ -1588,6 +1588,12 @@ export type CloudflarePreviewApp = {
    * e2e smoke still runs against the existing worker.
    */
   contentFingerprintPaths?: string[];
+  /**
+   * Fold the complete Doppler config into the deploy identity. This is
+   * deliberately all config values, hashed together (never logged or stored
+   * individually), so an out-of-band secret/config edit invalidates reuse.
+   */
+  fingerprintDopplerConfig?: boolean;
   /** Apps co-selected so this app deploys and tests against one coherent head. */
   previewDependencies?: CloudflarePreviewAppSlug[];
   /**
@@ -2124,6 +2130,42 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
+    // Runtime/build inputs only. Changes under apps/os/e2e, root specs, or
+    // apps/mobile still select and run OS e2e, but can reuse the exact prior
+    // deployment after the source/config/version proofs below. Keeping the
+    // closure conservative is intentional: a false positive costs a deploy;
+    // a false negative could test stale product code.
+    contentFingerprintPaths: [
+      "apps/os/src",
+      "apps/os/public",
+      "apps/os/scripts",
+      "apps/os/sandbox",
+      "apps/os/config-repo-template",
+      "apps/os/iterate-config-repo",
+      "apps/os/package.json",
+      "apps/os/tsconfig.json",
+      "apps/os/vite.config.ts",
+      "apps/auth/src",
+      "apps/auth/package.json",
+      "apps/auth/tsconfig.json",
+      "apps/auth-contract",
+      ".github/workflows/pkg-pr-new.yml",
+      ".pnpmfile.cjs",
+      "packages/iterate",
+      "packages/shared",
+      "packages/typm",
+      "packages/ui",
+      "scripts/lib",
+      "envs.ts",
+      "package.json",
+      "patches",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      // This file chooses deploy-only environment overrides, including the
+      // head-pinned SDK package URL. Its tests/docs cannot affect deployment.
+      "scripts/preview/preview.ts",
+    ],
+    fingerprintDopplerConfig: true,
     // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
     // Petshop. Co-select both; every deploy starts concurrently and OS derives
     // Auth's public signing key directly from Doppler.
@@ -2509,6 +2551,8 @@ export const CloudflarePreviewAppEntry = z.object({
   workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
   /** Content fingerprint of the deployed sources (contentFingerprintPaths). */
   deployedFingerprint: z.string().trim().min(1).nullable().optional(),
+  /** Opaque hash of the complete Doppler config used by this deployment. */
+  deployedConfigFingerprint: z.string().trim().min(1).nullable().optional(),
   /**
    * Main's deployed gzip size in KiB at deploy time, read from the
    * `worker-size/<app>` commit status main deploys publish — the baseline for
@@ -4003,21 +4047,60 @@ async function releaseLeaseDespiteTeardownFailure(input: {
   }
 }
 
-/** Git object ids of the app's fingerprint paths at HEAD — content-addressed,
- * so an unchanged fixture app can skip its deploy entirely. */
+/** Hash the Git object ids of the app's fingerprint paths at HEAD. The path
+ * names and a schema tag are included so changing the declared input closure
+ * invalidates old records even when two entries happen to point at one blob. */
 function previewAppContentFingerprint(
   app: PreviewAppRuntime,
   repositoryRoot: string,
 ): string | null {
   if (!app.contentFingerprintPaths?.length) return null;
-  return execFileSync(
+  const objectIds = execFileSync(
     "git",
     ["rev-parse", ...app.contentFingerprintPaths.map((path) => `HEAD:${path}`)],
     { cwd: repositoryRoot, encoding: "utf8" },
   )
     .trim()
-    .split("\n")
-    .join("+");
+    .split("\n");
+  const fingerprint = createHash("sha256");
+  fingerprint.update("preview-deploy-inputs-v2\0");
+  for (const [index, path] of app.contentFingerprintPaths.entries()) {
+    fingerprint.update(path);
+    fingerprint.update("\0");
+    fingerprint.update(objectIds[index] ?? "<missing>");
+    fingerprint.update("\0");
+  }
+  return `sha256-v2:${fingerprint.digest("hex")}`;
+}
+
+type ResolvedPreviewAppConfig = {
+  baseUrl: string;
+  deploymentConfigFingerprint?: string;
+  projectHostnameBases: string[];
+  readinessBearerToken?: string;
+  workerName: string;
+};
+
+/** Pure eligibility check; a failed or absent proof always falls through to a
+ * normal deploy. Live serving/version proof is intentionally separate. */
+function canReuseRecordedPreviewDeployment(input: {
+  app: PreviewAppRuntime;
+  appConfig: ResolvedPreviewAppConfig;
+  existingEntry: CloudflarePreviewAppEntry | null;
+  fingerprint: string | null;
+}) {
+  const { app, appConfig, existingEntry, fingerprint } = input;
+  return Boolean(
+    fingerprint !== null &&
+    existingEntry?.status === "deployed" &&
+    existingEntry.publicUrl === appConfig.baseUrl &&
+    existingEntry.deployedFingerprint === fingerprint &&
+    existingEntry.deployedWorkerName === appConfig.workerName &&
+    existingEntry.deployedWorkerVersion &&
+    (!app.fingerprintDopplerConfig ||
+      (appConfig.deploymentConfigFingerprint !== undefined &&
+        existingEntry.deployedConfigFingerprint === appConfig.deploymentConfigFingerprint)),
+  );
 }
 
 async function deployPreviewAppWithStatus(input: {
@@ -4101,14 +4184,15 @@ async function deployPreviewApp(input: {
   } as const;
 
   const fingerprint = previewAppContentFingerprint(input.app, input.repositoryRoot);
-  const recordedDeploymentCanBeReused =
-    fingerprint !== null &&
-    input.existingEntry?.status === "deployed" &&
-    input.existingEntry.publicUrl === appConfig.baseUrl &&
-    input.existingEntry.deployedFingerprint === fingerprint &&
-    input.existingEntry.deployedWorkerName === appConfig.workerName &&
-    Boolean(input.existingEntry.deployedWorkerVersion);
-  if (recordedDeploymentCanBeReused && input.existingEntry?.deployedWorkerVersion) {
+  const recordedDeploymentCanBeReused = canReuseRecordedPreviewDeployment({
+    app: input.app,
+    appConfig,
+    existingEntry: input.existingEntry,
+    fingerprint,
+  });
+  const existingEntry = input.existingEntry;
+  const recordedWorkerVersion = existingEntry?.deployedWorkerVersion ?? undefined;
+  if (recordedDeploymentCanBeReused && existingEntry && recordedWorkerVersion && fingerprint) {
     // The record alone is not proof the worker still answers — this app may
     // be selected precisely because the not-serving sweep found it dead
     // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
@@ -4118,25 +4202,34 @@ async function deployPreviewApp(input: {
       resolvePreviewReadinessUrls({
         publicUrl: appConfig.baseUrl,
         readyUrlPath: input.app.previewReadyUrlPath,
-      }).map((url) => probePreviewAppServingOnce(url)),
+      }).map((url) =>
+        probePreviewAppServingOnce(
+          url,
+          input.app.previewReadyWorkerVersion ? recordedWorkerVersion : undefined,
+        ),
+      ),
     );
     const deployReuseProofDurationMs = Date.now() - reuseProofStartedAt;
     if (probes.every((probe) => probe.ok)) {
-      // Same slot, same content, last run fully green, worker answering: what
-      // is serving is byte-identical to what this deploy would upload. Skip
-      // the wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
+      // Same slot, same runtime inputs/config, last run fully green, worker
+      // answering: a deploy cannot change application behavior. OS's only
+      // head-derived setting is the pkg.pr.new SDK URL; every input to that
+      // package is in the fingerprint, so retaining the previous immutable
+      // URL is content-equivalent on an e2e-only head. Skip the
+      // wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
       logPreview(
-        `deploy skipped: ${input.app.slug} unchanged since ${input.existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
+        `deploy skipped: ${input.app.slug} unchanged since ${existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
       );
       return CloudflarePreviewAppEntry.parse({
         ...baseEntry,
+        deployedConfigFingerprint: appConfig.deploymentConfigFingerprint,
         deployedFingerprint: fingerprint,
-        deployedWorkerName: input.existingEntry.deployedWorkerName,
-        deployedWorkerVersion: input.existingEntry.deployedWorkerVersion,
+        deployedWorkerName: existingEntry.deployedWorkerName,
+        deployedWorkerVersion: recordedWorkerVersion,
         deployReuseProofDurationMs,
-        workerSizeKib: input.existingEntry.workerSizeKib ?? null,
-        workerGzipKib: input.existingEntry.workerGzipKib ?? null,
-        mainWorkerGzipKib: input.existingEntry.mainWorkerGzipKib ?? null,
+        workerSizeKib: existingEntry.workerSizeKib ?? null,
+        workerGzipKib: existingEntry.workerGzipKib ?? null,
+        mainWorkerGzipKib: existingEntry.mainWorkerGzipKib ?? null,
         status: "awaiting-tests",
       });
     }
@@ -4218,6 +4311,7 @@ async function deployPreviewApp(input: {
     ...sizeFields,
     deployCommandDurationMs,
     deployReadinessDurationMs,
+    deployedConfigFingerprint: appConfig.deploymentConfigFingerprint,
     deployedWorkerName: appConfig.workerName,
     deployedWorkerVersion,
     deployedFingerprint: fingerprint,
@@ -4234,6 +4328,10 @@ async function readPreviewAppConfig(input: {
 }) {
   const PreviewAppConfig = z.object({
     baseUrl: z.string().trim().url(),
+    deploymentConfigFingerprint: z
+      .string()
+      .regex(/^sha256-v1:[a-f0-9]{64}$/)
+      .optional(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
     readinessBearerToken: z.string().trim().min(1).optional(),
     workerName: z.string().trim().min(1),
@@ -4245,11 +4343,23 @@ async function readPreviewAppConfig(input: {
         `Preview readiness requires Doppler secret ${input.app.previewReadyBearerTokenEnvVar}.`,
       );
     }
+    if (input.app.fingerprintDopplerConfig && !parsed.deploymentConfigFingerprint) {
+      throw new Error("Preview deploy reuse requires an opaque Doppler config fingerprint.");
+    }
     return parsed;
   };
   const repoConfig = input.app.resolvePreviewAppConfig(input.dopplerConfig);
+  const deploymentConfigFingerprint = input.app.fingerprintDopplerConfig
+    ? await readDopplerConfigFingerprint({
+        app: input.app,
+        commandEnvironment: input.commandEnvironment,
+        dopplerConfig: input.dopplerConfig,
+        repositoryRoot: input.repositoryRoot,
+        signal: input.signal,
+      })
+    : undefined;
   if (!input.app.previewReadyBearerTokenEnvVar) {
-    return parsePreviewAppConfig(repoConfig);
+    return parsePreviewAppConfig({ ...repoConfig, deploymentConfigFingerprint });
   }
 
   const readinessBearerTokenEnvVar = JSON.stringify(
@@ -4305,6 +4415,7 @@ async function readPreviewAppConfig(input: {
       ? {
           ...dopplerConfig,
           ...repoConfig,
+          deploymentConfigFingerprint,
           projectHostnameBases:
             repoConfig.projectHostnameBases ??
             ("projectHostnameBases" in dopplerConfig
@@ -4313,6 +4424,44 @@ async function readPreviewAppConfig(input: {
         }
       : dopplerConfig,
   );
+}
+
+/** Hash the exact Doppler config without ever logging or persisting its
+ * contents. One whole-config digest also avoids exposing useful hashes of
+ * individual low-entropy settings. */
+async function readDopplerConfigFingerprint(input: {
+  app: PreviewAppRuntime;
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  repositoryRoot: string;
+  signal?: AbortSignal;
+}) {
+  const result = await runCommand({
+    args: [
+      "secrets",
+      "download",
+      "--no-file",
+      "--format",
+      "json",
+      "--project",
+      input.app.dopplerProject,
+      "--config",
+      input.dopplerConfig,
+    ],
+    command: "doppler",
+    echoOutput: false,
+    environment: input.commandEnvironment,
+    signal: input.signal,
+    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
+  });
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to fingerprint preview app Doppler config.");
+  }
+  const secrets = z.record(z.string(), z.string()).parse(JSON.parse(result.stdout));
+  const canonicalEntries = Object.entries(secrets).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  return `sha256-v1:${createHash("sha256").update(JSON.stringify(canonicalEntries)).digest("hex")}`;
 }
 
 async function runPreviewDeployCommand(input: {
@@ -5477,13 +5626,28 @@ type PreviewAppServingProbe = (url: URL) => Promise<{ ok: boolean; detail: strin
 const previewServingProbeTimeoutMs = 15_000;
 
 /** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
-async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
+async function probePreviewAppServingOnce(
+  url: URL,
+  expectedWorkerVersion?: string,
+): Promise<{ ok: boolean; detail: string }> {
   try {
-    const { status } = await fetchReadinessResponse(url, {
+    const { status, workerVersion } = await fetchReadinessResponse(url, {
       signal: AbortSignal.timeout(previewServingProbeTimeoutMs),
       timeoutMs: previewServingProbeTimeoutMs,
     });
-    return { ok: status >= 200 && status < 300, detail: `HTTP ${status}` };
+    if (status < 200 || status >= 300) return { ok: false, detail: `HTTP ${status}` };
+    if (expectedWorkerVersion && workerVersion !== expectedWorkerVersion) {
+      return {
+        ok: false,
+        detail: `HTTP ${status}, Worker version ${workerVersion ?? "<missing>"} (expected ${expectedWorkerVersion})`,
+      };
+    }
+    return {
+      ok: true,
+      detail: expectedWorkerVersion
+        ? `HTTP ${status}, Worker version ${expectedWorkerVersion}`
+        : `HTTP ${status}`,
+    };
   } catch (error) {
     return { ok: false, detail: formatPreviewErrorMessage(error) };
   }
@@ -6371,6 +6535,9 @@ export const previewInternals = {
   parseEnvironmentConfigLeaseData,
   readPlaywrightTestTelemetry,
   readPreviewAppConfig,
+  canReuseRecordedPreviewDeployment,
+  previewAppContentFingerprint,
+  probePreviewAppServingOnce,
   readVitestTestTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
