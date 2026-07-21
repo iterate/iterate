@@ -256,8 +256,9 @@ function ProjectNameCell({ project }: { project: ProjectListEntry }) {
     <div className="min-w-0 space-y-0.5">
       {project.deploymentStatus === "ready" ? (
         <Link
-          to="/projects/$projectSlug/agents/new"
+          to="/projects/$projectSlug"
           params={{ projectSlug: project.slug }}
+          search={{}}
           className="block truncate font-medium hover:underline"
         >
           {project.slug}
@@ -308,7 +309,7 @@ function ProjectActionsCell({
           variant="outline"
           size="sm"
           render={
-            <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug: project.slug }} />
+            <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} search={{}} />
           }
         >
           Open

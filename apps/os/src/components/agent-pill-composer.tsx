@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import {
   ArrowUpIcon,
   FileCode2Icon,
@@ -30,7 +30,10 @@ type AgentComposerMessageConfig = {
   onSubmit: () => Promise<void> | void;
   attachments?: ReactNode;
   canSubmit?: boolean;
+  /** Open the file picker (hidden input lives in the parent). */
   onAttach?: () => void;
+  /** Accept dropped/selected files (same path as the file picker). */
+  onAddFiles?: (files: FileList | null) => void;
   placeholder?: string;
 };
 
@@ -73,6 +76,7 @@ export function AgentPillComposer({
   onInterrupt?: () => Promise<void> | void;
 }) {
   const messageRef = useRef<HTMLTextAreaElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const activeMode: AgentComposerMode = mode === "message" && message == null ? "raw" : mode;
   const isExamples = activeMode === "examples";
   const canSubmit =
@@ -82,6 +86,7 @@ export function AgentPillComposer({
       ? (message?.canSubmit ?? (message?.value.trim() ?? "") !== "")
       : raw.value.trim() !== "");
   const showInterrupt = activeMode === "message" && onInterrupt != null;
+  const acceptsFileDrop = message?.onAddFiles != null && !isSubmitting;
 
   useEffect(() => {
     if (autoFocusMessage && activeMode === "message") messageRef.current?.focus();
@@ -98,6 +103,31 @@ export function AgentPillComposer({
     void onInterrupt();
   }
 
+  function onDragEnter(event: DragEvent<HTMLDivElement>) {
+    if (!acceptsFileDrop || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setIsDragging(true);
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!acceptsFileDrop || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function onDragLeave(event: DragEvent<HTMLDivElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setIsDragging(false);
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    if (!acceptsFileDrop || !event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    setIsDragging(false);
+    if (activeMode !== "message") onModeChange("message");
+    message?.onAddFiles?.(event.dataTransfer.files);
+  }
+
   return (
     <div className="w-full">
       {error == null ? null : (
@@ -106,9 +136,15 @@ export function AgentPillComposer({
         </p>
       )}
       <div
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        data-drop-active={isDragging ? "true" : undefined}
         className={cn(
-          "flex gap-2 rounded-3xl border bg-background py-2 pl-1.5 pr-2 shadow-sm",
+          "flex gap-2 rounded-3xl border bg-background py-2 pl-1.5 pr-2 shadow-sm transition-shadow",
           isExamples ? "items-start" : "items-end",
+          isDragging && "ring-2 ring-primary/40 border-primary/40",
         )}
       >
         <DropdownMenu>

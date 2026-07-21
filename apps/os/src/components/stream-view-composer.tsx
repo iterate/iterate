@@ -6,11 +6,15 @@ import { Button } from "@iterate-com/ui/components/button";
 import { StreamEventInput, type StreamEvent } from "iterate/processors";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
+import {
+  fileSizeErrorMessage,
+  formatFileSize,
+  partitionFilesBySize,
+} from "~/components/composer-files.ts";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
-const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /**
  * How a domain page lets its stream view send chat messages (agents only).
@@ -121,14 +125,8 @@ export function StreamViewComposer({
   function addSelectedFiles(fileList: FileList | null) {
     const files = Array.from(fileList ?? []);
     if (files.length === 0) return;
-    const accepted = files.filter((file) => file.size <= MAX_MESSAGE_FILE_SIZE_BYTES);
-    const rejected = files.filter((file) => file.size > MAX_MESSAGE_FILE_SIZE_BYTES);
-    if (rejected.length > 0) {
-      const label = rejected.length === 1 ? rejected[0]!.name : `${rejected.length} files`;
-      setFileError(`${label} must be ${formatFileSize(MAX_MESSAGE_FILE_SIZE_BYTES)} or smaller.`);
-    } else {
-      setFileError(undefined);
-    }
+    const { accepted, rejected } = partitionFilesBySize(files);
+    setFileError(fileSizeErrorMessage(rejected));
     if (accepted.length > 0) {
       setSelectedFiles((previous) => [...previous, ...accepted]);
     }
@@ -220,7 +218,10 @@ export function StreamViewComposer({
                 ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
                 ...(messageComposer.onSubmitFiles == null
                   ? {}
-                  : { onAttach: () => fileInputRef.current?.click() }),
+                  : {
+                      onAttach: () => fileInputRef.current?.click(),
+                      onAddFiles: addSelectedFiles,
+                    }),
                 ...(messageComposer.placeholder == null
                   ? {}
                   : { placeholder: messageComposer.placeholder }),
@@ -239,11 +240,4 @@ export function StreamViewComposer({
       />
     </>
   );
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const kilobytes = size / 1024;
-  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
-  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }

@@ -1,57 +1,36 @@
 import { useEffect } from "react";
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowRightIcon } from "lucide-react";
-import { buttonVariants } from "@iterate-com/ui/components/button";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
-import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
-import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
+import { ProjectDashboard } from "~/components/project-dashboard.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agent.ts";
-import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import {
-  breadcrumbLoaderData,
-  streamBreadcrumb,
-  streamPageStaticData,
-} from "~/lib/route-breadcrumbs.ts";
-import { StreamViewSearch } from "~/lib/stream-view-search.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
-const HomeSearch = StreamViewSearch.extend({
+const HomeSearch = z.object({
   /** Set by the create form: play the creation checklist until `ready`, then
    * hand over to the onboarding agent. */
   welcome: z.boolean().optional().catch(undefined),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
-  staticData: streamPageStaticData(),
+  staticData: breadcrumbStaticData("Home"),
   validateSearch: HomeSearch,
   ssr: false,
-  loader: async ({ context }) =>
-    breadcrumbLoaderData({
-      project: context.project,
-      routeConfig: await getPublicRouteConfig(),
-      streamBreadcrumb: streamBreadcrumb(context.project, "/"),
-    }),
   component: ProjectHomePage,
 });
 
 /**
- * The project home is the project ROOT STREAM's page: the stream takes the
- * main space, and the project's reduced state renders live in the side panel.
- * Until the bootstrap saga commits `project/ready`, that panel is the
- * creation checklist (create redirects here immediately, before the saga
- * finishes, and every tick arrives as a processor push); afterwards it is the
- * settings view.
+ * Project home is the lightweight dashboard (new-agent composer + recent
+ * agents). Welcome/create still lands here with `?welcome` and hands off to
+ * the onboarding agent after bootstrap — settings live at `/settings`.
  */
 function ProjectHomePage() {
-  const { project, routeConfig } = Route.useLoaderData();
+  const { project } = Route.useRouteContext();
   const { welcome } = Route.useSearch();
   const params = Route.useParams();
   const navigate = useNavigate();
-  // `address` dials lazily inside the subscription effect, so this page never
-  // suspends: the stream view paints immediately and the side panel shows its
-  // own "Loading project…" card until the first push lands.
   const lifecycle = useLiveState(
     (itx) => itx.liveState,
     (state) => state.reduced,
@@ -59,14 +38,13 @@ function ProjectHomePage() {
     { slug: project.id },
   );
   const ready = lifecycle.value?.ready ?? false;
-  // Onboarding phase: the completion event has not been appended yet. This
-  // keys off the explicit project phase marker, independently of agent state.
   const inOnboarding = lifecycle.value === undefined ? false : isOnboardingActive(lifecycle.value);
   // Create lands here with `welcome` as soon as the project exists. Stay on
   // the checklist until bootstrap flips `ready`, then hand off to the
   // onboarding agent so the user watches the saga rather than waiting on the
   // create button.
   const handOffToOnboarding = welcome === true && ready && inOnboarding;
+  const showWelcomeChecklist = welcome === true;
 
   useEffect(() => {
     if (!handOffToOnboarding) return;
@@ -80,45 +58,22 @@ function ProjectHomePage() {
     });
   }, [handOffToOnboarding, navigate, params.projectSlug]);
 
-  const panel =
-    lifecycle.value === undefined && welcome !== true ? (
-      // No push yet on a plain navigation: this is LOADING, not "creating"
-      // — a fully created project must not flash the checklist.
-      <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
-        Loading project…
-      </div>
-    ) : ready && !handOffToOnboarding ? (
-      <>
-        {inOnboarding ? (
-          <Link
-            to="/projects/$projectSlug/agents/streams/$"
-            params={{ projectSlug: params.projectSlug, _splat: ONBOARDING_AGENT_PATH }}
-            search={{}}
-            className={buttonVariants({ size: "lg", className: "w-full" })}
-          >
-            Continue onboarding
-            <ArrowRightIcon data-icon="inline-end" aria-hidden="true" />
-          </Link>
-        ) : null}
-        <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
-        <ProjectCustomDomainsSettings
-          projectId={project.id}
-          projectState={lifecycle.value}
-          routeConfig={routeConfig}
-        />
-      </>
-    ) : (
-      // Creating (including welcome), or the welcome handoff is in flight:
-      // keep showing the checklist rather than flashing settings.
-      <ProjectCreationProgress state={lifecycle.value} />
+  if (showWelcomeChecklist) {
+    return (
+      <ProjectStreamView
+        panel={<ProjectCreationProgress state={lifecycle.value} />}
+        projectId={project.id}
+        streamPath="/"
+        emptyLabel="No events in the project root stream yet."
+      />
     );
+  }
 
   return (
-    <ProjectStreamView
-      panel={panel}
+    <ProjectDashboard
       projectId={project.id}
-      streamPath="/"
-      emptyLabel="No events in the project root stream yet."
+      projectSlug={params.projectSlug}
+      showContinueOnboarding={inOnboarding}
     />
   );
 }

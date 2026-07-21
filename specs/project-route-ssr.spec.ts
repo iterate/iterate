@@ -6,7 +6,7 @@ test("server-renders project routes before the itx client connects", async ({ he
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
 
-  const response = await page.goto(`/projects/${fixture.project.slug}/agents/new`);
+  const response = await page.goto(`/projects/${fixture.project.slug}`);
   if (response === null) throw new Error("Direct project navigation returned no document response");
 
   const initialHtml = await response.text();

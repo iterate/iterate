@@ -1,122 +1,32 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowUpIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
-import { Spinner } from "@iterate-com/ui/components/spinner";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/sdk/itx/react";
 
+/**
+ * Legacy URL: new-agent composition lives on the project dashboard (home).
+ * Keep this path so old bookmarks and sidebar links resolve cleanly.
+ */
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  // Not a stream view (a centered composer), so no streamBreadcrumb: the
-  // shell's fallback header supplies the label + ⌘K, and the palette derives
-  // project context from the route match.
   staticData: { breadcrumb: "New agent" },
-  loader: ({ context }) => ({ project: context.project }),
-  component: NewAgentPage,
+  ssr: false,
+  component: NewAgentRedirect,
 });
 
-function NewAgentPage() {
-  const params = Route.useParams();
-  const { project } = Route.useLoaderData();
+function NewAgentRedirect() {
+  const { projectSlug } = Route.useParams();
   const navigate = useNavigate();
-  const composerRef = useRef<HTMLTextAreaElement>(null);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState<string>();
 
   useEffect(() => {
-    composerRef.current?.focus();
-  }, []);
-
-  const createAgent = useMutation({
-    mutationFn: async (content: string) => {
-      const agentPath = `/agents/web/${slugifyCreationTime(new Date())}`;
-      // connectItx (imperative, not the suspending hook) narrows the one session
-      // socket to this project. Birth is explicit and completes before the first
-      // conversational event is appended.
-      const itx = await connectItx(project.id);
-      const agent = itx.agents.get(agentPath);
-      await agent.create();
-      await agent.message(content);
-      return agentPath;
-    },
-    onSuccess: (agentPath) => {
-      void navigate({
-        to: "/projects/$projectSlug/agents/streams/$",
-        params: {
-          ...params,
-          _splat: agentPath,
-        },
-        // Fresh view state on the new agent's chat.
-        search: {},
-      });
-    },
-    onError: (mutationError) => {
-      const message =
-        mutationError instanceof Error ? mutationError.message : String(mutationError);
-      setError(message);
-      toast.error(message);
-    },
-  });
-
-  function submit(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const content = message.trim();
-    if (content === "" || createAgent.isPending) return;
-    setError(undefined);
-    createAgent.mutate(content);
-  }
-
-  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    submit();
-  }
-
-  const canSubmit = message.trim() !== "" && !createAgent.isPending;
+    void navigate({
+      to: "/projects/$projectSlug",
+      params: { projectSlug },
+      search: {},
+      replace: true,
+    });
+  }, [navigate, projectSlug]);
 
   return (
-    <main className="flex min-h-full flex-1 items-center justify-center p-4">
-      <form onSubmit={submit} className="w-full max-w-3xl">
-        {error == null ? null : (
-          <p className="mb-2 ml-4 truncate font-mono text-xs text-destructive" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="flex items-end gap-2 rounded-3xl border bg-background py-2 pl-4 pr-2 shadow-sm">
-          <textarea
-            ref={composerRef}
-            value={message}
-            onChange={(event) => setMessage(event.currentTarget.value)}
-            onKeyDown={onComposerKeyDown}
-            rows={1}
-            aria-label="Message a new agent"
-            placeholder="Message a new agent"
-            className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
-          />
-          <Button
-            size="icon-lg"
-            type="submit"
-            title="Create agent"
-            disabled={!canSubmit}
-            className="rounded-full"
-          >
-            {createAgent.isPending ? (
-              <Spinner className="size-4" />
-            ) : (
-              <ArrowUpIcon className="size-4" />
-            )}
-          </Button>
-        </div>
-      </form>
+    <main className="flex min-h-full flex-1 items-center justify-center p-4 text-sm text-muted-foreground">
+      Opening project home…
     </main>
   );
-}
-
-function slugifyCreationTime(date: Date) {
-  return date
-    .toISOString()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }

@@ -30,8 +30,16 @@ test("opening OS returns to the most recently active project", async ({ helpers,
   const recent = fixture.projects[1]!;
 
   await page.goto(`/projects/${recent.slug}`);
-  await page.getByTestId("project-settings-panel").waitFor();
+  await page.getByTestId("project-dashboard").waitFor();
   await page.goto("/");
 
   expect(page.url()).toContain(`/projects/${recent.slug}`);
+});
+
+test("project settings is available under /settings", async ({ helpers, page }) => {
+  await using fixture = await helpers.createFixture("project-settings");
+
+  await page.goto(`/projects/${fixture.project.slug}/settings`);
+  await page.getByTestId("project-settings-panel").waitFor();
+  expect(page.url()).toContain(`/projects/${fixture.project.slug}/settings`);
 });
