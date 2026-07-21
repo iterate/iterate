@@ -14,7 +14,7 @@
  * canonical `<app>--<project>` hosts: the whole label is a legitimate
  * project-slug candidate, but its expected miss must not make each fresh
  * ingress isolate round-trip through the auth worker. Hits are written back,
- * and `projects.create` primes the cache eagerly so the post-create navigation
+ * and `projects.get(slug).create` primes the cache eagerly so post-create navigation
  * never misses.
  */
 import { itxEnv } from "./env.ts";
@@ -207,7 +207,7 @@ async function writeThrough(
   record: ProjectDirectoryRecord,
   policy: { attemptTimeoutMs: number; maxAttempts: number },
 ) {
-  // No expiration: slugs are immutable and `projects.create` overwrites the
+  // No expiration: slugs are immutable and `projects.get(slug).create` overwrites the
   // keys it primes, so entries never go stale — and admin-lane projects
   // (auth mints only an id, no directory row) have NO auth fallback, so an
   // expiring cache would break their slug ingress after the TTL. Clearing the

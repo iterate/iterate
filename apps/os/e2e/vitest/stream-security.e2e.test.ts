@@ -21,7 +21,7 @@ test("project.processor does not expose the host-only ingest method over RPC", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `sec-ingest-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`sec-ingest-${RUN_SUFFIX}-${marker}`).create({});
 
   // Reach past the typed surface exactly as a hostile caller would.
   const processor = project.processor as unknown as {
@@ -59,7 +59,7 @@ test("append accepts an offset assertion on a subscription-configured core event
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `sec-offset-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`sec-offset-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
   // A brand-new project stream has committed created(1) + the birth-certificate
@@ -108,7 +108,7 @@ test("subscribe rejects a malformed subscriber descriptor instead of corrupting 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `sec-subscriber-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`sec-subscriber-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
   // An explicit key makes the rejected attempt identifiable in the state

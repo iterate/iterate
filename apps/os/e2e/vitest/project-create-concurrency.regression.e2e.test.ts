@@ -10,8 +10,10 @@ test.fails(
     });
     const slug = `project-create-race-${crypto.randomUUID().slice(0, 8)}`;
 
-    using first = session.projects.create({ slug, waitUntilReady: false });
-    using second = session.projects.create({ slug, waitUntilReady: false });
+    // Deliberately retain the two pipelined promises here: awaiting the first
+    // create before issuing the second would no longer exercise the race.
+    using first = session.projects.get(slug).create({});
+    using second = session.projects.get(slug).create({});
     const [firstIdentity, secondIdentity] = await Promise.all([
       first.identity(),
       second.identity(),

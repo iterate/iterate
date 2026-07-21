@@ -655,8 +655,8 @@ export class StreamProcessorRunner<
             previousState: reduction.previousState,
             state: reduction.state,
             delivery,
-            blockProcessorWhile: (work) => {
-              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work));
+            blockProcessorWhile: (reason, work) => {
+              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work, reason));
               eventChain = attempt;
               startedBlockers.push(attempt);
             },
@@ -705,8 +705,8 @@ export class StreamProcessorRunner<
           previousState: ctx.state,
           state: ctx.state,
           delivery,
-          blockProcessorWhile: (work) => {
-            const attempt = passChain.then(() => this.#keepAliveBackedWork(work));
+          blockProcessorWhile: (reason, work) => {
+            const attempt = passChain.then(() => this.#keepAliveBackedWork(work, reason));
             passChain = attempt;
             startedBlockers.push(attempt);
           },
@@ -1020,21 +1020,33 @@ export class StreamProcessorRunner<
    * plain `keepAlive` hook, else run directly. Same fire-and-forget→promise
    * bridge as the legacy `#runKeepAliveBackedWork`.
    */
-  async #keepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
+  async #keepAliveBackedWork(work: () => Promise<unknown>, blockReason?: string): Promise<unknown> {
     const keepAliveWhile = this.durability?.recovery?.keepAliveWhile ?? this.keepAlive;
-    if (keepAliveWhile === undefined) return await work();
-    return await new Promise<unknown>((resolve, reject) => {
-      keepAliveWhile(async () => {
-        try {
-          const result = await work();
-          resolve(result);
-          return result;
-        } catch (error) {
-          reject(error);
-          throw error;
-        }
+    try {
+      if (keepAliveWhile === undefined) return await work();
+      return await new Promise<unknown>((resolve, reject) => {
+        keepAliveWhile(async () => {
+          try {
+            const result = await work();
+            resolve(result);
+            return result;
+          } catch (error) {
+            reject(error);
+            throw error;
+          }
+        });
       });
-    });
+    } catch (error) {
+      // Name WHICH blocker failed (the frame-level error cannot); the frame
+      // still fails and retries — this log adds context, not handling.
+      if (blockReason !== undefined) {
+        console.error(
+          `stream processor blocked work failed (${this.driver.contract.slug}: ${blockReason})`,
+          error,
+        );
+      }
+      throw error;
+    }
   }
 
   /** Serialize frames + self-pulls; the chain swallows each entry's

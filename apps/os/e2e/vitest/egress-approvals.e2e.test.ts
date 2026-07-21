@@ -30,7 +30,7 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = itx.projects.create({ slug: `egress-approvals-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`egress-approvals-${crypto.randomUUID()}`).create({});
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 
@@ -191,9 +191,9 @@ test("enrolled approval keys make unsigned grants inert; a signed grant releases
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
 
   try {
-    using project = itx.projects.create({
-      slug: `egress-approvals-signed-${crypto.randomUUID()}`,
-    });
+    using project = await itx.projects
+      .get(`egress-approvals-signed-${crypto.randomUUID()}`)
+      .create({});
     // The signed message binds the real prj_… id (what the DO verifies with).
     const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");

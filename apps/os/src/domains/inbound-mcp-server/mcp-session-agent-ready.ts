@@ -12,7 +12,7 @@ export async function ensureMcpSessionAgentReady(input: {
   projectItx: {
     agents: {
       get(path: string): {
-        create(): Promise<void>;
+        create(): Promise<unknown>;
         append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
       };
     };

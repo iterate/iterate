@@ -57,17 +57,21 @@ export function shouldApplySandboxSheetOpenChange(
   return nextOpen || !createPending;
 }
 
-export function parseSandboxCreateForm(input: SandboxCreateFormValues): SandboxCreateInput {
+export function parseSandboxCreateForm(input: SandboxCreateFormValues): {
+  input: SandboxCreateInput;
+  path: string;
+} {
   const parsed = SandboxCreateFormSchema.parse(input);
-  return parsed.keepAlive
-    ? {
-        name: parsed.name,
-        instanceType: parsed.instanceType,
-        keepAlive: true,
-      }
-    : {
-        name: parsed.name,
-        instanceType: parsed.instanceType,
-        sleepAfter: parsed.sleepAfter,
-      };
+  return {
+    path: sandboxPathFor(parsed.name),
+    input: parsed.keepAlive
+      ? {
+          instanceType: parsed.instanceType,
+          keepAlive: true,
+        }
+      : {
+          instanceType: parsed.instanceType,
+          sleepAfter: parsed.sleepAfter,
+        },
+  };
 }

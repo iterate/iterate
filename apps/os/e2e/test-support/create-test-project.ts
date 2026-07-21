@@ -20,7 +20,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   const slug = uniqueFixtureSlug(opts.slugPrefix, { maxPrefixLength: 20 });
 
   using session = createAdminOsItx({ baseUrl });
-  using created = session.projects.create({ slug });
+  using created = await session.projects.get(slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 

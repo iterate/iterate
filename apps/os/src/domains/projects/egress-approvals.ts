@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 // =============================================================================
 // Human-in-the-loop egress approvals.
 //
@@ -25,90 +23,21 @@ import { z } from "zod";
 // 64-byte r‖s signature.
 // =============================================================================
 
-/** Matchers of one egress rule. Absent fields match everything. */
-const EgressRuleMatch = z.object({
-  /** Hostnames, with `*.` wildcard support: "api.stripe.com", "*.stripe.com". */
-  hosts: z.array(z.string()).optional(),
-  /** HTTP methods (case-insensitive): ["POST", "DELETE"]. */
-  methods: z.array(z.string()).optional(),
-  /** URL path prefix: "/v1/transfers". */
-  pathPrefix: z.string().optional(),
-  /**
-   * Secret paths the request references (getSecret placeholders). This is the
-   * secret-aware trigger: "any request spending /secrets/stripe/prod needs a
-   * human", regardless of destination.
-   */
-  secretPaths: z.array(z.string()).optional(),
-});
+// The event payload and state schemas live INLINE in the project processor
+// contract (the contract owns every nested data structure); this module only
+// re-exports their inferred types for its own function signatures and for
+// the out-of-app importers (the `iterate approve` CLI, the mobile approver).
+import type {
+  EgressRule,
+  HumanApprovalKey,
+  HumanApprovalRequestedPayload,
+} from "./project-processor-contract.ts";
 
-export const EgressRule = z.object({
-  /** Caller-provided identifier; the requested event names the rule that caught it. */
-  ruleKey: z.string().min(1),
-  /** Human-readable "why was this caught" line, shown on the approval prompt. */
-  description: z.string().default(""),
-  match: EgressRuleMatch.default({}),
-  verdict: z.enum(["hold", "deny"]),
-  /** How long a held request waits for a human before auto-rejecting. */
-  approvalTimeoutMs: z.number().int().positive().max(3_600_000).default(600_000),
-});
-
-export type EgressRule = z.output<typeof EgressRule>;
-
-/** One enrolled approval public key as reduced onto project processor state. */
-export const HumanApprovalKey = z.object({
-  keyId: z.string(),
-  /** Base64 of the uncompressed P-256 public point (65 bytes, 0x04‖X‖Y). */
-  publicKey: z.string(),
-  label: z.string().default(""),
-  addedAt: z.string(),
-  revokedAt: z.string().nullable().default(null),
-});
-
-export type HumanApprovalKey = z.output<typeof HumanApprovalKey>;
-
-/**
- * The `human-approval-requested` payload fields the approval signature
- * covers. Everything here is placeholder-form (getSecret(...) references,
- * never material) — what the human approves is "a request that will spend
- * this secret", and the material never reaches the approval device.
- */
-export const HumanApprovalRequestedPayload = z.object({
-  method: z.string(),
-  url: z.string(),
-  /** All headers as they would be forwarded, placeholder form. */
-  headers: z.record(z.string(), z.string()),
-  /** Hex SHA-256 of the body bytes; null for bodyless requests. */
-  bodySha256: z.string().nullable().default(null),
-  /** First ~2KB of a UTF-8 body, for the approval UI only (NOT signed). */
-  bodyPreview: z.string().nullable().default(null),
-  /** Secret paths the request references — the "spends this secret" headline. */
-  secretPaths: z.array(z.string()).default([]),
-  /** The rule that caught the request. */
-  ruleKey: z.string(),
-  expiresAt: z.string(),
-});
-
-export type HumanApprovalRequestedPayload = z.output<typeof HumanApprovalRequestedPayload>;
-
-/** A held request's identity is the offset of its requested event — no minted ids. */
-const HumanApprovalResolutionPayload = z.object({
-  approvalRequestEventOffset: z.number().int().nonnegative(),
-});
-
-export const HumanApprovalGrantedPayload = HumanApprovalResolutionPayload.extend({
-  keyId: z.string().optional(),
-  /** Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval message. */
-  signature: z.string().optional(),
-});
-
-export const HumanApprovalRejectedPayload = HumanApprovalResolutionPayload.extend({
-  reason: z.enum(["human", "expired"]),
-});
-
-export const HumanApprovalSettledPayload = HumanApprovalResolutionPayload.extend({
-  status: z.number().int().optional(),
-  error: z.string().optional(),
-});
+export type {
+  EgressRule,
+  HumanApprovalKey,
+  HumanApprovalRequestedPayload,
+} from "./project-processor-contract.ts";
 
 // -----------------------------------------------------------------------------
 // Rule matching.

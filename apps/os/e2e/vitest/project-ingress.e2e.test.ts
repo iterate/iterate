@@ -20,7 +20,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `project-ingress-${marker}` });
+  using project = await itx.projects.get(`project-ingress-${marker}`).create({});
   const { projectId } = await project.__describe();
 
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
@@ -50,7 +50,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug });
+  using project = await itx.projects.get(slug).create({});
   const { projectId } = await project.__describe();
 
   const fetchApp = (
@@ -182,7 +182,7 @@ test("counter websockets: upgrade flows through ingress and increments broadcast
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug });
+  using project = await itx.projects.get(slug).create({});
   await project.__describe();
 
   const base = new URL(buildUrl({ path: "/" }));

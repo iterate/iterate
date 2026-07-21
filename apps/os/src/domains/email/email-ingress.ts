@@ -27,8 +27,6 @@ import {
   EMAIL_BODY_TRUNCATE_CHARS,
   EMAIL_INTEGRATION_STREAM_PATH,
   EMAIL_MAX_RAW_SIZE_BYTES,
-  EMAIL_RECEIVED_EVENT_TYPE,
-  EMAIL_REJECTED_EVENT_TYPE,
   dmarcPasses,
   emailDomainForDeployment,
   fallbackInboundMessageKey,
@@ -57,8 +55,9 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     return;
   }
   // Project creation owns this birth. If the directory became visible before
-  // its email-router append finished, throw so SMTP retries instead of folding
-  // a message before the processor can act on it and losing that delivery.
+  // its email-router append finished, throw so SMTP retries instead of
+  // reducing a message before the processor can act on it and losing that
+  // delivery.
   const projectPatterns = await readCreatedProjectAllowedSenders(project.id);
 
   const rejectMail = async (reason: string, rejectMessage: string) => {
@@ -76,7 +75,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     // Envelope-sized audit fact — the project can see someone knocked, but
     // rejected bodies are never stored.
     await integrationStreamStub(project.id, EMAIL_INTEGRATION_STREAM_PATH).append({
-      type: EMAIL_REJECTED_EVENT_TYPE,
+      type: "events.iterate.com/email/rejected",
       idempotencyKey: `email-rejected:${messageKey}:${message.to.toLowerCase()}:${reason}`,
       payload: {
         envelope: { from: message.from, to: message.to },
@@ -125,7 +124,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
     }));
 
   const receivedEvent = {
-    type: EMAIL_RECEIVED_EVENT_TYPE,
+    type: "events.iterate.com/email/received",
     // The recipient is part of the key: one message delivered to two of the
     // project's addresses (To + Cc'd thread tag) is two routing decisions.
     idempotencyKey: `email-received:${messageKey}:${message.to.toLowerCase()}`,
@@ -169,7 +168,7 @@ export async function handleInboundEmail(message: ForwardableEmailMessage): Prom
  * The project's own sender allowlist, read from a router whose birth is
  * durably visible. Snapshot catch-up provides read-your-writes when push is
  * lagging. A missing birth or read failure throws so SMTP retries: appending
- * any inbound fact before birth would fold it without performing its action.
+ * any inbound fact before birth would reduce it without performing its action.
  */
 async function readCreatedProjectAllowedSenders(projectId: string): Promise<string[]> {
   try {

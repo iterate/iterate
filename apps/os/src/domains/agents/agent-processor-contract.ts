@@ -7,9 +7,9 @@
 // usage) are hoisted functions defined below the contract, so the contract
 // still opens the file.
 //
-// No synthetic ids anywhere: the journal already assigns every event a
+// No synthetic ids anywhere: the stream already assigns every event a
 // unique, ordered identity — its offset. An LLM request IS its
-// `llm-request-requested` event, named by the offset the journal gave it on
+// `llm-request-requested` event, named by the offset the stream gave it on
 // commit; settlements point back with that offset, and idempotency keys are
 // derived from offsets.
 //
@@ -49,12 +49,12 @@ export const AgentProcessorContract = defineProcessorContract({
       .nullable()
       .default(null)
       .meta({
-        description: "Existence marker: null until agent/created folds. No turns run before it.",
+        description: "Existence marker: null until agent/created reduces. No turns run before it.",
       }),
     // The complete configuration, every knob defaulted. `.prefault({})` is
     // core zod 4 (not a patch): unlike `.default(value)`, which returns the
     // value AS-IS when the input is absent, prefault PARSES it — so the empty
-    // fold runs `{}` through the schema and every nested knob default fills
+    // reduction runs `{}` through the schema and every nested knob default fills
     // in. `agent/configured` merges partial patches (omitted keys keep their
     // values); the implementation re-validates merges through
     // `AgentProcessorContract.stateSchema.shape.config`.
@@ -77,7 +77,7 @@ export const AgentProcessorContract = defineProcessorContract({
           .default(250)
           .meta({
             description:
-              "Debounce window before a pending trigger journals its turn intent: long enough " +
+              "Debounce window before a pending trigger records its turn intent: long enough " +
               "to coalesce a burst of context events that arrive together (a message plus its " +
               "attachments, a script result fan-in), short enough to be invisible next to LLM " +
               "latency. Measured from the FIRST uncovered trigger — continuous input cannot " +
@@ -90,7 +90,7 @@ export const AgentProcessorContract = defineProcessorContract({
           .default(10 * 60_000)
           .meta({
             description:
-              "How long a journaled intent stays runnable, measured from its trigger. Past " +
+              "How long a recorded intent stays runnable, measured from its trigger. Past " +
               "this the processor settles it cancelled/expired instead of running it: " +
               "answering a ten-minute-old message with a context snapshot from then does more " +
               "harm than admitting the miss. Also the per-attempt transport deadline, so an " +
@@ -129,7 +129,7 @@ export const AgentProcessorContract = defineProcessorContract({
           .meta({
             description:
               "Circuit breaker on self-driven turn chains (scripts/agents triggering the next " +
-              "turn): this many autonomous turns without external input journals agent/paused; " +
+              "turn): this many autonomous turns without external input records agent/paused; " +
               "the next external message resumes.",
           }),
         scriptResultHistoryLimit: z
@@ -163,7 +163,7 @@ export const AgentProcessorContract = defineProcessorContract({
       .array(
         z.object({
           offset: z.number().int().positive().meta({
-            description: "Journal offset of the context-added event this item folded from.",
+            description: "Stream offset of the context-added event this item reduced from.",
           }),
           payload: agentContextItemSchema(),
         }),
@@ -171,7 +171,7 @@ export const AgentProcessorContract = defineProcessorContract({
       .default([])
       .meta({
         description:
-          "The conversation fold: ONE ordered list of every model-visible item (system items " +
+          "The reduced conversation: ONE ordered list of every model-visible item (system items " +
           "sit in place — providers accept system/developer content mid-history). A keyed item " +
           "no request has covered yet is replaced in place by an update with the same key; a " +
           "covered one appends a new occurrence (see lastLlmRequestOffset). Compaction " +
@@ -226,10 +226,10 @@ export const AgentProcessorContract = defineProcessorContract({
       .default(null)
       .meta({
         description:
-          "The one open LLM request: a turn whose INTENT is journaled. null = nothing owed. " +
-          "This is the whole recoverability story — the intent lives in the journal, not in a " +
-          "closure, so any incarnation that folds the journal knows what is owed regardless " +
-          "of who died in between. At most one request is ever open: a new intent folds to " +
+          "The one open LLM request: a turn whose INTENT is recorded. null = nothing owed. " +
+          "This is the whole recoverability story — the intent lives in the stream, not in a " +
+          "closure, so any incarnation that reduces the stream knows what is owed regardless " +
+          "of who died in between. At most one request is ever open: a new intent reduces to " +
           "nothing while this is set.",
       }),
     consecutiveLlmFailures: z
@@ -296,7 +296,7 @@ export const AgentProcessorContract = defineProcessorContract({
       .prefault({})
       .meta({
         description:
-          "Lifetime token totals, folded from token-usage-reported. Cost/observability data, " +
+          "Lifetime token totals, reduced from token-usage-reported. Cost/observability data, " +
           "not loop-control state: nothing in the agent loop branches on it. The compaction " +
           "trigger reads each report's own payload instead (the report carries " +
           "maxContextTokens for exactly that).",
@@ -427,9 +427,9 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The journaled INTENT to run one LLM turn. Carries no id: the request's identity is the " +
-        "offset this event gets on commit. The fold ignores it when no trigger is pending or a " +
-        "request already is open — a late debounced intent is a harmless journal fact.",
+        "The recorded INTENT to run one LLM turn. Carries no id: the request's identity is the " +
+        "offset this event gets on commit. The reduce ignores it when no trigger is pending or a " +
+        "request already is open — a late debounced intent is a harmless stream fact.",
       payloadSchema: z.object({
         model: z.string().meta({ description: "Model pinned for this turn." }),
         expiresAt: z.number().meta({
@@ -442,7 +442,7 @@ export const AgentProcessorContract = defineProcessorContract({
       examples: [
         {
           description:
-            "The debounce elapsed and the intent journaled; this event's own offset becomes " +
+            "The debounce elapsed and the intent was recorded; this event's own offset becomes " +
             "the requestOffset every later fact references.",
           payload: { model: "openai/gpt-5.6-sol", expiresAt: 1752000600000 },
         },
@@ -516,7 +516,7 @@ export const AgentProcessorContract = defineProcessorContract({
         {
           description:
             "The LLM call failed; the error rides a stream/error-occurred event into " +
-            "model-visible context and the fold schedules the retry.",
+            "model-visible context and the reduce schedules the retry.",
           payload: {
             requestOffset: 61,
             durationMs: 30012,
@@ -546,7 +546,7 @@ export const AgentProcessorContract = defineProcessorContract({
       // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
       // Every append/parse lane built from this definition defaults the
       // envelope's `ephemeral` flag to true and REJECTS `ephemeral: false`,
-      // so a chunk can never become a durable journal fact by accident.
+      // so a chunk can never become a durable stream fact by accident.
       ephemeral: true,
       payloadSchema: z.object({
         chunk: z.unknown().meta({ description: "The provider's chunk object, verbatim." }),
@@ -662,7 +662,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description:
         "Sets or enriches the typed external object this agent represents. Bindings are " +
         "normally emitted atomically with integration agent creation, never inferred from " +
-        "paths. Contract-owned but folded by integration processors, not by the agent.",
+        "paths. Contract-owned but reduced by integration processors, not by the agent.",
       payloadSchema: AgentBinding,
       examples: [
         {
@@ -762,14 +762,14 @@ export type AgentContextAddedPayload = AgentProcessorState["contextItems"][numbe
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
 
-/** Exact runtime plus the event which first established it in the fold. This
- * is processor state exposed through live state, not a journal event. */
+/** Exact runtime plus the event which first established it in reduced state.
+ * This is processor state exposed through live state, not a stream event. */
 export const AgentRuntimeTransition = agentRuntimeTransitionSchema();
 export type AgentRuntimeTransition = z.infer<typeof AgentRuntimeTransition>;
 
-/** The deliberately small push surface for one Agent DO. The full fold stays
+/** The deliberately small push surface for one Agent DO. The full reduced state stays
  * behind `processor.snapshot()`; publishing context/history through live state
- * would duplicate the journal on every conversation update. */
+ * would duplicate the stream on every conversation update. */
 export const AgentLiveState = z.strictObject({
   runtimeChange: AgentRuntimeTransition.optional(),
 });
@@ -784,7 +784,7 @@ export type AgentLiveState = z.infer<typeof AgentLiveState>;
  * actor union are how the slack/telegram/email/github integrations attach
  * provenance and source coordinates; `compaction` marks the structural
  * history rewrite produced by context compaction. Parse failure means the
- * item silently drops from the fold, i.e. conversation loss.
+ * item silently drops from reduced state, i.e. conversation loss.
  */
 function agentContextItemSchema() {
   return z
@@ -929,7 +929,7 @@ function agentContextItemSchema() {
         .meta({
           description:
             "On assistant items: offset of the llm-request-requested event this output " +
-            "answers. The fold IGNORES an assistant item whose request is no longer the open " +
+            "answers. The reduce IGNORES an assistant item whose request is no longer the open " +
             "one — that guard is what closes the interrupt-vs-settle race.",
         }),
       compaction: z

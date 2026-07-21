@@ -134,7 +134,7 @@ async function seedProject(input: { baseUrl: URL }) {
   const slug = previewSmokeProjectSlug();
   using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
   try {
-    await itx.projects.create({ slug });
+    await itx.projects.get(slug).create({});
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     const message = error instanceof Error ? error.message : String(error);
@@ -165,7 +165,7 @@ function canDeriveProjectMcpUrl(input: { baseUrl: URL }) {
 }
 
 async function seedProjectMcpUrl(input: { baseUrl: URL }) {
-  // The preview smoke deliberately uses the normal `projects.create` itx
+  // The preview smoke deliberately uses the normal `projects.get(slug).create` itx
   // procedure (admin handle → synthetic operator org), keeping this path close
   // to the UI while still making preview checks repeatable without Clerk.
   await seedProject(input);

@@ -77,7 +77,7 @@ test("configured processor subscriptions are recorded as configured runtime conn
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-configured-${marker}` });
+  using project = await itx.projects.get(`lifecycle-configured-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys, state } = await waitForConfiguredProcessorConnections(stream);
@@ -105,7 +105,7 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-key-reserved-${marker}` });
+  using project = await itx.projects.get(`lifecycle-key-reserved-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys } = await waitForConfiguredProcessorConnections(stream);
@@ -142,7 +142,7 @@ test("delivery expressions must end in a property step, rejected before commit",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-call-tail-${marker}` });
+  using project = await itx.projects.get(`configured-call-tail-${marker}`).create({});
   using stream = project.streams.get(`/configured-call-tail-${marker}`);
 
   await expect(
@@ -172,7 +172,7 @@ test("webhook subscriptions validate their URL before commit", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `configured-webhook-url-${marker}` });
+  using project = await itx.projects.get(`configured-webhook-url-${marker}`).create({});
   using stream = project.streams.get(`/configured-webhook-url-${marker}`);
 
   await expect(
@@ -225,7 +225,7 @@ test("subscription and subscribe inputs are validated at the door", async () => 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-input-gates-${marker}` });
+  using project = await itx.projects.get(`lifecycle-input-gates-${marker}`).create({});
   using stream = project.streams.get(`/lifecycle-input-gates-${marker}`);
 
   await expect(
@@ -267,7 +267,7 @@ test("wake expressions traverse dynamic dispatch surfaces (the slack router shap
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-dynamic-wake-${marker}` });
+  using project = await itx.projects.get(`lifecycle-dynamic-wake-${marker}`).create({});
   using stream = project.streams.get(`/integrations/slack/${connection}`);
 
   const subscriptionKey = `dynamic-wake-${marker}`;
@@ -326,7 +326,7 @@ test("project streams are born with the project-worker push feed and replace it 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-worker-feed-${marker}` });
+  using project = await itx.projects.get(`lifecycle-worker-feed-${marker}`).create({});
   using stream = project.streams.get(`/lifecycle-worker-feed-${marker}`);
 
   // Born configured: a fresh child stream's runtime subscription table shows
@@ -381,7 +381,7 @@ test("stream idle teardown severs configured processor subscriptions", async () 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-idle-${marker}` });
+  using project = await itx.projects.get(`lifecycle-idle-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
@@ -427,7 +427,7 @@ test("append after idle teardown re-wakes configured subscriber from its checkpo
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-redial-${marker}` });
+  using project = await itx.projects.get(`lifecycle-redial-${marker}`).create({});
   using stream = project.streams.get("/");
 
   const { keys } = await waitForConfiguredProcessorConnections(stream, { settled: true });
@@ -467,7 +467,7 @@ test("closing a Cap'n Web session without unsubscribe removes its stream subscri
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = observerItx.projects.create({ slug: `lifecycle-session-close-${marker}` });
+  using project = await observerItx.projects.get(`lifecycle-session-close-${marker}`).create({});
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -529,7 +529,7 @@ test.skip("dropping a WebSocket waitForEvent caller cleans up the internal waitF
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = observerItx.projects.create({ slug: `lifecycle-wait-${marker}` });
+  using project = await observerItx.projects.get(`lifecycle-wait-${marker}`).create({});
   const { projectId } = await project.__describe();
   using observerStream = project.streams.get(streamPath);
 
@@ -583,7 +583,7 @@ test("a stream DO kill mid-call rejects with the stream-unavailable tag", async 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `lifecycle-kill-tag-${marker}` });
+  using project = await itx.projects.get(`lifecycle-kill-tag-${marker}`).create({});
   using stream = project.streams.get(`/lifecycle-kill-tag-${marker}`);
 
   const parked = (async () => {

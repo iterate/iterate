@@ -9,7 +9,10 @@ export const BrowserRawEventsContract = defineProcessorContract({
   slug: "browser-raw-events",
   version: "0.1.0",
   description: "Mirrors raw stream events into the browser SQLite events table.",
-  stateSchema: z.object({}),
+  stateSchema: z.object({}).meta({
+    description:
+      "Stateless: the per-stream SQLite events table is the projection; the only durable bookkeeping is the runner's resume cursor.",
+  }),
   events: {},
   consumes: ["*"],
   emits: [],

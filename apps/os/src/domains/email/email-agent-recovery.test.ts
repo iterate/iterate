@@ -13,9 +13,9 @@
 //
 // The processor is driven the way production drives it: a REAL
 // createStreamProcessorRegistry (runner + durableObjectRecovery + keepalive
-// alarm) over a fake DurableObjectState, the in-memory MemoryStream journal,
+// alarm) over a fake DurableObjectState, the in-memory MemoryStream,
 // and a virtual clock — the same harness shape as repo-recovery.test.ts.
-// `crash()` is an eviction: in-flight work dies; the journal, KV progress,
+// `crash()` is an eviction: in-flight work dies; the stream, KV progress,
 // and the durable alarm survive.
 
 import { describe, expect, it } from "vitest";
@@ -25,7 +25,6 @@ import {
   createStreamProcessorRegistry,
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./email-agent-processor-contract.ts";
 import { EmailAgentProcessor } from "./email-agent-processor-implementation.ts";
@@ -150,7 +149,7 @@ function makeHarness() {
       return registry;
     },
     /** Evict the incarnation: registry, runner, and the in-flight
-     * transcription die; the journal, KV progress, and the durable alarm
+     * transcription die; the stream, KV progress, and the durable alarm
      * survive. */
     crash() {
       pending = [];
@@ -228,15 +227,15 @@ describe("eviction recovery end to end", () => {
       h.stream.events.some((event) => event.type === "events.iterate.com/agents/context-added"),
     ).toBe(false);
 
-    h.crash(); // the in-flight transcription dies; journal, KV, and the alarm survive
+    h.crash(); // the in-flight transcription dies; stream, KV, and the alarm survive
     h.resolve.impl = async () => [RESOLVED_FILE];
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
-    // durableObjectRecovery's revival pass journaled the processor-scoped
+    // durableObjectRecovery's revival pass appended the processor-scoped
     // fact — in production its append cold-boots the Stream DO, whose woken
     // fan-out drives the redelivery simulated below.
     const revived = h.stream.events.filter(
-      (event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+      (event) => event.type === "events.iterate.com/stream/processor-revived",
     );
     expect(revived).toHaveLength(1);
     expect(revived[0]!.payload).toMatchObject({

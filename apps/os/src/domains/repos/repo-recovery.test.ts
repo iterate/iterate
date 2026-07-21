@@ -1,9 +1,9 @@
 // Repo creation and GitHub import recovery through the production-shaped
 // processor registry. `crash()` replaces the incarnation while preserving the
-// event journal, processor progress, and durable alarm.
+// stream, processor progress, and durable alarm.
 
 import { describe, expect, it, vi } from "vitest";
-import { KEEPALIVE_ALARM_LEAD_MS, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import { MemoryStreamNetwork } from "iterate/processors/testing";
 import {
   createStreamProcessorRegistry,
@@ -176,7 +176,7 @@ function makeHarness() {
 }
 
 describe("RepoProcessor creation saga", () => {
-  it("creates an empty Artifact and journals the terminal certificate", async () => {
+  it("creates an empty Artifact and appends the terminal certificate", async () => {
     const h = makeHarness();
     let calls = 0;
     h.effects.createEmpty = async () => {
@@ -223,7 +223,7 @@ describe("RepoProcessor creation saga", () => {
     expect(h.stream.events.at(-1)?.type).toBe("events.iterate.com/repos/created");
   });
 
-  it("journals a creation failure instead of claiming the repo is ready", async () => {
+  it("records a creation failure instead of claiming the repo is ready", async () => {
     const h = makeHarness();
     let calls = 0;
     h.effects.importPublic = async () => {
@@ -320,7 +320,7 @@ describe("RepoProcessor creation saga", () => {
     expect(calls).toBe(1);
   });
 
-  it("does not repeat completed creation when rebuilding state from the journal", async () => {
+  it("does not repeat completed creation when rebuilding state from the stream", async () => {
     const h = makeHarness();
     let calls = 0;
     h.effects.createEmpty = async () => {
@@ -330,48 +330,24 @@ describe("RepoProcessor creation saga", () => {
     await h.stream.append(EMPTY_REQUEST);
     await h.deliverPending();
     await h.deliverPending();
-    const journalLength = h.stream.events.length;
+    const streamLength = h.stream.events.length;
     const state = h.state();
     expect(calls).toBe(1);
 
     h.kv.clear();
     h.crash();
     h.effects.createEmpty = async () => {
-      throw new Error("completed creation must not run during refold");
+      throw new Error("completed creation must not run during a replay");
     };
     await h.deliverPending();
 
-    expect(h.stream.events).toHaveLength(journalLength);
-    expect(h.state()).toEqual(state);
-  });
-
-  it("refolds existing repo lifecycle facts without rerunning creation", async () => {
-    const h = makeHarness();
-    await h.stream.append(
-      { type: "events.iterate.com/repo/created", payload: { config: {} } },
-      {
-        type: "events.iterate.com/repo/ready",
-        payload: { ...CREATED_ARTIFACT, path: HOME, projectId: PROJECT_ID },
-      },
-      { type: "events.iterate.com/repo/github-link-configured", payload: GITHUB_LINK },
-    );
-    await h.deliverPending();
-    const state = h.state();
-    expect(state).toMatchObject({
-      artifactName: CREATED_ARTIFACT.artifactName,
-      birthCertificate: { config: {} },
-      github: GITHUB_LINK,
-    });
-
-    h.kv.clear();
-    h.crash();
-    await h.deliverPending();
+    expect(h.stream.events).toHaveLength(streamLength);
     expect(h.state()).toEqual(state);
   });
 });
 
 describe("RepoProcessor eviction recovery", () => {
-  it("re-drives a transient creation error after revival without journaling failure", async () => {
+  it("re-drives a transient creation error after revival without recording failure", async () => {
     const h = makeHarness();
     let calls = 0;
     h.effects.createEmpty = async () => {
@@ -420,7 +396,9 @@ describe("RepoProcessor eviction recovery", () => {
     h.effects.createEmpty = async () => CREATED_ARTIFACT;
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
     expect(
-      h.stream.events.filter((event) => event.type === STREAM_PROCESSOR_REVIVED_EVENT_TYPE),
+      h.stream.events.filter(
+        (event) => event.type === "events.iterate.com/stream/processor-revived",
+      ),
     ).toHaveLength(1);
 
     await h.deliverPending();

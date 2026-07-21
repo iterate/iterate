@@ -1708,7 +1708,7 @@ describe("AgentProcessor stream facts", () => {
     expect(AgentLiveState.safeParse({ unexpected: true }).success).toBe(false);
 
     // agent/created is deliberately open (provenance may ride along), but the
-    // fold keeps policy out of the birth certificate: a smuggled config is
+    // reduce keeps policy out of the birth certificate: a smuggled config is
     // inert — configuration only ever enters through agent/configured.
     const h = makeAgentHarness();
     await h.play([
@@ -1720,6 +1720,22 @@ describe("AgentProcessor stream facts", () => {
     ]);
     expect(h.state().birthCertificate).not.toBeNull();
     expect(h.state().config.llm.model).not.toBe("smuggled-model");
+  });
+
+  it("a second birth certificate is a no-op: the first one wins", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", { type: "events.iterate.com/agent/created", payload: {} }],
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/created",
+          payload: { note: "impostor" },
+        },
+      ],
+    );
+
+    expect(h.state().birthCertificate).toEqual({ createdAtOffset: 1 });
   });
 });
 

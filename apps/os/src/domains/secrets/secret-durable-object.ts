@@ -16,7 +16,7 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { assertPushTokenSecretRevision } from "../devices/push-token-consistency.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { secretCreationEvents } from "./secret-defaults.ts";
 import type {
   SecretCreateInput,
   SecretDescription,
@@ -40,8 +40,8 @@ import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
-// Secret folds are pure and normally complete during catchUp. If ingestion is
-// broken, fail the command instead of retaining its RPC forever.
+// Secret reduction is pure and normally completes during catchUp. If ingestion
+// is broken, fail the command instead of retaining its RPC forever.
 const INGEST_WAIT_TIMEOUT_MS = 15_000;
 
 /**
@@ -52,7 +52,7 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * touches material is `fetch()`: substitute `getSecret(...)` placeholders in
  * trusted DO code and dispatch to a host on the secret's egress allowlist.
  * Credential refresh is a NAMED STRATEGY run by this same trusted code
- * (`refresh` on the folded state) whose exchange endpoint must itself fall
+ * (`refresh` on the reduced state) whose exchange endpoint must itself fall
  * within the pin — so a refresh, like any use, only ever moves bytes toward
  * pinned hosts.
  *
@@ -82,9 +82,11 @@ export class SecretDurableObject extends DurableObject<Env> {
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
-  // recovery on purpose: SecretProcessor is a pure fold (reduce only — no
-  // processEvent, no runInBackground), so an eviction can never lose
-  // consequential background work (see the registry module doc's rule).
+  // recovery on purpose: the processor's only side effect (the secret/created
+  // catalog cross-post) is a blocked per-event append — the cursor holds until
+  // it commits, so an eviction just redelivers the event; there is no
+  // runInBackground work an eviction could lose (see the registry module
+  // doc's rule).
   readonly #secretProcessor = this.#registry.register(
     new SecretProcessor({
       stream: this.#stream,
@@ -150,26 +152,38 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #create(input: SecretCreateInput) {
     const egress = normalizeEgress(input.egress);
+    const visibility = input.visibility ?? "write-only";
     // Readable and substitutable are mutually exclusive kinds: material
     // leaves via reveal() OR via pinned egress substitution, never both. The
     // matching update() guard makes this an INVARIANT, not a default — a
     // readable secret can never later grow an egress pin.
-    if ((input.visibility ?? "write-only") === "readable" && egress.urls.length > 0) {
+    if (visibility === "readable" && egress.urls.length > 0) {
       throw new Error(
         `a readable secret cannot have egress origins: ${this.#name.path} (readable material leaves via reveal(), never substitution)`,
       );
     }
     const idempotencyKey = `secret/created:${this.#name.projectId}:${this.#name.path}`;
-    const subscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
-      durableObjectName: this.ctx.id.name!,
-      idempotencyKey: `stream/subscription-configured:${this.ctx.id.name!}#${SecretProcessorContract.slug}`,
-      processor: ["secrets", ["get", this.#name.path], "processor"],
-      processorSlug: SecretProcessorContract.slug,
-    });
 
     const existing = await this.#stream.getEvent({ idempotencyKey });
     if (existing !== undefined) {
-      const [configured] = await this.#stream.append(subscription);
+      // Duplicate create. The stream's same-key-different-body rejection
+      // cannot police secret payloads (encrypted material has a fresh IV per
+      // encryption), so the loud different-payload failure lives here: the
+      // comparable birth policy must match exactly. Material is write-only
+      // and NOT comparable — an identical-policy create keeps the existing
+      // material (the ensure-create-then-reveal pairing flow depends on
+      // this); rotation goes through update().
+      this.#assertCreateMatchesBirth(existing.payload, {
+        egress,
+        refresh: input.refresh ?? null,
+        visibility,
+      });
+      const [, subscription] = secretCreationEvents({
+        path: this.#name.path,
+        payload: { config: { egress, refresh: input.refresh ?? null, visibility } },
+        projectId: this.#name.projectId,
+      });
+      const [configured] = await this.#stream.append(subscription!);
       await this.#waitUntilProcessed(configured!.offset);
       return existing;
     }
@@ -195,20 +209,19 @@ export class SecretDurableObject extends DurableObject<Env> {
             );
       try {
         const [created, configured] = await this.#stream.append(
-          {
-            idempotencyKey,
+          ...secretCreationEvents({
             offset,
-            type: "events.iterate.com/secret/created",
+            path: this.#name.path,
             payload: {
               config: {
                 egress,
                 ...(encryptedMaterial === undefined ? {} : { encryptedMaterial }),
                 refresh: input.refresh ?? null,
-                visibility: input.visibility ?? "write-only",
+                visibility,
               },
             },
-          } as StreamEventInput,
-          subscription,
+            projectId: this.#name.projectId,
+          }),
         );
         await this.#waitUntilProcessed(Math.max(created!.offset, configured!.offset));
         return created!;
@@ -219,6 +232,34 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
     }
     throw new Error("unreachable secret create retry state");
+  }
+
+  /** The loud duplicate-create check: the retried policy must equal the birth
+   * certificate's (egress origins, refresh strategy, visibility). Material is
+   * deliberately excluded — see the call site. */
+  #assertCreateMatchesBirth(
+    birthPayload: unknown,
+    requested: {
+      egress: { urls: string[] };
+      refresh: SecretRefresh | null;
+      visibility: "write-only" | "readable";
+    },
+  ): void {
+    const born =
+      SecretProcessorContract.events["events.iterate.com/secret/created"].payloadSchema.parse(
+        birthPayload,
+      ).config;
+    const mismatches: string[] = [];
+    if (JSON.stringify(born.egress.urls) !== JSON.stringify(requested.egress.urls)) {
+      mismatches.push("egress");
+    }
+    if (!sameRefresh(born.refresh, requested.refresh)) mismatches.push("refresh");
+    if (born.visibility !== requested.visibility) mismatches.push("visibility");
+    if (mismatches.length > 0) {
+      throw new Error(
+        `secret already created with a different ${mismatches.join("/")} policy: ${this.#name.path} (use update() to change an existing secret)`,
+      );
+    }
   }
 
   update(input: SecretUpdateInput) {
@@ -288,7 +329,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       );
     }
 
-    // A material-less update is intentionally destructive in the fold. It
+    // A material-less update is intentionally destructive in the reduction. It
     // needs no privileged append lane: egress, refresh, and audit facts are all
     // ordinary public stream coordination.
     if (input.material === undefined) {
@@ -327,7 +368,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async describe(): Promise<SecretDescription> {
-    // update() appends to the stream and the processor folds it in
+    // update() appends to the stream and the processor reduces it in
     // asynchronously; pull-through makes update() -> describe()
     // read-your-writes even when the configured subscription's wake is slow
     // or was dropped.

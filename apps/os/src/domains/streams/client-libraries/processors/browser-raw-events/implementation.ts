@@ -18,7 +18,7 @@ export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
  * Tables this processor owns. Views pass this to the runtime so a mirror
  * discard clears the projection AND its derived counts together — clearing
  * `events` alone would leave stale totals behind (rows are append-only, so
- * the counts trigger has no delete arm to reconcile them).
+ * the counts trigger has no delete arm to bring the totals back down).
  */
 export const BROWSER_RAW_EVENTS_TABLES = ["events", "event_type_counts"];
 

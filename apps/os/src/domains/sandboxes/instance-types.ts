@@ -20,8 +20,8 @@ import { z } from "zod";
  * CONFIGURATION, not identity: it never appears in the sandbox path
  * (`/sandboxes/<name>` — a type segment would materialize meaningless
  * intermediate folder streams like `/sandboxes/lite`). The collection
- * journals it on `create-requested` and routes every `get` by reading the
- * journal — honest about the one thing a sandbox can never change.
+ * records it on `create-requested` and routes every `get` by reading the
+ * stream — honest about the one thing a sandbox can never change.
  */
 export const SANDBOX_INSTANCE_TYPES = [
   "lite",

@@ -86,17 +86,22 @@ async function makeProcessor(options: {
 }
 
 describe("CapabilityHostProcessor birth", () => {
-  it("throws when a second capability-host birth certificate is reduced", async () => {
-    const stream = capabilityHostStream();
+  it("a second capability-host birth certificate is a no-op: the first one wins", async () => {
+    const stream = capabilityHostStream({ fallback: ["capabilityHosts", ["get", "/"]] });
     const harness = await makeProcessor({ stream });
+    // Conflicting births are rejected at the create() door (same-key-
+    // different-body); a duplicate that still reaches reduce must not wedge
+    // the frame, and must not replace the scope's journaled fallback.
     await stream.append({
       type: "events.iterate.com/capability-host/created",
-      payload: { config: {} },
+      payload: { config: {}, fallback: null },
     });
 
-    await expect(harness.runner.catchUp()).rejects.toThrow(
-      "capability host received more than one created event",
-    );
+    await harness.runner.catchUp();
+    expect(harness.runner.currentState.birthCertificate).toEqual({
+      config: {},
+      fallback: ["capabilityHosts", ["get", "/"]],
+    });
   });
 
   it("throws for an uncreated scope instead of forwarding anywhere", async () => {

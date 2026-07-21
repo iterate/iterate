@@ -132,7 +132,7 @@ Each of these was raised as a suspected problem by at least one critic and then
   project processor state (`src/rpc-targets.ts:433` area). The D1 projections died
   with itx-v4 and are genuinely gone.
 - **"There are two data planes / two project-create paths."** No — creation goes
-  through one path (`session.projects.create`); the auth↔D1 drift wedge from the
+  through one path (`session.projects.get(slug).create`); the auth↔D1 drift wedge from the
   earlier design is resolved by reconcile-on-recover.
 - **"The dashboard's two-plane split (server fns vs itx WebSocket) is spaghetti."**
   No — it is a deliberate, clean split: server functions for request-scoped reads,
