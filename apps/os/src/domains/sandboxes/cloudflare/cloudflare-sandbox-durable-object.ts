@@ -335,11 +335,6 @@ const IDENTITY_STORAGE_KEY = "iterate-sandbox-identity";
  *    a sandbox cannot reach the internet except through project policy.
  */
 export abstract class SandboxDurableObject extends Sandbox<Env> {
-  /** Report this incarnation's code version without starting its container. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
-  }
-
   // Intercept HTTPS as well as HTTP: without this, only plaintext egress would
   // reach the `outbound` handler and TLS traffic would bypass project policy.
   override interceptHttps = true;

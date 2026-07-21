@@ -41,11 +41,6 @@ type ScriptExecutionLoopbackExports = {
  * host) on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
-  }
-
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),

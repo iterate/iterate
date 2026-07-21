@@ -65,25 +65,18 @@ serially because they intentionally share one warm container.
   app lanes and the whole workflow never retry automatically.
 - **Watchdogs fail rather than retry.** The TUI and Vitest/Playwright processes
   retain their own bounded `timeout`s, inside the workflow backstop.
-- **Readiness is an active version proof.** A healthy edge response alone does
-  not prove that Cloudflare has finished updating Durable Objects. OS checks
-  ten bounded waves concurrently. Each wave samples eight version-specific
-  `CapabilityHostDurableObject` placements and one fixed incarnation in every
-  other deployed OS Durable Object namespace. The streams example checks ten
-  waves of eight fixed `StreamDurableObject` incarnations. Once every wave
-  reports the exact deployed version, the complete set is revalidated after a
-  10-second quiet interval. Failed waves alone stay in the hot retry set. The
-  fan-out route requires the app's existing Doppler-backed bearer, and the
-  client rejects malformed wave identities instead of accepting a partial
-  proof.
-- **Only classified rollout states retry.** Version skew, flagged Durable
-  Object lifecycle resets, and the probe's own bounded timeout are settling
-  states. Authentication/configuration failures and unclassified 5xx responses
-  fail the deployment immediately with a bounded response diagnostic.
-- **The proof does not exercise product work.** Its RPC only returns the
-  incarnation's version. In particular, probing a sandbox Durable Object does
-  not create or start a container. Ordinary health requests remain cheap and
-  do not touch Durable Objects.
+- **Readiness proves the uploaded edge version.** OS and the streams example
+  report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
+  final version to remain continuously visible for 10 seconds. The probe is a
+  cheap public health request and never wakes synthetic Durable Objects.
+- **Durable Object resets are handled by product operations.** Cloudflare may
+  still move an individual Durable Object to new code after edge readiness.
+  Idempotent operations must redeliver after that explicit lifecycle outcome
+  without committing terminal failure state. A finite placement sample cannot
+  prove the whole fleet, so readiness does not pretend otherwise.
+- **Readiness retries are bounded and diagnostic.** Each request has a short
+  watchdog, the overall deploy check has a hard deadline, and the final HTTP
+  response body or transport error is retained in the failure message.
 - **Retries remain visible.** Vitest, TUI, and Playwright write compact retry
   telemetry that is folded into the preview state in the PR description.
 - **Do not serialize around a product defect.** Repeated storage, RPC, stream,

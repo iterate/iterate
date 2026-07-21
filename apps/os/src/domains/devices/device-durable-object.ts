@@ -23,11 +23,6 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
 const EXPO_PUSH_ORIGIN = "https://exp.host";
 
 export class DeviceDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
-  }
-
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #deviceId = deviceIdFromPath(this.#name.path);
   readonly #stream = new StreamRpcTarget({

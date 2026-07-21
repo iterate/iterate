@@ -12,7 +12,7 @@ import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
 import { streamDeliveryAuthContext } from "../../auth.ts";
-import { workerVersion, type Env } from "../../env.ts";
+import type { Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";
 import {
   deploymentItxForInternal,
@@ -213,11 +213,6 @@ const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
  * that touch SQLite/KV must remain synchronous.
  */
 export class StreamDurableObject extends DurableObject<Env> {
-  /** Report this incarnation's code version for the deployment rollout gate. */
-  deploymentVersion(): string {
-    return workerVersion(this.env);
-  }
-
   #liveState!: LiveState<StreamRuntimeDebugState>;
   #liveStateRefreshScheduled = false;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);

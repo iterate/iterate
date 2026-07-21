@@ -34,13 +34,12 @@ bar is measured on Depot's same 64-core runner shape as the normal preview job.
 
 ## Round 5 (2026-07-21)
 
-This round starts from main after AI Search and sandbox-based worker building
-were removed. Its baseline is PR #2140's exact tested head `2d156e0c3`: the
-complete preview job passed in 4m05s with zero test retries. Deploys already
-start together, app e2e lanes start together, and OS starts smoke, TUI, Vitest,
-and Playwright together. The remaining proof is distributional: 25 consecutive
-full deploy-and-test runs, each under five minutes, with every absorbed retry
-visible in the ledger and investigated.
+This round starts from current main. Its baseline is PR #2140's exact tested
+head `2d156e0c3`: the complete preview job passed in 4m05s with zero test
+retries. Deploys already start together, app e2e lanes start together, and OS
+starts smoke, TUI, Vitest, and Playwright together. The remaining proof is
+distributional: 25 consecutive full deploy-and-test runs, each under five
+minutes, with every absorbed retry visible in the ledger and investigated.
 
 Progress and failure diagnoses live in the active PR's comments; this section
 is updated with the final run IDs and outcome once the proof completes.
