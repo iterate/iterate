@@ -6,10 +6,7 @@ import {
 } from "../domains/agents/agent-defaults.ts";
 import type { AgentEventInput } from "../domains/agents/agent-processor-contract.ts";
 import type { ProjectProcessorState } from "../domains/projects/project-processor-contract.ts";
-import {
-  isStreamUnavailableError,
-  retryStreamUnavailableOnce,
-} from "../domains/streams/stream-unavailable.ts";
+import { isStreamUnavailableError } from "../domains/streams/stream-unavailable.ts";
 
 export const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const ONBOARDING_GREETING_EVENT_TYPE = "events.iterate.com/agents/web-message-sent" as const;
@@ -50,15 +47,12 @@ type OnboardingAgentHandle = {
 /** Ensure generic birth, then idempotently install the onboarding startup facts. */
 export async function ensureOnboardingAgentReady(input: {
   agent: OnboardingAgentHandle;
-  onRetry?: (error: unknown) => void;
 }): Promise<void> {
-  // Both operations are idempotent: generic birth has a stable identity and
-  // the startup facts carry revisioned idempotency keys. Replay them together
-  // once when a deploy rolls the stream incarnation between the two calls.
-  await retryStreamUnavailableOnce(async () => {
-    await input.agent.create();
-    await input.agent.append(...onboardingAgentStartupEvents());
-  }, input.onRetry);
+  // Deploy-reset recovery lives at the doors these calls go through: create()
+  // replays its idempotent waits itself, and the startup facts carry
+  // revisioned idempotency keys so the keyed-append door retry dedupes.
+  await input.agent.create();
+  await input.agent.append(...onboardingAgentStartupEvents());
 }
 
 type OnboardingGreetingEvent = Pick<StreamEvent, "offset" | "type">;

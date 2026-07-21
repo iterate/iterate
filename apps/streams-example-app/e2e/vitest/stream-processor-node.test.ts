@@ -18,8 +18,11 @@ import {
   StreamProcessorRunner,
   type ProcessorProgress,
 } from "iterate/processors";
-import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
-import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
+import {
+  e2eStreamPathLabel,
+  toStreamWebSocketUrl,
+  withStreamConnectionFromNode,
+} from "../helpers.ts";
 
 const EchoExampleContract = defineProcessorContract({
   slug: "echo-example",

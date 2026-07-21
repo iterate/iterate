@@ -364,7 +364,7 @@ describe("contract event-input envelope", () => {
     // Load-bearing: getEventInputSchema is .strict(), so without `ephemeral`
     // in the envelope every processor-lane ephemeral append (the agent's LLM
     // chunks) would throw "Unrecognized key" at parse.
-    const parsed = CounterContract.parseEventInput("events.iterate.com/test/incremented", {
+    const parsed = CounterContract.parseEventInput({
       type: "events.iterate.com/test/incremented",
       ephemeral: true,
       payload: { by: 1 },

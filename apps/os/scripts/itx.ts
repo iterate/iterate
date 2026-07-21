@@ -14,6 +14,7 @@ import repl from "node:repl";
 
 import { RpcTarget } from "capnweb";
 
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { connectItx } from "iterate/node";
 import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
@@ -201,7 +202,11 @@ function adminConnection(options: { baseUrl?: string }) {
   }
   const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
   if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
-  return { auth: { type: "admin-secret" as const, secret }, baseUrl };
+  return {
+    auth: { type: "admin-secret" as const, secret },
+    baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  };
 }
 
 function parseVars(raw: string | undefined): Record<string, unknown> {

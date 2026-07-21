@@ -1,4 +1,4 @@
-import { itxEnv as env } from "../../env.ts";
+import { itxEnv as env, workerVersion } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
@@ -194,9 +194,21 @@ export function loadResolvedWorker({
   resolved: ResolvedWorkerSource;
   scopePath: string;
 }): WorkerStub {
-  const cacheKey = ["worker-loader", env.WORKER_SELF, projectId, scopePath, resolved.cacheKey].join(
-    ":",
-  );
+  // Loader isolates capture the parent deployment's loopback RPC bindings.
+  // They must not survive an OS rollout: a hit created by the previous
+  // version can only speak that version of workerd's cloned-data protocol,
+  // and crossing it from the new parent fails with
+  // "Unable to deserialize cloned data due to invalid or unsupported version".
+  // Build artifacts remain content-addressed and shared; only the cheap
+  // loaded isolate is deployment-scoped.
+  const cacheKey = [
+    "worker-loader",
+    env.WORKER_SELF,
+    workerVersion(env),
+    projectId,
+    scopePath,
+    resolved.cacheKey,
+  ].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,

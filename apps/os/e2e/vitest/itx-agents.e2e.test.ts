@@ -641,24 +641,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   // offset, not merely the last returned item.
   await project.capabilityHosts.get(agentPath).create();
 
-  const birth = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/created"],
-    timeoutMs: 60_000,
-  });
-  const workspaceMount = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/capability-host/capability-provided"],
-    timeoutMs: 60_000,
-  });
-  const configured = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/configured"],
-    timeoutMs: 60_000,
-  });
-  const basePrompt = agentStream.waitForEvent({
-    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
-    predicate: (event) =>
-      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
-    timeoutMs: 60_000,
-  });
   await project.agents.get(agentPath).create();
 
   // create() is a read-after-create barrier for the collection processor, not
@@ -668,17 +650,33 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
   );
 
-  const birthEvent = await birth;
+  // This test proves the durable birth batch and create()'s read-after-create
+  // barrier, not the live waitForEvent transport. Read the committed facts
+  // after create returns so a deployment replacing a waiter incarnation does
+  // not turn durable product truth into a test-only transient failure.
+  const birthEvents = await agentStream.getEvents({ afterOffset: 0 });
+  const birthEvent = birthEvents.find((event) => event.type === "events.iterate.com/agent/created");
+  const configured = birthEvents.find(
+    (event) => event.type === "events.iterate.com/agent/configured",
+  );
+  const basePrompt = birthEvents.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
+  );
+  const workspaceMount = birthEvents.find(
+    (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+  );
   expect(birthEvent).toMatchObject({ payload: {} });
-  expect((await configured).payload).toMatchObject({
+  expect(configured?.payload).toMatchObject({
     config: { llm: { model: expect.any(String) } },
   });
-  expect((await basePrompt).payload).toMatchObject({
+  expect(basePrompt?.payload).toMatchObject({
     role: "system",
     key: "agent/system-prompt",
     content: expect.stringContaining("async (itx)"),
   });
-  expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+  expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the

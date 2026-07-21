@@ -3,7 +3,6 @@ import { Link } from "@tanstack/react-router";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { ArrowRightIcon } from "lucide-react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { NewAgentComposer } from "~/components/new-agent-composer.tsx";
 import {
   AGENT_DISPLAY_STATE_PRESENTATION,
@@ -20,8 +19,8 @@ const CLOCK_TICK_MS = 15_000;
 
 /**
  * Project home for ready projects: start a new thread, continue from a few
- * recent agents. No page title — the shell breadcrumb carries context, the
- * composer placeholder says what to do.
+ * recent agents when any exist. No page title — the shell breadcrumb carries
+ * context, the composer placeholder says what to do.
  */
 export function ProjectDashboard({
   projectId,
@@ -43,7 +42,6 @@ export function ProjectDashboard({
     [agentsState],
   );
   const nowMs = useTickingNowMs(CLOCK_TICK_MS);
-  const agentsLoading = agentsState === undefined;
 
   return (
     <main className="flex min-h-full flex-1 flex-col p-4 md:p-8" data-testid="project-dashboard">
@@ -62,31 +60,22 @@ export function ProjectDashboard({
 
         <NewAgentComposer projectId={projectId} projectSlug={projectSlug} />
 
-        <section className="flex flex-col gap-3" aria-labelledby="recent-agents-heading">
-          <div className="flex items-baseline justify-between gap-3">
-            <h2 id="recent-agents-heading" className="text-base font-medium tracking-tight">
-              Recently Active Agents
-            </h2>
-            <Link
-              to="/projects/$projectSlug/agents"
-              params={{ projectSlug }}
-              search={{}}
-              className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            >
-              See all
-            </Link>
-          </div>
+        {recent.length > 0 ? (
+          <section className="flex flex-col gap-3" aria-labelledby="recent-agents-heading">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 id="recent-agents-heading" className="text-base font-medium tracking-tight">
+                Recently Active Agents
+              </h2>
+              <Link
+                to="/projects/$projectSlug/agents"
+                params={{ projectSlug }}
+                search={{}}
+                className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                See all
+              </Link>
+            </div>
 
-          {agentsLoading ? (
-            <p className="py-6 text-sm text-muted-foreground">Loading agents…</p>
-          ) : recent.length === 0 ? (
-            <Empty>
-              <EmptyHeader>
-                <EmptyTitle>No agents yet</EmptyTitle>
-                <EmptyDescription>Message a new agent above to start one.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
             <ul className="grid gap-2 sm:grid-cols-2" data-testid="recent-agents-list">
               {recent.map((agent) => (
                 <li key={agent.path}>
@@ -94,8 +83,8 @@ export function ProjectDashboard({
                 </li>
               ))}
             </ul>
-          )}
-        </section>
+          </section>
+        ) : null}
       </div>
     </main>
   );

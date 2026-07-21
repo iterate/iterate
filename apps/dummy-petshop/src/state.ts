@@ -77,8 +77,9 @@ export interface PetshopState {
   usedAuthorizationCodeIds: string[];
   /** Current webhook HMAC secret; rotatable via the backdoor. */
   webhookSigningSecret: string;
-  /** While > 0, POST /oauth/token returns 500 and decrements — for retry specs. */
-  tokenEndpointFailuresRemaining: number;
+  /** Scheduled POST /oauth/token failures, scoped by OAuth client so one test's
+   * fault injection cannot break another concurrently running integration. */
+  tokenEndpointFailuresRemainingByClient: Record<string, number>;
   /** Registered GitHub App installations, keyed by `installationId` (the path
    * segment of `POST /app/installations/<id>/access_tokens`). Seeded with the
    * well-known default; extended/replaced via `POST /__backdoor/apps`. */
@@ -115,13 +116,27 @@ export class PetshopStateDurableObject extends DurableObject {
   async #load(): Promise<PetshopState> {
     const existing = await this.ctx.storage.get<PetshopState>("state");
     if (existing) {
+      let changed = false;
       // Backfill the App registry for a blob written before it existed (the
       // shop's state is one long-lived blob; a preview DO can predate this).
       // Persisted once so the seeded webhook secret is stable across reads.
       if (!existing.apps) {
         existing.apps = { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() };
-        await this.ctx.storage.put("state", existing);
+        changed = true;
       }
+      // A single deployment-global failure counter could leak from an aborted
+      // run or be consumed by a concurrent client. Deliberately discard it
+      // while moving existing preview state to client-scoped fault injection.
+      if (!existing.tokenEndpointFailuresRemainingByClient) {
+        existing.tokenEndpointFailuresRemainingByClient = {};
+        changed = true;
+      }
+      if ("tokenEndpointFailuresRemaining" in existing) {
+        delete (existing as PetshopState & { tokenEndpointFailuresRemaining?: number })
+          .tokenEndpointFailuresRemaining;
+        changed = true;
+      }
+      if (changed) await this.ctx.storage.put("state", existing);
       return existing;
     }
     const initial: PetshopState = {
@@ -139,7 +154,7 @@ export class PetshopStateDurableObject extends DurableObject {
       // not a hardcoded constant. Persisted immediately so it is stable
       // across reads; readable (and rotatable) through the backdoor.
       webhookSigningSecret: crypto.randomUUID(),
-      tokenEndpointFailuresRemaining: 0,
+      tokenEndpointFailuresRemainingByClient: {},
       apps: { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() },
     };
     await this.ctx.storage.put("state", initial);
@@ -238,17 +253,20 @@ export class PetshopStateDurableObject extends DurableObject {
     return app;
   }
 
-  async setTokenEndpointFailures(times: number): Promise<void> {
+  async setTokenEndpointFailures(clientId: string, times: number): Promise<void> {
     const state = await this.#load();
-    state.tokenEndpointFailuresRemaining = times;
+    if (times === 0) delete state.tokenEndpointFailuresRemainingByClient[clientId];
+    else state.tokenEndpointFailuresRemainingByClient[clientId] = times;
     await this.#save(state);
   }
 
-  /** Atomically consume one scheduled failure; true means "fail this request". */
-  async consumeTokenEndpointFailure(): Promise<boolean> {
+  /** Atomically consume one scheduled failure for this client. */
+  async consumeTokenEndpointFailure(clientId: string): Promise<boolean> {
     const state = await this.#load();
-    if (state.tokenEndpointFailuresRemaining <= 0) return false;
-    state.tokenEndpointFailuresRemaining -= 1;
+    const remaining = state.tokenEndpointFailuresRemainingByClient[clientId] ?? 0;
+    if (remaining <= 0) return false;
+    if (remaining === 1) delete state.tokenEndpointFailuresRemainingByClient[clientId];
+    else state.tokenEndpointFailuresRemainingByClient[clientId] = remaining - 1;
     await this.#save(state);
     return true;
   }

@@ -24,7 +24,7 @@
     "typecheck": "pnpm routes:check && pnpm gen:wrangler && tsc --noEmit && pnpm typecheck:template",
     "typecheck:template": "tsx ./scripts/typecheck-config-repo-template.ts",
     "test": "pnpm test:unit",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "e2e": "vitest --config e2e/vitest.config.ts",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",

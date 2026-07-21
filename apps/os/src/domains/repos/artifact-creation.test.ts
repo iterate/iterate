@@ -1,10 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { getOrCreateArtifact } from "./artifact-creation.ts";
 
-test("an existing seeded repo does not repeat first-push setup", async () => {
-  const beforeFirstPush = vi.fn(async () => {
-    throw new Error("Cloudflare subscriptions API is unavailable");
-  });
+test("an existing seeded repo reports its last push", async () => {
   const artifacts = {
     create: vi.fn(async () => {
       throw artifactError("ALREADY_EXISTS");
@@ -13,23 +10,19 @@ test("an existing seeded repo does not repeat first-push setup", async () => {
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
-    beforeFirstPush,
     defaultBranch: "main",
   });
 
   expect(result).toEqual({ created: false, lastPushAt: "2026-07-20T12:00:00.000Z" });
-  expect(beforeFirstPush).not.toHaveBeenCalled();
 });
 
-test("a new repo completes first-push setup before creation returns", async () => {
-  const beforeFirstPush = vi.fn(async () => {});
+test("a new repo is created with its default branch", async () => {
   const artifacts = {
     create: vi.fn(async () => {}),
     get: vi.fn(),
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
-    beforeFirstPush,
     defaultBranch: "trunk",
   });
 
@@ -37,12 +30,10 @@ test("a new repo completes first-push setup before creation returns", async () =
   expect(artifacts.create).toHaveBeenCalledExactlyOnceWith("project-repo", {
     setDefaultBranch: "trunk",
   });
-  expect(beforeFirstPush).toHaveBeenCalledOnce();
   expect(artifacts.get).not.toHaveBeenCalled();
 });
 
-test("an unseeded existing repo completes first-push setup during recovery", async () => {
-  const beforeFirstPush = vi.fn(async () => {});
+test("an unseeded existing repo remains eligible for recovery", async () => {
   const artifacts = {
     create: vi.fn(async () => {
       throw artifactError("ALREADY_EXISTS");
@@ -51,12 +42,10 @@ test("an unseeded existing repo completes first-push setup during recovery", asy
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
-    beforeFirstPush,
     defaultBranch: "main",
   });
 
   expect(result).toEqual({ created: false, lastPushAt: null });
-  expect(beforeFirstPush).toHaveBeenCalledOnce();
 });
 
 function artifactError(code: string) {

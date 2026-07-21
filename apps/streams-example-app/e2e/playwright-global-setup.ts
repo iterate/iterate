@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { request } from "@playwright/test";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { mintAdminBrowserTokens } from "./auth.ts";
 
 export const STORAGE_STATE_PATH = "test-results/.auth/storage-state.json";
@@ -17,7 +18,10 @@ export default async function globalSetup() {
   if (!tokens) return;
 
   mkdirSync(dirname(STORAGE_STATE_PATH), { recursive: true });
-  const context = await request.newContext({ baseURL: workerUrl });
+  const context = await request.newContext({
+    baseURL: workerUrl,
+    extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),
+  });
   const response = await context.get(
     `/api/iterate-auth/session-from-token?${new URLSearchParams({
       access_token: tokens.accessToken,

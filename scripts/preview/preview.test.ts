@@ -51,8 +51,10 @@ const {
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
+  resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
@@ -231,14 +233,27 @@ describe("preview workflow scope", () => {
         ]),
       ),
     ).toEqual({
-      auth: { baseUrl: "https://auth.iterate-preview-3.com" },
-      "dummy-petshop": { baseUrl: "https://dummy-petshop.iterate-preview-3.com" },
+      auth: {
+        baseUrl: "https://auth.iterate-preview-3.com",
+        workerName: "auth-preview-3",
+      },
+      "dummy-petshop": {
+        baseUrl: "https://dummy-petshop.iterate-preview-3.com",
+        workerName: "dummy-petshop-preview-3",
+      },
       os: {
         baseUrl: "https://os.iterate-preview-3.com",
         projectHostnameBases: ["iterate-preview-3.app"],
+        workerName: "os-preview-3",
       },
-      semaphore: { baseUrl: "https://semaphore.iterate-preview-3.com" },
-      "streams-example-app": { baseUrl: "https://streams.iterate-preview-3.com" },
+      semaphore: {
+        baseUrl: "https://semaphore.iterate-preview-3.com",
+        workerName: "semaphore-preview-3",
+      },
+      "streams-example-app": {
+        baseUrl: "https://streams.iterate-preview-3.com",
+        workerName: "streams-example-app-preview-3",
+      },
     });
   });
 
@@ -251,7 +266,7 @@ describe("preview workflow scope", () => {
       appPath: "apps/auth",
       previewReadyUrlPath: "/api/auth/ok",
       previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-      previewTestCommandArgs: ["pnpm", "test:e2e"],
+      previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
     });
   });
 
@@ -263,7 +278,7 @@ describe("preview workflow scope", () => {
       paths: ["apps/dummy-petshop/**"],
       previewReadyUrlPath: "/",
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
-      previewTestCommandArgs: ["pnpm", "test:e2e"],
+      previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
     });
     await expect(
       readPreviewAppConfig({
@@ -275,6 +290,7 @@ describe("preview workflow scope", () => {
     ).resolves.toEqual({
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       projectHostnameBases: [],
+      workerName: "dummy-petshop-preview-3",
     });
     // Only the deploy workflow is path-filtered; cleanup deliberately has no
     // paths list (it must run for every closed PR — see the cleanup-trigger
@@ -290,7 +306,6 @@ describe("preview workflow scope", () => {
 
     expect(os).toMatchObject({
       paths: expect.arrayContaining([
-        ".bun-version",
         "apps/dummy-petshop/**",
         "apps/mobile/**",
         "playwright.config.ts",
@@ -308,9 +323,6 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- specs/**");
-    expect(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-    ).toContain("bun-version-file: .bun-version");
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,
@@ -352,6 +364,50 @@ describe("preview workflow scope", () => {
     });
 
     expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+  });
+
+  test("pins tests to every current-head deployment's exact Worker version", () => {
+    const headSha = "current-head";
+    const osVersion = "11111111-1111-4111-8111-111111111111";
+    const authVersion = "22222222-2222-4222-8222-222222222222";
+    const entry = (
+      appSlug: "auth" | "os",
+      appDisplayName: string,
+      deployedWorkerName: string,
+      deployedWorkerVersion: string,
+    ) =>
+      CloudflarePreviewAppEntry.parse({
+        appDisplayName,
+        appSlug,
+        deployedWorkerName,
+        deployedWorkerVersion,
+        headSha,
+        publicUrl: `https://${appSlug}.iterate-preview-7.com`,
+        status: "awaiting-tests",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+      });
+    const apps = {
+      auth: entry("auth", "Auth", "auth-preview-7", authVersion),
+      os: entry("os", "OS", "os-preview-7", osVersion),
+    };
+
+    expect(
+      resolvePreviewTestWorkerVersionOverrides({
+        apps,
+        appSlugs: ["os", "auth"],
+        dopplerConfig: "preview_7",
+        headSha,
+      }),
+    ).toBe(`auth-preview-7="${authVersion}",os-preview-7="${osVersion}"`);
+
+    expect(() =>
+      resolvePreviewTestWorkerVersionOverrides({
+        apps: { ...apps, os: { ...apps.os, deployedWorkerVersion: null } },
+        appSlugs: ["os", "auth"],
+        dopplerConfig: "preview_7",
+        headSha,
+      }),
+    ).toThrow(/exact os-preview-7 deployment identity is missing or stale/);
   });
 
   test("refuses to run OS e2e against a missing or stale Petshop deployment", () => {
@@ -1030,6 +1086,91 @@ describe("preview compare base", () => {
   });
 });
 
+describe("preview OS container rollout", () => {
+  const previousHead = "previous-preview-sha";
+  const currentHead = "current-preview-sha";
+  const previousState = {
+    apps: {
+      os: CloudflarePreviewAppEntry.parse({
+        appDisplayName: "OS",
+        appSlug: "os",
+        deployedWorkerName: "os-preview-7",
+        deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
+        headSha: previousHead,
+        status: "deployed",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+      }),
+    },
+    environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
+    notice: null,
+  };
+
+  test("skips serial stock-image builds when exact same-slot inputs are unchanged", async () => {
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-7",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare: async (basehead) => {
+          expect(basehead).toBe(`${previousHead}...${currentHead}`);
+          return {
+            status: "ahead",
+            changedFilenames: ["scripts/preview/preview.ts", "apps/os/scripts/deploy.ts"],
+          };
+        },
+      }),
+    ).resolves.toEqual({
+      mode: "none",
+      reason: `no container input changed since ${previousHead.slice(0, 7)}`,
+    });
+  });
+
+  test("keeps the full rollout when a container input changed", async () => {
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-7",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare: async () => ({
+          status: "ahead",
+          changedFilenames: ["apps/os/sandbox/Dockerfile"],
+        }),
+      }),
+    ).resolves.toEqual({
+      mode: "immediate",
+      reason: "container input apps/os/sandbox/Dockerfile changed",
+    });
+  });
+
+  test("keeps the full rollout for a different slot without trusting a diff", async () => {
+    const fetchCompare = vi.fn();
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-6",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare,
+      }),
+    ).resolves.toEqual({
+      mode: "immediate",
+      reason: "the preview slot is new or changed",
+    });
+    expect(fetchCompare).not.toHaveBeenCalled();
+  });
+});
+
 describe("preview retry selection", () => {
   test.for([
     {
@@ -1145,7 +1286,7 @@ describe("preview deploy selection", () => {
     expect(apps).toEqual([]);
   });
 
-  test("selects OS and its dependencies for an iterate TUI-only change", async () => {
+  test("selects OS and its dependencies for an iterate package-only change", async () => {
     const apps = await selectPreviewAppsForPullRequest({
       ...selectionInput,
       previousState: {
@@ -1356,6 +1497,8 @@ describe("cloudflare preview state helpers", () => {
       runUrl: "https://github.com/iterate/iterate/actions/runs/123",
       shortSha: "abcdef0",
       deployDurationMs: 12_345,
+      deployedWorkerName: "os-preview-2",
+      deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
       testDurationMs: 678,
       status: "deployed",
       updatedAt: "2026-04-02T10:00:00.000Z",

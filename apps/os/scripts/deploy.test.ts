@@ -11,11 +11,105 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   assertPreviewPetshopIntegrationConfigured,
+  detachRetiredArtifactEventQueueConsumer,
   isExactOsProjectMiss,
   posthogBuildEnv,
+  resolveOsContainerDeployArgs,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+describe("retired Artifact event Queue consumer", () => {
+  it.each(["script", "script_name"] as const)(
+    "detaches only the legacy consumer for this Worker when Cloudflare returns %s",
+    async (workerField) => {
+      const calls: Array<{ init?: RequestInit; path: string }> = [];
+      const cf = async <T>(path: string, init?: RequestInit): Promise<T> => {
+        calls.push({ init, path });
+        if (path === "/queues?per_page=100&page=1") {
+          return Array.from({ length: 100 }, (_, index) => ({
+            queue_id: `other-${index}`,
+            queue_name: `other-${index}-events`,
+          })) as T;
+        }
+        if (path === "/queues?per_page=100&page=2") {
+          return [{ queue_id: "queue-id", queue_name: "os-preview-4-events" }] as T;
+        }
+        if (path === "/queues/queue-id/consumers") {
+          return [
+            { consumer_id: "other-consumer", script: "other", type: "worker" },
+            { consumer_id: "consumer-id", [workerField]: "os-preview-4", type: "worker" },
+          ] as T;
+        }
+        return undefined as T;
+      };
+
+      await expect(
+        detachRetiredArtifactEventQueueConsumer({ cf, workerName: "os-preview-4" }),
+      ).resolves.toBe("detached");
+      expect(calls).toEqual([
+        { path: "/queues?per_page=100&page=1", init: undefined },
+        { path: "/queues?per_page=100&page=2", init: undefined },
+        { path: "/queues/queue-id/consumers", init: undefined },
+        {
+          path: "/queues/queue-id/consumers/consumer-id",
+          init: { method: "DELETE" },
+        },
+      ]);
+    },
+  );
+
+  it("is a read-only no-op once the consumer is gone", async () => {
+    const calls: string[] = [];
+    const cf = async <T>(path: string): Promise<T> => {
+      calls.push(path);
+      if (path === "/queues?per_page=100&page=1") {
+        return [{ queue_id: "queue-id", queue_name: "os-preview-4-events" }] as T;
+      }
+      return [] as T;
+    };
+
+    await expect(
+      detachRetiredArtifactEventQueueConsumer({ cf, workerName: "os-preview-4" }),
+    ).resolves.toBe("absent");
+    expect(calls).toEqual(["/queues?per_page=100&page=1", "/queues/queue-id/consumers"]);
+  });
+});
+
+describe("OS container rollout", () => {
+  it("skips only when preview explicitly proved an unchanged warm deployment", () => {
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: "none",
+      }),
+    ).toEqual(["--containers-rollout", "none"]);
+  });
+
+  it("keeps the full rollout by default and after a first-time bootstrap", () => {
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "bootstrapped",
+        requestedRollout: "none",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects an unknown rollout mode", () => {
+    expect(() =>
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: "maybe",
+      }),
+    ).toThrow(/OS_CONTAINERS_ROLLOUT/);
+  });
+});
 
 describe("preview Petshop deployment invariant", () => {
   it("requires first-party Petshop credentials in every preview OS config", () => {

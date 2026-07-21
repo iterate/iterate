@@ -127,8 +127,15 @@ for (const example of MATRIX_EXAMPLES) {
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
     { timeout: runtimeTimeoutMs + 30_000 },
-    async () => {
+    async ({ annotate }) => {
       expect(runtimes.length).toBeGreaterThan(0);
+
+      const recordPhase = async (name: string, category: string, startedAt: number) => {
+        await annotate(
+          JSON.stringify({ name, category, durationMs: performance.now() - startedAt }),
+          "e2e-phase",
+        );
+      };
 
       // Fresh per attempt; shared only when a case explicitly elects serial
       // runtime execution (the warm sandbox container).
@@ -138,6 +145,7 @@ for (const example of MATRIX_EXAMPLES) {
         projectLease: TestProjectLease,
         timeoutMs: number,
       ) => {
+        const runtimeStartedAt = performance.now();
         const { projectId } = projectLease;
         const runtimeDeadline = Date.now() + timeoutMs;
         const ctx = {
@@ -175,6 +183,8 @@ for (const example of MATRIX_EXAMPLES) {
             }`,
             { cause: error },
           );
+        } finally {
+          await recordPhase(`${runtime}: execute`, "runtime", runtimeStartedAt);
         }
       };
 
@@ -192,7 +202,9 @@ for (const example of MATRIX_EXAMPLES) {
 
       if (exampleCase.runtimeExecution === "serial") {
         using itx = connectGlobal();
+        const acquireStartedAt = performance.now();
         using projectLease = await serialMatrixProjectPool.acquire(itx);
+        await recordPhase("serial: acquire project", "fixture", acquireStartedAt);
         const caseDeadline = Date.now() + runtimeTimeoutMs;
         try {
           for (const runtime of runtimes) {
@@ -215,7 +227,9 @@ for (const example of MATRIX_EXAMPLES) {
       const results = await Promise.allSettled(
         runtimes.map(async (runtime) => {
           using itx = connectGlobal();
+          const acquireStartedAt = performance.now();
           using projectLease = await matrixProjectPools[runtime].acquire(itx);
+          await recordPhase(`${runtime}: acquire project`, "fixture", acquireStartedAt);
           try {
             await runRuntime(runtime, projectLease, runtimeTimeoutMs);
           } finally {

@@ -1,3 +1,7 @@
+import {
+  createCloudflareWorkerVersionOverrideFetch,
+  mergeCloudflareWorkerVersionOverrideHeaders,
+} from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { createSemaphoreTokenProvider } from "../../../scripts/auth/semaphore-token.ts";
 
 type SemaphoreAppFixture = {
@@ -5,6 +9,7 @@ type SemaphoreAppFixture = {
   baseURL: string;
   fetch(pathname: string, init?: RequestInit): Promise<Response>;
   apiFetch(pathname: string, init?: RequestInit): Promise<Response>;
+  networkFetch: typeof fetch;
 };
 
 export function requireSemaphoreBaseUrl() {
@@ -36,10 +41,14 @@ export function createSemaphoreAppFixture(args: {
   baseURL: string;
 }): SemaphoreAppFixture {
   const baseURL = args.baseURL.replace(/\/+$/, "");
+  const networkFetch = createCloudflareWorkerVersionOverrideFetch(
+    globalThis.fetch.bind(globalThis),
+    process.env,
+  );
   const apiFetch: SemaphoreAppFixture["apiFetch"] = async (pathname, init) => {
     const headers = new Headers(init?.headers);
     headers.set("authorization", `Bearer ${await args.apiKey()}`);
-    return fetch(new URL(pathname, baseURL), {
+    return networkFetch(new URL(pathname, baseURL), {
       ...init,
       headers,
     });
@@ -48,8 +57,9 @@ export function createSemaphoreAppFixture(args: {
   return {
     apiKey: args.apiKey,
     baseURL,
-    fetch: (pathname, init) => fetch(new URL(pathname, baseURL), init),
+    fetch: (pathname, init) => networkFetch(new URL(pathname, baseURL), init),
     apiFetch,
+    networkFetch,
   };
 }
 
@@ -58,7 +68,9 @@ export async function waitForHealth(baseURL: string, timeoutMs: number) {
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(new URL("/health", baseURL));
+      const response = await fetch(new URL("/health", baseURL), {
+        headers: mergeCloudflareWorkerVersionOverrideHeaders(undefined, process.env),
+      });
       if (response.ok && (await response.text()) === "OK") {
         return;
       }

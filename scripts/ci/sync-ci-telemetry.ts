@@ -1,0 +1,502 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
+import { Octokit } from "@octokit/rest";
+import { durationMs, sendPostHogEvents, systemEvent, type PostHogEvent } from "./posthog-events.ts";
+
+const execFile = promisify(execFileCallback);
+const repository = process.env.GITHUB_REPOSITORY ?? "iterate/iterate";
+const [owner, repo] = repository.split("/") as [string, string];
+const lookbackDays = Number.parseInt(process.env.CI_TELEMETRY_LOOKBACK_DAYS ?? "7", 10);
+const cutoff = Date.now() - lookbackDays * 86_400_000;
+const githubLimit = Number.parseInt(process.env.CI_TELEMETRY_GITHUB_LIMIT ?? "500", 10);
+const dryRun = process.argv.includes("--dry-run");
+
+async function main() {
+  const events = [...(await githubEvents()), ...(await depotEvents())];
+  console.log(`[ci-telemetry] collected ${events.length} idempotent event(s)`);
+  if (dryRun) {
+    console.log(JSON.stringify(summarize(events), null, 2));
+    return;
+  }
+  await sendPostHogEvents(events);
+}
+
+async function githubEvents(): Promise<PostHogEvent[]> {
+  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  if (!token) throw new Error("GH_TOKEN is required to sync GitHub Actions and review telemetry");
+  const octokit = new Octokit({ auth: token });
+  const events: PostHogEvent[] = [];
+  const runs = (
+    await octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, {
+      owner,
+      repo,
+      per_page: 100,
+      created: `>=${new Date(cutoff).toISOString()}`,
+    })
+  ).slice(0, githubLimit);
+  for (const run of runs.slice(0, githubLimit)) {
+    if (Date.parse(run.updated_at) < cutoff) break;
+    if (run.status !== "completed") continue;
+    const common = {
+      repository,
+      automation_platform: "github-actions",
+      data_source: "github-actions-api",
+      workflow_name: run.name ?? run.path,
+      workflow_path: run.path,
+      workflow_run_id: String(run.id),
+      workflow_run_attempt: run.run_attempt,
+      workflow_run_url: run.html_url,
+      trigger: run.event,
+      head_sha: run.head_sha,
+      branch: run.head_branch,
+      pull_request_number: run.pull_requests?.[0]?.number,
+      conclusion: run.conclusion,
+    };
+    events.push(
+      systemEvent(
+        "ci workflow finished",
+        `github-workflow:${run.id}:${run.run_attempt}:${run.updated_at}`,
+        `ci-workflow:github:${run.id}`,
+        {
+          ...common,
+          created_at: run.created_at,
+          started_at: run.run_started_at,
+          finished_at: run.updated_at,
+          queue_duration_ms: durationMs(run.created_at, run.run_started_at),
+          duration_ms: durationMs(run.run_started_at, run.updated_at),
+          total_wall_duration_ms: durationMs(run.created_at, run.updated_at),
+        },
+      ),
+    );
+    const jobs = await octokit.paginate(octokit.rest.actions.listJobsForWorkflowRun, {
+      owner,
+      repo,
+      run_id: run.id,
+      filter: "all",
+      per_page: 100,
+    });
+    for (const job of jobs) {
+      if (job.status !== "completed") continue;
+      events.push(
+        systemEvent(
+          "ci job finished",
+          `github-job:${job.id}:${job.completed_at}:${job.conclusion}`,
+          `ci-job:github:${job.id}`,
+          {
+            ...common,
+            job_id: String(job.id),
+            job_name: job.name,
+            job_url: job.html_url,
+            runner_name: job.runner_name,
+            runner_group_name: job.runner_group_name,
+            started_at: job.started_at,
+            finished_at: job.completed_at,
+            duration_ms: durationMs(job.started_at, job.completed_at),
+            conclusion: job.conclusion,
+            step_count: job.steps?.length ?? 0,
+            failed_step_count:
+              job.steps?.filter(
+                (step) => !["success", "skipped", "neutral"].includes(step.conclusion ?? ""),
+              ).length ?? 0,
+          },
+        ),
+      );
+    }
+  }
+
+  const pulls = await recentPullRequests(octokit);
+  for (const pull of pulls) {
+    if (Date.parse(pull.updated_at) < cutoff) break;
+    const checks = (
+      await octokit.rest.checks.listForRef({
+        owner,
+        repo,
+        ref: pull.head.sha,
+        per_page: 100,
+      })
+    ).data.check_runs;
+    const reviewChecks = checks.filter((check) =>
+      /bugbot|code.?review|iterate review/i.test(`${check.name} ${check.app?.slug ?? ""}`),
+    );
+    if (reviewChecks.length === 0) continue;
+    const threadCounts = await reviewThreadCounts(octokit, pull.number, pull.head.sha);
+    for (const check of reviewChecks) {
+      if (check.status !== "completed") continue;
+      const provider = check.app?.slug ?? check.name;
+      events.push(
+        systemEvent(
+          "ci review finished",
+          `github-review-check:${check.id}:${check.completed_at}:${check.conclusion}`,
+          `ci-review:${provider}:${pull.number}:${pull.head.sha}`,
+          {
+            repository,
+            automation_platform: "github",
+            data_source: "github-checks-api",
+            pull_request_number: pull.number,
+            pull_request_url: pull.html_url,
+            head_sha: pull.head.sha,
+            review_provider: provider,
+            review_name: check.name,
+            review_url: check.details_url,
+            status: check.status,
+            conclusion: check.conclusion,
+            started_at: check.started_at,
+            finished_at: check.completed_at,
+            duration_ms: durationMs(check.started_at, check.completed_at),
+            finding_count: threadCounts.byAuthor.get(provider) ?? threadCounts.total,
+            unresolved_finding_count:
+              threadCounts.unresolvedByAuthor.get(provider) ?? threadCounts.unresolved,
+          },
+        ),
+      );
+    }
+
+    // Iterate Review is a GitHub App review, not a check-run. Capture the
+    // review submission itself so the shared review model does not silently
+    // cover Cursor while omitting our own bot.
+    const reviews = (
+      await octokit.rest.pulls.listReviews({ owner, repo, pull_number: pull.number, per_page: 100 })
+    ).data.filter(
+      (review) =>
+        review.commit_id === pull.head.sha &&
+        /^iterate(?:\[bot\])?$/iu.test(review.user?.login ?? "") &&
+        review.submitted_at,
+    );
+    for (const review of reviews) {
+      const provider = "iterate";
+      events.push(
+        systemEvent(
+          "ci review finished",
+          `github-review:${review.id}:${review.submitted_at}:${review.state}`,
+          `ci-review:${provider}:${pull.number}:${pull.head.sha}`,
+          {
+            repository,
+            automation_platform: "github",
+            data_source: "github-pull-reviews-api",
+            pull_request_number: pull.number,
+            pull_request_url: pull.html_url,
+            head_sha: pull.head.sha,
+            review_provider: provider,
+            review_name: "Iterate Review",
+            review_url: review.html_url,
+            status: "completed",
+            conclusion: review.state.toLowerCase(),
+            finished_at: review.submitted_at,
+            finding_count: threadCounts.byAuthor.get(provider) ?? 0,
+            unresolved_finding_count: threadCounts.unresolvedByAuthor.get(provider) ?? 0,
+          },
+        ),
+      );
+    }
+  }
+  return events;
+}
+
+async function recentPullRequests(octokit: Octokit) {
+  const pulls: Awaited<ReturnType<typeof octokit.rest.pulls.list>>["data"] = [];
+  for (let page = 1; pulls.length < githubLimit; page += 1) {
+    const batch = (
+      await octokit.rest.pulls.list({
+        owner,
+        repo,
+        state: "all",
+        sort: "updated",
+        direction: "desc",
+        per_page: 100,
+        page,
+      })
+    ).data;
+    for (const pull of batch) {
+      if (Date.parse(pull.updated_at) < cutoff) return pulls;
+      pulls.push(pull);
+      if (pulls.length >= githubLimit) return pulls;
+    }
+    if (batch.length < 100) return pulls;
+  }
+  return pulls;
+}
+
+async function reviewThreadCounts(octokit: Octokit, pullRequestNumber: number, headSha: string) {
+  const result = await octokit.graphql<{
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes: Array<{
+            isResolved: boolean;
+            comments: {
+              nodes: Array<{
+                author: { login: string } | null;
+                originalCommit: { oid: string } | null;
+              }>;
+            };
+          }>;
+        };
+      } | null;
+    };
+  }>(
+    `query($owner:String!,$repo:String!,$number:Int!) {
+      repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
+        reviewThreads(first:100) { nodes { isResolved comments(first:1) {
+          nodes { author { login } originalCommit { oid } }
+        } } }
+      } }
+    }`,
+    { owner, repo, number: pullRequestNumber },
+  );
+  const threads = (result.repository.pullRequest?.reviewThreads.nodes ?? []).filter(
+    (thread) => thread.comments.nodes[0]?.originalCommit?.oid === headSha,
+  );
+  const byAuthor = new Map<string, number>();
+  const unresolvedByAuthor = new Map<string, number>();
+  for (const thread of threads) {
+    const author = thread.comments.nodes[0]?.author?.login;
+    if (!author) continue;
+    byAuthor.set(author, (byAuthor.get(author) ?? 0) + 1);
+    if (!thread.isResolved)
+      unresolvedByAuthor.set(author, (unresolvedByAuthor.get(author) ?? 0) + 1);
+  }
+  return {
+    total: threads.length,
+    unresolved: threads.filter((thread) => !thread.isResolved).length,
+    byAuthor,
+    unresolvedByAuthor,
+  };
+}
+
+type DepotDetail = {
+  run: { run_id: string; trigger: string; head_sha: string };
+  workflow: {
+    workflow_id: string;
+    workflow_path: string;
+    name: string;
+    status: string;
+    error_message: string;
+    created_at: string;
+    started_at: string;
+    finished_at: string;
+  };
+};
+type DepotMetrics = {
+  workflows: Array<{
+    workflow: { workflow_id: string };
+    jobs: Array<{
+      job: {
+        job_id: string;
+        job_key: string;
+        status: string;
+        conclusion: string;
+        created_at: string;
+        started_at: string;
+        finished_at: string;
+      };
+      attempts: Array<{
+        attempt: {
+          attempt_id: string;
+          attempt: number;
+          status: string;
+          conclusion: string;
+          created_at: string;
+          started_at: string;
+          finished_at: string;
+        };
+        availability?: { code?: string };
+        stats?: {
+          sample_count?: number;
+          peak_cpu_utilization?: number;
+          average_cpu_utilization?: number;
+          peak_memory_utilization?: number;
+          average_memory_utilization?: number;
+        };
+      }>;
+    }>;
+  }>;
+};
+
+async function depotEvents(): Promise<PostHogEvent[]> {
+  const token = process.env.DEPOT_CI_TELEMETRY_TOKEN;
+  if (!token && process.env.CI) {
+    throw new Error(
+      "DEPOT_CI_TELEMETRY_TOKEN is required for Depot timing and utilization telemetry",
+    );
+  }
+  // Developer runs may use the Depot CLI's local login. CI must use the
+  // dedicated read-only organization token above so backfills are reliable.
+  const environment = token ? { ...process.env, DEPOT_TOKEN: token } : process.env;
+  const list = await depotJson<Array<{ workflow_id: string; status: string; created_at: string }>>(
+    [
+      "ci",
+      "workflow",
+      "list",
+      "--org",
+      "0p91s0lz49",
+      "--repo",
+      repository,
+      "--output",
+      "json",
+      "-n",
+      "200",
+    ],
+    environment,
+  );
+  const limit = Number.parseInt(process.env.CI_TELEMETRY_DEPOT_LIMIT ?? "200", 10);
+  const recent = list
+    .filter(
+      (workflow) => workflow.status !== "running" && Date.parse(workflow.created_at) >= cutoff,
+    )
+    .slice(0, limit);
+  const details = await mapConcurrent(recent, 12, (item) =>
+    depotJson<DepotDetail>(
+      ["ci", "workflow", "show", item.workflow_id, "--org", "0p91s0lz49", "--output", "json"],
+      environment,
+    ),
+  );
+  const runIds = [...new Set(details.map((detail) => detail.run.run_id))];
+  const metricsEntries = await mapConcurrent(
+    runIds,
+    8,
+    async (runId) =>
+      [
+        runId,
+        await depotJson<DepotMetrics>(
+          ["ci", "metrics", "--run", runId, "--org", "0p91s0lz49", "--output", "json"],
+          environment,
+        ),
+      ] as const,
+  );
+  const runMetrics = new Map(metricsEntries);
+  const events: PostHogEvent[] = [];
+  for (const detail of details) {
+    const metrics = runMetrics.get(detail.run.run_id);
+    if (!metrics) throw new Error(`Depot metrics missing for run ${detail.run.run_id}`);
+    const workflowMetrics = metrics.workflows.find(
+      (candidate) => candidate.workflow.workflow_id === detail.workflow.workflow_id,
+    );
+    const common = {
+      repository,
+      automation_platform: "depot",
+      data_source: "depot-api",
+      workflow_name: detail.workflow.name,
+      workflow_path: detail.workflow.workflow_path,
+      workflow_id: detail.workflow.workflow_id,
+      workflow_run_id: detail.run.run_id,
+      workflow_run_url: `https://depot.dev/orgs/0p91s0lz49/workflows/${detail.workflow.workflow_id}`,
+      trigger: detail.run.trigger,
+      head_sha: detail.run.head_sha,
+    };
+    events.push(
+      systemEvent(
+        "ci workflow finished",
+        `depot-workflow:${detail.workflow.workflow_id}:${detail.workflow.finished_at}:${detail.workflow.status}`,
+        `ci-workflow:depot:${detail.workflow.workflow_id}`,
+        {
+          ...common,
+          status: detail.workflow.status,
+          error_message: detail.workflow.error_message || undefined,
+          created_at: detail.workflow.created_at,
+          started_at: detail.workflow.started_at,
+          finished_at: detail.workflow.finished_at,
+          queue_duration_ms: durationMs(detail.workflow.created_at, detail.workflow.started_at),
+          duration_ms: durationMs(detail.workflow.started_at, detail.workflow.finished_at),
+          total_wall_duration_ms: durationMs(
+            detail.workflow.created_at,
+            detail.workflow.finished_at,
+          ),
+        },
+      ),
+    );
+    for (const entry of workflowMetrics?.jobs ?? []) {
+      const job = entry.job;
+      events.push(
+        systemEvent(
+          "ci job finished",
+          `depot-job:${job.job_id}:${job.finished_at}:${job.conclusion}`,
+          `ci-job:depot:${job.job_id}`,
+          {
+            ...common,
+            job_id: job.job_id,
+            job_name: job.job_key,
+            status: job.status,
+            conclusion: job.conclusion,
+            created_at: job.created_at,
+            started_at: job.started_at,
+            finished_at: job.finished_at,
+            queue_duration_ms: durationMs(job.created_at, job.started_at),
+            duration_ms: durationMs(job.started_at, job.finished_at),
+            total_wall_duration_ms: durationMs(job.created_at, job.finished_at),
+            attempt_count: entry.attempts.length,
+          },
+        ),
+      );
+      for (const entryAttempt of entry.attempts) {
+        const attempt = entryAttempt.attempt;
+        events.push(
+          systemEvent(
+            "ci job attempt finished",
+            `depot-attempt:${attempt.attempt_id}:${attempt.finished_at}:${attempt.conclusion}`,
+            `ci-job-attempt:depot:${attempt.attempt_id}`,
+            {
+              ...common,
+              job_id: job.job_id,
+              job_name: job.job_key,
+              attempt_id: attempt.attempt_id,
+              attempt_number: attempt.attempt,
+              status: attempt.status,
+              conclusion: attempt.conclusion,
+              created_at: attempt.created_at,
+              started_at: attempt.started_at,
+              finished_at: attempt.finished_at,
+              queue_duration_ms: durationMs(attempt.created_at, attempt.started_at),
+              duration_ms: durationMs(attempt.started_at, attempt.finished_at),
+              total_wall_duration_ms: durationMs(attempt.created_at, attempt.finished_at),
+              metrics_availability: entryAttempt.availability?.code,
+              metrics_sample_count: entryAttempt.stats?.sample_count,
+              peak_cpu_utilization: entryAttempt.stats?.peak_cpu_utilization,
+              average_cpu_utilization: entryAttempt.stats?.average_cpu_utilization,
+              peak_memory_utilization: entryAttempt.stats?.peak_memory_utilization,
+              average_memory_utilization: entryAttempt.stats?.average_memory_utilization,
+            },
+          ),
+        );
+      }
+    }
+  }
+  return events;
+}
+
+async function depotJson<T>(args: string[], environment: NodeJS.ProcessEnv): Promise<T> {
+  const { stdout } = await execFile("depot", args, {
+    env: environment,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  return JSON.parse(stdout) as T;
+}
+
+async function mapConcurrent<Input, Output>(
+  inputs: Input[],
+  concurrency: number,
+  operation: (input: Input) => Promise<Output>,
+) {
+  const outputs = new Array<Output>(inputs.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, inputs.length) }, async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= inputs.length) return;
+        outputs[index] = await operation(inputs[index]!);
+      }
+    }),
+  );
+  return outputs;
+}
+
+function summarize(events: PostHogEvent[]) {
+  return Object.fromEntries(
+    [...new Set(events.map((event) => event.event))].map((name) => [
+      name,
+      events.filter((event) => event.event === name).length,
+    ]),
+  );
+}
+
+await main();

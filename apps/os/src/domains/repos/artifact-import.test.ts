@@ -12,7 +12,7 @@ function fakeArtifacts() {
 }
 
 describe("importGithubArtifact", () => {
-  test("captures the imported head after installing the exact-repo subscription", async () => {
+  test("captures the imported head directly after the repository becomes ready", async () => {
     const order: string[] = [];
     const appended: unknown[] = [];
     const commitOid = "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01";
@@ -45,14 +45,11 @@ describe("importGithubArtifact", () => {
           order.push("append-capture");
           appended.push(event);
         },
-        ensureEventSubscription: async () => {
-          order.push("subscribe");
-        },
         namespace: "os-preview-17-repos",
       },
     );
 
-    expect(order).toEqual(["import", "ready", "subscribe", "read-head", "append-capture"]);
+    expect(order).toEqual(["import", "ready", "read-head", "append-capture"]);
     expect(appended).toEqual([
       {
         type: "events.iterate.com/repo/cloudflare-artifact-event-received",
