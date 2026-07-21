@@ -378,20 +378,25 @@ function loginPage(login: string) {
     <title>Sign in</title>
     <style nonce="${nonce}">
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #fff; color: #0a0a0a; font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; }
-      main { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 32px 24px; width: 100%; max-width: 360px; box-sizing: border-box; text-align: center; }
-      .mark { width: 56px; height: 56px; border-radius: 14px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); margin-bottom: 8px; }
-      h1 { margin: 0; font-size: 18px; font-weight: 600; }
-      p { margin: 0; color: #737373; }
-      a { display: block; width: 100%; margin-top: 20px; padding: 11px 16px; box-sizing: border-box; background: #0a0a0a; color: #fff; border-radius: 10px; font-weight: 500; text-decoration: none; }
+      main { padding: 32px 24px; width: 100%; max-width: 400px; box-sizing: border-box; }
+      header { display: flex; align-items: center; gap: 16px; }
+      .mark { width: 48px; height: 48px; border-radius: 22.37%; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); flex-shrink: 0; }
+      h1 { margin: 0; font-size: 17px; font-weight: 600; }
+      p { margin: 0; color: #737373; font-size: 14px; }
+      a { display: block; margin-top: 24px; padding: 11px 16px; background: #0a0a0a; color: #fff; border-radius: 10px; font-weight: 500; text-decoration: none; text-align: center; }
       a:hover { background: #262626; }
       a:focus-visible { outline: 2px solid #0a0a0a; outline-offset: 2px; }
     </style>
   </head>
   <body>
     <main>
-      ${ITERATE_MARK_SVG}
-      <h1>Sign in to iterate</h1>
-      <p>This app is available to project members.</p>
+      <header>
+        ${ITERATE_MARK_SVG}
+        <div>
+          <h1>Sign in to iterate</h1>
+          <p>This app is available to project members.</p>
+        </div>
+      </header>
       <a href="${escapeHtml(login)}">Continue with iterate</a>
     </main>
   </body>

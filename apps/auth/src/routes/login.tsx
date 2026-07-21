@@ -75,16 +75,18 @@ function RouteComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
       <main className={signedInUser ? "w-full max-w-md" : "w-full max-w-xs"}>
-        <div className="mb-8 flex flex-col items-center gap-1 text-center">
-          <IterateLogo className="mb-3 size-12 rounded-xl shadow-sm" />
-          <h1 className="text-lg font-semibold">
-            {signedInUser ? "Choose an account" : "Sign in"}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {signedInUser
-              ? "Continue with an iterate account or sign in as someone else."
-              : "Sign in to your iterate account"}
-          </p>
+        <div className="mb-8 flex items-center gap-4">
+          <IterateLogo className="size-12 shadow-sm" />
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold">
+              {signedInUser ? "Choose an account" : "Sign in"}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {signedInUser
+                ? "Continue with an iterate account or sign in as someone else."
+                : "Sign in to your iterate account"}
+            </p>
+          </div>
         </div>
         {signedInUser ? (
           <AccountChooser
