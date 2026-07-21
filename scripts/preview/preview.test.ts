@@ -43,12 +43,13 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  previewProvisionedIntegrationSecrets,
   readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
-  resolveSharedPreviewSecret,
+  resolveSharedPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
@@ -141,24 +142,64 @@ test("Auth preview provisioning can target only an approved slot range", () => {
   ).toThrow(/unknown preview slot 4/);
 });
 
-test("Auth and OS preview provisioning share one new project-app session secret", () => {
+test("Preview provisioning inherits the shared dev project-app session secret", () => {
   expect(
-    resolveSharedPreviewSecret({
-      authSecret: null,
-      createSecret: () => "new-shared-secret",
-      osSecret: null,
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      authPreviewSecret: null,
+      osDevSecret: "shared-non-production-secret",
+      osPreviewSecret: null,
     }),
-  ).toBe("new-shared-secret");
+  ).toBe("shared-non-production-secret");
 });
 
-test("Auth preview provisioning refuses divergent project-app session secrets", () => {
-  expect(() =>
-    resolveSharedPreviewSecret({
-      authSecret: "auth-secret",
-      createSecret: () => "unused",
-      osSecret: "os-secret",
+test("Preview provisioning preserves a matching preview-root session secret", () => {
+  expect(
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      authPreviewSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      osPreviewSecret: "shared-non-production-secret",
     }),
-  ).toThrow(/project-app session secrets differ/);
+  ).toBe("shared-non-production-secret");
+});
+
+test("Preview provisioning refuses divergent project-app session roots", () => {
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "auth-secret",
+      authPreviewSecret: null,
+      osDevSecret: "os-secret",
+      osPreviewSecret: null,
+    }),
+  ).toThrow(/dev project-app session secrets differ/);
+
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      authPreviewSecret: "auth-preview-secret",
+      osDevSecret: "shared-non-production-secret",
+      osPreviewSecret: "os-preview-secret",
+    }),
+  ).toThrow(/preview project-app session secrets differ/);
+
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      authPreviewSecret: "stale-preview-secret",
+      osDevSecret: "shared-non-production-secret",
+      osPreviewSecret: null,
+    }),
+  ).toThrow(/preview project-app session secret differs from dev/);
+});
+
+test("Preview provisioning includes the Dummy Petshop client OS deploys require", () => {
+  expect(
+    JSON.parse(previewProvisionedIntegrationSecrets().APP_CONFIG_INTEGRATIONS__PETSHOP),
+  ).toEqual({
+    oauthClientId: "petshop-default",
+    oauthClientSecret: "petshop-default-secret",
+  });
 });
 
 describe("preview app dependency expansion", () => {

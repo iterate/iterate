@@ -10,34 +10,17 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 
 ## Status
 
-Read-only planning is complete and the exact non-production batch was approved
-on 2026-07-20. The repository map, all fifty Doppler configs, and all ten
-GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
-is complete for all ten slots, including clean second ensures and every returned
-ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
-preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
-verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Ten valid Bugbot findings now have regression
-coverage: requested-slot adoption erases unknown-provenance data, seeded
-repository lookup no longer depends on Cloudflare subscription setup, and a
-server-side GitHub import records its initial commit even though the exact-repo
-subscription can only be installed after the atomic import. Intentional
-PR-body-directed slot moves are also reported as requested moves, not expired
-lease takeovers. Pre-deploy Email Routing reports a missing zone as deferred so
-resource-ID reconciliation can finish, while post-deploy reconciliation still
-fails hard. Interrupted exact-slot moves also resume from the requested lease
-and release the old recorded slot instead of self-blocking; a failed exact-slot
-request releases any unrelated adopted lease. Markdown examples and comments
-cannot activate the PR-body selector. Local OS tests and typecheck are green;
-the latest preview run exposed and now has a regression for an unbounded
-cross-slot subscription scan. PR #2161 merged and the normal production rollout
-passed. Post-merge preview deployment exposed one missing provisioner invariant:
-the required project-app session secret was not shared into Auth and OS for new
-slots. The follow-up is regression-tested and ready to provision without
-rotating existing credentials. Preview deployment, full Slack manifests, and
-Semaphore lease publication remain; lease publication is still the separate
-production approval boundary. The strict PR-body slot selector makes it
-possible to canary one expanded slot without exposing all ten to old clients.
+Slots 10–19 are provisioned, deployed, and published in Semaphore's nineteen-
+slot production pool. Google has persisted both callback types for every slot;
+GitHub App identity/webhooks and every Slack manifest URL are verified. Draft
+PR #2182 requested and claimed preview-14 through the normal `preview` label
+path. Two lifecycle attempts proved that the eager account-wide Worker-binding
+scan exceeds the shared Cloudflare API budget when preview jobs overlap; a
+five-minute cooldown did not help while other handovers were active. Cleanup
+now relies on Cloudflare's atomic rejection to name only actual binding owners,
+with focused fail-closed tests. Remaining work is deploying that fix, rerunning
+preview-14, real OS-side GitHub/Slack/Google canaries, and the separately
+approved shared-session-root migration.
 
 ## Goal
 
@@ -147,12 +130,26 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
 - [x] Merge the repository change before deploying or leasing the slots.
   _PR #2161 squash-merged as `fe1f3d4a`; the production Auth/OS, Semaphore,
   Streams, tunnels, test, lint, and publish checks all passed._
-- [ ] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
+- [x] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
   each slot from current `main`; verify integrations and operational telemetry.
-- [ ] Present the completed provisioning ledger and obtain separate approval
+  _All fifty deployments passed. Fresh-host 522s recovered within bounded
+  smoke checks. GitHub identity/webhook checks and all ten Slack full-manifest
+  URL verifications passed._
+- [ ] Migrate the project-app session secret to matching Auth/OS preview roots,
+  remove child overrides, and redeploy Auth/OS together after explicit approval.
+- [x] Add the two Google OAuth redirect URIs for every new slot.
+  _The shared non-production `dev` client now persists both Auth and OS
+  callbacks for previews 1–19, with no missing or duplicate preview URI._
+- [ ] Prove the preview-14 OS-side Slack/GitHub/Google connections.
+- [x] Present the completed provisioning ledger and obtain separate approval
   to add the production Semaphore leases.
-- [ ] Seed leases, require nineteen-slot status and zero reconciliation issues,
-  and prove assign/run/cleanup for each slot with a draft canary PR.
+  _The user approved publication after reviewing the deployed provider and
+  Worker state._
+- [x] Seed leases and require nineteen-slot status with zero config drift.
+  _Semaphore reports nineteen resources; slots 10–19 were available after
+  seeding and reconciliation returned no issues. Preview-14 is now held by
+  PR #2182 as explicitly requested._
+- [ ] Prove the assign/run/cleanup lifecycle with the draft canary PR.
 - [ ] Move this task to `tasks/complete/` with a date prefix after all ten slots
   pass the normal lifecycle.
 
@@ -163,16 +160,16 @@ read back from the owning system.
 
 | Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
 | ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 11   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 12   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 13   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 15   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 16   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 17   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 18   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 19   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 10   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 11   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 12   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 13   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 15   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 16   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 17   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 18   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 19   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
 
 ## Read-only inventory
 
@@ -469,3 +466,37 @@ the recorded projection.
   preserves one per-slot value and rejects divergent existing values. The live
   command will run without `--rotate`, so existing OAuth and app credentials
   remain unchanged.
+- 2026-07-21: Provisioned the missing session and Dummy Petshop config, then
+  deployed all five apps for slots 10–19. Every final smoke passed. Fresh
+  hostname 522s remained inside bounded readiness checks; two Auth OAuth-client
+  seeds exposed a missing post-smoke retry, now covered by a bounded 522–526
+  regression test while unclassified 500s still fail immediately.
+- 2026-07-21: Authenticated as every preview GitHub App and verified the exact
+  slug and `.com` webhook URL through `GET /app` and `GET /app/hook/config`.
+  Upgraded Slack apps 10–19 from bootstrap to full manifests in the logged-in
+  browser and explicitly verified every Events API URL.
+- 2026-07-21: Audited session-secret inheritance. Auth and OS match within each
+  preview slot but slots differ and both preview roots are empty; Auth/OS dev
+  roots already match. The follow-up provisioner now models one non-production
+  root value and rejects child overrides. Live migration remains separately
+  approved because it invalidates existing preview sessions.
+- 2026-07-21: Added and persisted Google Auth and OS integration callbacks for
+  previews 10–19 on the shared non-production OAuth client. A rapid nineteen-
+  row bulk fill returned HTTP 400 and rolled back; normal typed batches of six
+  persisted, and a final reload found all 38 preview callbacks exactly once.
+- 2026-07-21: Published the approved Semaphore resources. Production reports
+  nineteen total slots and zero config drift. Adding the `preview` label to
+  draft PR #2182 caused its standalone selector to claim preview-14 exactly.
+- 2026-07-21: Cancelled the first preview-14 lifecycle run while it was safely
+  parked at 503. The preceding fifty-app deployment had exhausted Cloudflare's
+  five-minute API budget, so each ten-Worker chunk of the required external DO-
+  binding scan received a 120-second `Retry-After` and could not fit inside the
+  CI budget.
+- 2026-07-21: Cancelled a second attempt after a five-minute quiet period when
+  four concurrent preview jobs kept the shared Cloudflare budget saturated.
+  Reproduced the fleet-scaling defect and changed DO cleanup to try the atomic
+  retirement first, inspect only binding-owner Workers named by Cloudflare,
+  verify each detach, and retry. Normal cleanup now makes zero Worker-settings
+  reads; named-reference and unclassified-failure tests keep the path fail-
+  closed. The runbook records the new invariant and removes the ineffective
+  cooldown advice.
