@@ -42,6 +42,13 @@ export interface MountRepoAccess {
     encoding?: "utf8" | "base64";
   }): Promise<{ commitOid: string; content: string; path: string } | null>;
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
+  /** The whole HEAD tree's text contents in ONE call (head-cache-backed) —
+   * bulk consumers must use this instead of fanning readFile() per path,
+   * which overloads the repo object. */
+  getFilesSnapshot(input?: { branch?: string }): Promise<{
+    commitOid: string;
+    files: Record<string, string>;
+  }>;
   commitFiles(input: {
     author?: { email: string; name: string };
     changes: RepoFileChange[];
@@ -205,6 +212,12 @@ export class WorkspaceCore {
     // masked, exactly as files under a deeper mount point are shadowed.
     if (isVirtualDirectoryPath(mounts, path)) return null;
     return this.#mountRead(mounts, path);
+  }
+
+  /** The OVERLAY copy only — no mount fall-through (bulk readers group the
+   * fall-through per mount themselves; see the DO's readFiles). */
+  async readOverlayFile(path: string): Promise<string | null> {
+    return this.#workspace.readFile(path);
   }
 
   /** The BASE of a path — its mount's content at HEAD, ignoring the overlay

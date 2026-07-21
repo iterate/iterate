@@ -289,13 +289,48 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async readFiles(paths: string[]): Promise<Record<string, string | null>> {
     await this.#assertCreated();
     if (paths.length > 10_000) throw new Error("readFiles caps at 10000 paths per call");
-    const entries = await Promise.all(
+    const result: Record<string, string | null> = {};
+    const mounts = this.#currentConfig().mounts;
+    // Live sessions and overlay copies first (local reads); what remains is
+    // mount fall-through, grouped so each mount pays ONE snapshot RPC —
+    // fanning per-file reads at a repo object is the documented overload.
+    const byMount = new Map<string, { paths: string[]; repoPath: string }>();
+    await Promise.all(
       paths.map(async (path) => {
         const live = await this.#collab.readFile(path);
-        return [path, live ?? (await this.#core.readFile(path))] as const;
+        if (live !== null) {
+          result[path] = live;
+          return;
+        }
+        const local = await this.#core.readOverlayFile(path);
+        if (local !== null) {
+          result[path] = local;
+          return;
+        }
+        const resolved = routeMount(mounts, path);
+        if (resolved === null || resolved.repoRelativePath === "") {
+          result[path] = null;
+          return;
+        }
+        const group = byMount.get(resolved.mountPath) ?? {
+          paths: [],
+          repoPath: resolved.mount.repoPath,
+        };
+        group.paths.push(path);
+        byMount.set(resolved.mountPath, group);
       }),
     );
-    return Object.fromEntries(entries);
+    await Promise.all(
+      [...byMount.entries()].map(async ([mountPath, group]) => {
+        const snapshot = await this.#repoStub(group.repoPath).getFilesSnapshot();
+        const prefix = mountPath === "/" ? "/" : `${mountPath}/`;
+        for (const path of group.paths) {
+          const repoRelative = path.startsWith(prefix) ? path.slice(prefix.length) : path;
+          result[path] = snapshot.files[repoRelative] ?? null;
+        }
+      }),
+    );
+    return result;
   }
 
   /** A path's mount content at HEAD — what uncommitted work diffs against. */

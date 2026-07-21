@@ -69,6 +69,7 @@ function fakeRepo(tree: Record<string, string>) {
       };
     },
     listFiles: async () => ({ commitOid: "head-oid", paths: Object.keys(tree).sort() }),
+    getFilesSnapshot: async () => ({ commitOid: "head-oid", files: { ...tree } }),
     commitFiles: async (input) => {
       commits.push({ changes: input.changes, message: input.message });
       for (const change of input.changes) {
