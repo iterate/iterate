@@ -184,7 +184,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(guestbookHtml).toContain(
     '<script type="module" src="/apps/guestbook/client.js"></script>',
   );
-  expect(guestbookHtml).toContain("__iterateWorkerOverlay");
+  expect(guestbookHtml).toContain("data-iterate-worker-overlay");
   const guestbookClient = await fetchApp(`guestbook--${slug}`, {
     path: "/apps/guestbook/client.js",
   });
