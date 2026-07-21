@@ -56,9 +56,9 @@ export const test = base.extend<{
           return;
         }
 
+        const frame = request.serviceWorker() === null ? request.frame() : null;
         const sameOrigin =
-          request.serviceWorker() === null &&
-          new URL(request.url()).origin === new URL(request.frame().url()).origin;
+          frame !== null && new URL(request.url()).origin === new URL(frame.url()).origin;
         if (sameOrigin) {
           await route.continue();
           return;
