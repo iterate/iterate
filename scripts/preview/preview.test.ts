@@ -188,7 +188,6 @@ describe("preview workflow scope", () => {
 
     expect(os).toMatchObject({
       paths: expect.arrayContaining([
-        ".bun-version",
         "apps/dummy-petshop/**",
         "apps/mobile/**",
         "playwright.config.ts",
@@ -206,9 +205,6 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- specs/**");
-    expect(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-    ).toContain("bun-version-file: .bun-version");
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,

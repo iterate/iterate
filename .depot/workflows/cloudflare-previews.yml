@@ -48,7 +48,6 @@ on:
       - unlabeled
     paths:
       - .depot/workflows/cloudflare-previews.yml
-      - .bun-version
       - packages/shared/**
       - packages/ui/**
       - pnpm-lock.yaml
@@ -88,7 +87,7 @@ jobs:
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
     # OS gives every isolated Vitest file a worker at once. Keep that fan-out,
-    # Playwright, TUI, deploys, and packaging off one another's local CPU tail.
+    # Playwright, deploys, and packaging off one another's local CPU tail.
     runs-on: depot-ubuntu-24.04-64
     # Hard backstop on one attempt. Each parallel sub-lane retains its own
     # tighter watchdog; this outer bound catches setup, deploy, and reporting
@@ -122,13 +121,6 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      # The iterate terminal is an OpenTUI application and deliberately runs
-      # under Bun. Keep the version reproducible and fail before deploy if the
-      # runtime cannot be provisioned.
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .bun-version
       - name: Install dependencies
         run: pnpm install
       - name: Install Doppler CLI
