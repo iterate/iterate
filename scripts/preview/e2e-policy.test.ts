@@ -147,12 +147,19 @@ describe("retry telemetry parsers", () => {
             passedAfterRetry: true,
             state: "passed",
             durationMs: 5200,
+            firstFailure: "Network connection lost",
           },
         ],
       }),
     );
     await expect(previewInternals.readVitestRetryTelemetry(file)).resolves.toEqual([
-      { lane: "vitest", name: "sandbox > executes", retryCount: 1, passedAfterRetry: true },
+      {
+        lane: "vitest",
+        name: "sandbox > executes",
+        retryCount: 1,
+        passedAfterRetry: true,
+        firstFailure: "Network connection lost",
+      },
     ]);
     rmSync(file);
   });
@@ -175,7 +182,11 @@ describe("retry telemetry parsers", () => {
                       {
                         status: "flaky",
                         results: [
-                          { retry: 0, status: "failed" },
+                          {
+                            retry: 0,
+                            status: "failed",
+                            error: { message: "Network connection\n lost" },
+                          },
                           { retry: 1, status: "passed" },
                         ],
                       },
@@ -193,7 +204,13 @@ describe("retry telemetry parsers", () => {
       }),
     );
     await expect(previewInternals.readPlaywrightRetryTelemetry(file)).resolves.toEqual([
-      { lane: "specs", name: "runs a script", retryCount: 1, passedAfterRetry: true },
+      {
+        lane: "specs",
+        name: "runs a script",
+        retryCount: 1,
+        passedAfterRetry: true,
+        firstFailure: "Network connection lost",
+      },
     ]);
     rmSync(file);
   });
@@ -202,11 +219,17 @@ describe("retry telemetry parsers", () => {
     expect(
       previewInternals.renderPreviewRetrySummary({
         retried: [
-          { lane: "vitest", name: "a", retryCount: 1, passedAfterRetry: true },
+          {
+            lane: "vitest",
+            name: "a",
+            retryCount: 1,
+            passedAfterRetry: true,
+            firstFailure: "Network connection lost",
+          },
           { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
         ],
       }),
-    ).toBe("2 retried: a (vitest x1) · b (specs x1, still failed)");
+    ).toBe("2 retried: a (vitest x1) — Network connection lost · b (specs x1, still failed)");
     expect(previewInternals.renderPreviewRetrySummary({ retried: [] })).toBeNull();
   });
 });

@@ -1337,6 +1337,7 @@ export type PreviewRetrySummary = {
     name: string;
     retryCount: number;
     passedAfterRetry: boolean;
+    firstFailure?: string;
   }[];
 };
 
@@ -1364,6 +1365,7 @@ async function readVitestRetryTelemetry(
         fullName: z.string(),
         retryCount: z.number().int().positive(),
         passedAfterRetry: z.boolean(),
+        firstFailure: z.string().optional(),
       }),
     ),
   });
@@ -1373,6 +1375,7 @@ async function readVitestRetryTelemetry(
     name: record.fullName,
     retryCount: record.retryCount,
     passedAfterRetry: record.passedAfterRetry,
+    ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
   }));
 }
 
@@ -1391,7 +1394,15 @@ async function readPlaywrightRetryTelemetry(
     suites?: PlaywrightJsonSuite[];
     specs?: {
       title?: string;
-      tests?: { status?: string; results?: { retry?: number }[] }[];
+      tests?: {
+        status?: string;
+        results?: {
+          retry?: number;
+          status?: string;
+          error?: unknown;
+          errors?: unknown[];
+        }[];
+      }[];
     }[];
   };
   const report = JSON.parse(await readFile(filePath, "utf8")) as {
@@ -1403,11 +1414,19 @@ async function readPlaywrightRetryTelemetry(
       for (const test of spec.tests ?? []) {
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
         if (retryCount > 0) {
+          const failedResult = test.results?.find(
+            (result) =>
+              result.status === "failed" || result.error !== undefined || result.errors?.length,
+          );
+          const firstFailure = compactRetryFailure(
+            failedResult?.error ?? failedResult?.errors?.[0],
+          );
           retried.push({
             lane,
             name: spec.title ?? "(unknown spec)",
             retryCount,
             passedAfterRetry: test.status === "flaky",
+            ...(firstFailure ? { firstFailure } : {}),
           });
         }
       }
@@ -1449,10 +1468,22 @@ function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null 
   const details = summary.retried
     .map(
       (record) =>
-        `${record.name} (${record.lane} x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})`,
+        `${record.name} (${record.lane} x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})${record.firstFailure ? ` — ${record.firstFailure}` : ""}`,
     )
     .join(" · ");
   return `${summary.retried.length} retried: ${details}`;
+}
+
+function compactRetryFailure(error: unknown): string | undefined {
+  let value: unknown = error;
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    value = record.message ?? record.stack ?? record.name;
+  }
+  if (typeof value !== "string") return undefined;
+  const compact = value.replace(/\s+/gu, " ").trim();
+  if (!compact) return undefined;
+  return compact.length > 300 ? `${compact.slice(0, 297)}...` : compact;
 }
 
 /**

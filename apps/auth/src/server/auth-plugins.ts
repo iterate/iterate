@@ -46,7 +46,7 @@ import {
   sendOrganizationInvitationEmail,
   shouldUseTestOtp,
 } from "./email.ts";
-import { authJwt } from "./auth-jwt.ts";
+import type { AuthJwtPlugin } from "./auth-jwt.ts";
 
 // Custom claims go out on three surfaces, configured further down in
 // oauthProvider():
@@ -94,7 +94,7 @@ function normalizeSingleOrganizationRole(role: string) {
  * build the same plugin set without real secrets. */
 export type AuthPluginOptions = {
   authAppOrigin: string;
-  authSigningPrivateJwk?: string;
+  jwtPlugin: AuthJwtPlugin;
   emailOtpEnabled: boolean;
   fixedTestOtpEnabled: boolean;
   emailBinding: CloudflareEmailBinding | undefined;
@@ -111,7 +111,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
   ];
 
   return [
-    authJwt(options.authSigningPrivateJwk),
+    options.jwtPlugin,
     bearer(),
     admin(),
     organization({

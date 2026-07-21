@@ -47,8 +47,8 @@ export default defineConfig({
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
   // Eight workers start the isolated catalogue promptly while keeping total
   // preview pressure bounded as Vitest and the other OS lanes overlap it.
-  // Higher counts did not shorten the measured lane and caused transient
-  // dynamic-worker connection loss under the full-fleet workload.
+  // Higher combined lane pressure did not shorten the measured preview and
+  // caused transient canceled ITX/Durable Object RPCs under full-fleet load.
   workers: process.env.CI ? 8 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [

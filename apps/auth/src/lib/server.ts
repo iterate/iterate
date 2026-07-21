@@ -1,13 +1,7 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { parse, serialize } from "hono/utils/cookie";
-import {
-  createLocalJWKSet,
-  createRemoteJWKSet,
-  jwtVerify,
-  type JSONWebKeySet,
-  type JWTVerifyGetKey,
-} from "jose";
+import { createLocalJWKSet, jwtVerify, type JSONWebKeySet, type JWTVerifyGetKey } from "jose";
 import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
 import { expandOAuthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
@@ -35,7 +29,7 @@ export type IterateAuthConfig = {
   clientId: string;
   clientSecret: string;
   redirectURI: string;
-  jwks?: JSONWebKeySet;
+  jwks: JSONWebKeySet;
   resource?: string | string[];
   logoutReturnToOrigins?: string[];
   cookiePrefix?: string;
@@ -51,7 +45,7 @@ const OAuthState = z.object({
 
 type OAuthState = z.infer<typeof OAuthState>;
 
-/** Key resolver handed to jose's jwtVerify (local baked set, remote set, or the stale-bake fallback chain built in createIterateAuth). */
+/** Local key resolver handed to jose's jwtVerify. */
 type JWKS = JWTVerifyGetKey;
 
 /** Internal dependency boundary used by the owning package's tests. */
@@ -854,13 +848,10 @@ export function createIterateAuth(config: IterateAuthConfig): IterateAuth {
     );
   }
 
-  const issuer = config.issuer ?? DEFAULT_ISSUER;
-  // Deployed relying parties receive the public half of Auth's Doppler-owned
-  // signing key, so verification is entirely local. Consumers that omit a
-  // baked set deliberately use the issuer's remote JWKS instead.
-  const jwks: JWTVerifyGetKey = config.jwks
-    ? createLocalJWKSet(config.jwks)
-    : createRemoteJWKSet(new URL(`${issuer}/jwks`));
+  // Every relying party receives the public half of Auth's Doppler-owned
+  // signing key. Missing trust configuration is a startup/configuration error,
+  // never an implicit network dependency on whichever Auth version is live.
+  const jwks: JWTVerifyGetKey = createLocalJWKSet(config.jwks);
   const infra = createOAuthInfra(config, jwks);
 
   const fetchAuthRoute = createAuthHandler(config, infra);

@@ -12,6 +12,8 @@ export interface RetriedTestRecord {
   passedAfterRetry: boolean;
   state: string;
   durationMs: number;
+  /** First failed attempt's compact error, retained even when the retry passes. */
+  firstFailure?: string;
 }
 
 /** Shape of the JSON file written to `$E2E_RETRY_TELEMETRY_FILE`. */
@@ -29,7 +31,7 @@ export interface RetryTelemetryFile {
 interface ReportedTestCase {
   fullName: string;
   diagnostic(): { retryCount: number; flaky: boolean; duration: number } | undefined;
-  result(): { state: string };
+  result(): { state: string; errors?: readonly unknown[] };
 }
 
 /** Structural slice of vitest's `TestModule` (see {@link ReportedTestCase}). */
@@ -65,13 +67,16 @@ export class RetryTelemetryReporter {
           if (!diagnostic || diagnostic.retryCount === 0) {
             continue;
           }
+          const result = test.result();
+          const firstFailure = compactFailure(result.errors?.[0]);
           retried.push({
             fullName: test.fullName,
             moduleId: testModule.moduleId,
             retryCount: diagnostic.retryCount,
             passedAfterRetry: diagnostic.flaky,
-            state: test.result().state,
+            state: result.state,
             durationMs: Math.round(diagnostic.duration),
+            ...(firstFailure ? { firstFailure } : {}),
           });
         }
       }
@@ -85,7 +90,7 @@ export class RetryTelemetryReporter {
         const details = retried
           .map(
             (record) =>
-              `${record.fullName} (x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})`,
+              `${record.fullName} (x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})${record.firstFailure ? ` — ${record.firstFailure}` : ""}`,
           )
           .join("; ");
         console.log(`[retry-telemetry] ${retried.length} test(s) needed retries: ${details}`);
@@ -94,4 +99,17 @@ export class RetryTelemetryReporter {
       console.error("[retry-telemetry] failed to record retry telemetry:", error);
     }
   }
+}
+
+/** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
+function compactFailure(error: unknown): string | undefined {
+  let value: unknown = error;
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    value = record.message ?? record.stack ?? record.name;
+  }
+  if (typeof value !== "string") return undefined;
+  const compact = value.replace(/\s+/gu, " ").trim();
+  if (!compact) return undefined;
+  return compact.length > 300 ? `${compact.slice(0, 297)}...` : compact;
 }

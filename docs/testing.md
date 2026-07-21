@@ -416,8 +416,9 @@ visible:
 - **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
 retries: ...` (the Vitest `RetryTelemetryReporter` lives in
   `packages/shared/src/test-support/e2e-policy/`); the onboarding smoke
-  prints the same marker when it needed attempt 2. Grep any run log for
-  `retry-telemetry`.
+  prints the same marker when it needed attempt 2. Vitest and Playwright
+  records retain the first failed attempt's compact error even when the retry
+  passes. Grep any run log for `retry-telemetry`.
 - **Preview CI**: the OS lane writes TUI and Vitest telemetry JSON (via
   `E2E_RETRY_TELEMETRY_FILE`) plus Playwright's `playwright-results.json`;
   `scripts/preview/preview.ts` folds all three into a `retries` column in the

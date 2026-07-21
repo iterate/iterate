@@ -1,11 +1,10 @@
 import { jwt } from "better-auth/plugins";
 import { parseAuthSigningPrivateJwk } from "../../../../scripts/lib/bake-auth-jwks.ts";
 
-/** Better Auth JWT plugin backed by the one immutable key supplied by Doppler. */
-export function authJwt(privateJwkJson: string | undefined) {
-  // Schema generation needs the plugin's schema but has no runtime secrets.
-  if (!privateJwkJson) return jwt();
+export type AuthJwtPlugin = ReturnType<typeof jwt>;
 
+/** Better Auth JWT plugin backed by the one immutable key supplied by Doppler. */
+export function authJwt(privateJwkJson: string): AuthJwtPlugin {
   const { d, ...publicJwk } = parseAuthSigningPrivateJwk(privateJwkJson);
   const key = {
     id: publicJwk.kid,

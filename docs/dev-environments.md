@@ -174,8 +174,8 @@ behavior.
 Auth signs JWTs with one Doppler-owned Ed25519 key. OS and the other relying
 workers trust only its public half, derived locally during config generation or
 deploy from `AUTH_FORGE_PRIVATE_JWK` (inherited from `_shared/dev` /
-`_shared/preview`). The same private key powers offline identity minting, so
-minting is instant and does not call the auth worker:
+`_shared/preview` / `_shared/prd`). The same private key powers offline
+identity minting, so minting is instant and does not call the auth worker:
 
 `pnpm auth:mint` lives in the **repo root** package (`pnpm cli` lives in
 `apps/os` — don't mix them up; pnpm's "command not found" error when you run

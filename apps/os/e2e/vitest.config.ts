@@ -111,10 +111,11 @@ export default defineConfig({
     // runtime-specific pools.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // Eight files × two cases keeps the catalogue on its measured ~90-second
-    // floor without stampeding the shared dynamic-worker control plane while
-    // Playwright and the other OS lanes are running alongside it.
-    maxWorkers: 8,
+    // Seven files × two cases keeps the catalogue near its measured floor while
+    // leaving enough shared Durable Object/RPC capacity for the eight-worker
+    // Playwright lane. Each lane is healthy at eight workers in isolation, but
+    // their combined start burst produced canceled 0ms RPCs and slower tails.
+    maxWorkers: 7,
     sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
     maxConcurrency: E2E_FILE_TEST_CONCURRENCY,
     passWithNoTests: true,
