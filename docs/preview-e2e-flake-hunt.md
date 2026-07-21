@@ -70,10 +70,26 @@ remains intact.
 
 Round-6 run ledger (filled from the marathon's machine-readable summary):
 
-| Proof                    | Revision                                                                  | Accepted runs | Retries | Outcome                                           |
-| ------------------------ | ------------------------------------------------------------------------- | ------------: | ------: | ------------------------------------------------- |
-| Pre-round normal preview | `950a4f01726f52ec2fb185305dc4dcf9baa7745d`                                |             1 |       1 | Passed; CLI transport-open retry classified above |
-| Round-6 marathon         | `a999a11a00987bd59694d79f20949353644f29f6` plus this evidence-only change |          0/25 |       0 | Pending                                           |
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                           |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------------- |
+| Pre-round normal preview | `950a4f01726f52ec2fb185305dc4dcf9baa7745d` |             1 |       1 | Passed; CLI transport-open retry classified above |
+| Round-6 marathon 1       | `443d7a49a6da759842248ce8b284c820db2a41ab` |          0/25 |       0 | Functional pass; rejected at 312s                 |
+
+The first round-6 marathon was [Depot run
+`2b0d59sw92`](https://depot.dev/orgs/0p91s0lz49/workflows/2b0d59sw92).
+Every test passed without retry, but the proof correctly stopped because the
+deploy-plus-test critical path took 312 seconds: 123.9 seconds deploying, then
+188.4 seconds testing. OS Vitest was the test pole at 181.8 seconds.
+
+Schema-v2 module timing showed why. The seven-worker cap made the final
+33.7-second `itx-egress.e2e.test.ts` file wait 147.6 seconds before it could
+start. The 48 OS module executions contained 1,112.7 seconds of remote work;
+even perfect seven-worker scheduling has a 159.0-second lower bound. These
+files create isolated projects and spend nearly all their time awaiting remote
+operations, so CI now gives every file a worker immediately. The in-file limit
+of two remains for the few cases that deliberately share a bounded project
+pool. The next marathon measures whether the deployed platform has a real
+capacity limit instead of encoding an assumed one in the local scheduler.
 
 ## Round 5 (2026-07-21)
 

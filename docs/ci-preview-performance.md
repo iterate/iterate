@@ -39,10 +39,8 @@ raise the budget automatically.
   so a failure cannot orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
-- OS Vitest runs seven files at once and permits at most two concurrent tests
-  per file in CI. A longest-processing-time-first sequencer starts the observed
-  slow files first, while the seven-worker bound keeps the combined Vitest and
-  Playwright project-creation burst inside measured preview capacity. The
+- OS Vitest gives every current file a worker immediately and permits at most
+  two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
 - Root Playwright uses eight fully parallel workers in CI. Preview runs queue the
   long reconnect/resume specs first so their fixed probe windows overlap the
@@ -103,9 +101,9 @@ serially because they intentionally share one warm container.
   entire duration to the critical path.
 - Start fixed-duration or historically slow work first. Once the phase is
   parallel, late scheduling of the longest item is the usual avoidable tail.
-- Keep the seven-worker file pool saturated and refresh the longest-first
-  timings when the tail moves. If that bounded remote burst exposes a real
-  shared-capacity defect, diagnose it rather than adding ad-hoc serial lanes.
+- Keep file scheduling out of the critical path: every isolated file should be
+  runnable immediately. If that remote burst exposes a real shared-capacity
+  defect, diagnose it rather than adding ad-hoc serial lanes.
 - Split composite tests when their internal serial work becomes the phase
   floor. This improves both scheduling and retry granularity.
 

@@ -36,8 +36,8 @@ concurrency:
 jobs:
   marathon:
     name: Preview e2e marathon
-    # Match the production preview check exactly: seven Vitest file workers run
-    # alongside Playwright and the app-level lanes on the measured 16-core host.
+    # Match the production preview check exactly: every Vitest file can start
+    # alongside Playwright and the app-level lanes on the 16-core host.
     runs-on: depot-ubuntu-24.04-16
     # 25 accepted runs cannot consume 125 minutes; this leaves bounded room for
     # setup and an externally stolen slot while the per-run watchdog diagnoses
