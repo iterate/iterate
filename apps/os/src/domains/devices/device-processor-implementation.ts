@@ -1,4 +1,4 @@
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import {
   DeviceProcessorContract,
@@ -394,18 +394,17 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             pushTokenSecretUpdatedOffset: state.pushTokenSecret.updatedOffset,
           })
         : false;
-    if (pushTokenInvalid || settlements.length > 0) {
-      await this.append(
-        ...(pushTokenInvalidated
-          ? [
-              {
-                type: "events.iterate.com/device/revoked" as const,
-                idempotencyKey: this.idempotencyKey("push-token-invalid"),
-                payload: { reason: "push-token-invalid" as const },
-              },
-            ]
-          : []),
-        ...settlements.map(({ outcome, requestOffset }) => ({
+    if (pushTokenInvalidated) {
+      await this.append({
+        type: "events.iterate.com/device/revoked",
+        idempotencyKey: this.idempotencyKey("push-token-invalid"),
+        payload: { reason: "push-token-invalid" },
+      });
+    }
+    if (settlements.length > 0) {
+      await this.#appendUnlessLostIdempotencyRace(
+        (...events) => this.append(...events),
+        settlements.map(({ outcome, requestOffset }) => ({
           type: "events.iterate.com/device/notification-settled" as const,
           idempotencyKey: this.idempotencyKey(`notification-settled@${requestOffset}`),
           payload: { requestOffset, outcome },
@@ -458,28 +457,29 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                 pushTokenSecretUpdatedOffset: input.pushTokenSecretUpdatedOffset,
               })
             : false;
-        await this.append(
-          ...(pushTokenInvalidated
-            ? [
-                {
-                  type: "events.iterate.com/device/revoked" as const,
-                  idempotencyKey: this.idempotencyKey("push-token-invalid"),
-                  payload: { reason: "push-token-invalid" as const },
+        if (pushTokenInvalidated) {
+          await this.append({
+            type: "events.iterate.com/device/revoked",
+            idempotencyKey: this.idempotencyKey("push-token-invalid"),
+            payload: { reason: "push-token-invalid" },
+          });
+        }
+        await this.#appendUnlessLostIdempotencyRace(
+          (...events) => this.append(...events),
+          [
+            {
+              type: "events.iterate.com/device/notification-settled",
+              idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
+              payload: {
+                requestOffset: input.requestOffset,
+                outcome: {
+                  kind: "rejected-by-expo",
+                  error: ticket.error,
+                  message: ticket.message,
                 },
-              ]
-            : []),
-          {
-            type: "events.iterate.com/device/notification-settled",
-            idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
-            payload: {
-              requestOffset: input.requestOffset,
-              outcome: {
-                kind: "rejected-by-expo",
-                error: ticket.error,
-                message: ticket.message,
               },
             },
-          },
+          ],
         );
         return;
       }
@@ -494,21 +494,25 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   }
 
   /**
-   * Append a batch whose idempotency keys may race concurrent writers: every
-   * writer of `notification-settled@<offset>` (expiry sweep, send rejection,
-   * receipt check) races every other. The stream rejects a same-key append
-   * with a different body; the FIRST writer's settlement stands, and losing
-   * the race is success — the obligation is settled either way.
+   * Append settlements whose idempotency keys may race concurrent writers:
+   * every writer of `notification-settled@<offset>` (expiry sweep, send
+   * rejection, receipt check) races every other. The stream rejects a
+   * same-key append with a different body; the FIRST writer's settlement
+   * stands, and losing the race is success — the obligation is settled
+   * either way. One event per append, NOT one batch: each requestOffset
+   * races independently, and a batch is atomic — one lost race would
+   * silently drop every sibling settlement in it.
    */
   async #appendUnlessLostIdempotencyRace(
     append: ProcessEventArgs<DeviceProcessorContract>["append"],
     events: EmittedInput<DeviceProcessorContract>[],
   ): Promise<void> {
-    try {
-      await append(...events);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+    for (const event of events) {
+      try {
+        await append(event);
+      } catch (error) {
+        if (!isIdempotencyConflict(error)) throw error;
+      }
     }
   }
 }

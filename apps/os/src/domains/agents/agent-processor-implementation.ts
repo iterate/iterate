@@ -6,6 +6,7 @@ import {
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
+  isIdempotencyConflict,
   mergeProcessorConfig,
   StreamProcessor,
 } from "iterate/processors";
@@ -951,8 +952,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     try {
       await append(...events);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+      if (!isIdempotencyConflict(error)) throw error;
     }
   }
 

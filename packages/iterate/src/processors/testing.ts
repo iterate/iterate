@@ -6,7 +6,7 @@
 // cell, crash-as-eviction) live inline in the suites that need them
 // (stream-processor-registry.test.ts, the per-domain *-recovery tests).
 
-import { sameIdempotentEvent } from "./idempotency.ts";
+import { idempotencyConflictMessage, sameIdempotentEvent } from "./idempotency.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { StreamEventReadInput } from "./rpc-types.ts";
 import type { ConsumedInput, ProcessorState } from "./processor-contracts.ts";
@@ -87,14 +87,12 @@ export class MemoryStream implements ProcessorStream {
           : [...this.events, ...staged].find(
               (event) => event.idempotencyKey === input.idempotencyKey,
             );
-      if (existing !== undefined) {
+      if (existing !== undefined && input.idempotencyKey !== undefined) {
         // The Stream DO's predicate, SHARED: a same-key append with a
         // DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
         // once masked exactly that production rejection from a test.
         if (!sameIdempotentEvent(existing, input)) {
-          throw new Error(
-            `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
-          );
+          throw new Error(idempotencyConflictMessage(input.idempotencyKey, existing.offset));
         }
         results.push(existing);
         continue;

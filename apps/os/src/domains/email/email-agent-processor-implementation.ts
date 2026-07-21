@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
 import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
@@ -164,8 +164,7 @@ export class EmailAgentProcessor extends StreamProcessor<
             // same-key-different-body append. The committed transcription
             // stands — losing that race IS settlement, and rethrowing would
             // wedge the frame forever (every retry mints fresh URLs).
-            const message = error instanceof Error ? error.message : String(error);
-            if (!/idempotency key .* already names a different event/.test(message)) throw error;
+            if (!isIdempotencyConflict(error)) throw error;
           }
         });
         return;
