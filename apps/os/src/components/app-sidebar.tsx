@@ -549,12 +549,15 @@ function ProjectSidebarGroup({
     queryFn: () => getProjectCustomHostnames({ data: { projectId: projectId ?? "" } }),
     staleTime: 5 * 60_000,
   });
-  const projectWorkerUrl = buildProjectWorkerUrl({
-    projectSlug,
-    customHostname: customHostnames.data?.[0] ?? null,
-    projectHostnameBases,
-    appBaseUrl,
-  });
+  // A malformed directory entry must not cost the link entirely — fall back
+  // to the platform host when the custom hostname fails validation.
+  const projectWorkerUrl =
+    buildProjectWorkerUrl({
+      projectSlug,
+      customHostname: customHostnames.data?.[0] ?? null,
+      projectHostnameBases,
+      appBaseUrl,
+    }) ?? buildProjectWorkerUrl({ projectSlug, projectHostnameBases, appBaseUrl });
   const showAgentRows = sidebarAgentRowsVisible({
     isMobile,
     openMobile,
