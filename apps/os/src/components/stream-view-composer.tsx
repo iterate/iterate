@@ -45,6 +45,7 @@ export type StreamInterrupt = {
 export function StreamViewComposer({
   autoFocusMessage,
   defaultMode,
+  disabled,
   interrupt,
   messageComposer,
   onNudgeDeliveries,
@@ -53,6 +54,7 @@ export function StreamViewComposer({
 }: {
   autoFocusMessage: boolean;
   defaultMode?: "message" | "raw";
+  disabled: boolean;
   /** Null while no turn is running (or the stream has no interrupt hook). */
   interrupt: StreamInterrupt | null;
   messageComposer?: StreamMessageComposer;
@@ -183,6 +185,7 @@ export function StreamViewComposer({
           onSubmit: submitRawEvents,
         }}
         isSubmitting={isSubmitting}
+        disabled={disabled}
         {...(error == null ? {} : { error })}
       />
     </>

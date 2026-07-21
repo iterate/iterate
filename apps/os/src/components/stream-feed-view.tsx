@@ -65,6 +65,7 @@ export function StreamFeedView({
   emptyLabel = "No events in this stream yet.",
   filter,
   isPending = false,
+  pendingLabel = "Connecting to the stream",
   liveState,
   transientAgentItems = EMPTY_AGENT_ITEMS,
   runtime = ZERO_AGENT_RUNTIME,
@@ -78,6 +79,7 @@ export function StreamFeedView({
   /** Which kind families (and constraints within them) this mode shows. */
   filter: StreamFeedQueryInput;
   isPending?: boolean;
+  pendingLabel?: string;
   /** Reduced agent state for the live tail; null hides the trailing items. */
   liveState: AgentUiState | null;
   /** Runtime-projected settled items which are not journal database rows. */
@@ -237,7 +239,7 @@ export function StreamFeedView({
           <Empty className="min-h-48">
             <EmptyHeader>
               {isPending ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>{isPending ? "Connecting to the stream" : "Nothing here yet"}</EmptyTitle>
+              <EmptyTitle>{isPending ? pendingLabel : "Nothing here yet"}</EmptyTitle>
               {isPending ? null : (
                 <EmptyDescription>
                   {filtersNarrow ? "No feed items match the current filters." : emptyLabel}

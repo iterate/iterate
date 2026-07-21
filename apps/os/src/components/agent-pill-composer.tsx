@@ -57,6 +57,7 @@ export function AgentPillComposer({
   message,
   raw,
   examples,
+  disabled = false,
   isSubmitting = false,
   error,
   autoFocusMessage = false,
@@ -70,6 +71,7 @@ export function AgentPillComposer({
   raw?: AgentComposerRawConfig;
   /** The example picker rendered as the composer body in "examples" mode. */
   examples?: ReactNode;
+  disabled?: boolean;
   isSubmitting?: boolean;
   error?: string;
   autoFocusMessage?: boolean;
@@ -87,6 +89,7 @@ export function AgentPillComposer({
         : mode;
   const isExamples = activeMode === "examples";
   const canSubmit =
+    !disabled &&
     !isSubmitting &&
     !isExamples &&
     (activeMode === "message"
@@ -106,7 +109,7 @@ export function AgentPillComposer({
   }
 
   function interrupt() {
-    if (isSubmitting || isInterrupting || onInterrupt == null) return;
+    if (disabled || isSubmitting || isInterrupting || onInterrupt == null) return;
     void onInterrupt();
   }
 
@@ -286,7 +289,7 @@ export function AgentPillComposer({
                   : "Send message"
             }
             onClick={showInterrupt ? interrupt : submit}
-            disabled={showInterrupt ? isSubmitting || isInterrupting : !canSubmit}
+            disabled={showInterrupt ? disabled || isSubmitting || isInterrupting : !canSubmit}
             className="relative overflow-hidden rounded-full"
           >
             {showInterrupt ? (
