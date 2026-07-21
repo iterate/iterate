@@ -18,6 +18,24 @@ import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
 
 const guestbookStreamPath = "/guestbook";
 
+/** The processor property crosses Workers RPC before its wake method is called. */
+class GuestbookProcessorRpcTarget extends RpcTarget {
+  constructor(
+    private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,
+  ) {
+    super();
+  }
+
+  async wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    if (request.stream.projectId === null) {
+      throw new Error("the guestbook subscribes on project streams only");
+    }
+    return await this.registryFor(request.stream.projectId).wakeStreamSubscriber(request);
+  }
+}
+
 /** One createApp Durable Object owns the page, API, processor, and live value. */
 export class GuestbookApp extends IterateDurableObject {
   #registry: StreamProcessorRegistry<GuestbookState> | undefined;
@@ -52,17 +70,8 @@ export class GuestbookApp extends IterateDurableObject {
     await (await this.#freshRegistry()).handleAlarm(alarmInfo);
   }
 
-  get processor() {
-    return {
-      wakeStreamSubscriber: async (
-        request: StreamSubscriberWakeRequest,
-      ): Promise<StreamSubscriberWakeResponse> => {
-        if (request.stream.projectId === null) {
-          throw new Error("the guestbook subscribes on project streams only");
-        }
-        return await this.#ensureRegistry(request.stream.projectId).wakeStreamSubscriber(request);
-      },
-    };
+  get processor(): GuestbookProcessorRpcTarget {
+    return new GuestbookProcessorRpcTarget((projectId) => this.#ensureRegistry(projectId));
   }
 
   async sign(name: string, message: string): Promise<void> {

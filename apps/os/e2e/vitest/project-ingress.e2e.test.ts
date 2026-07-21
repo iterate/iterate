@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
@@ -70,6 +71,11 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     type: "stateful",
   } satisfies StatefulDynamicWorkerRef;
   using directGuestbook = project.workers.get(guestbookAppRef) as unknown as {
+    processor: {
+      wakeStreamSubscriber(
+        request: StreamSubscriberWakeRequest,
+      ): Promise<StreamSubscriberWakeResponse>;
+    };
     sign(name: string, message: string): Promise<void>;
   } & Disposable;
   await expect(
@@ -81,6 +87,17 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       .map(({ type }) => type)
       .filter((type) => type.startsWith("events.iterate.com/guestbook/")),
   ).toEqual(["events.iterate.com/guestbook/created", "events.iterate.com/guestbook/entry-signed"]);
+  // The wake expression uses workers.get(ref)'s default member replay. Its
+  // intermediate `processor` property must therefore survive Workers RPC as
+  // a real RpcTarget; reaching the registry's coordinate fence proves that
+  // exact lane without opening a live delivery sink in the test.
+  await expect(
+    directGuestbook.processor.wakeStreamSubscriber({
+      processorSlug: "guestbook",
+      stream: { path: "/wrong-stream", projectId, streamMaxOffset: 2 },
+      subscriptionKey: "app-guestbook#guestbook",
+    }),
+  ).rejects.toThrow("wakeStreamSubscriber coordinate mismatch");
 
   const fetchApp = (
     appHostPrefix: string,

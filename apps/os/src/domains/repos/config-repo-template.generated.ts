@@ -450,6 +450,24 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const guestbookStreamPath = \"/guestbook\";\n" +
       "\n" +
+      "/** The processor property crosses Workers RPC before its wake method is called. */\n" +
+      "class GuestbookProcessorRpcTarget extends RpcTarget {\n" +
+      "  constructor(\n" +
+      "    private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,\n" +
+      "  ) {\n" +
+      "    super();\n" +
+      "  }\n" +
+      "\n" +
+      "  async wakeStreamSubscriber(\n" +
+      "    request: StreamSubscriberWakeRequest,\n" +
+      "  ): Promise<StreamSubscriberWakeResponse> {\n" +
+      "    if (request.stream.projectId === null) {\n" +
+      "      throw new Error(\"the guestbook subscribes on project streams only\");\n" +
+      "    }\n" +
+      "    return await this.registryFor(request.stream.projectId).wakeStreamSubscriber(request);\n" +
+      "  }\n" +
+      "}\n" +
+      "\n" +
       "/** One createApp Durable Object owns the page, API, processor, and live value. */\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
       "  #registry: StreamProcessorRegistry<GuestbookState> | undefined;\n" +
@@ -484,17 +502,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    await (await this.#freshRegistry()).handleAlarm(alarmInfo);\n" +
       "  }\n" +
       "\n" +
-      "  get processor() {\n" +
-      "    return {\n" +
-      "      wakeStreamSubscriber: async (\n" +
-      "        request: StreamSubscriberWakeRequest,\n" +
-      "      ): Promise<StreamSubscriberWakeResponse> => {\n" +
-      "        if (request.stream.projectId === null) {\n" +
-      "          throw new Error(\"the guestbook subscribes on project streams only\");\n" +
-      "        }\n" +
-      "        return await this.#ensureRegistry(request.stream.projectId).wakeStreamSubscriber(request);\n" +
-      "      },\n" +
-      "    };\n" +
+      "  get processor(): GuestbookProcessorRpcTarget {\n" +
+      "    return new GuestbookProcessorRpcTarget((projectId) => this.#ensureRegistry(projectId));\n" +
       "  }\n" +
       "\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
