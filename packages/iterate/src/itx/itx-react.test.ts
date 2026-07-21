@@ -13,6 +13,7 @@ const control = vi.hoisted(() => ({
   sessionProbeCalls: 0,
   authenticateCalls: 0,
   authError: undefined as Error | undefined,
+  authErrors: [] as Error[],
   lastRoot: undefined as unknown,
   lastRpcRootDispose: undefined as ReturnType<typeof vi.fn> | undefined,
   lastCredentials: undefined as unknown,
@@ -44,6 +45,8 @@ vi.mock("capnweb", () => ({
           [Symbol.dispose]: vi.fn(),
         });
         if (control.hangFirstAuth) return new Promise(() => {});
+        const queuedAuthError = control.authErrors.shift();
+        if (queuedAuthError) return Promise.reject(queuedAuthError);
         if (control.authError) return Promise.reject(control.authError);
         const root = Object.assign(handleFor(""), {
           __describe: () => {
@@ -95,6 +98,7 @@ beforeEach(() => {
   control.sessionProbeCalls = 0;
   control.authenticateCalls = 0;
   control.authError = undefined;
+  control.authErrors = [];
   control.lastRoot = undefined;
   control.lastRpcRootDispose = undefined;
   control.lastCredentials = undefined;
@@ -283,12 +287,72 @@ describe("itx session socket", () => {
     expect(control.authenticateCalls).toBe(1);
   });
 
-  test("configureIterateSession after the first dial throws — the target is per-process", async () => {
+  test("configured credentials are resolved for each dial and force-refreshed once after an auth rejection", async () => {
     const { configureIterateSession, connectIterateSession } = await import("./itx-react.ts");
-    connectIterateSession();
-    expect(() => configureIterateSession({ baseUrl: "https://elsewhere.example" })).toThrow(
-      /before the first connect/,
-    );
+    const requests: Array<{ forceRefresh: boolean }> = [];
+    configureIterateSession({
+      baseUrl: "https://os.example.com",
+      credentials: ({ forceRefresh }) => {
+        requests.push({ forceRefresh });
+        return { type: "bearer", token: forceRefresh ? "fresh" : "cached" };
+      },
+    });
+    control.authErrors.push(new Error("token expired"));
+
+    const session = connectIterateSession();
+    await openLatest();
+    await expect(session).resolves.toMatchObject({ url: "wss://os.example.com/api" });
+    expect(requests).toEqual([{ forceRefresh: false }, { forceRefresh: true }]);
+    expect(control.lastCredentials).toEqual({ type: "bearer", token: "fresh" });
+    expect(control.authenticateCalls).toBe(2);
+
+    FakeWebSocket.instances[0]!.fire("close");
+    await openLatest();
+    await connectIterateSession();
+    expect(requests).toEqual([
+      { forceRefresh: false },
+      { forceRefresh: true },
+      { forceRefresh: false },
+    ]);
+  });
+
+  test("configureIterateSession keeps the same target stable and replaces a different deployment", async () => {
+    const { configureIterateSession, connectIterateSession } = await import("./itx-react.ts");
+    configureIterateSession({ baseUrl: "https://os.example.com" });
+    const first = connectIterateSession();
+    await openLatest();
+    const firstSession = await first;
+
+    configureIterateSession({ baseUrl: "https://os.example.com/" });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(connectIterateSession()).toBe(first);
+
+    configureIterateSession({ baseUrl: "https://elsewhere.example" });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1]!.url).toBe("wss://elsewhere.example/api");
+    expect(firstSession[Symbol.dispose]).toHaveBeenCalledTimes(1);
+    await openLatest();
+    await expect(connectIterateSession()).resolves.toMatchObject({
+      url: "wss://elsewhere.example/api",
+    });
+  });
+
+  test("disconnectIterateSession releases the current authority and leaves the keeper idle", async () => {
+    const { configureIterateSession, connectIterateSession, disconnectIterateSession } =
+      await import("./itx-react.ts");
+    configureIterateSession({ baseUrl: "https://os.example.com" });
+    const first = connectIterateSession();
+    await openLatest();
+    const session = await first;
+
+    disconnectIterateSession();
+    expect(session[Symbol.dispose]).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    const second = connectIterateSession();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await openLatest();
+    await expect(second).resolves.toMatchObject({ url: "wss://os.example.com/api" });
   });
 
   test("FIRST-LOAD SUSPENSE survives a closed-before-open dial — never the error boundary", async () => {

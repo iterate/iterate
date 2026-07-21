@@ -93,6 +93,7 @@ export {
   configureIterateSession,
   connectIterateSession,
   connectItx,
+  disconnectIterateSession,
   isItxTransportError,
   reconnectIterateSession,
   reportTransportSuspicion,

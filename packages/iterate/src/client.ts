@@ -9,12 +9,13 @@
 //
 // In a browser the keeper needs no configuration (it dials the page's `/api`
 // with cookie auth); everywhere else call `configureIterateSession` first.
-// Keeper lifetime is the process: there is no close — a tab navigates away, a
-// script exits (`process.exit`). A deliberate close is future surface.
+// Keeper lifetime normally matches the process; native sign-out boundaries can
+// explicitly disconnect it without discarding the selected deployment.
 export {
   configureIterateSession,
   connectIterateSession,
   connectItx,
+  disconnectIterateSession,
   isItxTransportError,
   reconnectIterateSession,
   releaseItxSubscription,
