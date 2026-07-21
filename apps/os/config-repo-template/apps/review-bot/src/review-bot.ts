@@ -9,12 +9,7 @@
 // fact lives on the agent streams it appends to, keyed so redeliveries
 // collapse.
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  PLATFORM_STREAM_EVENTS,
-  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
-  StreamProcessor,
-} from "iterate/processors";
+import { defineProcessorContract, StreamProcessor } from "iterate/processors";
 import type { Project, StreamEvent, StreamEventInput } from "iterate/sdk";
 
 // Record keys are stable rule IDs: duplicate identities are structurally
@@ -79,11 +74,7 @@ export const ReviewBotProcessorContract = defineProcessorContract({
       payloadSchema: z.looseObject({}),
     },
   },
-  // The platform revival fact must be consumed for `recovery: true`
-  // registration (review-bot-app.ts): a host evicted while it owes
-  // `blockProcessorWhile` work is revived for a guaranteed delivery turn.
-  processorDeps: [PLATFORM_STREAM_EVENTS],
-  consumes: ["events.iterate.com/github/webhook-received", STREAM_PROCESSOR_REVIVED_EVENT_TYPE],
+  consumes: ["events.iterate.com/github/webhook-received"],
   emits: [],
 });
 

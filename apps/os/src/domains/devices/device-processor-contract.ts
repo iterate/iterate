@@ -23,10 +23,10 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DeviceProcessorContract = defineProcessorContract({
   slug: "device",
-  // 0.3.0: tuning knobs moved into state.config (schema defaults only — no
-  // configured event); reducer semantics are unchanged, the bump just refolds
-  // checkpoints into the new shape.
-  version: "0.3.0",
+  // 0.4.0: pushTokenSecretPath + pushTokenSecretUpdatedOffset merged into one
+  // nullable pushTokenSecret object (always set/cleared together); the bump
+  // refolds persisted reduction caches into the new shape.
+  version: "0.4.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   processorDeps: [CoreProcessorContract, NotificationIntentContract],
   stateSchema: z.object({
@@ -71,26 +71,27 @@ export const DeviceProcessorContract = defineProcessorContract({
           "Receipt-polling knobs, every value defaulted by the schema (no configured event " +
           "— nothing here needs runtime configuration yet).",
       }),
-    pushTokenSecretPath: z
-      .string()
+    pushTokenSecret: z
+      .object({
+        path: z.string().meta({
+          description: "Stream path of the write-only Secret holding the current Expo push token.",
+        }),
+        updatedOffset: z
+          .number()
+          .int()
+          .positive()
+          .meta({
+            description:
+              "The Secret update offset fencing every send and compare-and-clear against a " +
+              "concurrent credential rotation.",
+          }),
+      })
       .nullable()
       .default(null)
       .meta({
         description:
-          "Stream path of the write-only Secret holding the CURRENT Expo push token, or null " +
-          "once revoked — the send gate: no path, no attempts.",
-      }),
-    pushTokenSecretUpdatedOffset: z
-      .number()
-      .int()
-      .positive()
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The Secret's update offset for the current credential. Every send and every " +
-          "compare-and-clear is fenced on it, so an invalid-token response for an OLDER Expo " +
-          "request cannot erase Secret material rotated while that request was in flight.",
+          "The current Expo push-token Secret coordinates, or null once revoked. Keeping the " +
+          "path and update offset together makes the send gate and rotation fence atomic.",
       }),
     revokedAt: z
       .string()
@@ -165,39 +166,12 @@ export const DeviceProcessorContract = defineProcessorContract({
         "notification-intent subscription that copies project-level notification/requested " +
         "intents onto this device stream.",
       payloadSchema: deviceBirthCertificateSchema(),
-      examples: [
-        {
-          description: "An iPhone enrolls after the user grants notification permission.",
-          payload: {
-            config: {
-              appVersion: "2.4.0",
-              label: "Misha's iPhone",
-              notificationsStatus: "granted",
-              ownerId: "usr_01HZX3K9M2",
-              platform: "ios",
-              pushTokenSecretPath: "/secrets/devices/dvc_3f8a/expo-push-token",
-              pushTokenSecretUpdatedOffset: 4,
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/device/notification-requested": {
       description:
         "Requests one expiring push notification to this device. The event's own offset is " +
         "the obligation's identity; every later fact points back with requestOffset.",
       payloadSchema: deviceNotificationRequestSchema(),
-      examples: [
-        {
-          description: "An approval request pushes to the phone with a five-minute deadline.",
-          payload: {
-            body: "POST api.stripe.com is waiting for your approval.",
-            destination: { kind: "approvals", approvalRequestEventOffset: 17 },
-            expiresAt: 1784536200000,
-            title: "Approval needed",
-          },
-        },
-      ],
     },
     "events.iterate.com/device/push-token-updated": {
       description:
@@ -244,19 +218,6 @@ export const DeviceProcessorContract = defineProcessorContract({
               "revision every send and clear is fenced on.",
           }),
       }),
-      examples: [
-        {
-          description: "The app rotates its Expo token after an OS update.",
-          payload: {
-            appVersion: "2.5.1",
-            label: "Misha's iPhone",
-            notificationsStatus: "granted",
-            ownerId: "usr_01HZX3K9M2",
-            pushTokenSecretPath: "/secrets/devices/dvc_3f8a/expo-push-token",
-            pushTokenSecretUpdatedOffset: 9,
-          },
-        },
-      ],
     },
     "events.iterate.com/device/revoked": {
       description:
@@ -271,14 +232,6 @@ export const DeviceProcessorContract = defineProcessorContract({
             "DeviceNotRegistered), sign-out.",
         }),
       }),
-      examples: [
-        { description: "The user signs out of the app.", payload: { reason: "sign-out" } },
-        {
-          description:
-            "Expo reported DeviceNotRegistered, so the processor cleared the credential and revoked itself.",
-          payload: { reason: "push-token-invalid" },
-        },
-      ],
     },
     "events.iterate.com/device/notification-attempt-started": {
       description:
@@ -290,12 +243,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           description: "The obligation being attempted: the offset of its requesting event.",
         }),
       }),
-      examples: [
-        {
-          description: "The processor is about to dial Expo for the request at offset 12.",
-          payload: { requestOffset: 12 },
-        },
-      ],
     },
     "events.iterate.com/device/notification-ticket-observed": {
       description:
@@ -311,12 +258,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           .min(1)
           .meta({ description: "Expo's receipt ticket id, polled later for the outcome." }),
       }),
-      examples: [
-        {
-          description: "Expo queued the push and handed back a ticket.",
-          payload: { requestOffset: 12, ticketId: "0f38e7d2-6a4b-4c8e-9f3a-2b1d5e7c9a01" },
-        },
-      ],
     },
     "events.iterate.com/device/notification-settled": {
       description:
@@ -401,22 +342,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           description: "The settled obligation: the offset of its requesting event.",
         }),
       }),
-      examples: [
-        {
-          description: "The receipt came back clean: APNs/FCM accepted the push.",
-          payload: {
-            outcome: {
-              kind: "accepted-by-push-service",
-              ticketId: "0f38e7d2-6a4b-4c8e-9f3a-2b1d5e7c9a01",
-            },
-            requestOffset: 12,
-          },
-        },
-        {
-          description: "Nobody attempted the push before its deadline, so it settled expired.",
-          payload: { outcome: { kind: "expired" }, requestOffset: 12 },
-        },
-      ],
     },
     "events.iterate.com/device/notification-opened": {
       description: "The app observed that the user opened a correlated notification.",
@@ -429,12 +354,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           description: "The notification that was opened: the offset of its requesting event.",
         }),
       }),
-      examples: [
-        {
-          description: "The user tapped the approval notification.",
-          payload: { openedAt: "2026-07-18T08:12:30.000Z", requestOffset: 12 },
-        },
-      ],
     },
   },
   consumes: [
@@ -451,14 +370,12 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/notification-ticket-observed",
     "events.iterate.com/device/notification-settled",
     "events.iterate.com/device/notification-opened",
-    // The platform revival fact (core-owned). MUST be consumed (this processor
-    // registers with recovery): its ordinary delivery is the guaranteed
-    // at-head turn where the state-derived pass settles orphaned attempts and
-    // expired requests after an eviction. `stream/woken` and
+    // The eventless at-head pass settles orphaned attempts and expired requests
+    // after recovery; the platform revival fact itself is not consumed.
+    // `stream/woken` and
     // `stream/subscriber-connected` are deliberately NOT consumed any more:
     // they were only ever extra re-check-at-head signals, and the runner's
     // final at-head pass makes them redundant.
-    "events.iterate.com/stream/processor-revived",
   ],
   emits: [
     // The catalog cross-post: device/created is re-appended onto the project

@@ -14,9 +14,11 @@ options. The one substitution is `files`: it may point at an inline map or a
 project repo snapshot because a custom worker-bundler `FileSystem` object
 cannot cross the service-binding boundary.
 
-On a cache miss OS resolves that descriptor to `Record<string, string>` and
-puts the map back into the same options object. Paths are not rewritten. OS
-then makes exactly the call the source names:
+On a cache miss OS routes the immutable build key through one keyed
+`WorkerBuildCoordinatorDurableObject`. The elected caller resolves the file
+descriptor to `Record<string, string>` and puts the map back into the same
+options object. Paths are not rewritten. OS then makes exactly the call the
+source names:
 
 - `createWorker({ ...source.createWorker, files: resolvedFiles })`; or
 - `createApp({ ...source.createApp, files: resolvedFiles })`.
@@ -31,7 +33,7 @@ Ordinary Worker builds additionally receive these platform-owned virtual
 modules by exact specifier:
 
 - `@iterate-com/capnweb`
-- `iterate/live-state`
+- `iterate/sdk/capnweb`
 - `iterate/processors`
 - `iterate/processors/cloudflare`
 - `iterate/sdk`
@@ -61,9 +63,9 @@ source: {
 }
 ```
 
-With `bundle: false`, worker-bundler transforms the dependency-free server as
-separate modules while still compiling each client entry into a browser
-bundle. The direct `esm.sh` React imports remain external browser imports.
+With `bundle: false`, worker-bundler transforms the server as separate modules
+while still compiling each client entry into a browser bundle. React and the
+Iterate browser SDK are ordinary `package.json` dependencies and imports.
 `createApp` may return any number of client bundles and explicit text assets.
 OS caches the returned content, manifest, config, and Wrangler compatibility
 settings, then delegates requests to worker-bundler's own
@@ -85,14 +87,25 @@ artifact until expiry.
 KV stores one complete modules/assets JSON record per successful key with a
 30-day TTL. Build failures are not cached because worker-bundler does not
 distinguish deterministic source failures from transient registry or runtime
-failures; a later request tries again. Concurrent cache misses may build the
-same immutable key; their content-addressed writes are identical, and the next
-request is a hit. There is no request-crossing promise or distributed lock.
+failures; a later request tries again.
 
-Browser fetches may stop waiting at a small budget while the same promise
-continues under `waitUntil`; callers see the self-refreshing building page.
-There is deliberately no last-good artifact, stale serving, distributed lock,
-or refresh policy.
+KV is only the immutable result cache, never a lock: [its eventually
+consistent model](https://developers.cloudflare.com/kv/concepts/how-kv-works/#consistency)
+has no atomic lease primitive. After the caller's fast KV read misses, every
+request for the same key reaches the globally named coordinator object. Its
+leader rechecks KV, reads the repo snapshot, calls the bundler, and writes the
+artifact once; concurrent followers receive the same plain-data result through
+promises owned by their own RPC invocations. Different build keys address
+different objects and therefore build in parallel, following Cloudflare's
+[one coordination atom per Durable
+Object](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#model-your-durable-objects-around-your-atom-of-coordination)
+guidance. A coordinator reset may retry the idempotent build, but normal
+cross-isolate concurrency cannot create a stampede.
+
+Browser fetches may stop waiting at a small budget while the coordinator's
+elected operation continues under `waitUntil`; callers see the self-refreshing
+building page. There is deliberately no last-good artifact, stale serving, KV
+lease, or refresh policy.
 
 ## Actual boundaries
 

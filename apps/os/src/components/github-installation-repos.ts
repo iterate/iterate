@@ -1,4 +1,4 @@
-import type { Itx } from "iterate/react";
+import type { Itx } from "iterate/sdk/itx/react";
 
 const MAX_PAGES = 5;
 

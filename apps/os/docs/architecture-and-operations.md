@@ -80,7 +80,7 @@ There are no organization routes; organization membership and selection live
 in the auth worker.
 
 The browser talks to itx over `/api`: one Cap'n Web WebSocket per
-context, managed by the `iterate` package's client (`iterate/react` —
+context, managed by the `iterate` package's client (`iterate/sdk/itx/react` —
 `useItx`/`useItxQuery`/`useItxSubscription`; see `docs/frontend-development.md`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_typescript`).
 `/api/operator-sessions` mints short-lived, origin-bound grants for either one
@@ -181,7 +181,7 @@ Slack/Google integration config returns with the integrations domain
 
 OAuth clients in the Iterate Auth Worker and the matching Doppler values are
 managed by `scripts/sync-auth-clients.ts` (`pnpm auth:sync-clients`). For each
-target Doppler config (`dev_<name>`, `preview_1`–`preview_9`, `prd`) it
+target Doppler config (`dev_<name>`, `preview_<n>`, `prd`) it
 ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
 `APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and

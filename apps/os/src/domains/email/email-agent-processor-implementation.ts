@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import type { AgentFileAttachment } from "../agents/agent-processor-contract.ts";
 import { normalizeAgentBindingLabel } from "../agents/agent-presence.ts";
@@ -97,7 +97,7 @@ export class EmailAgentProcessor extends StreamProcessor<
           // in the transcription still let the agent reach any surviving
           // bytes via itx.files.get(path).
           const stored = (event.payload.message.attachments ?? []).filter(
-            (attachment): attachment is StoredInboundAttachment & { size: number } =>
+            (attachment): attachment is typeof attachment & { path: string } =>
               typeof attachment.path === "string",
           );
           let files: AgentFileAttachment[] | undefined;
@@ -108,7 +108,7 @@ export class EmailAgentProcessor extends StreamProcessor<
                 stored.map((attachment) => ({
                   filename: attachment.filename ?? null,
                   mimeType: attachment.mimeType ?? null,
-                  path: attachment.path!,
+                  path: attachment.path,
                   size: attachment.size ?? 0,
                 })),
               );
@@ -164,15 +164,13 @@ export class EmailAgentProcessor extends StreamProcessor<
             // same-key-different-body append. The committed transcription
             // stands — losing that race IS settlement, and rethrowing would
             // wedge the frame forever (every retry mints fresh URLs).
-            const message = error instanceof Error ? error.message : String(error);
-            if (!/idempotency key .* already names a different event/.test(message)) throw error;
+            if (!isIdempotencyConflict(error)) throw error;
           }
         });
         return;
       }
-      // email-agent/created and stream/processor-revived: no per-event effect
-      // — birth matters through the reduction, and the revival fact's whole
-      // job is the redelivery of the unacknowledged frame that carries it.
+      // email-agent/created has no per-event effect; birth matters through the
+      // reduction.
     }
   }
 
@@ -220,7 +218,6 @@ export class EmailAgentProcessor extends StreamProcessor<
         };
       }
       default:
-        // stream/processor-revived: consumed only for its delivery turn.
         return state;
     }
   }

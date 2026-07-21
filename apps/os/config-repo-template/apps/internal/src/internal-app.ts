@@ -8,8 +8,12 @@ import {
   type ProjectAuthCredentials,
   type StreamEvent,
 } from "iterate/sdk";
-import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
-import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import {
+  LiveState,
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+} from "iterate/sdk/capnweb";
 
 type InternalAppState = { events: StreamEvent[] };
 

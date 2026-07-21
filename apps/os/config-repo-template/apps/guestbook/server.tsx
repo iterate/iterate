@@ -1,60 +1,111 @@
-import { DurableObject } from "cloudflare:workers";
+import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
+import {
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+  type LiveStateRpc,
+} from "iterate/sdk/capnweb";
+import type {
+  StreamEventInput,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "iterate/processors";
+import {
+  createStreamProcessorRegistry,
+  type StreamProcessorRegistry,
+} from "iterate/processors/cloudflare";
+import { IterateDurableObject, itxProjectStream } from "iterate/sdk";
+import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
 
-export class GuestbookApp extends DurableObject<unknown> {
-  constructor(ctx: DurableObjectState, env: unknown) {
-    super(ctx, env);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS entries (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        message TEXT NOT NULL,
-        signed_at TEXT NOT NULL
-      )
-    `);
+const guestbookStreamPath = "/guestbook";
+
+/** The processor property crosses Workers RPC before its wake method is called. */
+class GuestbookProcessorRpcTarget extends WorkersRpcTarget {
+  constructor(
+    private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,
+  ) {
+    super();
+  }
+
+  async wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    if (request.stream.projectId === null) {
+      throw new Error("the guestbook subscribes on project streams only");
+    }
+    return await this.registryFor(request.stream.projectId).wakeStreamSubscriber(request);
+  }
+}
+
+/** One createApp Durable Object owns the page, API, processor, and live value. */
+export class GuestbookApp extends IterateDurableObject {
+  #registry: StreamProcessorRegistry<GuestbookState> | undefined;
+
+  #ensureRegistry(projectId: string): StreamProcessorRegistry<GuestbookState> {
+    if (this.#registry === undefined) {
+      const stream = itxProjectStream(this.env, guestbookStreamPath);
+      const registry = createStreamProcessorRegistry<GuestbookState>(this.ctx, {
+        path: guestbookStreamPath,
+        projectId,
+        stream,
+        version: this.env.ITERATE_WORKER_VERSION,
+      });
+      registry.register(new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }));
+      this.#registry = registry;
+    }
+    return this.#registry;
+  }
+
+  async #freshRegistry(): Promise<StreamProcessorRegistry<GuestbookState>> {
+    if (this.#registry !== undefined) return this.#registry;
+    using project = await this.env.ITX.get();
+    return this.#ensureRegistry(await project.projectId);
+  }
+
+  async #append(...events: StreamEventInput[]): Promise<void> {
+    using project = await this.env.ITX.get();
+    await project.streams.get(guestbookStreamPath).append(...events);
+  }
+
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await (await this.#freshRegistry()).handleAlarm(alarmInfo);
+  }
+
+  get processor(): GuestbookProcessorRpcTarget {
+    return new GuestbookProcessorRpcTarget((projectId) => this.#ensureRegistry(projectId));
+  }
+
+  async sign(name: string, message: string): Promise<void> {
+    const trimmedName = name.trim().slice(0, 80);
+    const trimmedMessage = message.trim().slice(0, 500);
+    if (trimmedName.length === 0 || trimmedMessage.length === 0) {
+      throw new TypeError("Name and message are required");
+    }
+    await this.#append(
+      {
+        type: "events.iterate.com/guestbook/created",
+        payload: { config: { title: "Guestbook" } },
+        idempotencyKey: "guestbook/created",
+      },
+      {
+        type: "events.iterate.com/guestbook/entry-signed",
+        payload: { message: trimmedMessage, name: trimmedName },
+        idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
+      },
+    );
+    const registry = await this.#freshRegistry();
+    await registry.catchUp("guestbook");
+    registry.refreshLive();
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api/entries") {
-      if (request.method === "GET") {
-        const entries = this.ctx.storage.sql
-          .exec<{ id: string; message: string; name: string; signed_at: string }>(
-            "SELECT id, name, message, signed_at FROM entries ORDER BY signed_at DESC, id DESC LIMIT 100",
-          )
-          .toArray()
-          .map((entry) => ({
-            id: entry.id,
-            message: entry.message,
-            name: entry.name,
-            signedAt: entry.signed_at,
-          }));
-        return Response.json(entries);
-      }
-      if (request.method === "POST") {
-        const body = await request.json<{ message?: unknown; name?: unknown }>();
-        const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
-        const message = typeof body.message === "string" ? body.message.trim().slice(0, 500) : "";
-        if (name.length === 0 || message.length === 0) {
-          return new Response("name and message are required", { status: 400 });
-        }
-        const entry = {
-          id: crypto.randomUUID(),
-          message,
-          name,
-          signedAt: new Date().toISOString(),
-        };
-        this.ctx.storage.sql.exec(
-          "INSERT INTO entries (id, name, message, signed_at) VALUES (?, ?, ?, ?)",
-          entry.id,
-          entry.name,
-          entry.message,
-          entry.signedAt,
-        );
-        return Response.json(entry, { status: 201 });
-      }
-      return new Response("method not allowed", { status: 405 });
+    if (url.pathname === "/api") {
+      const registry = await this.#freshRegistry();
+      await registry.catchUp("guestbook");
+      await registry.loadAndRefreshLive();
+      return newWorkersWebSocketRpcResponse(request, new GuestbookApi(this, registry));
     }
-
     if (request.method !== "GET" || url.pathname !== "/") {
       return new Response("not found", { status: 404 });
     }
@@ -88,5 +139,25 @@ export class GuestbookApp extends DurableObject<unknown> {
         },
       },
     );
+  }
+}
+
+export class GuestbookApi extends RpcTarget {
+  readonly #liveState: LiveStateRpcTarget<GuestbookState>;
+
+  constructor(
+    private readonly app: GuestbookApp,
+    registry: StreamProcessorRegistry<GuestbookState>,
+  ) {
+    super();
+    this.#liveState = new LiveStateRpcTarget(registry);
+  }
+
+  get liveState(): LiveStateRpc<GuestbookState> {
+    return this.#liveState;
+  }
+
+  async sign(name: string, message: string): Promise<void> {
+    await this.app.sign(name, message);
   }
 }

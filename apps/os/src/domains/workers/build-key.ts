@@ -1,6 +1,6 @@
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
-import { WORKER_BUNDLER_VERSION, workerVirtualModules } from "./build-backend.ts";
+import { WORKER_BUNDLER_VERSION } from "./build-backend.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
 /**
@@ -40,17 +40,9 @@ export type WorkerBuildInput = {
   compatibilityDate: string;
   compatibilityFlags: string[];
   files: ResolvedWorkerFileSource;
+  iteratePackageSpec?: string;
   source: DynamicWorkerSource;
 };
-
-let platformVirtualModulesDigest: Promise<string> | undefined;
-
-function virtualModulesDigest(overrides?: Record<string, string>): Promise<string> {
-  if (overrides !== undefined && Object.keys(overrides).length > 0) {
-    return stableSha256(workerVirtualModules(overrides));
-  }
-  return (platformVirtualModulesDigest ??= stableSha256(workerVirtualModules()));
-}
 
 /**
  * Deterministic identity of one build: normalized source snapshot, build
@@ -66,12 +58,18 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
   let build: unknown;
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
-    build = { method: "createApp", options };
+    build = {
+      method: "createApp",
+      options,
+    };
   } else {
     const { files: _files, virtualModules, ...options } = input.source.createWorker;
     build = {
       method: "createWorker",
-      options: { ...options, virtualModulesSha256: await virtualModulesDigest(virtualModules) },
+      options: {
+        ...options,
+        virtualModulesSha256: await stableSha256(virtualModules ?? {}),
+      },
     };
   }
   return await stableSha256({
@@ -80,6 +78,7 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
     compatibilityDate: input.compatibilityDate,
     compatibilityFlags: input.compatibilityFlags,
     files: normalizeResolvedSource(input.files),
+    iteratePackageSpec: input.iteratePackageSpec,
     bundlerVersion: WORKER_BUNDLER_VERSION,
     type: "worker-build-key",
   });

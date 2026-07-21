@@ -25,7 +25,7 @@ _Avoid_: bespoke event interpretation, per-client reducers
 The shared client stack doing what a bespoke connection module used to:
 `configureIterateSession` points the one-socket keeper (`iterate/client`) at
 the deployment with credentials from the Itx Auth Module, and
-`useItxSubscription` (`iterate/react`) owns the live `stream.subscribe` with
+`useItxSubscription` (`iterate/sdk/itx/react`) owns the live `stream.subscribe` with
 reconnect, watchdog, and re-subscribe-with-replay. Replay overlap is safe
 because the Agent Feed Model dedupes by offset.
 _Avoid_: hand-rolled reconnect/backoff loops — the keeper owns recovery

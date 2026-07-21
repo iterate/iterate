@@ -180,13 +180,7 @@ describe("SlackAgentProcessor", () => {
 
     const inputs = h.events("events.iterate.com/agents/context-added");
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as {
-      actor?: unknown;
-      content: string;
-      llmRequestPolicy?: unknown;
-      refs?: unknown;
-      role: string;
-    };
+    const payload = inputs[0]!.payload;
     expect(payload).toMatchObject({
       role: "developer",
       actor: { type: "slack", userId: "UHUMAN" },
@@ -229,6 +223,37 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
+  it("classifies structured idempotent Slack reaction outcomes without reporting them", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const h = makeSlackAgentHarness({
+        callSlackApi: async ({ method }) => {
+          if (method === "reactions.add") {
+            throw Object.assign(new Error("opaque Slack failure"), {
+              slackErrorCode: "already_reacted",
+            });
+          }
+        },
+      });
+      await h.play([
+        "append",
+        SLACK_AGENT_BORN,
+        THREAD_ROUTE_CONFIGURED,
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: humanMessageWebhookPayload({}),
+        },
+      ]);
+
+      expect(error).not.toHaveBeenCalledWith(
+        "[slack-agent] Slack side effect failed",
+        expect.anything(),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("records unmentioned human messages as non-triggering history without eyes", async () => {
     const h = makeSlackAgentHarness();
     await h.play([
@@ -245,7 +270,7 @@ describe("SlackAgentProcessor", () => {
     expect(inputs[0]!.payload).toMatchObject({
       llmRequestPolicy: { behaviour: "dont-trigger-request" },
     });
-    expect((inputs[0]!.payload as { content: string }).content).toContain("just humans talking");
+    expect(inputs[0]!.payload.content).toContain("just humans talking");
     expect(h.slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
     expect(h.state().conversationActive).toBe(false);
   });
@@ -262,7 +287,7 @@ describe("SlackAgentProcessor", () => {
 
     const inputs = h.events("events.iterate.com/agents/context-added");
     expect(inputs).toHaveLength(1);
-    expect((inputs[0]!.payload as { llmRequestPolicy?: unknown }).llmRequestPolicy).toEqual({
+    expect(inputs[0]!.payload.llmRequestPolicy).toEqual({
       behaviour: "after-current-request",
     });
     expect(h.slackCalls).toContainEqual({
@@ -294,11 +319,10 @@ describe("SlackAgentProcessor", () => {
 
     const inputs = h.events("events.iterate.com/agents/context-added");
     expect(inputs).toHaveLength(2);
-    expect(
-      inputs.map(
-        (event) => (event.payload as { llmRequestPolicy?: { behaviour: string } }).llmRequestPolicy,
-      ),
-    ).toEqual([{ behaviour: "after-current-request" }, { behaviour: "after-current-request" }]);
+    expect(inputs.map((event) => event.payload.llmRequestPolicy)).toEqual([
+      { behaviour: "after-current-request" },
+      { behaviour: "after-current-request" },
+    ]);
     // Eyes only on the activating mention, not the follow-up.
     expect(h.slackCalls.filter((call) => call.method === "reactions.add")).toEqual([
       { method: "reactions.add", body: { channel: "C123", name: "eyes", timestamp: "111.222" } },
@@ -372,7 +396,7 @@ describe("SlackAgentProcessor", () => {
       const inputs = h.events("events.iterate.com/agents/context-added");
       expect(inputs).toHaveLength(1);
       expect(inputs[0]!.payload).not.toHaveProperty("files");
-      const content = (inputs[0]!.payload as { content: string }).content;
+      const content = inputs[0]!.payload.content;
       expect(content).toContain("cat.png");
       // Never a silent drop: the loss and its cause are visible to the model.
       expect(content).toContain("[1 attachment(s) could not be loaded: slack download exploded]");
@@ -436,7 +460,7 @@ describe("SlackAgentProcessor", () => {
 
     const scripts = h.events("events.iterate.com/capability-host/script-run-requested");
     expect(scripts).toHaveLength(1);
-    expect((scripts[0]!.payload as { code: string }).code).toContain("await itx.whoami()");
+    expect(scripts[0]!.payload.code).toContain("await itx.whoami()");
     // The request body is DETERMINISTIC: expiry anchors to the webhook's
     // createdAt, never `now`, so an at-least-once redelivery re-appends the
     // identical body and dedupes on the key instead of wedging the frame.
@@ -774,7 +798,7 @@ describe("SlackAgentProcessor", () => {
       idempotencyKey: "slack-agent/bang-command@/agents/slack/nustom/c123/ts-111-222:3",
       payload: { executionId: "slack-bang-command-3" },
     });
-    const code = (scripts[0]!.payload as { code: string }).code;
+    const code = scripts[0]!.payload.code;
     expect(code).toContain("const debug = await itx.debug();");
     expect(code).toContain('await itx.integrations.slack.get("nustom").chat.postMessage({');
     expect(code).toContain('channel: "C123"');
@@ -840,13 +864,7 @@ describe("SlackAgentProcessor", () => {
     expect(inputs[0]).toMatchObject({
       idempotencyKey: "slack-agent/webhook-to-agent-context@/agents/slack/nustom/c123/ts-111-222:2",
     });
-    const payload = inputs[0]!.payload as {
-      actor?: unknown;
-      content: string;
-      llmRequestPolicy?: unknown;
-      refs?: unknown;
-      role: string;
-    };
+    const payload = inputs[0]!.payload;
     // Interactivity payloads carry the presser at user.id, not event.user.
     expect(payload).toMatchObject({
       role: "developer",
@@ -910,7 +928,7 @@ describe("SlackAgentProcessor", () => {
 
     const inputs = h.events("events.iterate.com/agents/context-added");
     expect(inputs).toHaveLength(1);
-    expect((inputs[0]!.payload as { llmRequestPolicy?: unknown }).llmRequestPolicy).toEqual({
+    expect(inputs[0]!.payload.llmRequestPolicy).toEqual({
       behaviour: "after-current-request",
     });
     // Bot-authored messages never get the eyes reaction, even when forwarded.
@@ -960,9 +978,7 @@ describe("SlackAgentProcessor", () => {
 
     const scripts = h.events("events.iterate.com/capability-host/script-run-requested");
     expect(scripts).toHaveLength(1);
-    expect((scripts[0]!.payload as { code: string }).code).toContain(
-      "const debug = await itx.debug();",
-    );
+    expect(scripts[0]!.payload.code).toContain("const debug = await itx.debug();");
     expect(h.slackCalls.filter((call) => call.method === "reactions.add")).toHaveLength(0);
   });
 

@@ -114,8 +114,8 @@ export type WorkerBundlerCreateAppOptions = WorkerBundlerOptions & {
 
 /**
  * One direct worker-bundler call. The wrapper names deliberately match the
- * upstream functions; OS only resolves the repo-aware `files` value, adds its
- * platform virtual modules to `createWorker`, and caches the returned build.
+ * upstream functions; OS resolves the repo-aware `files` value, applies the
+ * deployment-specific `iterate` package pin, and caches the returned build.
  */
 export type DynamicWorkerSource =
   | { createApp: WorkerBundlerCreateAppOptions }

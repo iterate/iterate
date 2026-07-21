@@ -7,7 +7,7 @@
 // repoints.
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -60,11 +60,6 @@ function notificationRequested(overrides?: {
   };
 }
 
-const REVIVED = {
-  type: "events.iterate.com/stream/processor-revived",
-  payload: { processorSlug: "device", revivals: 1, version: "test" },
-} satisfies DeviceEventInput;
-
 const SETTLED = "events.iterate.com/device/notification-settled";
 const TICKET = "events.iterate.com/device/notification-ticket-observed";
 const STARTED = "events.iterate.com/device/notification-attempt-started";
@@ -97,7 +92,6 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
   const sent: Parameters<DevicePushSender>[0][] = [];
   const clearedTokens: { pushTokenSecretPath: string; pushTokenSecretUpdatedOffset: number }[] = [];
   const receiptAlarms: (number | null)[] = [];
-  let processor!: DeviceProcessor;
   const base =
     substrate ??
     (() => {
@@ -105,9 +99,9 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
       const network = new MemoryStreamNetwork(() => clock.now);
       return { clock, stream: network.get("/devices/phone"), progress: makeMemoryProgressStore() };
     })();
-  const harness = makeProcessorHarness<DeviceProcessorContract>({
-    createProcessor: (deps) => {
-      processor = new DeviceProcessor({
+  const harness = makeProcessorHarness<DeviceProcessorContract, DeviceProcessor>({
+    createProcessor: (deps) =>
+      new DeviceProcessor({
         ...deps,
         projectId: "prj_test",
         send: async (input) => {
@@ -122,9 +116,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
         repointReceiptAlarm: async (atMs) => {
           receiptAlarms.push(atMs);
         },
-      });
-      return processor;
-    },
+      }),
     substrate: base,
   });
   return {
@@ -134,7 +126,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
     clearedTokens,
     receiptAlarms,
     rootEvents: () => harness.stream.network!.eventsAt("/"),
-    checkReceipts: () => processor.checkReceipts(harness.state()),
+    checkReceipts: () => harness.processor().checkReceipts(harness.state()),
   };
 }
 
@@ -149,8 +141,10 @@ describe("DeviceProcessor enrollment", () => {
 
     expect(h.state()).toMatchObject({
       birthCertificate: DEVICE_CREATED.payload,
-      pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
-      pushTokenSecretUpdatedOffset: 1,
+      pushTokenSecret: {
+        path: "/secrets/devices/phone/expo-push-token",
+        updatedOffset: 1,
+      },
       revokedAt: null,
       tokenUpdatedOffset: 1,
     });
@@ -201,8 +195,10 @@ describe("DeviceProcessor enrollment", () => {
         // platform is immutable; everything else tracks the update.
         config: { appVersion: "1.1.0", platform: "ios", pushTokenSecretUpdatedOffset: 7 },
       },
-      pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
-      pushTokenSecretUpdatedOffset: 7,
+      pushTokenSecret: {
+        path: "/secrets/devices/phone/expo-push-token",
+        updatedOffset: 7,
+      },
       revokedAt: null,
       tokenUpdatedOffset: 3,
     });
@@ -349,8 +345,7 @@ describe("DeviceProcessor settlements", () => {
       { payload: { requestOffset: 3, outcome: { kind: "device-unavailable" } } },
     ]);
     expect(h.state()).toMatchObject({
-      pushTokenSecretPath: null,
-      pushTokenSecretUpdatedOffset: null,
+      pushTokenSecret: null,
       revokedAt: expect.any(String),
     });
     expect(h.rootEvents().at(-1)).toMatchObject({
@@ -370,7 +365,7 @@ describe("DeviceProcessor settlements", () => {
     // The incarnation dies mid-dial; the successor's revival turn finds a
     // started obligation nobody is driving. Expo may have accepted the push,
     // so it settles uncertain instead of ringing the phone twice.
-    await h.play(["crash"], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
 
     expect(h.sent).toHaveLength(1); // no second dial, ever
     expect(h.events(SETTLED)).toMatchObject([
@@ -479,6 +474,98 @@ describe("DeviceProcessor receipts", () => {
           outcome: { kind: "accepted-by-push-service", ticketId: "ticket-123" },
         },
       },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
+  it("a receipt check that loses the settle race accepts the already committed outcome", async () => {
+    const h = makeDeviceHarness();
+    await h.play(
+      [
+        "append",
+        DEVICE_CREATED,
+        notificationRequested({ expiresAt: Date.parse("2026-07-18T09:00:00Z") }),
+      ],
+      ["advanceTime", 15 * 60_000],
+    );
+    const receiptRequested = Promise.withResolvers<void>();
+    const receipt = Promise.withResolvers<ReceiptAnswer>();
+    h.gateway.getReceipt = async () => {
+      receiptRequested.resolve();
+      return receipt.promise;
+    };
+
+    const checking = h.checkReceipts();
+    await receiptRequested.promise;
+    await h.stream.append({
+      type: SETTLED,
+      idempotencyKey: "device/notification-settled@2",
+      payload: {
+        requestOffset: 2,
+        outcome: {
+          kind: "uncertain",
+          phase: "receipt",
+          reason: "A sibling incarnation settled the request first.",
+        },
+      },
+    });
+    receipt.resolve({ status: "accepted-by-push-service" });
+
+    await expect(checking).resolves.toBeUndefined();
+    await h.settle();
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 2, outcome: { kind: "uncertain", phase: "receipt" } } },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
+  it("one lost settle race does not drop a sibling obligation's settlement from the same check", async () => {
+    const h = makeDeviceHarness();
+    await h.play(
+      [
+        "append",
+        DEVICE_CREATED,
+        notificationRequested({ expiresAt: Date.parse("2026-07-18T09:00:00Z") }),
+        notificationRequested({
+          idempotencyKey: "device/notification-requested-2",
+          expiresAt: Date.parse("2026-07-18T09:00:00Z"),
+        }),
+      ],
+      ["advanceTime", 15 * 60_000],
+    );
+    // Receipts are polled sequentially, so gate on the FIRST lookup (offset
+    // 2's), let the sibling settle that offset meanwhile, then release both.
+    const firstReceiptRequested = Promise.withResolvers<void>();
+    const receipt = Promise.withResolvers<ReceiptAnswer>();
+    let receiptCalls = 0;
+    h.gateway.getReceipt = async () => {
+      receiptCalls += 1;
+      if (receiptCalls > 1) return { status: "accepted-by-push-service" };
+      firstReceiptRequested.resolve();
+      return receipt.promise;
+    };
+
+    const checking = h.checkReceipts();
+    await firstReceiptRequested.promise;
+    await h.stream.append({
+      type: SETTLED,
+      idempotencyKey: "device/notification-settled@2",
+      payload: {
+        requestOffset: 2,
+        outcome: {
+          kind: "uncertain",
+          phase: "receipt",
+          reason: "A sibling incarnation settled the request first.",
+        },
+      },
+    });
+    receipt.resolve({ status: "accepted-by-push-service" });
+
+    await expect(checking).resolves.toBeUndefined();
+    await h.settle();
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 2, outcome: { kind: "uncertain", phase: "receipt" } } },
+      { payload: { requestOffset: 3, outcome: { kind: "accepted-by-push-service" } } },
     ]);
     expect(h.state().notifications).toEqual({});
   });

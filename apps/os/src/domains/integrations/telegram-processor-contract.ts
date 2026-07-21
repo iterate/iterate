@@ -106,12 +106,6 @@ export const TelegramProcessorContract = defineProcessorContract({
     "events.iterate.com/telegram/created": {
       description: "Birth certificate for this Telegram webhook router.",
       payloadSchema: telegramRouterBirthCertificateSchema(),
-      examples: [
-        {
-          description: "A Telegram connection router is born for one bot connection.",
-          payload: { config: { connection: "support-bot" } },
-        },
-      ],
     },
     "events.iterate.com/telegram/access-configured": {
       description:
@@ -127,12 +121,6 @@ export const TelegramProcessorContract = defineProcessorContract({
               "authorization principal.",
           }),
       }),
-      examples: [
-        {
-          description: "Two Telegram users may talk to this project bot.",
-          payload: { allowedUserIds: ["555123", "777456"] },
-        },
-      ],
     },
     "events.iterate.com/telegram-agent/created": {
       description: "Birth certificate for the Telegram facet on an agent stream.",
@@ -154,14 +142,6 @@ export const TelegramProcessorContract = defineProcessorContract({
             description: "The immutable chat coordinates every journaled send is forced to.",
           }),
       }),
-      examples: [
-        {
-          description: "A Telegram facet binds an agent stream to one chat topic.",
-          payload: {
-            config: { connection: "support-bot", chatId: "555123", messageThreadId: "42" },
-          },
-        },
-      ],
     },
     "events.iterate.com/telegram/webhook-received": {
       description:
@@ -176,24 +156,6 @@ export const TelegramProcessorContract = defineProcessorContract({
           }),
         })
         .loose(),
-      examples: [
-        {
-          description: "A private-chat text message, as Telegram's Bot API delivers it.",
-          payload: {
-            botId: "7000001",
-            body: {
-              update_id: 100001,
-              message: {
-                message_id: 42,
-                from: { id: 555123, is_bot: false, first_name: "Misha", username: "misha" },
-                chat: { id: 555123, type: "private" },
-                date: 1_751_980_451,
-                text: "Hey, can you check the deploy status?",
-              },
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/telegram/message-sent": {
       description:
@@ -226,21 +188,6 @@ export const TelegramProcessorContract = defineProcessorContract({
           }),
         })
         .loose(),
-      examples: [
-        {
-          description:
-            "The connection-stream provenance claim: bot message_id → the session stream its send-requested lived on.",
-          payload: {
-            messageId: 9001,
-            chatId: "555123",
-            sessionPath: "/agents/telegram/mishas-helper-bot/chat-555123/session-1751980500",
-            request: {
-              offset: 7,
-              stream: "/agents/telegram/mishas-helper-bot/chat-555123/session-1751980500",
-            },
-          },
-        },
-      ],
     },
   },
   consumes: [

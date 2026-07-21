@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { useItx, useLiveState } from "iterate/react";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import { AddRepoFromGithub } from "~/components/add-repo-from-github.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoArtifactNameCodec } from "~/domains/repos/utils.ts";

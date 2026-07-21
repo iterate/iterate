@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { LiveStateRpcTarget } from "iterate/live-state";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
@@ -14,6 +14,10 @@ import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
+import {
+  createCloudflareAccountApi,
+  ensureArtifactRepoEventSubscriptionForWorker,
+} from "../events/cloudflare-event-subscriptions.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
@@ -69,7 +73,8 @@ import {
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
-import { importGithubArtifact } from "./artifact-import.ts";
+import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
+import { getOrCreateArtifact } from "./artifact-creation.ts";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
@@ -123,11 +128,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery: creation and GitHub imports are consequential
-  // `runInBackground` work (journaled requested/started obligations whose
+  // `runInBackground` work (stream-committed requested/started obligations whose
   // OUTCOME matters). An incarnation that dies owing either must be revived.
-  // The keepalive alarm appends the `stream/processor-revived` fact, whose
-  // ordinary delivery lands at head and lets the at-head reconcile re-drive
-  // the obligations (see the registry module doc's recovery rule).
+  // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
+  // produces the eventless at-head pass that re-drives the obligations (see the
+  // registry module doc's recovery rule).
   readonly #repoProcessor = this.#registry.register(
     new RepoProcessor({
       stream: this.#stream,
@@ -1246,6 +1251,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         this.#invalidateArtifactState(branch);
       },
     });
+    await this.ensureArtifactRepoEventSubscription(artifactName);
     // Reads are not serialized with writes: one can refill the token or head
     // caches from the old Artifact while deletion is being polled. Discard
     // every possible refill after recreation, immediately before this write
@@ -1473,13 +1479,21 @@ export class RepoDurableObject extends DurableObject<Env> {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     await timedStep("create-timing", timing, "artifact-import", async () => {
-      await importGithubArtifact(this.requireArtifacts(), {
-        branch: REPO_DEFAULT_BRANCH,
-        ...(input.depth === undefined ? {} : { depth: input.depth }),
-        name: artifactName,
-        owner: input.owner,
-        repo: input.repo,
-      });
+      await importGithubArtifactWithInitialPushCapture(
+        this.requireArtifacts(),
+        {
+          branch: REPO_DEFAULT_BRANCH,
+          ...(input.depth === undefined ? {} : { depth: input.depth }),
+          name: artifactName,
+          owner: input.owner,
+          repo: input.repo,
+        },
+        {
+          append: (event) => this.#stream.append(event),
+          ensureEventSubscription: () => this.ensureArtifactRepoEventSubscription(artifactName),
+          namespace: this.env.ARTIFACTS_NAMESPACE,
+        },
+      );
     });
     return {
       artifactName,
@@ -1563,19 +1577,28 @@ export class RepoDurableObject extends DurableObject<Env> {
   private async getOrCreateArtifact(
     name: string,
   ): Promise<{ created: boolean; lastPushAt: string | null }> {
-    try {
-      await this.requireArtifacts().create(name, {
-        setDefaultBranch: REPO_DEFAULT_BRANCH,
-      });
-      return { created: true, lastPushAt: null };
-    } catch (error) {
-      // Only the race we mean to tolerate. The old blind catch masked real
-      // failures (an INTERNAL_ERROR here fell through to get(), which then
-      // reported a misleading NOT_FOUND).
-      if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      const existing = await this.requireArtifacts().get(name);
-      return { created: false, lastPushAt: existing.lastPushAt };
+    return await getOrCreateArtifact(this.requireArtifacts(), name, {
+      beforeFirstPush: () => this.ensureArtifactRepoEventSubscription(name),
+      defaultBranch: REPO_DEFAULT_BRANCH,
+    });
+  }
+
+  private async ensureArtifactRepoEventSubscription(repoName: string): Promise<void> {
+    if (this.env.DEPLOYMENT_ENV === undefined) return;
+    const apiToken = this.env.APP_CONFIG_CLOUDFLARE__API_TOKEN?.trim();
+    if (!apiToken) {
+      throw new Error(
+        `Deployment ${this.env.DEPLOYMENT_ENV} cannot subscribe Artifacts repo events without APP_CONFIG_CLOUDFLARE__API_TOKEN`,
+      );
     }
+    const api = createCloudflareAccountApi({
+      accountId: this.env.ARTIFACTS_ACCOUNT_ID,
+      apiToken,
+    });
+    await ensureArtifactRepoEventSubscriptionForWorker(api, {
+      repoName,
+      workerName: this.env.WORKER_SELF,
+    });
   }
 
   private requireArtifacts(): Artifacts {

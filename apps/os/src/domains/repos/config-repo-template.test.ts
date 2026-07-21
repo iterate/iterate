@@ -64,34 +64,26 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
       "apps/todo/client.tsx",
       "apps/todo/server.tsx",
       "apps/guestbook/client.tsx",
+      "apps/guestbook/processor.ts",
       "apps/guestbook/server.tsx",
     ]),
   );
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    dependencies?: Record<string, string>;
-    devDependencies: Record<string, string>;
+    dependencies: Record<string, string>;
   };
-  // Root worker is a thin router; shared Cap'n Web deps for InternalApp live in
-  // apps/internal/package.json. Root stays free of runtime dependencies.
-  expect(templatePackageJson.dependencies).toBeUndefined();
-  expect(templatePackageJson.devDependencies).toMatchObject({
-    "@iterate-com/capnweb": expect.any(String),
+  // Worker builds npm-install from the ROOT manifest (the platform rewrites
+  // its `iterate` spec in-memory per deploy), so every app's runtime deps —
+  // the review bot's zod included — live here, never in per-app manifests
+  // the rewrite would miss.
+  expect(templatePackageJson.dependencies).toMatchObject({
+    iterate: expect.any(String),
+    react: expect.any(String),
+    zod: expect.any(String),
   });
 });
 
-test("createApp browser pairs stay dependency-free React + SQLite examples", () => {
-  for (const app of ["guestbook", "todo"]) {
-    expect(templateFile(`apps/${app}/server.tsx`)).toContain('from "cloudflare:workers"');
-    const client = templateFile(`apps/${app}/client.tsx`);
-    expect(client).toContain('from "https://esm.sh/react@19.2.4"');
-    expect(client).toContain('from "https://esm.sh/react-dom@19.2.4/client"');
-    expect(client).toContain(`export function ${app === "todo" ? "Todo" : "Guestbook"}Client()`);
-    expect(client).not.toContain("react/jsx-runtime");
-    // Platform overlay injection owns the final response and skips CSP pages.
-    expect(templateFile(`apps/${app}/server.tsx`)).not.toContain("content-security-policy");
-  }
-
+test("browser pairs stay two-file createApp apps behind the thin router", () => {
   const worker = templateFile("worker.ts");
   expect(worker.match(/createApp:/g)).toHaveLength(2);
   expect(worker.match(/client: "apps\/(?:todo|guestbook)\/client\.tsx"/g)).toHaveLength(2);
@@ -161,16 +153,16 @@ test("review-bot wake subscriptions are per-connection and name the hosted proce
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
   // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now
-  // worker.ts imports straight from `iterate/sdk`: types resolve through the
-  // published package (pkg.pr.new's @main URL tracks the latest build from
-  // main), and the RUNTIME imports are satisfied at build time by the
-  // platform-injected virtual module (worker-loader.ts), never by npm.
+  // worker.ts imports straight from `iterate/sdk` and worker builds
+  // npm-install the published package (pkg.pr.new's @main URL tracks the
+  // latest build from main; preview deploys pin their PR's build through the
+  // in-memory manifest rewrite).
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    devDependencies: Record<string, string>;
+    dependencies: Record<string, string>;
   };
-  expect(templatePackageJson.devDependencies).toMatchObject({
+  expect(templatePackageJson.dependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });

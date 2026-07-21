@@ -1,4 +1,4 @@
-import { RpcTarget } from "capnweb";
+import { RpcTarget } from "@iterate-com/capnweb";
 import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
@@ -25,6 +25,29 @@ import {
 // =============================================================================
 
 export type MaybePromise<T> = T | Promise<T>;
+
+// `keepAliveWhile` is fire-and-forget from the host's point of view (it only
+// keeps the runtime alive while the work runs), so this bridges the work's
+// result/failure back into a promise the caller can await.
+export async function awaitKeepAliveBacked<T>(
+  keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (keepAliveWhile === undefined) return await work();
+
+  return await new Promise<T>((resolve, reject) => {
+    keepAliveWhile(async () => {
+      try {
+        const result = await work();
+        resolve(result);
+        return result;
+      } catch (error) {
+        reject(error);
+        throw error;
+      }
+    });
+  });
+}
 
 /**
  * The structural slice of a processor contract that the class needs. Contracts
@@ -100,16 +123,16 @@ export type ReduceArgs<Contract> = {
  * - `runInBackground` — a DROPPABLE ATTEMPT. The cursor advances
  *   immediately; an eviction loses the closure silently. Every callsite must
  *   answer "what recovers the OUTCOME if this attempt drops?" — legitimate
- *   answers are "an at-head reconciliation (`processEvent` under
- *   `delivery.caughtUp`), via journaled requested/completed evidence" (LLM
+ *   answers are "an at-head pass (`processEvent` under
+ *   `delivery.caughtUp`), via stream-backed requested/completed evidence" (LLM
  *   calls, scripts, debounce timers) or
  *   "nothing, the outcome genuinely doesn't matter" (telemetry). A naked
- *   runInBackground around consequential work with no reconciler is the bug
+ *   runInBackground around consequential work with no recovery pass is the bug
  *   class the 2026-06-10 / 2026-07-07 incidents came from.
  *
  * Both are keepalive-backed: while either kind of work is in flight the
  * runner's recovery adapter parks a durable alarm ahead of it, so an
- * incarnation that dies owing work is revived and the reconcilers get their
+ * incarnation that dies owing work is revived and the processors get their
  * at-head pass (docs/writing-stream-processors.md has the full doctrine).
  */
 type SideEffectHelpers = {
@@ -412,14 +435,6 @@ export abstract class StreamProcessor<
    */
   protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
 
-  /**
-   * Reduce one raw stream event against explicit state, without touching any
-   * processor-internal state. Returns `undefined` for events this processor
-   * does not consume, and a {@link ConsumedEventParseFailure} for events of a
-   * consumed TYPE whose shape fails the contract parse — streams accept raw
-   * appends by design, so a malformed event is a fact of the log, not an
-   * exception: throwing here would wedge the cursor on it forever.
-   */
   /** Parse a raw event against the contract: `undefined` (type not consumed),
    * a Zod error (consumed type, bad shape), or the typed consumed event.
    * Stateless — shared by {@link #reduceRawEvent} and {@link #isDeliverable}. */
@@ -449,6 +464,14 @@ export abstract class StreamProcessor<
     return this.#parseConsumedEvent(event).ok;
   }
 
+  /**
+   * Reduce one raw stream event against explicit state, without touching any
+   * processor-internal state. Returns `undefined` for events this processor
+   * does not consume, and a {@link ConsumedEventParseFailure} for events of a
+   * consumed TYPE whose shape fails the contract parse — streams accept raw
+   * appends by design, so a malformed event is a fact of the log, not an
+   * exception: throwing here would wedge the cursor on it forever.
+   */
   #reduceRawEvent(args: {
     event: StreamEvent;
     state: ProcessorState<Contract>;
@@ -470,7 +493,7 @@ export abstract class StreamProcessor<
    * from the hook args — that one rides the runner's recovery keepalive.
    */
   protected runInBackground(work: () => Promise<unknown>): void {
-    this.#runKeepAliveBackedWork(work).catch((error: unknown) => {
+    awaitKeepAliveBacked(this.#keepAliveWhile, work).catch((error: unknown) => {
       console.error("stream processor background work failed", error);
     });
   }
@@ -547,26 +570,6 @@ export abstract class StreamProcessor<
         this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });
       }
       return committed;
-    });
-  }
-
-  // keepAliveWhile is fire-and-forget from the host's point of view (it only
-  // keeps the runtime alive while the work runs), so this bridges the work's
-  // result/failure back into a promise the caller can await.
-  async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
-    if (this.#keepAliveWhile === undefined) return await work();
-
-    return await new Promise<unknown>((resolve, reject) => {
-      this.#keepAliveWhile!(async () => {
-        try {
-          const result = await work();
-          resolve(result);
-          return result;
-        } catch (error) {
-          reject(error);
-          throw error;
-        }
-      });
     });
   }
 }

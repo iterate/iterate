@@ -95,6 +95,16 @@ export const ProjectProcessorContract = defineProcessorContract({
     customDomains: z
       .array(
         projectCustomDomainCloudflareSnapshotSchema().extend({
+          kind: z
+            .enum(["cloudflare", "direct"])
+            .default("cloudflare")
+            .meta({
+              description:
+                "How the hostname routes: `cloudflare` = a Cloudflare-for-SaaS custom hostname " +
+                "this processor provisions and polls; `direct` = a platform-owned apex served " +
+                "by worker routes plus an operator-primed hostname-directory registration — " +
+                "no provisioning lifecycle, and the provisioner must never touch it.",
+            }),
           createdAt: z
             .string()
             .meta({ description: "createdAt of the event that first recorded this hostname." }),
@@ -154,37 +164,10 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created": {
       description: "Birth certificate for this project processor.",
       payloadSchema: projectBirthCertificateSchema(),
-      examples: [
-        {
-          description:
-            "A dashboard signup created the project: onboarding starts and the creator's email seeds the inbound-email sender allowlist.",
-          payload: {
-            config: {
-              onboardingActive: true,
-              slug: "acme-inc",
-              creatorEmail: "jane@acme-inc.com",
-            },
-          },
-        },
-        {
-          description:
-            "An admin/CLI create: no creating user, so no onboarding and no allowlist seed.",
-          payload: {
-            config: { slug: "acme-staging" },
-          },
-        },
-      ],
     },
     "events.iterate.com/project/ready": {
       description: "The project bootstrap saga completed and its default worker is ready.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description:
-            "The bootstrap saga finished: the root repo exists and the project worker answered its probe.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/project/onboarding-completed": {
       description: "The project owner completed the onboarding agent flow.",
@@ -193,14 +176,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           .string()
           .meta({ description: "Stream path of the onboarding agent that finished the flow." }),
       }),
-      examples: [
-        {
-          description: "The onboarding agent marked its flow done for the project owner.",
-          payload: {
-            agentPath: "/agents/onboarding",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/custom-domain-add-requested": {
       description: "A custom domain should be provisioned and routed to this project.",
@@ -209,88 +184,35 @@ export const ProjectProcessorContract = defineProcessorContract({
           .string()
           .meta({ description: "The DNS hostname to provision, e.g. app.acme-inc.com." }),
       }),
-      examples: [
-        {
-          description: "The owner asked to serve the project on their own domain.",
-          payload: {
-            hostname: "app.acme-inc.com",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/custom-domain-refresh-requested": {
       description: "Refresh Cloudflare status for a custom domain.",
       payloadSchema: z.object({
         hostname: z.string().meta({ description: "The already-configured hostname to re-poll." }),
       }),
-      examples: [
-        {
-          description:
-            "A dashboard refresh re-polls Cloudflare while the domain is pending validation.",
-          payload: {
-            hostname: "app.acme-inc.com",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/custom-domain-remove-requested": {
       description: "A custom domain should be removed from this project.",
       payloadSchema: z.object({
         hostname: z.string().meta({ description: "The hostname to detach from the project." }),
       }),
-      examples: [
-        {
-          description: "The owner asked to detach their domain from the project.",
-          payload: {
-            hostname: "app.acme-inc.com",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/custom-domain-cloudflare-observed": {
       description: "Cloudflare custom-hostname status observed for a project custom domain.",
       payloadSchema: projectCustomDomainCloudflareSnapshotSchema(),
-      examples: [
-        {
-          description:
-            "First observation after provisioning: certificate validation is pending, so the owner still has DNS records to create.",
-          payload: {
-            cloudflareHostnameId: "0d89c70d-ad9f-4843-b99f-6cc0252067e9",
-            error: null,
-            hostname: "app.acme-inc.com",
-            hostnameStatus: "pending",
-            ownershipVerification: {
-              name: "_cf-custom-hostname.app.acme-inc.com",
-              value: "5cc07c04-ea62-4a5d-b4b0-069bc47533f8",
-            },
-            sslStatus: "pending_validation",
-            status: "pending_validation",
-            validationRecords: [
-              {
-                name: "_acme-challenge.app.acme-inc.com",
-                status: "pending",
-                value: "ca3-f8e2b4c9d1a04e7f9b6c3d2e1f0a5b4c",
-              },
-            ],
-            wildcard: true,
-          },
-        },
-        {
-          description:
-            "A later refresh observed the hostname and certificate both active: the domain now routes to the project.",
-          payload: {
-            cloudflareHostnameId: "0d89c70d-ad9f-4843-b99f-6cc0252067e9",
-            error: null,
-            hostname: "app.acme-inc.com",
-            hostnameStatus: "active",
-            ownershipVerification: null,
-            sslStatus: "active",
-            status: "active",
-            validationRecords: [],
-            wildcard: true,
-          },
-        },
-      ],
+    },
+    "events.iterate.com/project/custom-domain-direct-observed": {
+      description:
+        "The hostname routes to this project directly: a platform-owned apex served by worker " +
+        "routes plus an operator-primed hostname-directory registration, with no " +
+        "Cloudflare-for-SaaS custom hostname behind it. Appended by platform operators, never by " +
+        "this processor; recording it keeps the settings UI honest without starting any " +
+        "provisioning lifecycle — add/refresh/remove requests for a direct hostname are inert.",
+      payloadSchema: z.object({
+        hostname: z
+          .string()
+          .meta({ description: "The directly routed hostname, e.g. iterate.com." }),
+      }),
     },
     "events.iterate.com/project/custom-domain-provision-failed": {
       description: "Custom-domain provisioning failed before an observed Cloudflare status.",
@@ -298,31 +220,12 @@ export const ProjectProcessorContract = defineProcessorContract({
         error: z.string().meta({ description: "What the provisioning attempt reported." }),
         hostname: z.string().meta({ description: "The hostname the attempt was for." }),
       }),
-      examples: [
-        {
-          description: "Cloudflare rejected the custom-hostname create call.",
-          payload: {
-            error:
-              "Cloudflare /zones/f1e2d3c4b5a69788c9d0e1f2a3b4c5d6/custom_hostnames failed with 409: Duplicate custom hostname found.",
-            hostname: "app.acme-inc.com",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/custom-domain-removed": {
       description: "A custom domain was removed from Cloudflare and routing KV.",
       payloadSchema: z.object({
         hostname: z.string().meta({ description: "The hostname that no longer routes here." }),
       }),
-      examples: [
-        {
-          description:
-            "The remove request completed: Cloudflare and routing KV no longer know the hostname.",
-          payload: {
-            hostname: "app.acme-inc.com",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/egress-rules-configured": {
       description:
@@ -335,29 +238,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           .array(egressRuleSchema())
           .meta({ description: "The complete ordered rule list now in force." }),
       }),
-      examples: [
-        {
-          description:
-            "Mutating Stripe calls need a human; anything spending the production Stripe secret is held too, wherever it goes.",
-          payload: {
-            rules: [
-              {
-                ruleKey: "stripe-mutations",
-                description: "Mutating calls to the Stripe API",
-                match: { hosts: ["api.stripe.com"], methods: ["POST", "PUT", "DELETE"] },
-                verdict: "hold",
-                approvalTimeoutMs: 600_000,
-              },
-              {
-                ruleKey: "stripe-prod-secret",
-                description: "Any request spending the production Stripe key",
-                match: { secretPaths: ["/secrets/stripe/prod"] },
-                verdict: "hold",
-              },
-            ],
-          },
-        },
-      ],
     },
     "events.iterate.com/project/human-approval-key-added": {
       description:
@@ -376,32 +256,12 @@ export const ProjectProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "Human-readable device label, e.g. the enrolling machine." }),
       }),
-      examples: [
-        {
-          description:
-            "The owner enrolled their MacBook's Secure Enclave key via `iterate approve --enroll`.",
-          payload: {
-            keyId: "9f2c47a1b8d3e605",
-            publicKey:
-              "BGx1uJ9lZ7Yw2cQ4vX8pR3nK6tA1sD5fG0hJ9kL2mN4oP7qS8uV3wY6zB1cE4gI7jM0nQ5rT8vX2yA5bD8fH1kN4pS7u",
-            label: "jonas-macbook-enclave",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/human-approval-key-revoked": {
       description: "Revoke an enrolled approval key; signatures from it stop being accepted.",
       payloadSchema: z.object({
         keyId: z.string().meta({ description: "The enrolled key to stop accepting." }),
       }),
-      examples: [
-        {
-          description: "The owner rotated their laptop and revoked the old enclave key.",
-          payload: {
-            keyId: "9f2c47a1b8d3e605",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/human-approval-requested": {
       description:
@@ -429,25 +289,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           description: "ISO horizon after which the hold auto-rejects with reason expired.",
         }),
       }),
-      examples: [
-        {
-          description:
-            "An agent tried to move money: a POST to Stripe spending the production key waits for approval.",
-          payload: {
-            method: "POST",
-            url: "https://api.stripe.com/v1/transfers",
-            headers: {
-              authorization: 'Bearer getSecret("/secrets/stripe/prod")',
-              "content-type": "application/x-www-form-urlencoded",
-            },
-            bodySha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
-            bodyPreview: "amount=420000&currency=gbp&destination=acct_1MTfjCQ9PRzxCzLK",
-            secretPaths: ["/secrets/stripe/prod"],
-            ruleKey: "stripe-mutations",
-            expiresAt: "2026-07-10T12:34:56.000Z",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/human-approval-granted": {
       description:
@@ -468,17 +309,6 @@ export const ProjectProcessorContract = defineProcessorContract({
             "Base64 raw 64-byte r‖s ECDSA P-256 signature over the canonical approval message.",
         }),
       }),
-      examples: [
-        {
-          description: "A signed grant from an enrolled Secure Enclave key releases the request.",
-          payload: {
-            approvalRequestEventOffset: 42,
-            keyId: "9f2c47a1b8d3e605",
-            signature:
-              "MEUCIQDx4Zc7HqzUnkl3RaW0mYtVbGJ5cD8fH1kN4pS7uMEUCIQDx4Zc7HqzUnkl3RaW0mYtVbGJ5c=",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/human-approval-rejected": {
       description:
@@ -493,23 +323,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           .enum(["human", "expired"])
           .meta({ description: "Who refused: a human, or the hold's timeout." }),
       }),
-      examples: [
-        {
-          description: "A human refused the request from the approval CLI.",
-          payload: {
-            approvalRequestEventOffset: 42,
-            reason: "human",
-          },
-        },
-        {
-          description:
-            "Nobody answered within the rule's approvalTimeoutMs; the hold auto-rejected.",
-          payload: {
-            approvalRequestEventOffset: 42,
-            reason: "expired",
-          },
-        },
-      ],
     },
     "events.iterate.com/project/human-approval-settled": {
       description:
@@ -530,22 +343,6 @@ export const ProjectProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "Delivery failure, when the released request never got a status." }),
       }),
-      examples: [
-        {
-          description: "The released Stripe transfer succeeded.",
-          payload: {
-            approvalRequestEventOffset: 42,
-            status: 200,
-          },
-        },
-        {
-          description: "The upstream call failed after release.",
-          payload: {
-            approvalRequestEventOffset: 42,
-            error: "connection refused",
-          },
-        },
-      ],
     },
   },
   consumes: [
@@ -556,6 +353,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
+    "events.iterate.com/project/custom-domain-direct-observed",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-refresh-requested",
     "events.iterate.com/project/custom-domain-remove-requested",

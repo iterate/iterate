@@ -53,12 +53,12 @@
 // `runInBackground` work is consequential, so the DO author MUST pass
 // `{ recovery: true }` to `register` for every processor whose background
 // work has an outcome that matters (LLM turns, repo seeds, vendor calls with
-// journaled obligations). A processor registered without recovery gets NO
+// stream-backed obligations). A processor registered without recovery gets NO
 // post-eviction revival: an incarnation that dies owing its work loses that
-// work silently — acceptable only for telemetry-grade effects. The runner
-// enforces the mechanical half (the contract must consume the core
-// `stream/processor-revived` fact); this judgement call is the half only the
-// author can make.
+// work silently — acceptable only for telemetry-grade effects. Consuming the
+// core `stream/processor-revived` fact is optional: do it when the processor
+// reacts to that fact itself. Otherwise its append still wakes delivery, and
+// the runner's eventless at-head pass gives recovery its turn.
 //
 // KNOWN LIMITATION — retry vs transport parking (codex review §4/#7): a
 // permanently failing frame is rethrown by the runner's sink, and the
@@ -70,7 +70,7 @@
 // retry-forever.
 
 import * as cloudflareWorkers from "cloudflare:workers";
-import { LiveState } from "../itx/live-state/engine.ts";
+import { LiveState } from "../sdk/capnweb/live-state/engine.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
@@ -435,8 +435,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       }
       // Recovery FIRST, because durableObjectRecovery's construction re-issues
       // a persisted alarm desire (the lost-platform-alarm heal) through this
-      // runner's own slice — and because the runner's constructor validates
-      // that the contract consumes the core `stream/processor-revived` fact.
+      // runner's own slice before the runner can start work.
       const recovery = opts?.recovery
         ? durableObjectRecovery({
             storage: ctx.storage,

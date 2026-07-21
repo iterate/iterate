@@ -498,7 +498,12 @@ describe("agent-ui reducer", () => {
           direction: "inbound",
           subscriber: {
             description: "browser",
-            user: { email: "jonas@example.com", name: "Jonas Temple" },
+            user: {
+              id: "usr_jonas",
+              email: "jonas@example.com",
+              name: "Jonas Temple",
+              picture: "https://example.com/jonas.png",
+            },
           },
         },
       },
@@ -517,7 +522,12 @@ describe("agent-ui reducer", () => {
     expect(state.presence[1]).toMatchObject({
       subscriptionKey: "browser:tab-1",
       connected: false,
-      user: { email: "jonas@example.com", name: "Jonas Temple" },
+      user: {
+        id: "usr_jonas",
+        email: "jonas@example.com",
+        name: "Jonas Temple",
+        picture: "https://example.com/jonas.png",
+      },
     });
   });
 

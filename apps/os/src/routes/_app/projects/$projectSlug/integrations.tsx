@@ -64,7 +64,7 @@ import {
   Unplug,
 } from "lucide-react";
 import { z } from "zod";
-import { useItx, useItxQuery, useLiveState } from "iterate/react";
+import { useItx, useItxQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { Project } from "../../../../itx-api.generated.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {

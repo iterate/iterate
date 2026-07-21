@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { DynamicWorkerRef } from "./schemas.ts";
 import {
+  buildBudgetForRequest,
   isWebSocketUpgradeRequest,
   takeWorkerFetchDispatch,
   WORKER_BUILDING_HEADER,
@@ -58,7 +59,7 @@ describe("worker fetch dispatch header", () => {
   });
 
   test("building response is a marked, retryable, self-refreshing 503", async () => {
-    const response = workerBuildingResponse();
+    const response = workerBuildingResponse("/prj_test");
     expect(response.status).toBe(503);
     expect(response.headers.get(WORKER_BUILDING_HEADER)).toBe("1");
     expect(response.headers.get("retry-after")).not.toBeNull();
@@ -70,13 +71,19 @@ describe("worker fetch dispatch header", () => {
     expect(body).toContain(WORKER_BUILDING_HEADER);
     expect(body).toContain('<noscript><meta http-equiv="refresh"');
     expect(body).toContain('data-spinner="true"');
+    expect(body).toContain("data-iterate-default-favicon");
+    expect(body).toContain('href="/prj_test/.iterate/favicon.svg"');
   });
 
   test("the classifier answers build-lifecycle errors with their pages, nothing else", async () => {
     // Errors arrive over RPC name-preserved, class identity lost — so the
     // classifier is exercised exactly the way real hops see them.
-    const building = workerBuildStatus(namedError("WorkerBuildInProgressError", "still building"));
+    const building = workerBuildStatus(
+      namedError("WorkerBuildInProgressError", "still building"),
+      "/prj_test",
+    );
     expect(building).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
+    expect(await building!.response.text()).toContain('href="/prj_test/.iterate/favicon.svg"');
     expect(
       workerBuildStatus(namedError("RepoNotSeededError", "config repo is still seeding")),
     ).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
@@ -91,11 +98,34 @@ describe("worker fetch dispatch header", () => {
 
     const failed = workerBuildStatus(
       namedError("WorkerBuildFailedError", "Expected ; but found is"),
+      "/prj_test",
     );
     expect(failed).toMatchObject({ outcome: "worker_build_failed", response: { status: 500 } });
     expect(await failed!.response.text()).toContain("Expected ; but found is");
 
     expect(workerBuildStatus(new Error("anything else"))).toBeNull();
+  });
+
+  test("a document navigation races a cold build only briefly", () => {
+    const document = new Request("https://snake.example.com/", {
+      headers: { "sec-fetch-dest": "document" },
+    });
+    // A person is watching a blank tab — clamp whatever the dispatcher asked
+    // for (ingress's own budget, or the SDK's default riding the header).
+    expect(buildBudgetForRequest(document, 15_000)).toBe(1_500);
+    expect(buildBudgetForRequest(document, undefined)).toBe(1_500);
+    // A dispatcher already under the clamp keeps its tighter budget.
+    expect(buildBudgetForRequest(document, 500)).toBe(500);
+  });
+
+  test("everything else keeps the caller's budget, wait-forever included", () => {
+    const poll = new Request("https://snake.example.com/", {
+      headers: { "sec-fetch-dest": "empty" },
+    });
+    expect(buildBudgetForRequest(poll, 15_000)).toBe(15_000);
+    const bare = new Request("https://snake.example.com/api");
+    expect(buildBudgetForRequest(bare, 15_000)).toBe(15_000);
+    expect(buildBudgetForRequest(bare, undefined)).toBeUndefined();
   });
 
   test("upgrade detection is header-cased", () => {

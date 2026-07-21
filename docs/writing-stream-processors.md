@@ -24,12 +24,13 @@ The machinery itself — `StreamProcessor`, `defineProcessorContract`, the
 runner, the registry, keepalive/recovery durability — lives in the published
 package (`packages/iterate/src/processors`, imported as `iterate/processors`).
 apps/os hosts its domain processors on it, and a project's own worker can
-host processors on exactly the same code: the platform injects the module
-into every dynamic worker build, and the config-repo template's guestbook app
-(`apps/os/config-repo-template/apps/guestbook` — the processor in
-`src/guestbook.ts`, `GuestbookApp` hosting it in `src/guestbook-app.ts`, and
-the reduced state mirrored into Cap'n Web live state for its TanStack pages)
-is the reference for that userspace hosting shape.
+host processors on exactly the same code through the ordinary published
+dependency. The config-repo template's guestbook app
+(`apps/os/config-repo-template/apps/guestbook` — `processor.ts` plus the
+`GuestbookApp` server in `server.tsx`, bundled with its browser client by
+`createApp` and rendered via Cap'n Web + `useLiveState`) is the reference for
+that userspace hosting shape. Reduced state lives on the project stream at
+`/guestbook`.
 
 ## Expose the processor vocabulary directly
 
@@ -95,8 +96,8 @@ the re-run). Blocking is the exception, so justify it in a call-site comment:
 name the per-event consequence that would be lost forever if the append were
 dropped.
 `runInBackground` alone gives **at-most-once**: the checkpoint
-advances immediately and an eviction loses the closure. Every side effect in
-a `process*` hook must pick one deliberately:
+advances immediately and an eviction loses the closure. Every asynchronous
+side effect in a `process*` hook must pick one deliberately:
 
 | Primitive                   | Guarantee                                                                              | On eviction                                                   | Use for                                            |
 | --------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
@@ -106,10 +107,20 @@ a `process*` hook must pick one deliberately:
 `blockProcessorWhile` is not for long work: it head-of-line-blocks every later
 event — including the cancellation the user is frantically sending.
 
+A synchronous in-memory poke that is only an idempotent cache hint needs no
+side-effect lane. The cache notification in
+`repo-processor-implementation.ts` is the reference; it does not carry a
+durable consequence.
+
 Registrations run in strict FIFO order: each blocker starts only after the
 previous one settles, so a later registration in the same `processEvent` body
 observes the earlier work's appends. Order state-derived work after per-event
 work by writing it later in the function — there is no separate lane.
+
+At head, settlement appends that must land promptly use one outer
+`blockProcessorWhile`; holding the frame lets redelivery retry them. Everything
+that can be re-derived from state at leisure is a droppable `runInBackground`
+attempt: keepalive revival and the next at-head pass derive it again.
 
 The question every `runInBackground` callsite must answer in a comment or by
 obvious construction: **"what recovers the outcome if this attempt drops?"**
@@ -143,14 +154,15 @@ attempt + restart from state**:
 
 1. **Evidence**: a `…-requested` event opens the obligation; the reduced
    state tracks it (with everything needed to start an attempt from state alone — model,
-   code, expiry). A `…-started` event marks that an attempt began, appended
-   durably **before** the work body runs — and if that append FAILS, the body
-   must not run and no completion may be appended: the obligation stays
-   `requested`, the failure propagates (marking the keepalive window), and a
-   later at-head pass retries the whole attempt. Release the live-set entry
-   in a `finally` either way, or the restart code skips the id for the rest of
-   the incarnation. Terminal events (`…-completed`, a cancellation) close the
-   obligation and delete it from the reduced state.
+   code, expiry). When a domain needs to distinguish whether external work may
+   have begun, a `…-started` event marks that boundary and is appended durably
+   **before** the work body runs. If that append fails, the body must not run
+   and no settlement may be appended: the obligation stays `requested`, the
+   failure propagates (marking the keepalive window), and a later at-head pass
+   retries the whole attempt. Release the live-set entry in a `finally` either
+   way, or the restart code skips the id for the rest of the incarnation.
+   Domains such as Agent that can safely adopt the recorded request need no
+   separate started fact.
 2. **Attempt**: `runInBackground`, registered in an in-memory live-set
    _synchronously, before any await_, so the same pass never classifies its
    own attempt as undriven.
@@ -167,9 +179,39 @@ attempt + restart from state**:
      could re-drive. This is why this code is hand-written per processor,
      not machinery.
 
-Settlements reuse the normal completion path's **idempotency keys**, so a
-race between a late attempt and the restart — or a full stream replay —
-collapses to one durable outcome at the append dedup layer.
+Use one terminal event per obligation, named `…-settled`, with a result union
+whose kinds include success, failure, and cancellation; `completed` reads as
+success. Cancellation is one way the obligation settles, so it shares the
+settlement key and stale-result reduce guard; the user's separate intent to
+stop remains its own event. Do not split one terminal state across
+`…-succeeded`, `…-failed`, and `…-cancelled` event types. Repos still has split `…-completed` and
+`…-failed` terminal events for stream-compatibility reasons; that shape is
+grandfathered, not the template for new work.
+
+For most domains, the settlement result union is also the durable failure
+record. `stream/error-occurred` is the agent-visible error lane: among domain
+processors, only `AgentProcessor` emits its failures there today so the agent
+can transcribe them into model-visible context. General runner-side emission
+remains a filed follow-up.
+
+Build processor-owned idempotency keys with
+`this.idempotencyKey(key, event)` by default. When the deciding identity must
+be embedded by hand, separate it with `@` (`settle@<identity>`); when an event
+is supplied, the helper's own `@<path>:<offset>` suffix prevents same-slug
+processors forwarding into one stream from colliding. A raw string key is
+reserved for deliberate cross-processor convergence, such as shared agent
+binding and route-configuration keys, and needs a comment saying that the
+collision is the point.
+
+Settlements reuse the normal path's idempotency key. Identical bodies really
+do dedupe, but settlement bodies often contain incarnation-dependent values
+such as durations, partial text, or freshly signed URLs; when two such bodies
+race under one key, the stream rejects the loser as a same-key-different-body
+conflict. Use tolerate-as-settlement when losing the race means the obligation
+is already settled (the fleet's `#appendUnlessLostIdempotencyRace` shape). Use
+read-back-the-winner when the loser must know the authoritative outcome
+(`CapabilityHostProcessor`). Use observe-before-append when an unexpected
+occupant is a bug that must surface loudly (`SchedulerProcessor`).
 
 ## Staleness: wake whenever, act only within the intent's horizon
 
@@ -187,18 +229,20 @@ how far your reduced state sits from the stream head) before starting anything.
   safe by construction: an agent revived a week late reports a failure, it
   does not answer a week-old prompt, and an attempt cannot run unbounded after
   the intent expired. Every new obligation type should carry an explicit
-  expiry.
+  expiry. Processors with expiry or deadline logic take `now` as a required
+  dependency; making it optional makes virtual-time tests depend on the host
+  clock. New contracts stamp expiries as epoch-ms numbers, not ISO strings.
 - **Vendor idempotency for dangerous effects.** For a payment-shaped effect,
   the obligation key must ride to the vendor (e.g. a Stripe idempotency key)
   so at-least-once attempts collapse server-side. Dangerous **and**
   non-idempotent at the vendor ⇒ short expiry, fail closed, escalate to a
   human-visible failure.
 - **Hesitation windows.** For retractable intents, put deliberate wall-clock
-  between evidence and attempt so invalidating events can land — the agent's
-  debounce between `llm-request-scheduled` and `llm-request-requested` is
-  this pattern (and its timer is a droppable attempt: losing it costs
-  latency, never the request, because the settle logic re-derives it from
-  the reduced state).
+  between evidence and attempt so invalidating events can land. The agent
+  computes debounce plus failure backoff from the pending trigger, then
+  appends `llm-request-requested`; its timer is a droppable attempt because
+  losing it costs latency, never the request, and the next at-head pass
+  derives the same intent from reduced state.
 
 ## Reprocessing safety: the whole stream can be replayed at you
 
@@ -218,7 +262,14 @@ shape would re-add 👀 reactions to every historical Slack message (a
 rate-limit crash-loop inside `blockProcessorWhile`, with reaction
 resurrection as the user-visible symptom).
 
-Every side effect in a `process*` hook must be one of exactly three shapes:
+A per-event append under an idempotency key must have a body that is a
+deterministic function of that event and its reduced configuration. A `now()`,
+random id, or freshly signed URL in the body turns at-least-once redelivery
+into a same-key-different-body conflict that wedges the frame forever. Anchor
+deadlines to `event.createdAt`, not the delivery clock.
+
+Every consequential side effect in a `process*` hook must be one of exactly
+three shapes:
 
 1. **An append with a stable idempotency key.** Safe by construction: the
    stream dedupes the replay. This is why the durable forwards (Slack
@@ -226,8 +277,8 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
    replay re-dials the appends and they all collapse.
 2. **An obligation restarted from the AT-HEAD reduced state** (the pattern
    above). Safe because the at-head reduced state has absorbed every
-   committed completion:
-   requested-and-completed pairs cancel out _before_ `processEvent` acts.
+   committed settlement:
+   requested-and-settled pairs cancel out _before_ `processEvent` acts.
    The `delivery.caughtUp` branch in `RepoProcessor.processEvent` is the
    minimal creation example—reduce `createRequest` and `birthCertificate`,
    then provision only when the at-head state has an open request and no
@@ -239,6 +290,23 @@ Every side effect in a `process*` hook must be one of exactly three shapes:
    repaint are the references (`webhookAckIsFresh` in
    `integrations/utils.ts`); the status lane is additionally
    latest-fact-wins, painted at most once per at-head batch.
+
+For transient vendor cosmetics, remember the latest qualifying fact in an
+in-memory field, then at head read and clear that field first and paint it at
+most once; `#unpaintedPresenceFact` in
+`slack-agent-processor-implementation.ts` and `#unpaintedTypingFact` in
+`telegram-agent-processor-implementation.ts` are the reference pair.
+
+Integration transcription also has one concrete shape: append exactly one
+`agents/context-added` per source event, with `role: developer`, a transcript
+headed by the literal source event type, an `actor` naming the untrusted
+sender, and one `refs` entry pointing at that exact source event. Set
+`dont-trigger-request` unless that surface's wake rule fires, and turn a
+permanent enrichment failure into an explicit note inside the content rather
+than silently dropping data. `slack-agent-processor-implementation.ts`,
+`telegram-agent-processor-implementation.ts`, and
+`email-agent-processor-implementation.ts` are greppable checks of the same
+convention.
 
 Vendor work that is **idempotent-by-overwrite** inside a durable lane
 (re-downloading Slack-shared files to a per-event storage key) is acceptable:
@@ -282,14 +350,18 @@ gets its alarm fired in a fresh incarnation, which revives the processor:
 1. append one `events.iterate.com/stream/processor-revived` fact to the
    stream (durable evidence; also cold-boots the stream DO, whose `woken`
    fan-out restores the spine's deliveries);
-2. let its ordinary delivery drive the named processor through the runner;
-   the consumed fact guarantees a turn, and the runner guarantees the final
-   at-head pass even if a later unconsumed raw event has reached the stream.
+2. let ordinary delivery drive the named processor through the runner; a
+   processor may consume the fact when it reacts to the fact itself, but
+   consumption is not required for recovery: reaching head guarantees either
+   a consumed event with `caughtUp: true` or the eventless
+   `processEvent(event: null, caughtUp: true)` pass.
 
-Recovery therefore has exactly one entrypoint — batch delivery — and the
-stream narrates the whole episode: `…llm-request-requested` →
-`…/revived` → `…llm-request-completed {failure: orphaned}` →
-`…llm-request-scheduled`.
+Recovery therefore has exactly one entrypoint — batch delivery. For Agent, the
+stream story is `…llm-request-requested` → `…/revived` →
+`…llm-request-settled`: the fresh incarnation adopts the still-open request.
+When that settlement is a retryable failure, its `reduce` arm turns the
+failure into the next pending trigger under the cap; the next at-head pass
+applies backoff and records a new `…llm-request-requested` intent.
 
 The keepalive is also a **crash-loop breaker**, because a DO must never stay
 awake forever from a bug: every revival durably marks a counter _before_
@@ -326,12 +398,23 @@ What hosting code must do:
 
 ## Testing: every failure above is a few lines of plain node
 
-The recovery suites boot the real `createStreamProcessorRegistry`, runner,
-durability adapter, and processors over an in-memory stream, fake
-`DurableObjectState`, and mutable virtual clock. Start with
-`agent-eviction-recovery.test.ts` and
-`capability-host-recovery.test.ts`; the registry's own isolation harness is
-`stream-processor-registry.test.ts`.
+`makeProcessorHarness` has one shape for every suite: the real runner,
+`ProcessorKeepalive`, recovery adapter, Durable Object KV-backed progress,
+alarm cell, virtual clock, and `MemoryStream`. `crash()` is eviction and does
+not attach its successor; a new append or a due alarm is the production-real
+wake. See `email-agent-recovery.test.ts`, `repo-recovery.test.ts`,
+`capability-host-recovery.test.ts`, and `telegram-agent-recovery.test.ts`.
+The registry's own isolation fakes remain in
+`stream-processor-registry.test.ts` because that suite tests the registry
+layer itself.
+
+With `makeProcessorHarness`, step tuples are the scenario spine; use
+`h.append(...)` and `h.advanceTime(...)` for single actions. Raw
+`h.stream.append(...)` is the committed-but-undelivered door: it commits to
+the stream without driving delivery, so reserve it for premises that need
+that distinction. When timing arithmetic depends on a config default such as
+a debounce or expiry, read it from `h.state().config...` instead of repeating
+the default as a magic number.
 
 The rules that keep these tests honest:
 
@@ -364,7 +447,7 @@ Scenarios every obligation-carrying processor should have (crib from
 2. eviction before any attempt → provably-never-ran work starts late (or
    expires);
 3. expired obligation → settled without the vendor ever being dialed;
-4. full-stream replay → completions dedupe, nothing re-executes (the replay
+4. full-stream replay → settlements dedupe, nothing re-executes (the replay
    test above — required for every processor that touches a vendor);
 5. the crash-loop breaker engaging on your processor's poison shape;
 6. a failed started-append → nothing runs, nothing settles, the live-set is
@@ -390,14 +473,17 @@ Scenarios every obligation-carrying processor should have (crib from
       `ProcessorContract.parseConsumedInput(...)`; no one-event wrapper methods
       without additional domain semantics.
 - [ ] Every `runInBackground` answers "what recovers the outcome?"
-- [ ] Obligations: requested/started/completed events; the reduced state
-      carries what an attempt needs; terminal events delete the entry.
+- [ ] Obligations: a `…-requested` event opens the reduced-state entry; an
+      optional `…-started` event records a meaningful attempt boundary; one
+      `…-settled` terminal with a success/failure/cancelled result union
+      deletes the entry.
 - [ ] `delivery.caughtUp` branch: start undriven fresh work, settle orphans and
       expired intent, idempotency keys shared with the normal path.
 - [ ] `expiresAt` stamped by the requester; the at-head branch honors it (and the
       `createdAt + DEFAULT` fallback covers raw appends).
 - [ ] A failed started-append never settles and never leaks the live-set.
-- [ ] Injected `now` dep for anything clock-dependent.
+- [ ] Required injected `now` dep for expiry/deadline logic; new expiry fields
+      are epoch-ms numbers.
 - [ ] Every vendor side effect is one of the three replay-safe shapes:
       idempotency-keyed append, at-head reduced-state comparison, or
       freshness-gated ack — never guarded by event-time state alone.

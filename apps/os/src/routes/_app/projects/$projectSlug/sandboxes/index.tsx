@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { CreateSandboxSheet } from "~/components/create-sandbox-sheet.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SandboxStatusBadge } from "~/components/sandbox-status-badge.tsx";

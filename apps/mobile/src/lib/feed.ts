@@ -14,7 +14,7 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
+import type { StreamEvent } from "iterate/sdk/itx/react";
 
 export type {
   AgentUiActivity,

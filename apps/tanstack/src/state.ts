@@ -1,4 +1,4 @@
-import type { LiveStateRpc } from "iterate/live-state";
+import type { LiveStateRpc } from "iterate/sdk/capnweb";
 
 /** One todo row, exactly as the Durable Object's SQLite stores it. */
 export type Todo = {

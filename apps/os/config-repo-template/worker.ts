@@ -48,14 +48,13 @@ export const internalAppRef = {
   },
 };
 
-/** Basic React + SQLite Durable Object todos (`apps/todo`). */
+/** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */
 export const todoAppRef = {
   className: "TodoApp",
-  durableWorkerKey: "app-todo",
+  durableWorkerKey: "app-todo-live",
   path: "/",
   source: {
     createApp: {
-      bundle: false,
       client: "apps/todo/client.tsx",
       files: repoFiles,
       server: "apps/todo/server.tsx",
@@ -79,14 +78,13 @@ export const counterAppRef = {
   },
 };
 
-/** Basic React + SQLite Durable Object guestbook (`apps/guestbook`). */
+/** Stream-processor guestbook: reduce on /guestbook (`apps/guestbook`). */
 export const guestbookAppRef = {
   className: "GuestbookApp",
-  durableWorkerKey: "app-guestbook",
+  durableWorkerKey: "app-guestbook-stream",
   path: "/",
   source: {
     createApp: {
-      bundle: false,
       client: "apps/guestbook/client.tsx",
       files: repoFiles,
       server: "apps/guestbook/server.tsx",
@@ -94,6 +92,8 @@ export const guestbookAppRef = {
   },
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
+
+let guestbookInitialization: Promise<void> | undefined;
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   // The base class delivers committed events on ANY stream here at least once and in
@@ -142,6 +142,45 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return this.fetchDynamicWorker(req, counterAppRef);
     }
     if (app === "guestbook") {
+      // The guestbook's domain history lives on the project stream at
+      // /guestbook; its app hosts the processor behind a durable WAKE
+      // subscription (apps/guestbook/server.tsx). Unlike the review bot —
+      // whose bootstrap rides the repo-link fact in processEvent above —
+      // nothing platform-side announces "someone wants a guestbook", so the
+      // first visit appends the idempotent creation batch here.
+      guestbookInitialization ??= (async () => {
+        using itx = await this.env.ITX.get();
+        await itx.streams.get("/guestbook").append(
+          {
+            type: "events.iterate.com/guestbook/created",
+            payload: { config: { title: "Guestbook" } },
+            idempotencyKey: "guestbook/created",
+          },
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: "app-guestbook#guestbook",
+              delivery: {
+                mode: "wake",
+                expression: [
+                  "workers",
+                  ["get", guestbookAppRef],
+                  "processor",
+                  "wakeStreamSubscriber",
+                ],
+                processorSlug: "guestbook",
+              },
+            },
+            idempotencyKey: "guestbook/subscription:v1",
+          },
+        );
+      })().catch((error: unknown) => {
+        // A failed setup must be retryable by the next request; successful
+        // setup remains durable and needs no more stream RPCs in this isolate.
+        guestbookInitialization = undefined;
+        throw error;
+      });
+      await guestbookInitialization;
       return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app === "tasks") {
@@ -157,12 +196,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (denied) return denied;
-      const url = new URL(req.url);
-      url.protocol = "https:";
+      const tasksUrl = new URL(req.url);
+      tasksUrl.protocol = "https:";
       const origin = await itx.kv.get("tasks-app-origin");
-      url.host = typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
+      tasksUrl.host =
+        typeof origin === "string" && origin !== "" ? origin : "tasks.iterate.workers.dev";
       return fetch(
-        new Request(url, {
+        new Request(tasksUrl, {
           method: req.method,
           headers: req.headers,
           body: req.body,
@@ -181,13 +221,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         <html>
           <body>
             <main>
-              <p>Hello from your Iterate project worker.</p>
+              <p>Hello from your iterate project worker.</p>
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
-                <li><a href="${appUrl("todo")}">todo</a> (basic React + SQLite Durable Object, project members only)</li>
+                <li><a href="${appUrl("todo")}">todo</a> (LiveState + Cap'n Web, project members only)</li>
                 <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
-                <li><a href="${appUrl("guestbook")}">guestbook</a> (basic React + SQLite Durable Object, public)</li>
+                <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor reduce on /guestbook, public)</li>
                 <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
               </ul>
               <p>Edit worker.ts in the project repo to change this.</p>

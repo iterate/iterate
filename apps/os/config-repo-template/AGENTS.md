@@ -23,9 +23,10 @@ pipeline: it passes the repo file map and build options to
 install dependencies declared in `package.json`. The platform's capability
 types and worker base classes come from the `iterate` package —
 `import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from
-"iterate/sdk"`. It's a devDependency here: the platform supplies the runtime
-`iterate/*` subpaths and `@iterate-com/capnweb` to ordinary worker builds, so
-`npm install` is only for local typechecking and editor support.
+"iterate/sdk"`. `iterate` is an ordinary runtime dependency: the platform pins
+it to the deployment's immutable SDK build, and worker-bundler installs and
+bundles the same package graph—including Iterate's one Cap'n Web copy—used by
+local typechecking.
 
 Every worker class — the root project worker AND the apps — extends one of
 the two SDK base classes: `IterateWorkerEntrypoint` (stateless) or
@@ -65,8 +66,10 @@ worker-bundler unchanged.
 
 `apps/todo` and `apps/guestbook` show the intentionally smallest browser-app
 shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per
-app. The client entry is served separately and imports React directly from
-`esm.sh`; those browser dependencies are not copied into the Worker bundle.
+app. The client entry is served separately and imports React and React DOM as
+ordinary package dependencies; Cap'n Web and LiveState come through
+`iterate/sdk/capnweb` and `iterate/sdk/capnweb/react`. Preview builds pin the
+single `iterate` dependency to that deployment's exact pkg.pr.new artifact.
 This is an example, not a platform file-layout rule. The apps deliberately
 avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform
 can inject the small Iterate status overlay in the corner.

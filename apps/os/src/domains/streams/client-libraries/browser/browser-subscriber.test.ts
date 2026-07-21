@@ -5,18 +5,25 @@ import {
 } from "./browser-subscriber.ts";
 
 describe("browserStreamSubscriberDescriptor", () => {
-  it("announces the authenticated user's name and email", () => {
+  it("announces the authenticated user's id, name, email, and picture", () => {
     const announcement = { slug: "browser-feed" };
+    const picture = "https://example.com/jonas.png";
+    const user = {
+      id: "usr_jonas",
+      email: "jonas@example.com",
+      name: "Jonas Temple",
+      picture,
+    };
 
     expect(
       browserStreamSubscriberDescriptor({
         announcement,
-        user: { email: "jonas@example.com", name: "Jonas Temple" },
+        user,
       }),
     ).toEqual({
       description: "browser",
       processor: { announcement },
-      user: { email: "jonas@example.com", name: "Jonas Temple" },
+      user,
     });
   });
 
@@ -31,7 +38,12 @@ describe("browserStreamSubscriberDescriptor", () => {
 });
 
 describe("browserStreamSubscriberUserUpdate", () => {
-  const user = { email: "jonas@example.com", name: "Jonas Temple" };
+  const user = {
+    id: "usr_jonas",
+    email: "jonas@example.com",
+    name: "Jonas Temple",
+    picture: "https://example.com/jonas.png",
+  };
 
   it("uses a new identity without reconnecting an unstarted runtime", () => {
     expect(
@@ -56,5 +68,23 @@ describe("browserStreamSubscriberUserUpdate", () => {
         started: true,
       }),
     ).toEqual({ user: { ...user }, reconnect: false });
+  });
+
+  it("reconnects a live subscription when the user's picture changes", () => {
+    const next = { ...user, picture: "https://example.com/jonas-updated.png" };
+
+    expect(browserStreamSubscriberUserUpdate({ current: user, next, started: true })).toEqual({
+      user: next,
+      reconnect: true,
+    });
+  });
+
+  it("reconnects a live subscription when the user id changes", () => {
+    const next = { ...user, id: "usr_other" };
+
+    expect(browserStreamSubscriberUserUpdate({ current: user, next, started: true })).toEqual({
+      user: next,
+      reconnect: true,
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import type { ProjectListEntry } from "../../../os/src/itx-api.generated.ts";
-import type { ItxSession } from "./itx-core.ts";
+import type { ProjectListEntry } from "iterate/sdk/itx/react";
+import type { ItxSession } from "./itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "./open-project.ts";
 
 test("keeps a remembered project only while the current auth context can access it", () => {

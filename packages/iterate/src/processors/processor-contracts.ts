@@ -50,20 +50,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/**
- * One documented example payload for an owned event, rendered on the public
- * event docs site (events.iterate.com). The payload must parse against the
- * event's `payloadSchema` — enforced by the event-docs unit tests rather than
- * at module load, so a bad example fails CI instead of bricking a worker boot.
- */
-export type EventExample = {
-  /** What this example shows, e.g. "Push delivery to another stream's acceptCrossPost". */
-  description: string;
-  /** The example payload, in the payload schema's input shape. */
-  payload: unknown;
-};
-
-/** One owned event: its payload schema plus optional human description and examples. */
+/** One owned event: its payload schema plus an optional human description. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
@@ -75,7 +62,6 @@ export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutpu
    * an append site impossible instead of a silent storage leak.
    */
   ephemeral?: true;
-  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */
@@ -181,6 +167,16 @@ type EventFromType<
     ? TypedStreamEvent<Type, PayloadOutput> & { payload: PayloadOutput }
     : never
   : never;
+
+/** A committed event resolved from a contract's owned events or processor dependencies.
+ * Unknown event-type strings retain the untyped {@link StreamEvent} shape. */
+export type ResolvedEvent<Contract, Type extends string> = Contract extends {
+  events: EventCatalog;
+}
+  ? Type extends ResolvedEventType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>>
+    ? EventFromType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Type>
+    : StreamEvent
+  : StreamEvent;
 
 /** Union of committed-event shapes for a `consumes` tuple; `"*"` alone means any `StreamEvent`. */
 type EventFromTypes<
@@ -871,13 +867,13 @@ function getProcessorSlug(contract: unknown): string {
  * its incarnation died owing background work — never emitted by a processor.
  * Per-processor identity rides the payload's `processorSlug` and the
  * `processor-revived:<slug>@...` idempotency key, not the type string.
- * Recovery-wired contracts CONSUME it (the runner's construction check
- * requires that): its ordinary delivery is the guaranteed turn that lands at
- * the stream head, where `processEvent`'s at-head pass
- * (`delivery.caughtUp`) re-drives the processor's open obligations. The
- * event DEFINITION (payload schema, examples) lives with the platform's core
- * stream contract; this constant is here so contracts and the runner agree on
- * the type string without importing that contract.
+ * Consuming it is OPTIONAL: a processor should do so only when it reacts to
+ * the fact itself. Its append still wakes delivery when it is unconsumed, and
+ * a head-reaching frame receives the runner's eventless
+ * `processEvent(event: null, caughtUp: true)` pass so open obligations are not
+ * stranded. The event DEFINITION (payload schema) lives with the platform's
+ * core stream contract; this constant is here so contracts and the recovery
+ * adapter agree on the type string without importing that contract.
  */
 export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
 
@@ -906,17 +902,17 @@ export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnno
 
 /**
  * Platform stream events a processor contract may CONSUME without owning —
- * pass as a `processorDeps` entry. Currently just the keepalive revival fact:
- * a recovery-wired contract must consume it (the runner enforces this at
- * construction) so the revival append lands an at-head `processEvent` turn.
- * The event's authoritative definition lives with the platform's core stream
- * contract; this catalog is deliberately payload-loose — reducers ignore the
- * revival fact, its delivery IS the point.
+ * pass as a `processorDeps` entry. Currently just the keepalive revival fact.
+ * Consumption is optional and belongs only in processors that react to the
+ * fact itself; an unconsumed revival tail receives the runner's eventless
+ * at-head turn. The event's authoritative definition lives with the
+ * platform's core stream contract, and this catalog is deliberately
+ * payload-loose.
  */
 export const PLATFORM_STREAM_EVENTS = {
   [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
     description:
-      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work, guaranteeing the revived processor an at-head processEvent turn.",
+      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work; consumed when the processor reacts to the fact itself, otherwise followed by an eventless at-head processEvent turn.",
     payloadSchema: z.looseObject({}),
   },
 };

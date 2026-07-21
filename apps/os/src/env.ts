@@ -21,6 +21,13 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
+  /** Preview-only exact pkg.pr.new tarball used for `iterate` dependencies in
+   * dynamic builds. Deploy writes this from PREVIEW_PULL_REQUEST_HEAD_SHA. */
+  APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?: string;
+  /** Present only in generated deployed env blocks; absent in local dev. */
+  DEPLOYMENT_ENV?: string;
+  /** Required in deployed config; optional in the local runtime binding shape. */
+  APP_CONFIG_CLOUDFLARE__API_TOKEN?: string;
   ARTIFACTS: Artifacts;
   ARTIFACTS_ACCOUNT_ID: string;
   ARTIFACTS_NAMESPACE: string;
@@ -51,6 +58,11 @@ export interface Env {
    * (domains/workers/artifact-store.ts). Every entry is reproducible from its
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
+  /** One coordinator actor per content-addressed build key. KV remains the
+   * result cache; this namespace elects one live builder across OS isolates. */
+  WORKER_BUILD_COORDINATOR: DurableObjectNamespace<
+    import("./domains/workers/worker-build-coordinator-durable-object.ts").WorkerBuildCoordinatorDurableObject
+  >;
   /**
    * The worker-bundler sidecar (src/worker-bundler.ts): the only OS script
    * carrying esbuild-wasm. Source files cross this binding as inert data so a

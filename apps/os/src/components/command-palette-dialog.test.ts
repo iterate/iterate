@@ -4,33 +4,38 @@ import {
   buildStreamForest,
   defaultPaletteTab,
   flattenStreamRows,
+  formatEventCount,
   hasPathDescendant,
   initialPaletteDialogState,
   normalizeDestination,
   paletteKeyboardAction,
   paletteKeyboardTarget,
   reducePaletteDialogState,
+  streamTreeLabel,
 } from "./command-palette-model.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 
 const createdAt = "2026-07-17T10:00:00.000Z";
 
-function stream(path: string): StreamIndexRow {
+function stream(path: string, eventCount = 1): StreamIndexRow {
   return {
     path,
     createdAt,
     lastActivityAt: createdAt,
     lastType: "events.iterate.com/test",
-    eventCount: 1,
+    eventCount,
   };
 }
 
 describe("command palette models", () => {
   test("resets related palette state atomically when opening and changing tabs", () => {
-    const opened = reducePaletteDialogState(initialPaletteDialogState(), {
+    const collapsed = reducePaletteDialogState(initialPaletteDialogState(), {
+      type: "stream_toggled",
+      path: "/agents",
+    });
+    const opened = reducePaletteDialogState(collapsed, {
       type: "opened",
       tab: "recent",
-      expandedStreamPaths: new Set(["/", "/agents"]),
     });
     const queried = reducePaletteDialogState(opened, {
       type: "query_changed",
@@ -45,7 +50,8 @@ describe("command palette models", () => {
       tab: "agents",
     });
 
-    expect(opened.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
+    expect(collapsed.collapsedStreamPaths).toEqual(new Set(["/agents"]));
+    expect(opened.collapsedStreamPaths).toEqual(new Set());
     expect(queried.query).toBe("cattle");
     expect(changedTab).toMatchObject({
       tab: "agents",
@@ -126,18 +132,27 @@ describe("command palette models", () => {
     expect(root?.children[0]?.children[0]?.row.path).toBe("/agents/a/deep");
   });
 
-  test("preserves expansion locally and reveals ancestor context while searching", () => {
+  test("renders fully expanded by default, prunes collapsed subtrees, searches through them", () => {
     const rows = [stream("/"), stream("/agents"), stream("/agents/cows")];
     const forest = buildStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
 
-    expect(flattenStreamRows(forest, new Set(["/"]), "").map(({ node }) => node.row.path)).toEqual([
-      "/",
-      "/agents",
-    ]);
-    expect(flattenStreamRows(forest, new Set(), "cows").map(({ node }) => node.row.path)).toEqual([
+    expect(flattenStreamRows(forest, new Set(), "").map(({ node }) => node.row.path)).toEqual([
       "/",
       "/agents",
       "/agents/cows",
     ]);
+    expect(
+      flattenStreamRows(forest, new Set(["/agents"]), "").map(({ node }) => node.row.path),
+    ).toEqual(["/", "/agents"]);
+    expect(
+      flattenStreamRows(forest, new Set(["/agents"]), "cows").map(({ node }) => node.row.path),
+    ).toEqual(["/", "/agents", "/agents/cows"]);
+  });
+
+  test("labels tree rows with the leaf segment and formats event counts", () => {
+    expect(streamTreeLabel("/")).toBe("/");
+    expect(streamTreeLabel("/agents/repos/config")).toBe("config");
+    expect(formatEventCount(1)).toBe("1 event");
+    expect(formatEventCount(827)).toBe("827 events");
   });
 });

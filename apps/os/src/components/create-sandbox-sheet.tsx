@@ -32,7 +32,7 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Switch } from "@iterate-com/ui/components/switch";
-import { useItx } from "iterate/react";
+import { useItx } from "iterate/sdk/itx/react";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
   SANDBOX_INSTANCE_TYPES,

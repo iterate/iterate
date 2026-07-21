@@ -22,9 +22,10 @@ import { AgentCollectionProcessorContract } from "./agent-collection-processor-c
  * Every timestamp comes from the SOURCE hop
  * (`event.source.crossPostedFrom.at(-1)`), never from the copy's own commit
  * time: a copy can arrive long after the source fact, and the catalog must
- * preserve source chronology, not ingest delay. A copy without that
- * provenance cannot be attributed to an agent, so reduce rejects it loudly
- * rather than guessing.
+ * preserve source chronology, not ingest delay. A malformed committed copy is
+ * skipped and logged rather than wedging the cursor. If that log fires, an
+ * operator should repair the producer or subscription and append a correctly
+ * ordered, attributed copy.
  *
  * The waitingFor race: an agent clears its own `waitingFor` with a
  * CONDITIONAL clear (`clearWaitingForThroughOffset`, guarded by the source
@@ -48,6 +49,7 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
       }
       case "events.iterate.com/agent/created": {
         const source = crossPostedAgentSource(event);
+        if (source === null) return state;
         if (state.agents[source.path] !== undefined) return state;
         return {
           ...state,
@@ -63,11 +65,13 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
       }
       case "events.iterate.com/agent/summary-updated": {
         const source = crossPostedAgentSource(event);
+        if (source === null) return state;
         const previous = state.agents[source.path];
         if (previous === undefined) {
-          throw new Error(
-            `agent collection received ${event.type} for ${source.path} before agent/created`,
+          console.error(
+            `agent collection skipped ${event.type} for ${source.path}: agent/created has not been reduced`,
           );
+          return state;
         }
         const projection = foldAgentSummaryUpdated({
           summary: previous.summary,
@@ -111,20 +115,26 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
  * from (parsed to a canonical path) and the fact's ORIGINAL coordinates —
  * its offset and commit time on the SOURCE stream. Reduced catalog
  * timestamps and the waitingFor race guard read these, never the copy's own
- * commit time. Throws when the hop is missing: an unattributable agent fact
- * must fail the frame, not corrupt the catalog.
+ * commit time. An unattributable committed fact is logged and skipped so it
+ * cannot wedge the cursor.
  */
 function crossPostedAgentSource(event: Pick<StreamEvent, "type" | "source">): {
   path: AgentPath;
   createdAt: string;
   offset: number;
-} {
+} | null {
   const source = event.source?.crossPostedFrom?.at(-1);
   if (source === undefined) {
-    throw new Error(`agent collection received ${event.type} without cross-post provenance`);
+    console.error(`agent collection skipped ${event.type}: missing cross-post provenance`);
+    return null;
+  }
+  const path = AgentPath.safeParse(source.path);
+  if (!path.success) {
+    console.error(`agent collection skipped ${event.type}: source path is not an agent path`);
+    return null;
   }
   return {
-    path: AgentPath.parse(source.path),
+    path: path.data,
     createdAt: source.createdAt,
     offset: source.offset,
   };

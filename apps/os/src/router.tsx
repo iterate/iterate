@@ -2,7 +2,7 @@ import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
 import { capturePosthogException } from "@iterate-com/ui/components/posthog";
-import { createIterateQueryClient } from "iterate/react";
+import { createIterateQueryClient } from "iterate/sdk/itx/react";
 import { RoutePending } from "./components/route-pending.tsx";
 import { routeTree } from "./routeTree.gen.ts";
 
@@ -24,11 +24,9 @@ export function getRouter() {
     // TanStack catches at the nearest route match; the router default is the
     // app-wide hook (a root-route onCatch would miss child route failures).
     defaultOnCatch: capturePosthogException,
-    // Without a default pending component, an `ssr: false` route subtree (the
-    // whole project layout) renders a BLANK outlet in the SSR shell and again
-    // while `beforeLoad`/`loader` run on the client — for a direct hit on
-    // /projects/<slug>/repl that's a visibly empty main panel for the entire
-    // hydrate + project-fetch window (~1s on a slow read). Blank is bad UX and
+    // Without a default pending component, an `ssr: false` route leaf renders a
+    // BLANK outlet in the SSR shell and again while `beforeLoad`/`loader` run on
+    // the client. Blank is bad UX and
     // breaks the "the app always reports progress" contract the e2e specs
     // enforce (their spinner-waiter only extends waits while a spinner is
     // visible; docs/preview-e2e-flake-hunt.md flake 21).

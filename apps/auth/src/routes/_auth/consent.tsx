@@ -102,7 +102,7 @@ function RouteComponent() {
               <CardTitle className="mt-2 text-xl">Allow {clientName}?</CardTitle>
             </div>
           </div>
-          <CardDescription>{clientName} wants to use your Iterate account.</CardDescription>
+          <CardDescription>{clientName} wants to use your iterate account.</CardDescription>
         </CardHeader>
         <Separator />
         <CardContent>
@@ -205,7 +205,7 @@ function scopeLabel(scope: string): string {
 
 function scopeDescription(scope: string): string {
   const descriptions: Record<string, string> = {
-    openid: "Know which Iterate account is signed in.",
+    openid: "Know which iterate account is signed in.",
     profile: "Read your display name and profile image.",
     email: "Read the email address on this account.",
     offline_access: "Continue working after this browser session.",

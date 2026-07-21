@@ -4,7 +4,7 @@
  * `authenticate()`d into a **Session** (the catalog that vends project itxs via
  * `session.projects.get(slug)`), and kept alive through transport gaps.
  *
- * React never appears in this module. The hooks in ./itx-react.ts are a thin
+ * React never appears in this module. The hooks in ../sdk/itx/react.ts are a thin
  * binding over the exact surface exported here (`subscribeSession` +
  * `currentSnapshot` feed `useSyncExternalStore`; everything else is shared
  * verbatim), so a non-React consumer — a node script, a future runtime —
@@ -16,9 +16,11 @@
  *     riding the WebSocket handshake.
  *   • Anywhere else (the chat TUI, tests, scripts that want the KEEPER rather
  *     than the one-shot node dial), call {@link configureIterateSession} with a
- *     base URL and credentials BEFORE the first connect. The runtime's global
- *     WebSocket carries the dial — node ≥ 22, bun, and React Native all
- *     satisfy capnweb's WebSocket needs.
+ *     base URL and credentials. Calling it again for the same deployment
+ *     refreshes the credential source without disturbing the socket; changing
+ *     deployments deliberately replaces the socket. The runtime's global
+ *     WebSocket carries the dial — node ≥ 22, bun, and React Native all satisfy
+ *     capnweb's WebSocket needs.
  *
  * ───────────────────────────────────────────────────────────────────────────
  * THE SESSION MODEL — one socket, generations, invisible reconnect
@@ -65,7 +67,7 @@
  *    its healthy successor. {@link reconnectIterateSession} is the separate,
  *    deliberate *semantic* reset (new claims after create/unlock).
  */
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
 import type {
   ItxAuthCredentials,
   Project,
@@ -93,35 +95,61 @@ export type { ProjectStub as Itx };
 export type IterateSessionConfig = {
   /** OS deployment base URL, e.g. `https://os.iterate.com`; `/api` is appended. */
   baseUrl: string;
-  /** How `authenticate()` identifies the caller. Default: the browser session cookie. */
-  credentials?: ItxAuthCredentials;
+  /**
+   * How `authenticate()` identifies the caller. A provider is resolved for
+   * every dial, so rotating credentials stay fresh across transport reconnects.
+   * If authentication rejects with an auth-shaped error, providers get one
+   * forced-refresh attempt before the failure becomes terminal. Default: the
+   * browser session cookie.
+   */
+  credentials?:
+    | ItxAuthCredentials
+    | ((options: { forceRefresh: boolean }) => ItxAuthCredentials | Promise<ItxAuthCredentials>);
 };
 
 let explicitConfig: IterateSessionConfig | undefined;
 
 /**
  * Point the keeper at a deployment explicitly — the non-browser entry into the
- * one-socket model (the chat TUI, keeper-based scripts). Must run before the
- * first connect: the target is per-process, resolved at dial time, and a live
- * socket already embodies it. In a browser this is optional (the default is
- * `window.location`'s `/api` with cookie auth).
+ * one-socket model (the chat TUI, React Native, keeper-based scripts). Repeating
+ * the same target updates its credential source without disturbing the live
+ * socket. A different target retires the old deployment immediately and dials
+ * the new one, so authority can never cross deployments. In a browser this is
+ * optional (the default is `window.location`'s `/api` with cookie auth).
  */
 export function configureIterateSession(config: IterateSessionConfig): void {
-  if (current !== undefined) {
-    throw new Error(
-      "configureIterateSession must run before the first connect — a session for this process already exists (live, dialing, or parked after a terminal failure).",
-    );
-  }
+  const targetChanged =
+    explicitConfig !== undefined &&
+    apiWebSocketUrl(explicitConfig.baseUrl).href !== apiWebSocketUrl(config.baseUrl).href;
   explicitConfig = config;
+  if (!targetChanged || current === undefined) return;
+
+  const generation = current;
+  current = undefined;
+  retireGeneration(generation);
+  const retiredSession = snapshot?.session;
+  snapshot = undefined;
+  if (retiredSession !== undefined) disposeSession(retiredSession);
+  consecutiveDialFailures = 0;
+  // Dial now so mounted hooks see one coherent target transition rather than
+  // retaining the previous deployment until their next read.
+  if (firstConnect === undefined) {
+    firstConnect = Promise.withResolvers<SessionStub>();
+    void firstConnect.promise.catch(() => {});
+  }
+  dial();
 }
 
-function dialTarget(): { url: URL; credentials: ItxAuthCredentials } {
+function dialTarget(): {
+  url: URL;
+  credentials: NonNullable<IterateSessionConfig["credentials"]>;
+} {
   const base =
     explicitConfig?.baseUrl ??
     (typeof window === "undefined" ? noDialTarget() : window.location.href);
   return {
     url: apiWebSocketUrl(base),
-    credentials: explicitConfig?.credentials ?? { type: "from-server-cookie" },
+    credentials: explicitConfig?.credentials || { type: "from-server-cookie" },
   };
 }
 
@@ -399,7 +427,28 @@ function dial(): Generation {
           // cast bridges capnweb's Awaited-type nesting (`Stubify<Session>`
           // re-wraps every member in promise types) back to the nominal handle.
           // This is the module's ONE cast, at the identity boundary.
-          root = (await unauthenticated.authenticate(target.credentials)) as unknown as SessionStub;
+          const credentialProvider = target.credentials;
+          if (typeof credentialProvider === "function") {
+            const authenticate = async (forceRefresh: boolean) =>
+              (await unauthenticated.authenticate(
+                await credentialProvider({ forceRefresh }),
+              )) as unknown as SessionStub;
+            try {
+              root = await authenticate(false);
+            } catch (error) {
+              if (
+                !(error instanceof Error) ||
+                !/auth|token|unauthorized|401/i.test(error.message)
+              ) {
+                throw error;
+              }
+              root = await authenticate(true);
+            }
+          } else {
+            root = (await unauthenticated.authenticate(
+              credentialProvider,
+            )) as unknown as SessionStub;
+          }
         } catch (error) {
           clearTimeout(timeout);
           if (current !== generation) return;
@@ -612,6 +661,34 @@ export function reconnectIterateSession(): void {
   // transient storm that's already irrelevant.
   consecutiveDialFailures = 0;
   dial();
+}
+
+/**
+ * Revive only a generation parked by a terminal authentication failure. This
+ * is the imperative retry boundary for query/mutation clients: calling it
+ * before a repeated operation lets refreshed credentials dial again without
+ * disturbing a healthy or merely reconnecting session.
+ */
+export function retryFailedIterateSession(): void {
+  if (current?.failed) reconnectIterateSession();
+}
+
+/**
+ * Release the current transport and authority without reconnecting. Intended
+ * for process-local lifecycle boundaries such as signing out of a native app;
+ * mounted consumers should be removed in the same transition. The explicit
+ * deployment configuration remains, so a later connect can dial it again.
+ */
+export function disconnectIterateSession(): void {
+  const generation = current;
+  current = undefined;
+  if (generation !== undefined) retireGeneration(generation);
+  const retiredSession = snapshot?.session;
+  snapshot = undefined;
+  if (retiredSession !== undefined) disposeSession(retiredSession);
+  firstConnect?.reject(new Error("itx session disconnected"));
+  firstConnect = undefined;
+  consecutiveDialFailures = 0;
 }
 
 /**

@@ -14,7 +14,7 @@ const project = (
 });
 
 describe("chooseRootProjectRedirect", () => {
-  test("prefers the current project host when that project is ready", () => {
+  test("opens a preferred ready project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: "beta",
@@ -23,11 +23,11 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "beta" },
-      onboarding: false,
+      welcome: false,
     });
   });
 
-  test("sends the only ready project to onboarding", () => {
+  test("opens the only ready project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -36,11 +36,11 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      onboarding: true,
+      welcome: false,
     });
   });
 
-  test("sends a single auth-created missing project to onboarding", () => {
+  test("welcomes a single auth-created missing project through its creation flow", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -49,7 +49,7 @@ describe("chooseRootProjectRedirect", () => {
     ).toMatchObject({
       kind: "project",
       project: { slug: "alpha" },
-      onboarding: true,
+      welcome: true,
     });
   });
 

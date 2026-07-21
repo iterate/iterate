@@ -6,19 +6,16 @@
 // crash, and function steps driving the scripted script-execution worker (the
 // only capability-host-specific fake, defined here).
 //
-// Registry-level recovery (real keepalive alarm, fake DurableObjectState)
-// lives in capability-host-recovery.test.ts; this suite covers the processor
-// itself: the script-run obligation lifecycle, expiry, orphan settlement,
-// settle-append retry, the settle idempotency race, replay determinism, and
-// the capability-table reduction.
+// The harness's real keepalive and recovery adapters also drive the recovery
+// scenarios below; capability-host-recovery.test.ts keeps the focused
+// zero-lag end-to-end proof.
 
 import { describe, expect, it, vi } from "vitest";
-import type { ConsumedInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
   type HarnessSubstrate,
-  type ProcessorHarness,
 } from "iterate/processors/testing";
 import type { Project } from "../../itx-api.generated.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
@@ -45,11 +42,6 @@ const NEW_HOST_EVENTS = [
     payload: { config: {}, fallback: null },
   },
 ] satisfies HostEventInput[];
-
-const REVIVED = {
-  type: "events.iterate.com/stream/processor-revived",
-  payload: { processorSlug: "capability-host", revivals: 1, version: "test" },
-} satisfies HostEventInput;
 
 function scriptRunRequested(
   executionId: string,
@@ -86,10 +78,7 @@ function makeScriptedWorker() {
   };
 }
 
-/** The generic harness plus the scripted worker, wired in createProcessor.
- * `reads` is wired to the CURRENT incarnation's runner so crash() keeps the
- * committed-state reads honest, exactly as the hosting DO wires
- * registry.reads(...). */
+/** The generic harness plus the scripted worker, wired in createProcessor. */
 function makeHostHarness(
   args: {
     substrate?: HarnessSubstrate;
@@ -97,27 +86,19 @@ function makeHostHarness(
   } = {},
 ) {
   const worker = makeScriptedWorker();
-  let harness!: ProcessorHarness<CapabilityHostProcessorContract>;
-  const created = makeProcessorHarness<CapabilityHostProcessorContract>({
+  const harness = makeProcessorHarness<CapabilityHostProcessorContract, CapabilityHostProcessor>({
     createProcessor: (deps) =>
       new CapabilityHostProcessor({
         ...deps,
         itx: {} as Project,
-        reads: {
-          snapshot: () => harness.runner().snapshot(),
-          waitUntilEvent: (input) =>
-            "offset" in input
-              ? harness.runner().waitUntilEvent(input)
-              : harness.runner().waitUntilEvent(input),
-        },
+        reads: deps.reads,
         scriptExecutionEntrypoint: { run: (code, options) => worker.run(code, options) },
         ...(args.typecheckScript === undefined ? {} : { typecheckScript: args.typecheckScript }),
       }),
     path: "/capability-host-test",
     ...(args.substrate === undefined ? {} : { substrate: args.substrate }),
   });
-  harness = created;
-  return { ...created, worker };
+  return { ...harness, worker };
 }
 
 // =============================================================================
@@ -285,7 +266,7 @@ describe("CapabilityHostProcessor recovery", () => {
       );
       expect(h.worker.calls).toHaveLength(1); // the doomed attempt, parked
 
-      await h.play(["crash"], ["append", REVIVED]);
+      await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
 
       // The successor's at-head pass found `started` with no live run: the
       // body may have half-executed, so it settles failed/orphaned — the
@@ -319,7 +300,7 @@ describe("CapabilityHostProcessor recovery", () => {
         ["append", ...NEW_HOST_EVENTS],
         ["append", scriptRunRequested("exec-late", h.clock.now + 60_000)],
       );
-      await h.play(["crash"], ["append", REVIVED]);
+      await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
       expect(h.events(SETTLED)).toMatchObject([
         { payload: { settlement: { failureKind: "orphaned", status: "failed" } } },
       ]);
@@ -372,7 +353,7 @@ describe("CapabilityHostProcessor recovery", () => {
         () => {
           h.stream.failAppendsOfType = undefined;
         },
-        ["append", REVIVED],
+        ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1],
       );
 
       // requested-without-started = safe to start late: the successor's
@@ -416,7 +397,7 @@ describe("CapabilityHostProcessor recovery", () => {
       // classification.
       await h.play(() => {
         h.stream.failAppendsOfType = undefined;
-      }, ["append", REVIVED]);
+      }, ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
       expect(h.events(SETTLED)).toMatchObject([
         {
           payload: { executionId: "exec-retry", settlement: { status: "succeeded", result: "ok" } },

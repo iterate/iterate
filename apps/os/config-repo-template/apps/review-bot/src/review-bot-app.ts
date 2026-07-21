@@ -1,3 +1,4 @@
+import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import {
   createStreamProcessorRegistry,
@@ -9,6 +10,27 @@ import { ReviewBotProcessor } from "./review-bot.ts";
 const PROJECT_ID_STORAGE_KEY = "review-bot:project-id";
 const STREAM_PATH_STORAGE_KEY = "review-bot:stream-path";
 
+/** The processor property crosses Workers RPC before its wake method is called. */
+class ReviewBotProcessorRpcTarget extends WorkersRpcTarget {
+  constructor(
+    private readonly registryFor: (projectId: string, path: string) => StreamProcessorRegistry,
+  ) {
+    super();
+  }
+
+  async wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    if (request.stream.projectId === null) {
+      throw new Error("the review bot subscribes on project streams only");
+    }
+    return await this.registryFor(
+      request.stream.projectId,
+      request.stream.path,
+    ).wakeStreamSubscriber(request);
+  }
+}
+
 // The review bot's stateful host, one Durable Object instance per GitHub
 // connection (the ref's durableWorkerKey carries the connection slug —
 // review-bot-ref.ts). Unlike the guestbook, whose stream path is a constant,
@@ -17,10 +39,10 @@ const STREAM_PATH_STORAGE_KEY = "review-bot:stream-path";
 // live state: it exists purely to put ReviewBotProcessor on the connection
 // stream's delivery spine.
 export class ReviewBotApp extends IterateDurableObject {
-  #host: { registry: StreamProcessorRegistry } | undefined;
+  #registry: StreamProcessorRegistry | undefined;
 
-  #ensureHost(projectId: string, path: string): { registry: StreamProcessorRegistry } {
-    if (this.#host === undefined) {
+  #ensureRegistry(projectId: string, path: string): StreamProcessorRegistry {
+    if (this.#registry === undefined) {
       this.ctx.storage.kv.put(PROJECT_ID_STORAGE_KEY, projectId);
       this.ctx.storage.kv.put(STREAM_PATH_STORAGE_KEY, path);
       const stream = itxProjectStream(this.env, path);
@@ -42,13 +64,12 @@ export class ReviewBotApp extends IterateDurableObject {
         }),
         // Keepalive recovery: if an eviction kills this object while it owes
         // work (a webhook mid-route under blockProcessorWhile), the alarm
-        // fires, the keepalive journals a revival fact, and its wake delivery
-        // redelivers the held frame.
+        // fires and the recovered runner gets its delivery turn.
         { recovery: true },
       );
-      this.#host = { registry };
+      this.#registry = registry;
     }
-    return this.#host;
+    return this.#registry;
   }
 
   /** The hosting Durable Object's alarm fire, delivered here like a native
@@ -60,28 +81,17 @@ export class ReviewBotApp extends IterateDurableObject {
     const projectId = this.ctx.storage.kv.get<string>(PROJECT_ID_STORAGE_KEY);
     const path = this.ctx.storage.kv.get<string>(STREAM_PATH_STORAGE_KEY);
     if (projectId === undefined || path === undefined) return;
-    const { registry } = this.#ensureHost(projectId, path);
-    await registry.handleAlarm(alarmInfo);
+    await this.#ensureRegistry(projectId, path).handleAlarm(alarmInfo);
   }
 
   /** The wake door the stream spine dials — the subscription's persisted
    * expression is `workers.get(ref).processor.wakeStreamSubscriber`
-   * (review-bot-ref.ts), which the platform's dynamic capability dispatch
-   * flattens into an invokeCapability walk that lands here. The request
-   * carries the stream's coordinates, so the host can construct itself before
-   * answering the handshake (checkpoint + a live sink the stream then
-   * delivers frames to). */
-  get processor() {
-    return {
-      wakeStreamSubscriber: async (
-        request: StreamSubscriberWakeRequest,
-      ): Promise<StreamSubscriberWakeResponse> => {
-        if (request.stream.projectId === null) {
-          throw new Error("the review bot subscribes on project streams only");
-        }
-        const { registry } = this.#ensureHost(request.stream.projectId, request.stream.path);
-        return await registry.wakeStreamSubscriber(request);
-      },
-    };
+   * (review-bot-ref.ts). The request carries the stream's coordinates, so the
+   * host can construct itself before answering the handshake (checkpoint + a
+   * live sink the stream then delivers frames to). */
+  get processor(): ReviewBotProcessorRpcTarget {
+    return new ReviewBotProcessorRpcTarget((projectId, path) =>
+      this.#ensureRegistry(projectId, path),
+    );
   }
 }

@@ -10,6 +10,21 @@ type EventBody = {
   ephemeral?: boolean | undefined;
 };
 
+// The wording is a live wire contract: the rejection crosses Workers RPC,
+// which preserves the message but not class identity, so deployed processors
+// classify the conflict by this text. Mint with the builder, match with the
+// predicate — never spell the wording anywhere else.
+const IDEMPOTENCY_CONFLICT_FRAGMENT = " already names a different event at offset ";
+
+export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number) {
+  return `idempotency key "${idempotencyKey}"${IDEMPOTENCY_CONFLICT_FRAGMENT}${existingOffset}`;
+}
+
+export function isIdempotencyConflict(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(IDEMPOTENCY_CONFLICT_FRAGMENT);
+}
+
 /** Whether a requested append names the SAME event an idempotency key already committed. */
 export function sameIdempotentEvent(existing: EventBody, requested: EventBody): boolean {
   return (

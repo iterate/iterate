@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link } from "@tanstack/react-router";
-import { useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { Search } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
@@ -78,9 +78,7 @@ export function AgentCatalog({
           <Button
             nativeButton={false}
             size="sm"
-            render={
-              <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
-            }
+            render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
           >
             New agent
           </Button>

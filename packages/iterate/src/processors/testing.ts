@@ -1,18 +1,24 @@
 // In-memory test doubles for the stream substrate — the ONE MemoryStream
 // (plus MemoryStreamNetwork for router suites observing cross-stream
-// forwards) — and `driveProcessor`, REAL runner drive over the in-memory
-// stream: the shared form of the cutover suites' local `drive()` helpers.
-// Registry-level harnesses (fake DurableObjectState, virtual clock, alarm
-// cell, crash-as-eviction) live inline in the suites that need them
-// (stream-processor-registry.test.ts, the per-domain *-recovery tests).
+// forwards). The generic step harness drives the real runner over that
+// in-memory stream.
+// Step tuples form scenario spines; `h.append`/`h.advanceTime` settle single
+// actions, while `h.stream.append` commits without driving delivery.
+// Every harness uses the production DO durability adapters over in-memory KV
+// plus an alarm cell, so eviction and revival have one meaning in every suite.
 
-import { sameIdempotentEvent } from "./idempotency.ts";
+import {
+  durableObjectProgressStore,
+  durableObjectRecovery,
+} from "./durable-object-processor-durability.ts";
+import { idempotencyConflictMessage, sameIdempotentEvent } from "./idempotency.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { StreamEventReadInput } from "./rpc-types.ts";
-import type { ConsumedInput, ProcessorState } from "./processor-contracts.ts";
+import type { ConsumedInput, ProcessorState, ResolvedEvent } from "./processor-contracts.ts";
+import type { RegisteredProcessorReads } from "./stream-processor-registry.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamProcessor, StreamProcessorContract } from "./stream-processor.ts";
-import type { ProcessorProgress, ProcessorProgressStore } from "./stream-processor-runner.ts";
+import type { ProcessorProgressStore } from "./stream-processor-runner.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
 
 function emptyThroughputReport() {
@@ -81,26 +87,38 @@ export class MemoryStream implements ProcessorStream {
       if (input.type === this.failAppendsOfType) {
         throw new Error(`injected append failure for ${input.type}`);
       }
+      // The casts restate what the round-trip preserves: serializing a
+      // `Record<string, unknown>` yields a JSON object, so parsing it back
+      // yields one — `JSON.parse` just types as `any` and cannot say so.
+      const detachedInput: StreamEventInput = {
+        ...input,
+        ...(input.payload === undefined
+          ? {}
+          : { payload: JSON.parse(JSON.stringify(input.payload)) as Record<string, unknown> }),
+        ...(input.metadata === undefined
+          ? {}
+          : { metadata: JSON.parse(JSON.stringify(input.metadata)) as Record<string, unknown> }),
+      };
       const existing =
-        input.idempotencyKey === undefined
+        detachedInput.idempotencyKey === undefined
           ? undefined
           : [...this.events, ...staged].find(
-              (event) => event.idempotencyKey === input.idempotencyKey,
+              (event) => event.idempotencyKey === detachedInput.idempotencyKey,
             );
-      if (existing !== undefined) {
+      if (existing !== undefined && detachedInput.idempotencyKey !== undefined) {
         // The Stream DO's predicate, SHARED: a same-key append with a
         // DIFFERENT body is REJECTED, not deduplicated. Key-only dedup here
         // once masked exactly that production rejection from a test.
-        if (!sameIdempotentEvent(existing, input)) {
+        if (!sameIdempotentEvent(existing, detachedInput)) {
           throw new Error(
-            `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
+            idempotencyConflictMessage(detachedInput.idempotencyKey, existing.offset),
           );
         }
         results.push(existing);
         continue;
       }
       const event: StreamEvent = {
-        ...input,
+        ...detachedInput,
         // Wall-clock like production, not offset-derived: expiry policy reads
         // createdAt, and epoch-1970 stamps would expire everything on arrival.
         createdAt: new Date(this.now()).toISOString(),
@@ -228,49 +246,6 @@ export class MemoryStreamNetwork {
   }
 }
 
-/** What {@link driveProcessor} returns: REAL runner drive for one processor. */
-type ProcessorDriver<Contract extends StreamProcessorContract> = {
-  /** The driving runner, for tests that need its full surface. */
-  runner: StreamProcessorRunner<Contract>;
-  /** One catch-up pass to the stream's current head — the production
-   * delivery cadence. Failures RETHROW with the cursor held, so a retry
-   * redelivers the failed events exactly like the transport would. */
-  deliver(): Promise<void>;
-  /** The runner's committed reduced state (schema default until the first pass). */
-  readonly state: ProcessorState<Contract>;
-  /** One consistent read of the reduced state, pinned to its offset. */
-  snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }>;
-};
-
-/**
- * REAL runner drive over an in-memory stream — the shared form of the
- * cutover suites' local `drive()` helpers: one StreamProcessorRunner per
- * processor (in-memory progress; a fresh driver over the same stream
- * replays from scratch, which is the full-replay recipe). The processor
- * instance holds no reduced state of its own — read `driver.state` /
- * `driver.snapshot()`.
- */
-export function driveProcessor<Contract extends StreamProcessorContract, Deps extends object>(
-  processor: StreamProcessor<Contract, Deps>,
-  stream: MemoryStream,
-): ProcessorDriver<Contract> {
-  const runner = new StreamProcessorRunner({ processor, stream });
-  return {
-    runner,
-    deliver: () => runner.catchUp(),
-    get state() {
-      return runner.currentState;
-    },
-    snapshot: () => runner.snapshot(),
-  };
-}
-
-/** The events of one type on a stream (or plain event array), in order. */
-export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
-  const events = Array.isArray(source) ? source : source.events;
-  return events.filter((event) => event.type === type);
-}
-
 // =============================================================================
 // Step harness: scenario tests as ordered steps over a durable substrate.
 // =============================================================================
@@ -303,17 +278,61 @@ export type HarnessSubstrate = {
   progress: ProcessorProgressStore<unknown>;
 };
 
+type HarnessDurabilitySubstrate = {
+  storage: DurableObjectStorage;
+  alarm: { at: number | null };
+};
+
+const durabilitySubstrates = new WeakMap<HarnessSubstrate, HarnessDurabilitySubstrate>();
+const progressSubstrates = new WeakMap<object, HarnessDurabilitySubstrate>();
+
+function makeDurabilitySubstrate(): HarnessDurabilitySubstrate {
+  const kv = new Map<string, unknown>();
+  // `null as number | null` widens the literal so later `alarm.at = 123`
+  // assignments typecheck — an annotated `let` can't live in an object field.
+  const alarm = { at: null as number | null };
+  const storage = {
+    kv: {
+      // The map stores whatever the caller `put` under the key; `get<T>`
+      // mirrors the platform API's caller-asserted typing (the real
+      // DurableObjectStorage.kv.get is exactly this trust), so the cast
+      // restates the platform contract, not a new claim.
+      get: <T = unknown>(key: string): T | undefined =>
+        kv.has(key) ? (structuredClone(kv.get(key)) as T) : undefined,
+      put: (key: string, value: unknown) => void kv.set(key, structuredClone(value)),
+    },
+    getAlarm: async () => alarm.at,
+    setAlarm: async (at: number) => {
+      alarm.at = at;
+    },
+    deleteAlarm: async () => {
+      alarm.at = null;
+    },
+    // Double assertion because this implements only the members the keepalive
+    // and progress adapters touch (kv get/put, get/set/deleteAlarm) — the
+    // platform type's dozens of other members (sql, transactions, bookmarks)
+    // are structurally missing on purpose. Safe for every consumer HERE
+    // because the adapters' member usage is pinned by these suites; a new
+    // adapter dependency would throw undefined-is-not-a-function loudly.
+  } as unknown as DurableObjectStorage;
+  return { storage, alarm };
+}
+
 /** What {@link makeProcessorHarness}'s factory receives: base deps plus the
  * harness's virtual clock/sleep, for processors that take injectable time. */
-export type HarnessProcessorDeps = {
+export type HarnessProcessorDeps<Contract extends StreamProcessorContract> = {
   stream: ProcessorStream;
   path: string;
   projectId: string | null;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  reads: Pick<RegisteredProcessorReads<ProcessorState<Contract>>, "snapshot" | "waitUntilEvent">;
 };
 
-export type ProcessorHarness<Contract extends StreamProcessorContract> = {
+export type ProcessorHarness<
+  Contract extends StreamProcessorContract,
+  Processor extends StreamProcessor<Contract, object> = StreamProcessor<Contract, object>,
+> = {
   clock: { now: number };
   stream: MemoryStream;
   substrate: HarnessSubstrate;
@@ -321,6 +340,8 @@ export type ProcessorHarness<Contract extends StreamProcessorContract> = {
    * A method (not a property) so suites can spread the harness into a wider
    * object without freezing a pre-crash incarnation. */
   runner(): StreamProcessorRunner<Contract>;
+  /** The current incarnation's processor instance. */
+  processor(): Processor;
   /** Run steps in order, driving delivery to a fixpoint after each. */
   play(...steps: HarnessStep<Contract>[]): Promise<void>;
   /** Typed append (the contract's `consumes` vocabulary) + drive to fixpoint. */
@@ -337,8 +358,10 @@ export type ProcessorHarness<Contract extends StreamProcessorContract> = {
   settle(): Promise<void>;
   /** The runner's committed reduced state. */
   state(): ProcessorState<Contract>;
-  /** Committed stream rows, optionally filtered by event type. */
-  events(type?: string): StreamEvent[];
+  /** All committed stream rows. */
+  events(): StreamEvent[];
+  /** Committed rows of one event type, typed when the contract resolves it. */
+  events<Type extends string>(type: Type): ResolvedEvent<Contract, Type>[];
 };
 
 /** In-memory {@link ProcessorProgressStore} with the DO store's fencing check,
@@ -347,105 +370,206 @@ export type ProcessorHarness<Contract extends StreamProcessorContract> = {
  * replay from offset zero, which is both the re-reduce-from-scratch recipe and the harshest
  * at-least-once redelivery test (every per-event append re-runs). */
 export function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
-  let record: ProcessorProgress<unknown> | undefined;
-  return {
-    read: () => (record === undefined ? undefined : structuredClone(record)),
-    commit: (progress, opts) => {
-      const persisted = record?.processing.cursorRevision ?? 0;
-      if (opts.expectedCursorRevision !== persisted) {
-        throw new Error(
-          `progress commit fenced: expected revision ${opts.expectedCursorRevision}, persisted ${persisted}`,
-        );
-      }
-      record = structuredClone(progress);
-    },
-  };
+  const durability = makeDurabilitySubstrate();
+  const progress = durableObjectProgressStore<unknown>({
+    storage: durability.storage,
+    slug: "test-harness",
+  });
+  progressSubstrates.set(progress, durability);
+  return progress;
 }
 
 /**
- * Build a {@link ProcessorHarness}: REAL runner drive over the in-memory
- * substrate, with virtual time and eviction-faithful `crash()`. Knows nothing
- * about the processor under test — construct it in `createProcessor` from the
- * supplied base deps plus whatever fakes the suite owns (LLM transports,
- * capability hosts). Pass another harness's `substrate` to run a second
- * incarnation over the SAME stream (the zombie-race setup).
+ * Build a {@link ProcessorHarness}: the real runner, ProcessorKeepalive, and
+ * Durable Object durability adapters over an in-memory stream/KV/alarm
+ * substrate. `crash()` is eviction: delivery stays detached until a new
+ * append wakes it or a due keepalive alarm appends the revival fact. Pass
+ * another harness's `substrate` to run a second incarnation over the same
+ * durable state (the zombie-race setup).
  */
-export function makeProcessorHarness<Contract extends StreamProcessorContract>(args: {
-  createProcessor: (deps: HarnessProcessorDeps) => StreamProcessor<Contract, object>;
+export function makeProcessorHarness<
+  Contract extends StreamProcessorContract,
+  Processor extends StreamProcessor<Contract, object> = StreamProcessor<Contract, object>,
+>(args: {
+  createProcessor: (deps: HarnessProcessorDeps<Contract>) => Processor;
   path?: string;
   substrate?: HarnessSubstrate;
-}): ProcessorHarness<Contract> {
+}): ProcessorHarness<Contract, Processor> {
   const path = args.substrate?.stream.path ?? args.path ?? "/harness/processor";
   const clock = args.substrate?.clock ?? { now: 1_000_000 };
   const stream = args.substrate?.stream ?? new MemoryStream(path);
   stream.now = () => clock.now;
-  const progress = args.substrate?.progress ?? makeMemoryProgressStore();
-  const substrate: HarnessSubstrate = { clock, stream, progress };
+  const inheritedDurability =
+    args.substrate === undefined
+      ? undefined
+      : (durabilitySubstrates.get(args.substrate) ??
+        progressSubstrates.get(args.substrate.progress));
+  const durability = inheritedDurability ?? makeDurabilitySubstrate();
 
-  // Virtual sleeps: released when `advanceTime` moves the clock past their
-  // deadline. A `crash()` drops the incarnation's pending sleeps unresolved —
-  // the closures awaiting them are dead with the incarnation anyway.
+  // The substrate stores progress as `<unknown>` so one substrate type serves
+  // every contract; the narrowing is safe because a substrate is only ever
+  // shared between incarnations of the SAME processor (the zombie-race
+  // setup), so the state it holds is this contract's. TypeScript cannot carry
+  // the contract through the untyped substrate hand-off.
+  let progress = args.substrate?.progress as
+    | ProcessorProgressStore<ProcessorState<Contract>>
+    | undefined;
   let pendingSleeps: { dueAt: number; resolve: () => void }[] = [];
   const releaseDueSleeps = () => {
-    const [due, pending] = pendingSleeps.reduce<
-      [{ resolve: () => void }[], { dueAt: number; resolve: () => void }[]]
-    >(
-      ([d, p], sleep) => (sleep.dueAt <= clock.now ? [[...d, sleep], p] : [d, [...p, sleep]]),
-      [[], []],
-    );
-    pendingSleeps = pending;
+    const due = pendingSleeps.filter((sleep) => sleep.dueAt <= clock.now);
+    pendingSleeps = pendingSleeps.filter((sleep) => sleep.dueAt > clock.now);
     for (const sleep of due) sleep.resolve();
+    return due.length;
   };
 
+  let processor!: Processor;
+  let runner!: StreamProcessorRunner<Contract>;
+  let recovery!: ReturnType<typeof durableObjectRecovery>;
+  let incarnation = 0;
+  let deliveryEnabled = true;
+  let deliveryAttempt: Promise<void> | undefined;
+  let deliveryError: unknown;
+
+  const keepAlive = (work: Promise<unknown>) => {
+    void work.catch(() => undefined);
+  };
   const incarnate = () => {
-    const processor = args.createProcessor({
+    processor = args.createProcessor({
       stream,
       path,
       projectId: "proj_harness",
       now: () => clock.now,
       sleep: (ms) =>
         new Promise<void>((resolve) => pendingSleeps.push({ dueAt: clock.now + ms, resolve })),
+      reads: {
+        snapshot: () => runner.snapshot(),
+        waitUntilEvent: (input) =>
+          "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
+      },
     });
-    return new StreamProcessorRunner({
+    progress ??= durableObjectProgressStore<ProcessorState<Contract>>({
+      storage: durability.storage,
+      slug: processor.contract.slug,
+    });
+    recovery = durableObjectRecovery({
+      storage: durability.storage,
+      slug: processor.contract.slug,
+      stream,
+      version: "test-harness",
+      armAlarm: (atMs) => {
+        if (atMs === null) void durability.storage.deleteAlarm();
+        else void durability.storage.setAlarm(atMs);
+      },
+      waitUntil: keepAlive,
+      now: () => clock.now,
+    });
+    runner = new StreamProcessorRunner({
       processor,
       stream,
-      durability: { progress: progress as ProcessorProgressStore<ProcessorState<Contract>> },
+      durability: { progress, recovery },
+      keepAlive: (work) => keepAlive(work()),
       now: () => clock.now,
       readPageSize: 5,
     });
   };
-  let runner = incarnate();
+  incarnate();
+
+  const substrate: HarnessSubstrate = {
+    clock,
+    stream,
+    // Inverse of the narrowing above: the substrate's public face erases the
+    // contract (stores are invariant in their state parameter, so neither
+    // direction is assignable without the assertion pair).
+    progress: progress as ProcessorProgressStore<unknown>,
+  };
+  if (args.substrate !== undefined) durabilitySubstrates.set(args.substrate, durability);
+  durabilitySubstrates.set(substrate, durability);
+  progressSubstrates.set(substrate.progress, durability);
+
+  const startDelivery = () => {
+    if (deliveryAttempt !== undefined) return;
+    const deliveryIncarnation = incarnation;
+    const attempt = runner.catchUp();
+    deliveryAttempt = attempt;
+    void attempt.then(
+      () => {
+        if (deliveryIncarnation === incarnation) deliveryAttempt = undefined;
+      },
+      (error: unknown) => {
+        if (deliveryIncarnation !== incarnation) return;
+        deliveryAttempt = undefined;
+        deliveryError = error;
+      },
+    );
+  };
 
   const settle = async () => {
-    // Fixpoint with a bounded round count: each round drains real microtasks
-    // and macrotasks (so background work released by the previous round can
-    // land its appends), then catches the runner up. Stop when a full round
-    // leaves the stream head unchanged.
+    let quietRounds = 0;
+    let lastAppendedTypes: string[] = [];
     for (let round = 0; round < 50; round++) {
       const headBefore = stream.events.at(-1)?.offset ?? 0;
+      const releasedSleeps = releaseDueSleeps();
+      if (deliveryEnabled) startDelivery();
       await new Promise((resolve) => setTimeout(resolve, 0));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      await runner.catchUp();
-      if ((stream.events.at(-1)?.offset ?? 0) === headBefore) return;
+      if (deliveryError !== undefined) {
+        const error = deliveryError;
+        deliveryError = undefined;
+        throw error;
+      }
+      const headAfter = stream.events.at(-1)?.offset ?? 0;
+      lastAppendedTypes = stream.events
+        .filter((event) => event.offset > headBefore)
+        .map((event) => event.type);
+      quietRounds = headAfter === headBefore && releasedSleeps === 0 ? quietRounds + 1 : 0;
+      // An alarm-backed attempt may be intentionally hung so the next crash
+      // can evict it. Once the stream is quiet and its durable recovery alarm
+      // is armed, that parked attempt is a stable scenario boundary.
+      if (
+        quietRounds === 3 &&
+        (!deliveryEnabled || deliveryAttempt === undefined || durability.alarm.at !== null)
+      ) {
+        return;
+      }
     }
-    throw new Error("harness settle() did not reach a fixpoint in 50 rounds");
+    const headOffset = stream.events.at(-1)?.offset ?? 0;
+    throw new Error(
+      `harness settle() did not reach a fixpoint in 50 rounds; ` +
+        `last round appended event types: ${lastAppendedTypes.join(", ") || "none"}; ` +
+        `head offset: ${headOffset}`,
+    );
   };
 
   const append = async (...events: ConsumedInput<Contract>[]) => {
+    // A consumed input IS a stream event input — the contract type only
+    // narrows `type`/`payload` to the consumed vocabulary. TypeScript cannot
+    // relate the distributive contract-derived union back to the plain input
+    // shape, so the widening is asserted.
     await stream.append(...(events as StreamEventInput[]));
+    deliveryEnabled = true;
     await settle();
   };
 
   const advanceTime = async (ms: number) => {
-    clock.now += ms;
-    releaseDueSleeps();
+    const target = clock.now + ms;
+    while (durability.alarm.at !== null && durability.alarm.at <= target) {
+      clock.now = Math.max(clock.now, durability.alarm.at);
+      durability.alarm.at = null;
+      await recovery.handleAlarm();
+      deliveryEnabled = true;
+      await settle();
+    }
+    clock.now = target;
     await settle();
   };
 
   const crash = () => {
     runner.dispose();
+    incarnation += 1;
+    deliveryEnabled = false;
+    deliveryAttempt = undefined;
+    deliveryError = undefined;
     pendingSleeps = [];
-    runner = incarnate();
+    incarnate();
   };
 
   return {
@@ -453,25 +577,41 @@ export function makeProcessorHarness<Contract extends StreamProcessorContract>(a
     stream,
     substrate,
     runner: () => runner,
+    processor: () => processor,
     append,
     advanceTime,
     crash,
     settle,
     state: () => runner.currentState,
-    events: (type?: string) =>
-      type === undefined ? [...stream.events] : stream.events.filter((row) => row.type === type),
+    // TypeScript cannot check an implementation arrow against an overload
+    // pair, so the assertion is unavoidable. Soundness is the same claim the
+    // typed read surface makes everywhere: rows filtered to `type` carry that
+    // type's contract payload — committed rows are trusted, not re-parsed,
+    // exactly like production reads.
+    events: ((type?: string) =>
+      type === undefined
+        ? [...stream.events]
+        : stream.events.filter((row) => row.type === type)) as ProcessorHarness<
+      Contract,
+      Processor
+    >["events"],
     async play(...steps: HarnessStep<Contract>[]) {
-      for (const step of steps) {
-        if (typeof step === "function") {
-          await step();
-          await settle();
-        } else if (step[0] === "append") {
-          const [, ...events] = step;
-          await append(...events);
-        } else if (step[0] === "advanceTime") {
-          await advanceTime(step[1]);
-        } else {
-          crash();
+      for (const [index, step] of steps.entries()) {
+        const kind = typeof step === "function" ? "function" : step[0];
+        try {
+          if (typeof step === "function") {
+            await step();
+            await settle();
+          } else if (step[0] === "append") {
+            const [, ...events] = step;
+            await append(...events);
+          } else if (step[0] === "advanceTime") {
+            await advanceTime(step[1]);
+          } else {
+            crash();
+          }
+        } catch (error) {
+          throw new Error(`harness play() step ${index} (${kind}) failed`, { cause: error });
         }
       }
     },

@@ -1,6 +1,15 @@
 import { describe, expect, test } from "vitest";
 import type { AgentUiStep } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { formatElapsedSeconds, liveActivityLabel } from "./feed-format.ts";
+import { formatElapsedSeconds, formatFileSize, liveActivityLabel } from "./feed-format.ts";
+
+describe("formatFileSize", () => {
+  test("uses B / KB / MB", () => {
+    expect(formatFileSize(500)).toBe("500 B");
+    expect(formatFileSize(1024)).toBe("1 KB");
+    expect(formatFileSize(1536)).toBe("1.5 KB");
+    expect(formatFileSize(1024 * 1024)).toBe("1 MB");
+  });
+});
 
 const llm = (overrides: Partial<Extract<AgentUiStep, { kind: "llm" }>> = {}): AgentUiStep => ({
   kind: "llm",

@@ -130,9 +130,10 @@ Google accounts / GitHub installations, each at
   connected fact, arm the router subscription, claim the directory entry).
 - **Outbound calls**: the itx caller surface replays dotted paths onto real
   vendor SDK instances — a real `@slack/web-api` WebClient, the all-in-one
-  `octokit` SDK — whose transport carries a `getSecret(...)`
-  placeholder through the connection secret's `fetch()`. Full SDK surface for
-  free; tokens never leave the DO.
+  `octokit` SDK — whose transport carries a `getSecret(...)` placeholder
+  through project egress. Project policy runs first; the connection Secret DO
+  then substitutes, refreshes, pins, and audits. Full SDK surface for free;
+  tokens never leave the DO.
 - **Inbound webhooks** (`integration-webhook-api.ts` + per-provider
   handlers): a tiny chain of imperative `fetch` handlers. Each verifies
   however its provider requires (plain WebCrypto in platform code), extracts

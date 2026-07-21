@@ -158,6 +158,19 @@ describe("connectionSlackClient", () => {
       }
     },
   );
+
+  test("hand-rolled Web API failures expose Slack's structured error code", async () => {
+    mocks.primaryResult = { error: "already_reacted", ok: false };
+
+    await expect(
+      callProjectSlackWebApi({
+        body: { channel: "C1", name: "eyes", timestamp: "1700000000.000100" },
+        connection: "main",
+        method: "reactions.add",
+        projectId: "prj_1",
+      }),
+    ).rejects.toMatchObject({ slackErrorCode: "already_reacted" });
+  });
 });
 
 describe("normalizeSlackError", () => {

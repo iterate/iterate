@@ -42,11 +42,11 @@
 
 import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
-import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "./processor-contracts.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamEventBatch } from "./rpc-types.ts";
 import {
+  awaitKeepAliveBacked,
   StreamProcessor,
   type MaybePromise,
   type StreamProcessorContract,
@@ -122,11 +122,7 @@ export type ProcessorProgressStore<State> = {
 
 /**
  * Optional recovery capability. Present only for durable processors that own
- * background obligations (`runInBackground` work whose OUTCOME matters): the
- * runner throws at construction if recovery is wired but the contract's
- * `consumes` omits the core `stream/processor-revived` event
- * ({@link STREAM_PROCESSOR_REVIVED_EVENT_TYPE}), because a revival fact
- * nobody consumes recovers nothing.
+ * background obligations (`runInBackground` work whose OUTCOME matters).
  *
  * - `keepAliveWhile` parks a durable alarm ahead of in-flight work, so an
  *   incarnation that dies owing work is revived by the alarm's fire. The
@@ -134,11 +130,13 @@ export type ProcessorProgressStore<State> = {
  *   ProcessorKeepalive (stream-processor-keepalive.ts) — the runner REUSES
  *   that machinery wholesale, it never reinvents mark/backoff/quiet-clean.
  * - `appendRevived` appends the core `stream/processor-revived` fact (the
- *   payload's `processorSlug` names the revived processor) — the journaled,
- *   CONSUMED evidence that guarantees at least one delivery turn (and, since
- *   the fact is at head when delivered, one `delivery.caughtUp` reconcile)
- *   even at zero lag. It is called by the adapter's own revival pass (the
- *   keepalive's `revive` hook), not by the runner core.
+ *   payload's `processorSlug` names the revived processor) — stream evidence
+ *   that guarantees at least one delivery turn even at zero lag. Consuming the
+ *   fact is OPTIONAL: do it only when the processor reacts to the fact itself.
+ *   When unconsumed, its head-reaching frame gets the runner's eventless
+ *   `processEvent({ event: null, delivery: { caughtUp: true } })` pass, so open
+ *   obligations still recover. The adapter's own revival pass (the
+ *   keepalive's `revive` hook), not the runner core, calls it.
  * - `handleAlarm` services the durable timer (`ProcessorKeepalive.onAlarm`);
  *   the host DO multiplexes its single alarm across runners and routes fires
  *   to {@link StreamProcessorRunner.handleAlarm}, which delegates here.
@@ -162,38 +160,18 @@ type ProcessorDurability<State> = {
   recovery?: ProcessorRecovery;
 };
 
-/**
- * Where a delivery sits relative to the head the runner has OBSERVED:
- * `"catching-up"` while replaying history, `"live"` once deliveries reach the
- * observed head. A policy input, not a correctness gate — the honest framing
- * that replaces today's `checkpointOffset >= streamMaxOffset` at-head guard.
- */
-export type DeliveryPhase = "catching-up" | "live";
-
-/**
- * Honest event-time context handed to `processEvent`. Head and lag are POLICY
- * inputs (skip the stale typing indicator, debounce the status repaint), never
- * correctness — the observed head can be behind the real head the moment it
- * is read. Effect keys are minted via the processor's own
- * `idempotencyKey(key, whileProcessing?)`: bind the event for per-event
- * effects (a redelivered frame dedupes), or fold the deciding state into
- * `key` with no event bound for obligation-derived stable keys.
- */
+/** Honest delivery information handed to `processEvent`. */
 export type DeliveryContext = {
-  phase: DeliveryPhase;
-  /** The highest stream offset the runner has observed (>= this event's). */
-  observedHeadOffset: number;
   /**
-   * The at-head reconciliation signal: the scan has reached the highest raw
-   * stream offset the runner has observed, so `state` is the complete fold it
-   * has seen. It is true on the last consumed event of a head-reaching frame.
-   * If that frame contains no consumed event, the runner makes one eventless
-   * `processEvent` call (`event: null`) with this flag instead; an unconsumed
-   * tail must not strand obligations on an otherwise quiet stream.
+   * The at-head signal: the scan has reached the highest raw stream offset
+   * the runner has observed, so `state` is the complete reduction of
+   * everything it has seen. It is true on the last consumed event of a
+   * head-reaching frame. If that frame contains no consumed event, the runner
+   * makes one eventless `processEvent` call (`event: null`) with this flag
+   * instead; an unconsumed tail must not strand obligations on an otherwise
+   * quiet stream.
    */
   caughtUp: boolean;
-  /** The processing cursor's current fencing token (see {@link ProcessingProgress}). */
-  cursorRevision: number;
 };
 
 /**
@@ -311,25 +289,6 @@ export class StreamProcessorRunner<
     this.keepAlive = args.keepAlive;
     this.now = args.now ?? (() => Date.now());
     this.readPageSize = args.readPageSize ?? 500;
-
-    if (this.durability?.recovery !== undefined) {
-      // A revival fact nobody consumes recovers nothing: recovery's whole
-      // mechanism is "append the core `stream/processor-revived` fact, let
-      // the ordinary delivery turn run the processor's own reconciliation
-      // handlers". Exact identity, not shape: consuming some namespaced
-      // `<ns>/revived` event recovers nothing — the ONE core fact the
-      // recovery adapter appends must be consumed.
-      const consumes = this.driver.contract.consumes;
-      const consumesRevived =
-        consumes.includes("*") || consumes.includes(STREAM_PROCESSOR_REVIVED_EVENT_TYPE);
-      if (!consumesRevived) {
-        throw new Error(
-          `stream processor "${this.driver.contract.slug}" wires recovery but the contract does ` +
-            `not consume the revival fact "${STREAM_PROCESSOR_REVIVED_EVENT_TYPE}" — a revival ` +
-            `fact nobody consumes recovers nothing. Add that exact event type to the contract's consumes.`,
-        );
-      }
-    }
   }
 
   /**
@@ -635,10 +594,7 @@ export class StreamProcessorRunner<
           const caughtUp = batchReachesHead && event.offset === lastDeliveredOffset;
           if (caughtUp) firedCaughtUp = true;
           const delivery: DeliveryContext = {
-            phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
-            observedHeadOffset,
             caughtUp,
-            cursorRevision: ctx.revision,
           };
           // FIFO blocker chain: each registration starts only after the
           // previous one settles, so a later registration in the same
@@ -656,7 +612,15 @@ export class StreamProcessorRunner<
             state: reduction.state,
             delivery,
             blockProcessorWhile: (work) => {
-              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work, true));
+              const attempt = eventChain.then(() =>
+                this.#keepAliveBackedWork(work).catch((error: unknown) => {
+                  console.error(
+                    `stream processor blocked work failed (${this.driver.contract.slug})`,
+                    error,
+                  );
+                  throw error;
+                }),
+              );
               eventChain = attempt;
               startedBlockers.push(attempt);
             },
@@ -692,10 +656,7 @@ export class StreamProcessorRunner<
       // passes. Its blockers are awaited before the deferred frame-end commit.
       if (batchReachesHead && !firedCaughtUp) {
         const delivery: DeliveryContext = {
-          phase: "live",
-          observedHeadOffset,
           caughtUp: true,
-          cursorRevision: ctx.revision,
         };
         // Same FIFO blocker chain as the per-event dispatch; its work is
         // awaited before the deferred frame-end commit.
@@ -706,7 +667,15 @@ export class StreamProcessorRunner<
           state: ctx.state,
           delivery,
           blockProcessorWhile: (work) => {
-            const attempt = passChain.then(() => this.#keepAliveBackedWork(work, true));
+            const attempt = passChain.then(() =>
+              this.#keepAliveBackedWork(work).catch((error: unknown) => {
+                console.error(
+                  `stream processor blocked work failed (${this.driver.contract.slug})`,
+                  error,
+                );
+                throw error;
+              }),
+            );
             passChain = attempt;
             startedBlockers.push(attempt);
           },
@@ -1017,32 +986,11 @@ export class StreamProcessorRunner<
    * Route registered work through the recovery adapter's keepalive when
    * present (both `blockProcessorWhile` and `runInBackground` ride it — "the
    * DO died owing work" must equal "the alarm was armed"), else through the
-   * plain `keepAlive` hook, else run directly. Same fire-and-forget→promise
-   * bridge as the legacy `#runKeepAliveBackedWork`.
+   * plain `keepAlive` hook, else run directly.
    */
-  async #keepAliveBackedWork(work: () => Promise<unknown>, isBlocked = false): Promise<unknown> {
+  async #keepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
     const keepAliveWhile = this.durability?.recovery?.keepAliveWhile ?? this.keepAlive;
-    try {
-      if (keepAliveWhile === undefined) return await work();
-      return await new Promise<unknown>((resolve, reject) => {
-        keepAliveWhile(async () => {
-          try {
-            const result = await work();
-            resolve(result);
-            return result;
-          } catch (error) {
-            reject(error);
-            throw error;
-          }
-        });
-      });
-    } catch (error) {
-      // The frame still fails and retries — this log adds context, not handling.
-      if (isBlocked) {
-        console.error(`stream processor blocked work failed (${this.driver.contract.slug})`, error);
-      }
-      throw error;
-    }
+    return await awaitKeepAliveBacked(keepAliveWhile, work);
   }
 
   /** Serialize frames + self-pulls; the chain swallows each entry's

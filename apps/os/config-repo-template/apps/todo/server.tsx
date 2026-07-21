@@ -1,8 +1,27 @@
-import { DurableObject } from "cloudflare:workers";
+import {
+  LiveState,
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+  type LiveStateRpc,
+} from "iterate/sdk/capnweb";
+import { IterateDurableObject } from "iterate/sdk";
 
-export class TodoApp extends DurableObject<unknown> {
-  constructor(ctx: DurableObjectState, env: unknown) {
-    super(ctx, env);
+export type Todo = {
+  createdAt: string;
+  done: boolean;
+  id: string;
+  title: string;
+};
+
+type TodoListState = { todos: Todo[] };
+
+/** One createApp Durable Object owns the page, API, persistence, and live value. */
+export class TodoApp extends IterateDurableObject {
+  readonly #live: LiveState<TodoListState>;
+
+  constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {
+    super(...args);
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS todos (
         id TEXT PRIMARY KEY,
@@ -11,64 +30,54 @@ export class TodoApp extends DurableObject<unknown> {
         created_at TEXT NOT NULL
       )
     `);
+    this.#live = new LiveState<TodoListState>({ todos: this.#load() });
+  }
+
+  #load(): Todo[] {
+    return this.ctx.storage.sql
+      .exec<{ created_at: string; done: number; id: string; title: string }>(
+        "SELECT id, title, done, created_at FROM todos ORDER BY created_at, id",
+      )
+      .toArray()
+      .map((row) => ({
+        createdAt: row.created_at,
+        done: row.done !== 0,
+        id: row.id,
+        title: row.title,
+      }));
+  }
+
+  #refresh(): void {
+    this.#live.setState({ todos: this.#load() });
+  }
+
+  add(title: string): void {
+    const trimmed = title.trim().slice(0, 200);
+    if (trimmed.length === 0) return;
+    this.ctx.storage.sql.exec(
+      "INSERT INTO todos (id, title, done, created_at) VALUES (?, ?, 0, ?)",
+      crypto.randomUUID(),
+      trimmed,
+      new Date().toISOString(),
+    );
+    this.#refresh();
+  }
+
+  setDone(id: string, done: boolean): void {
+    this.ctx.storage.sql.exec("UPDATE todos SET done = ? WHERE id = ?", done ? 1 : 0, id);
+    this.#refresh();
+  }
+
+  remove(id: string): void {
+    this.ctx.storage.sql.exec("DELETE FROM todos WHERE id = ?", id);
+    this.#refresh();
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api/todos") {
-      if (request.method === "GET") {
-        const todos = this.ctx.storage.sql
-          .exec<{ created_at: string; done: number; id: string; title: string }>(
-            "SELECT id, title, done, created_at FROM todos ORDER BY created_at, id",
-          )
-          .toArray()
-          .map((todo) => ({
-            createdAt: todo.created_at,
-            done: todo.done !== 0,
-            id: todo.id,
-            title: todo.title,
-          }));
-        return Response.json(todos);
-      }
-      if (request.method === "POST") {
-        const body = await request.json<{ title?: unknown }>();
-        const title = typeof body.title === "string" ? body.title.trim().slice(0, 200) : "";
-        if (title.length === 0) return new Response("title is required", { status: 400 });
-        const todo = {
-          createdAt: new Date().toISOString(),
-          done: false,
-          id: crypto.randomUUID(),
-          title,
-        };
-        this.ctx.storage.sql.exec(
-          "INSERT INTO todos (id, title, done, created_at) VALUES (?, ?, 0, ?)",
-          todo.id,
-          todo.title,
-          todo.createdAt,
-        );
-        return Response.json(todo, { status: 201 });
-      }
-      return new Response("method not allowed", { status: 405 });
+    if (url.pathname === "/api") {
+      return newWorkersWebSocketRpcResponse(request, new TodoApi(this, this.#live));
     }
-
-    const match = /^\/api\/todos\/([^/]+)$/.exec(url.pathname);
-    if (match !== null) {
-      const id = match[1] ?? "";
-      if (request.method === "PATCH") {
-        const body = await request.json<{ done?: unknown }>();
-        if (typeof body.done !== "boolean") {
-          return new Response("done must be a boolean", { status: 400 });
-        }
-        this.ctx.storage.sql.exec("UPDATE todos SET done = ? WHERE id = ?", body.done ? 1 : 0, id);
-        return new Response(null, { status: 204 });
-      }
-      if (request.method === "DELETE") {
-        this.ctx.storage.sql.exec("DELETE FROM todos WHERE id = ?", id);
-        return new Response(null, { status: 204 });
-      }
-      return new Response("method not allowed", { status: 405 });
-    }
-
     if (request.method !== "GET" || url.pathname !== "/") {
       return new Response("not found", { status: 404 });
     }
@@ -102,5 +111,33 @@ export class TodoApp extends DurableObject<unknown> {
         },
       },
     );
+  }
+}
+
+export class TodoApi extends RpcTarget {
+  readonly #liveState: LiveStateRpcTarget<TodoListState>;
+
+  constructor(
+    private readonly app: TodoApp,
+    live: LiveState<TodoListState>,
+  ) {
+    super();
+    this.#liveState = new LiveStateRpcTarget(live);
+  }
+
+  get liveState(): LiveStateRpc<TodoListState> {
+    return this.#liveState;
+  }
+
+  async add(title: string): Promise<void> {
+    this.app.add(title);
+  }
+
+  async setDone(id: string, done: boolean): Promise<void> {
+    this.app.setDone(id, done);
+  }
+
+  async remove(id: string): Promise<void> {
+    this.app.remove(id);
   }
 }

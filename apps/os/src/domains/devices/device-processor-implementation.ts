@@ -1,4 +1,4 @@
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import {
   DeviceProcessorContract,
@@ -55,9 +55,9 @@ import {
  *
  * Recovery is the standard shape: the DO registers this processor with
  * recovery, so an incarnation that dies owing background work gets a
- * `stream/processor-revived` fact whose ordinary at-head delivery re-runs the
- * state-derived pass — orphaned attempts settle, still-runnable requests
- * start, the receipt alarm re-arms.
+ * `stream/processor-revived` fact whose wake produces the eventless at-head
+ * pass — orphaned attempts settle, still-runnable requests start, the receipt
+ * alarm re-arms.
  */
 export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, DeviceProcessorDeps> {
   readonly contract = DeviceProcessorContract;
@@ -123,8 +123,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         );
         break;
       // notification-requested / attempt-started / ticket-observed / settled /
-      // opened / processor-revived: no per-event effect — they matter through
-      // the reduced state below.
+      // opened: no per-event effect — they matter through the reduced state
+      // below.
     }
 
     // ---------------------------------------- state-derived side effects
@@ -132,7 +132,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // head — behind it the state is partial and settlements may sit in pages
     // not yet replayed.
     if (!delivery.caughtUp || state.birthCertificate === null) return;
-    const { pushTokenSecretPath, pushTokenSecretUpdatedOffset } = state;
+    const { pushTokenSecret } = state;
 
     // Settle what can no longer be attempted. Whether an orphaned `started`
     // attempt fails or re-drives is a domain decision: pushes fail-uncertain,
@@ -143,7 +143,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       const requestOffset = Number(offset);
       if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
         settlements.push({ requestOffset, outcome: { kind: "expired" } });
-      } else if (notification.status === "requested" && pushTokenSecretPath === null) {
+      } else if (notification.status === "requested" && pushTokenSecret === null) {
         settlements.push({ requestOffset, outcome: { kind: "device-unavailable" } });
       } else if (notification.status === "started" && !this.#liveSendAttempts.has(requestOffset)) {
         settlements.push({
@@ -194,12 +194,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // in this incarnation is already driving. The live-set entry is taken
     // SYNCHRONOUSLY, before any await, so the same pass never classifies its
     // own attempt as orphaned.
-    if (
-      pushTokenSecretPath === null ||
-      pushTokenSecretUpdatedOffset === null ||
-      this.projectId === null
-    )
-      return;
+    if (pushTokenSecret === null || this.projectId === null) return;
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
       if (
@@ -213,8 +208,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       runInBackground(() =>
         this.#sendNotification({
           notification,
-          pushTokenSecretPath,
-          pushTokenSecretUpdatedOffset,
+          pushTokenSecretPath: pushTokenSecret.path,
+          pushTokenSecretUpdatedOffset: pushTokenSecret.updatedOffset,
           requestOffset,
         }),
       );
@@ -232,8 +227,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         return {
           ...state,
           birthCertificate: event.payload,
-          pushTokenSecretPath: event.payload.config.pushTokenSecretPath,
-          pushTokenSecretUpdatedOffset: event.payload.config.pushTokenSecretUpdatedOffset,
+          pushTokenSecret: {
+            path: event.payload.config.pushTokenSecretPath,
+            updatedOffset: event.payload.config.pushTokenSecretUpdatedOffset,
+          },
           tokenUpdatedOffset: event.offset,
         };
       case "events.iterate.com/device/push-token-updated":
@@ -255,8 +252,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                     pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
                   },
                 },
-          pushTokenSecretPath: event.payload.pushTokenSecretPath,
-          pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
+          pushTokenSecret: {
+            path: event.payload.pushTokenSecretPath,
+            updatedOffset: event.payload.pushTokenSecretUpdatedOffset,
+          },
           // Re-enrollment: a fresh credential un-revokes the device.
           revokedAt: null,
           tokenUpdatedOffset: event.offset,
@@ -264,8 +263,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/revoked":
         return {
           ...state,
-          pushTokenSecretPath: null,
-          pushTokenSecretUpdatedOffset: null,
+          pushTokenSecret: null,
           revokedAt: event.createdAt,
         };
       case "events.iterate.com/device/notification-requested":
@@ -322,7 +320,6 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/notification-opened":
         return { ...state, lastNotificationOpenedAt: event.payload.openedAt };
       default:
-        // stream/processor-revived: consumed only for its delivery turn.
         return state;
     }
   }
@@ -390,24 +387,23 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // with: a rotation that landed meanwhile makes it a no-op, and only a
     // WINNING clear may revoke the device.
     const pushTokenInvalidated =
-      pushTokenInvalid && state.pushTokenSecretPath !== null
+      pushTokenInvalid && state.pushTokenSecret !== null
         ? await this.deps.clearPushToken({
-            pushTokenSecretPath: state.pushTokenSecretPath,
-            pushTokenSecretUpdatedOffset: state.pushTokenSecretUpdatedOffset!,
+            pushTokenSecretPath: state.pushTokenSecret.path,
+            pushTokenSecretUpdatedOffset: state.pushTokenSecret.updatedOffset,
           })
         : false;
-    if (pushTokenInvalid || settlements.length > 0) {
-      await this.append(
-        ...(pushTokenInvalidated
-          ? [
-              {
-                type: "events.iterate.com/device/revoked" as const,
-                idempotencyKey: this.idempotencyKey("push-token-invalid"),
-                payload: { reason: "push-token-invalid" as const },
-              },
-            ]
-          : []),
-        ...settlements.map(({ outcome, requestOffset }) => ({
+    if (pushTokenInvalidated) {
+      await this.append({
+        type: "events.iterate.com/device/revoked",
+        idempotencyKey: this.idempotencyKey("push-token-invalid"),
+        payload: { reason: "push-token-invalid" },
+      });
+    }
+    if (settlements.length > 0) {
+      await this.#appendUnlessLostIdempotencyRace(
+        (...events) => this.append(...events),
+        settlements.map(({ outcome, requestOffset }) => ({
           type: "events.iterate.com/device/notification-settled" as const,
           idempotencyKey: this.idempotencyKey(`notification-settled@${requestOffset}`),
           payload: { requestOffset, outcome },
@@ -460,28 +456,29 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                 pushTokenSecretUpdatedOffset: input.pushTokenSecretUpdatedOffset,
               })
             : false;
-        await this.append(
-          ...(pushTokenInvalidated
-            ? [
-                {
-                  type: "events.iterate.com/device/revoked" as const,
-                  idempotencyKey: this.idempotencyKey("push-token-invalid"),
-                  payload: { reason: "push-token-invalid" as const },
+        if (pushTokenInvalidated) {
+          await this.append({
+            type: "events.iterate.com/device/revoked",
+            idempotencyKey: this.idempotencyKey("push-token-invalid"),
+            payload: { reason: "push-token-invalid" },
+          });
+        }
+        await this.#appendUnlessLostIdempotencyRace(
+          (...events) => this.append(...events),
+          [
+            {
+              type: "events.iterate.com/device/notification-settled",
+              idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
+              payload: {
+                requestOffset: input.requestOffset,
+                outcome: {
+                  kind: "rejected-by-expo",
+                  error: ticket.error,
+                  message: ticket.message,
                 },
-              ]
-            : []),
-          {
-            type: "events.iterate.com/device/notification-settled",
-            idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
-            payload: {
-              requestOffset: input.requestOffset,
-              outcome: {
-                kind: "rejected-by-expo",
-                error: ticket.error,
-                message: ticket.message,
               },
             },
-          },
+          ],
         );
         return;
       }
@@ -496,21 +493,25 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   }
 
   /**
-   * Append a batch whose idempotency keys may race concurrent writers: every
-   * writer of `notification-settled@<offset>` (expiry sweep, send rejection,
-   * receipt check) races every other. The stream rejects a same-key append
-   * with a different body; the FIRST writer's settlement stands, and losing
-   * the race is success — the obligation is settled either way.
+   * Append settlements whose idempotency keys may race concurrent writers:
+   * every writer of `notification-settled@<offset>` (expiry sweep, send
+   * rejection, receipt check) races every other. The stream rejects a
+   * same-key append with a different body; the FIRST writer's settlement
+   * stands, and losing the race is success — the obligation is settled
+   * either way. One event per append, NOT one batch: each requestOffset
+   * races independently, and a batch is atomic — one lost race would
+   * silently drop every sibling settlement in it.
    */
   async #appendUnlessLostIdempotencyRace(
     append: ProcessEventArgs<DeviceProcessorContract>["append"],
     events: EmittedInput<DeviceProcessorContract>[],
   ): Promise<void> {
-    try {
-      await append(...events);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+    for (const event of events) {
+      try {
+        await append(event);
+      } catch (error) {
+        if (!isIdempotencyConflict(error)) throw error;
+      }
     }
   }
 }

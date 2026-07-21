@@ -147,6 +147,14 @@ async function forEachWithConcurrency<T>(
  * must never start while Cloudflare still reports a reference to a namespace
  * it is about to retire.
  */
+/** The preview-slot family a worker name belongs to (`os-preview-16` and
+ * `auth-preview-16-typechecker` are both slot 16), or null for every
+ * non-slot name (prd, dev, personal, and unknown workers). */
+export function previewSlotOfWorkerName(workerName: string): number | null {
+  const match = /-preview-(\d+)(?:-|$)/.exec(workerName);
+  return match ? Number(match[1]) : null;
+}
+
 export async function detachExternalDurableObjectBindings(input: {
   ctx: CfContext;
   targetWorkerName: string;
@@ -155,9 +163,20 @@ export async function detachExternalDurableObjectBindings(input: {
 }): Promise<{ workerName: string; removedBindingNames: string[] }[]> {
   const namespaceIds = new Set(input.targetNamespaceIds);
   const detached: { workerName: string; removedBindingNames: string[] }[] = [];
-  const candidates = input.workerNames.filter(
-    (workerName) => workerName !== input.targetWorkerName,
-  );
+  // When the target belongs to a preview slot, workers that clearly belong
+  // to a DIFFERENT slot are skipped: a cross-slot Durable Object binding
+  // would be a platform bug, and settings-scanning every slot's workers is
+  // what exhausts the account's API quota (dozens of GETs per erase, every
+  // preview lane, concurrently — the 429 storms that also starve prd
+  // deploys, since Cloudflare rate-limits per API user). Non-slot names
+  // (prd, dev, personal, unknown) are still swept.
+  const targetSlot = previewSlotOfWorkerName(input.targetWorkerName);
+  const candidates = input.workerNames.filter((workerName) => {
+    if (workerName === input.targetWorkerName) return false;
+    if (targetSlot === null) return true;
+    const slot = previewSlotOfWorkerName(workerName);
+    return slot === null || slot === targetSlot;
+  });
 
   await forEachWithConcurrency(candidates, SETTINGS_SCAN_CONCURRENCY, async (workerName) => {
     const path = `/workers/scripts/${encodeURIComponent(workerName)}/settings`;

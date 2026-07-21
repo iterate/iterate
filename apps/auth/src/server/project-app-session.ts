@@ -10,8 +10,14 @@ const SESSION_TTL_SECONDS = 15 * 60;
 const ProjectAppSessionClaims = z
   .object({
     audience: z.string(),
+    // Display identity for the app behind the proxy (presence, authorship).
+    // Optional: pre-rollout tokens without them stay valid, and they carry
+    // no authority — userId is the principal; these are what to call it.
+    email: z.string().trim().min(1).max(320).optional(),
     exp: z.number().int(),
     iat: z.number().int(),
+    image: z.string().trim().min(1).max(2048).optional(),
+    name: z.string().trim().min(1).max(256).optional(),
     projectId: z.string().trim().min(1).max(256),
     type: z.literal("project-app-session"),
     userId: z.string().trim().min(1).max(256),
@@ -42,6 +48,9 @@ export async function mintProjectAppSession(
     token: await signJWT(
       {
         audience: input.audience,
+        ...(input.email === undefined ? {} : { email: input.email }),
+        ...(input.image === undefined ? {} : { image: input.image }),
+        ...(input.name === undefined ? {} : { name: input.name }),
         projectId: input.projectId,
         type: "project-app-session",
         userId: input.userId,
@@ -84,9 +93,18 @@ export async function validateProjectAppSession(
 function parseMintInput(input: MintProjectAppSessionInput) {
   return {
     audience: parseAudience(input.audience),
+    email: optionalDisplayField(input.email, 320),
+    image: optionalDisplayField(input.image, 2048),
+    name: optionalDisplayField(input.name, 256),
     projectId: z.string().trim().min(1).max(256).parse(input.projectId),
     userId: z.string().trim().min(1).max(256).parse(input.userId),
   };
+}
+
+/** Empty or absent display fields stay out of the claims entirely. */
+function optionalDisplayField(value: string | undefined, maxLength: number): string | undefined {
+  const trimmed = z.string().max(maxLength).optional().parse(value)?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
 }
 
 function parseValidateInput(input: ValidateProjectAppSessionInput) {

@@ -79,7 +79,10 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       // Answer the building/failed cases HERE rather than relying on the
       // error name surviving the Durable Object fetch hop back to the
       // dispatching entrypoint — same pages every fetch-lane hop serves.
-      const buildStatus = workerBuildStatus(error);
+      const buildStatus = workerBuildStatus(
+        error,
+        taken.request.headers.get("x-iterate-url-prefix") ?? "",
+      );
       if (buildStatus !== null) return buildStatus.response;
       throw error;
     }
