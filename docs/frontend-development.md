@@ -12,13 +12,13 @@ travel over the tab's single `/api` WebSocket and the server answers or pushes.
 The client lives in the published **`iterate` package** and is layered so every
 runtime shares one implementation:
 
-| Entry                      | What it is                                                                                                                                                                                |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/react`            | The thin ITX hooks below. **Renderer-agnostic** — the same module runs under react-dom (this dashboard), `@opentui/react` (the chat TUI), and React Native.                               |
-| `iterate/client`           | The framework-free ITX layer under them: the one-socket session keeper and transport-error classification. No React anywhere.                                                             |
-| `iterate/live-state`       | Project-independent snapshot+patch protocol, client store, and server engine over Cap'n Web. [Its README](../packages/iterate/src/live-state/README.md) documents the standalone surface. |
-| `iterate/live-state/react` | Generic `CapnWebProvider`, `useCapnWebRoot`, and `useLiveState`; ITX's `ProjectScope` and live-state hooks are deliberately tiny adapters over this entry.                                |
-| `iterate/node`             | The node one-shot dial (`ws`, custom headers, frame observer) for scripts and e2e — `using`-scoped, no keeper.                                                                            |
+| Entry                       | What it is                                                                                                                                                                                            |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk/itx/react`     | The thin ITX hooks below. **Renderer-agnostic** — the same module runs under react-dom (this dashboard), `@opentui/react` (the chat TUI), and React Native.                                           |
+| `iterate/client`            | The framework-free ITX layer under them: the one-socket session keeper and transport-error classification. No React anywhere.                                                                         |
+| `iterate/sdk/capnweb`       | Project-independent snapshot+patch protocol, client store, and server engine over Cap'n Web. [Its README](../packages/iterate/src/sdk/capnweb/live-state/README.md) documents the standalone surface. |
+| `iterate/sdk/capnweb/react` | Generic `CapnWebProvider`, `useCapnWebRoot`, and `useLiveState`; ITX's `ProjectScope` and live-state hooks are deliberately tiny adapters over this entry.                                            |
+| `iterate/node`              | The node one-shot dial (`ws`, custom headers, frame observer) for scripts and e2e — `using`-scoped, no keeper.                                                                                        |
 
 In a browser the keeper needs zero configuration (it dials the page's `/api`
 with cookie auth); non-browser consumers point it at a deployment with
@@ -88,8 +88,8 @@ React owns local interaction):
 ## The hooks
 
 Everything a component needs comes from one import,
-`import { … } from "iterate/react"`
-([`packages/iterate/src/itx/itx-react.ts`](../packages/iterate/src/itx/itx-react.ts)).
+`import { … } from "iterate/sdk/itx/react"`
+([`packages/iterate/src/sdk/itx/react.ts`](../packages/iterate/src/sdk/itx/react.ts)).
 
 ### Get a handle
 
@@ -226,7 +226,7 @@ state. A `slug` argument also accepts a `prj_…` id.
 Mutations have no hook — you call the capability on the handle
 (`itx.chat.sendMessage(text)`), usually inside a `useMutation`.
 
-That's the whole surface — one entry (`iterate/react`), no others. The everyday
+That's the whole surface — one entry (`iterate/sdk/itx/react`), no others. The everyday
 four are `useIterateSession` / `useItx` / `useItxQuery` / `useLiveState`; the
 rest are imperative siblings, the mount, the one escape hatch, and types. The
 chat TUI consumes the SAME entry under OpenTUI — its data layer is

@@ -10,7 +10,7 @@ import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
-import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import type { Stream } from "../../itx-api.generated.ts";

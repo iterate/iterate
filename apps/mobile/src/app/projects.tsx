@@ -7,7 +7,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import type { ProjectListEntry } from "iterate/react";
+import type { ProjectListEntry } from "iterate/sdk/itx/react";
 import { SignInRequiredError, signOut } from "../lib/auth.ts";
 import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";

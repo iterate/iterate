@@ -1,4 +1,4 @@
-// `iterate/live-state` — live state end to end: the snapshot+patch wire
+// `iterate/sdk/capnweb` — live state end to end: the snapshot+patch wire
 // protocol, the structural diff that produces patches, the client store that
 // reassembles them, and the SERVER engine (`LiveState`) that holds a value
 // and pushes minimal diffs to retained RPC subscribers. No socket, no keeper

@@ -5,7 +5,6 @@
   "type": "module",
   "description": "Iterate project worker and bundled full-stack apps.",
   "dependencies": {
-    "@iterate-com/capnweb": "0.10.0",
     "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
     "react": "19.2.4",
     "react-dom": "19.2.4",

@@ -27,7 +27,7 @@
 // `retainProcessEventBatch` below and the wire tests in
 // stream-wire.e2e.test.ts.
 
-import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/live-state";
+import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/sdk/capnweb";
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
@@ -130,7 +130,7 @@ export function retainProcessEventBatch(
   } = {},
 ): RetainedProcessEventBatch {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
-  // the defensive onRpcBroken wiring — see iterate/live-state/retain.ts for why that
+  // the defensive onRpcBroken wiring — see iterate/sdk/capnweb/retain.ts for why that
   // wiring is subtle); this layer adds only the pump's delivery semantics.
   const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;

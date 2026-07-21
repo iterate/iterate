@@ -12,10 +12,10 @@ library attempts to install and bundle them.
 `apps/todo` and `apps/guestbook` are deliberately basic browser examples.
 Each contains only `server.tsx` and `client.tsx`: the server exports a
 Durable Object and the client becomes a separately served browser module. JSX is
-compiled by `createApp`; React, React DOM, and Cap'n Web are ordinary
-`package.json` dependencies. The same is true of `iterate/live-state` and
-`iterate/live-state/react`; preview builds replace the declared `iterate` spec
-with that deployment's exact pkg.pr.new artifact before bundling. There is no
+compiled by `createApp`; React and React DOM are ordinary `package.json`
+dependencies, while Cap'n Web and LiveState come from `iterate/sdk/capnweb`
+and `iterate/sdk/capnweb/react`. Preview builds replace the declared `iterate`
+spec with that deployment's exact pkg.pr.new artifact before bundling. There is no
 app-local Vite config, router generator, or framework adapter. Iterate injects
 its small status overlay into the HTML response in production.
 Their two-file layout is only an example: app refs may choose arbitrary server
@@ -63,9 +63,9 @@ It receives only `AppSession`, never the project-wide `itx` capability. Add RPC
 methods and getters to `AppSession` to define exactly what the browser may do.
 
 `LiveState` and its read-only `LiveStateRpcTarget` come from the same
-`iterate/live-state` module first-party apps use, while Cap'n Web's `RpcTarget`
-and `newWorkersWebSocketRpcResponse` come directly from
-`@iterate-com/capnweb`. `InternalApp` uses them to push its event projection
+`iterate/sdk/capnweb` module first-party apps use. That same entry re-exports
+Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`, guaranteeing one
+class identity across app and SDK code. `InternalApp` uses them to push its event projection
 with the same snapshot-and-patch implementation. The explicit classes are
 intentional: there is no
 `authenticatedApp` wrapper hiding where authentication happens or which

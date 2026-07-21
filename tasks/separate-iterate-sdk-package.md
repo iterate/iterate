@@ -13,7 +13,7 @@ tags: [iterate-package, sdk, cli, userspace-workers]
 `packages/iterate` is currently both the published SDK and the installed
 `iterate` CLI. That makes every package consumer inherit one package-wide
 runtime dependency graph even when it imports a narrow SDK subpath such as
-`iterate/live-state/react`.
+`iterate/sdk/capnweb/react`.
 
 This is particularly expensive for userspace apps. The dynamic worker builder
 installs a package and all of its declared runtime dependencies before esbuild
@@ -35,7 +35,7 @@ simple userspace import experience.
 Seeded apps should still be able to write imports such as:
 
 ```ts
-import { CapnWebProvider, useLiveState } from "iterate/live-state/react";
+import { CapnWebProvider, useLiveState } from "iterate/sdk/capnweb/react";
 import { StreamProcessor } from "iterate/processors";
 ```
 
@@ -80,7 +80,7 @@ select the exact pkg.pr.new artifact for a preview PR head.
 - [ ] The guestbook and todo templates consume the published SDK through their
       existing `iterate/...` imports with no virtual-module copies or CDN
       imports.
-- [ ] `iterate/live-state/react` supplies the same generic provider/hook used
+- [ ] `iterate/sdk/capnweb/react` supplies the same generic provider/hook used
       by `apps/os`, including the reconnectable `makeConnection` path and the
       explicit `{ root }` override.
 - [ ] Processor and Cloudflare worker exports remain available from the SDK

@@ -11,7 +11,7 @@
 // the second real caller (not a premature one).
 
 import type { RpcStub } from "capnweb";
-import type { Stream, StreamEvent } from "iterate/react";
+import type { Stream, StreamEvent } from "iterate/sdk/itx/react";
 import {
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,

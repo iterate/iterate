@@ -5,7 +5,7 @@ import { ArrowUpIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/react";
+import { connectItx } from "iterate/sdk/itx/react";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
   // Not a stream view (a centered composer), so no streamBreadcrumb: the

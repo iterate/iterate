@@ -71,7 +71,7 @@ export interface StreamProcessorRpc<State = unknown> {
  * Live handle for one live-state subscription. `ping()` reports liveness (and
  * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
  */
-export type { LiveStateRpc, LiveStateSubscriptionHandle } from "../live-state/types.ts";
+export type { LiveStateRpc, LiveStateSubscriptionHandle } from "../sdk/capnweb/live-state/types.ts";
 
 /**
  * A node's live state — a source-agnostic reactive value. `get()` reads it once;

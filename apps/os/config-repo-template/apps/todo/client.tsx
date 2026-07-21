@@ -1,20 +1,11 @@
 /**
  * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.
  */
-import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "iterate/sdk/capnweb";
 import React, { type FormEvent, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { LiveStateRpc } from "iterate/live-state";
-import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/live-state/react";
-
-type TodoApi = {
-  liveState: LiveStateRpc<{
-    todos: Array<{ createdAt: string; done: boolean; id: string; title: string }>;
-  }>;
-  add(title: string): Promise<void>;
-  setDone(id: string, done: boolean): Promise<void>;
-  remove(id: string): Promise<void>;
-};
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/sdk/capnweb/react";
+import type { TodoApi } from "./server.tsx";
 
 function makeConnection() {
   const endpoint = new URL("/api", window.location.href);

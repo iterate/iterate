@@ -76,10 +76,10 @@ export default defineConfig([
     // rolldown-plugin-dts); declarations come from `tsc -p tsconfig.sdk.json`.
     entry: {
       client: "src/client.ts",
-      "live-state": "src/live-state/index.ts",
-      "live-state-react": "src/live-state/react.tsx",
       node: "src/node.ts",
-      react: "src/react.ts",
+      "sdk/capnweb": "src/sdk/capnweb/index.ts",
+      "sdk/capnweb/react": "src/sdk/capnweb/react.tsx",
+      "sdk/itx/react": "src/sdk/itx/react.ts",
     },
     format: "esm",
     dts: false,

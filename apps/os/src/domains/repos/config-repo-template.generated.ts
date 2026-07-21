@@ -31,9 +31,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "attempts to install dependencies declared in `package.json`. The platform's\n" +
       "capability types and worker base classes come from the `iterate` package —\n" +
       "`import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from\n" +
-      "\"iterate/sdk\"`. It's a devDependency here: the platform supplies the runtime\n" +
-      "`iterate/*` subpaths and `@iterate-com/capnweb` to ordinary worker builds, so\n" +
-      "`npm install` is only for local typechecking and editor support.\n" +
+      "\"iterate/sdk\"`. `iterate` is an ordinary runtime dependency: the platform pins\n" +
+      "it to the deployment's immutable SDK build, and worker-bundler installs and\n" +
+      "bundles the same package graph—including Iterate's one Cap'n Web copy—used by\n" +
+      "local typechecking.\n" +
       "\n" +
       "The root project worker and its in-file examples extend one of the two SDK\n" +
       "base classes: `IterateWorkerEntrypoint` (stateless) or\n" +
@@ -75,10 +76,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app\n" +
       "shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per\n" +
-      "app. The client entry is served separately and imports React, React DOM, and\n" +
-      "Cap'n Web as ordinary package dependencies. `iterate/live-state` and\n" +
-      "`iterate/live-state/react` resolve from the ordinary `iterate` dependency too;\n" +
-      "preview builds pin it to that deployment's exact pkg.pr.new artifact.\n" +
+      "app. The client entry is served separately and imports React and React DOM as\n" +
+      "ordinary package dependencies; Cap'n Web and LiveState come through\n" +
+      "`iterate/sdk/capnweb` and `iterate/sdk/capnweb/react`. Preview builds pin the\n" +
+      "single `iterate` dependency to that deployment's exact pkg.pr.new artifact.\n" +
       "This is an example, not a platform file-layout rule. The apps deliberately\n" +
       "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
       "can inject the small Iterate status overlay in the corner.\n" +
@@ -152,10 +153,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`apps/todo` and `apps/guestbook` are deliberately basic browser examples.\n" +
       "Each contains only `server.tsx` and `client.tsx`: the server exports a\n" +
       "Durable Object and the client becomes a separately served browser module. JSX is\n" +
-      "compiled by `createApp`; React, React DOM, and Cap'n Web are ordinary\n" +
-      "`package.json` dependencies. The same is true of `iterate/live-state` and\n" +
-      "`iterate/live-state/react`; preview builds replace the declared `iterate` spec\n" +
-      "with that deployment's exact pkg.pr.new artifact before bundling. There is no\n" +
+      "compiled by `createApp`; React and React DOM are ordinary `package.json`\n" +
+      "dependencies, while Cap'n Web and LiveState come from `iterate/sdk/capnweb`\n" +
+      "and `iterate/sdk/capnweb/react`. Preview builds replace the declared `iterate`\n" +
+      "spec with that deployment's exact pkg.pr.new artifact before bundling. There is no\n" +
       "app-local Vite config, router generator, or framework adapter. Iterate injects\n" +
       "its small status overlay into the HTML response in production.\n" +
       "Their two-file layout is only an example: app refs may choose arbitrary server\n" +
@@ -203,9 +204,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "methods and getters to `AppSession` to define exactly what the browser may do.\n" +
       "\n" +
       "`LiveState` and its read-only `LiveStateRpcTarget` come from the same\n" +
-      "`iterate/live-state` module first-party apps use, while Cap'n Web's `RpcTarget`\n" +
-      "and `newWorkersWebSocketRpcResponse` come directly from\n" +
-      "`@iterate-com/capnweb`. `InternalApp` uses them to push its event projection\n" +
+      "`iterate/sdk/capnweb` module first-party apps use. That same entry re-exports\n" +
+      "Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`, guaranteeing one\n" +
+      "class identity across app and SDK code. `InternalApp` uses them to push its event projection\n" +
       "with the same snapshot-and-patch implementation. The explicit classes are\n" +
       "intentional: there is no\n" +
       "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
@@ -218,21 +219,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       " * Public guestbook UI. The provider owns the reconnectable Cap'n Web root;\n" +
       " * useLiveState consumes the nearest root.\n" +
       " */\n" +
-      "import { newWebSocketRpcSession, type RpcStub } from \"@iterate-com/capnweb\";\n" +
+      "import { newWebSocketRpcSession, type RpcStub } from \"iterate/sdk/capnweb\";\n" +
       "import React, { type FormEvent, useState } from \"react\";\n" +
       "import { createRoot } from \"react-dom/client\";\n" +
-      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/live-state/react\";\n" +
-      "\n" +
-      "type GuestbookState = {\n" +
-      "  birthCertificate: { config: { title: string } } | null;\n" +
-      "  entries: Array<{ name: string; message: string; signedAt: string }>;\n" +
-      "};\n" +
-      "\n" +
-      "type GuestbookApi = {\n" +
-      "  liveState: LiveStateRpc<GuestbookState>;\n" +
-      "  sign(name: string, message: string): Promise<void>;\n" +
-      "};\n" +
+      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/sdk/capnweb/react\";\n" +
+      "import type { GuestbookApi } from \"./server.tsx\";\n" +
       "\n" +
       "function makeConnection() {\n" +
       "  const endpoint = new URL(\"/api\", window.location.href);\n" +
@@ -437,67 +428,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/guestbook/ref.ts",
-    content:
-      "// Shared identity for the guestbook stream-processor host. worker.ts routes\n" +
-      "// HTTP here; the creation batch persists the same ref as the wake target so\n" +
-      "// ingress and the stream spine always dial the same Durable Object.\n" +
-      "import type { StreamEventInput } from \"iterate/processors\";\n" +
-      "import type { StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
-      "\n" +
-      "export const guestbookStreamPath = \"/guestbook\";\n" +
-      "export const guestbookSubscriptionConfigVersion = 1;\n" +
-      "\n" +
-      "// `as const` freezes the discriminant so StatefulDynamicWorkerRef's source\n" +
-      "// files union picks the repo branch (not a widened `{ type: string }`).\n" +
-      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
-      "\n" +
-      "/**\n" +
-      " * The one createApp facet that serves the page, browser bundle, API, and wake\n" +
-      " * delivery door. Platform modules are available to both app bundles.\n" +
-      " */\n" +
-      "export const guestbookAppRef = {\n" +
-      "  type: \"stateful\",\n" +
-      "  path: \"/\",\n" +
-      "  className: \"GuestbookApp\",\n" +
-      "  durableWorkerKey: \"app-guestbook-stream\",\n" +
-      "  source: {\n" +
-      "    createApp: {\n" +
-      "      client: \"apps/guestbook/client.tsx\",\n" +
-      "      files: repoFiles,\n" +
-      "      server: \"apps/guestbook/server.tsx\",\n" +
-      "    },\n" +
-      "  },\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n" +
-      "\n" +
-      "/** Birth certificate + durable wake subscription onto the host above. */\n" +
-      "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
-      "  return [\n" +
-      "    {\n" +
-      "      type: \"events.iterate.com/guestbook/created\",\n" +
-      "      payload: { config: { title: \"Guestbook\" } },\n" +
-      "      idempotencyKey: \"guestbook/created\",\n" +
-      "    },\n" +
-      "    {\n" +
-      "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
-      "      payload: {\n" +
-      "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
-      "        delivery: {\n" +
-      "          mode: \"wake\",\n" +
-      "          expression: [\"workers\", [\"get\", guestbookAppRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
-      "          processorSlug: \"guestbook\",\n" +
-      "        },\n" +
-      "      },\n" +
-      "      idempotencyKey: `guestbook/subscription:v${guestbookSubscriptionConfigVersion}`,\n" +
-      "    },\n" +
-      "  ];\n" +
-      "}\n",
-  },
-  {
     path: "apps/guestbook/server.tsx",
     content:
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import {\n" +
+      "  LiveStateRpcTarget,\n" +
+      "  RpcTarget,\n" +
+      "  newWorkersWebSocketRpcResponse,\n" +
+      "  type LiveStateRpc,\n" +
+      "} from \"iterate/sdk/capnweb\";\n" +
       "import type {\n" +
       "  StreamEventInput,\n" +
       "  StreamSubscriberWakeRequest,\n" +
@@ -509,12 +447,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} from \"iterate/processors/cloudflare\";\n" +
       "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
       "import { GuestbookProcessor, type GuestbookState } from \"./processor.ts\";\n" +
-      "import { guestbookCreationEvents, guestbookStreamPath } from \"./ref.ts\";\n" +
       "\n" +
-      "type GuestbookApi = {\n" +
-      "  liveState: LiveStateRpc<GuestbookState>;\n" +
-      "  sign(name: string, message: string): Promise<void>;\n" +
-      "};\n" +
+      "const guestbookStreamPath = \"/guestbook\";\n" +
       "\n" +
       "/** One createApp Durable Object owns the page, API, processor, and live value. */\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
@@ -543,7 +477,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "  async #append(...events: StreamEventInput[]): Promise<void> {\n" +
       "    using project = await this.env.ITX.get();\n" +
-      "    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);\n" +
+      "    await project.streams.get(guestbookStreamPath).append(...events);\n" +
       "  }\n" +
       "\n" +
       "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
@@ -566,7 +500,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async sign(name: string, message: string): Promise<void> {\n" +
       "    const trimmedName = name.trim().slice(0, 80);\n" +
       "    const trimmedMessage = message.trim().slice(0, 500);\n" +
-      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;\n" +
+      "    if (trimmedName.length === 0 || trimmedMessage.length === 0) {\n" +
+      "      throw new TypeError(\"Name and message are required\");\n" +
+      "    }\n" +
       "    await this.#append({\n" +
       "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
       "      payload: { message: trimmedMessage, name: trimmedName },\n" +
@@ -580,11 +516,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
       "    if (url.pathname === \"/api\") {\n" +
-      "      await this.#append();\n" +
       "      const registry = await this.#freshRegistry();\n" +
       "      await registry.catchUp(\"guestbook\");\n" +
       "      await registry.loadAndRefreshLive();\n" +
-      "      return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));\n" +
+      "      return newWorkersWebSocketRpcResponse(request, new GuestbookApi(this, registry));\n" +
       "    }\n" +
       "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
       "      return new Response(\"not found\", { status: 404 });\n" +
@@ -622,7 +557,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "}\n" +
       "\n" +
-      "class PublicGuestbookApi extends RpcTarget implements GuestbookApi {\n" +
+      "export class GuestbookApi extends RpcTarget {\n" +
       "  readonly #liveState: LiveStateRpcTarget<GuestbookState>;\n" +
       "\n" +
       "  constructor(\n" +
@@ -648,20 +583,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "/**\n" +
       " * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.\n" +
       " */\n" +
-      "import { newWebSocketRpcSession, type RpcStub } from \"@iterate-com/capnweb\";\n" +
+      "import { newWebSocketRpcSession, type RpcStub } from \"iterate/sdk/capnweb\";\n" +
       "import React, { type FormEvent, useState } from \"react\";\n" +
       "import { createRoot } from \"react-dom/client\";\n" +
-      "import type { LiveStateRpc } from \"iterate/live-state\";\n" +
-      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/live-state/react\";\n" +
-      "\n" +
-      "type TodoApi = {\n" +
-      "  liveState: LiveStateRpc<{\n" +
-      "    todos: Array<{ createdAt: string; done: boolean; id: string; title: string }>;\n" +
-      "  }>;\n" +
-      "  add(title: string): Promise<void>;\n" +
-      "  setDone(id: string, done: boolean): Promise<void>;\n" +
-      "  remove(id: string): Promise<void>;\n" +
-      "};\n" +
+      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/sdk/capnweb/react\";\n" +
+      "import type { TodoApi } from \"./server.tsx\";\n" +
       "\n" +
       "function makeConnection() {\n" +
       "  const endpoint = new URL(\"/api\", window.location.href);\n" +
@@ -764,8 +690,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/todo/server.tsx",
     content:
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from \"iterate/live-state\";\n" +
+      "import {\n" +
+      "  LiveState,\n" +
+      "  LiveStateRpcTarget,\n" +
+      "  RpcTarget,\n" +
+      "  newWorkersWebSocketRpcResponse,\n" +
+      "  type LiveStateRpc,\n" +
+      "} from \"iterate/sdk/capnweb\";\n" +
       "import { IterateDurableObject } from \"iterate/sdk\";\n" +
       "\n" +
       "export type Todo = {\n" +
@@ -776,13 +707,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "};\n" +
       "\n" +
       "type TodoListState = { todos: Todo[] };\n" +
-      "\n" +
-      "type TodoApi = {\n" +
-      "  liveState: LiveStateRpc<TodoListState>;\n" +
-      "  add(title: string): Promise<void>;\n" +
-      "  setDone(id: string, done: boolean): Promise<void>;\n" +
-      "  remove(id: string): Promise<void>;\n" +
-      "};\n" +
       "\n" +
       "/** One createApp Durable Object owns the page, API, persistence, and live value. */\n" +
       "export class TodoApp extends IterateDurableObject {\n" +
@@ -844,7 +768,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
       "    if (url.pathname === \"/api\") {\n" +
-      "      return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, this.#live));\n" +
+      "      return newWorkersWebSocketRpcResponse(request, new TodoApi(this, this.#live));\n" +
       "    }\n" +
       "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
       "      return new Response(\"not found\", { status: 404 });\n" +
@@ -882,7 +806,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "}\n" +
       "\n" +
-      "class PublicTodoApi extends RpcTarget implements TodoApi {\n" +
+      "export class TodoApi extends RpcTarget {\n" +
       "  readonly #liveState: LiveStateRpcTarget<TodoListState>;\n" +
       "\n" +
       "  constructor(\n" +
@@ -920,7 +844,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"type\": \"module\",\n" +
       "  \"description\": \"Iterate project worker and bundled full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
-      "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
@@ -967,11 +890,27 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
-      "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
-      "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
-      "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
-      "\n" +
+      "import {\n" +
+      "  LiveState,\n" +
+      "  LiveStateRpcTarget,\n" +
+      "  RpcTarget,\n" +
+      "  newWorkersWebSocketRpcResponse,\n" +
+      "} from \"iterate/sdk/capnweb\";\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
+      "\n" +
+      "const guestbookAppRef = {\n" +
+      "  className: \"GuestbookApp\",\n" +
+      "  durableWorkerKey: \"app-guestbook-stream\",\n" +
+      "  path: \"/\",\n" +
+      "  source: {\n" +
+      "    createApp: {\n" +
+      "      client: \"apps/guestbook/client.tsx\",\n" +
+      "      files: repoFiles,\n" +
+      "      server: \"apps/guestbook/server.tsx\",\n" +
+      "    },\n" +
+      "  },\n" +
+      "  type: \"stateful\",\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
       "\n" +
       "const todoAppRef = {\n" +
       "  className: \"TodoApp\",\n" +
@@ -1096,6 +1035,31 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
+      "      using itx = await this.env.ITX.get();\n" +
+      "      await itx.streams.get(\"/guestbook\").append(\n" +
+      "        {\n" +
+      "          type: \"events.iterate.com/guestbook/created\",\n" +
+      "          payload: { config: { title: \"Guestbook\" } },\n" +
+      "          idempotencyKey: \"guestbook/created\",\n" +
+      "        },\n" +
+      "        {\n" +
+      "          type: \"events.iterate.com/stream/subscription-configured\",\n" +
+      "          payload: {\n" +
+      "            subscriptionKey: \"app-guestbook#guestbook\",\n" +
+      "            delivery: {\n" +
+      "              mode: \"wake\",\n" +
+      "              expression: [\n" +
+      "                \"workers\",\n" +
+      "                [\"get\", guestbookAppRef],\n" +
+      "                \"processor\",\n" +
+      "                \"wakeStreamSubscriber\",\n" +
+      "              ],\n" +
+      "              processorSlug: \"guestbook\",\n" +
+      "            },\n" +
+      "          },\n" +
+      "          idempotencyKey: \"guestbook/subscription:v1\",\n" +
+      "        },\n" +
+      "      );\n" +
       "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +

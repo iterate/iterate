@@ -11,7 +11,7 @@ import {
   connectIterateSession,
   reconnectIterateSession,
   useIterateSessionQuery,
-} from "iterate/react";
+} from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";

@@ -1,5 +1,9 @@
-import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
-import { LiveStateRpcTarget, type LiveStateRpc } from "iterate/live-state";
+import {
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+  type LiveStateRpc,
+} from "iterate/sdk/capnweb";
 import type {
   StreamEventInput,
   StreamSubscriberWakeRequest,
@@ -11,12 +15,8 @@ import {
 } from "iterate/processors/cloudflare";
 import { IterateDurableObject, itxProjectStream } from "iterate/sdk";
 import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
-import { guestbookCreationEvents, guestbookStreamPath } from "./ref.ts";
 
-type GuestbookApi = {
-  liveState: LiveStateRpc<GuestbookState>;
-  sign(name: string, message: string): Promise<void>;
-};
+const guestbookStreamPath = "/guestbook";
 
 /** One createApp Durable Object owns the page, API, processor, and live value. */
 export class GuestbookApp extends IterateDurableObject {
@@ -45,7 +45,7 @@ export class GuestbookApp extends IterateDurableObject {
 
   async #append(...events: StreamEventInput[]): Promise<void> {
     using project = await this.env.ITX.get();
-    await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents(), ...events);
+    await project.streams.get(guestbookStreamPath).append(...events);
   }
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
@@ -68,7 +68,9 @@ export class GuestbookApp extends IterateDurableObject {
   async sign(name: string, message: string): Promise<void> {
     const trimmedName = name.trim().slice(0, 80);
     const trimmedMessage = message.trim().slice(0, 500);
-    if (trimmedName.length === 0 || trimmedMessage.length === 0) return;
+    if (trimmedName.length === 0 || trimmedMessage.length === 0) {
+      throw new TypeError("Name and message are required");
+    }
     await this.#append({
       type: "events.iterate.com/guestbook/entry-signed",
       payload: { message: trimmedMessage, name: trimmedName },
@@ -82,11 +84,10 @@ export class GuestbookApp extends IterateDurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api") {
-      await this.#append();
       const registry = await this.#freshRegistry();
       await registry.catchUp("guestbook");
       await registry.loadAndRefreshLive();
-      return newWorkersWebSocketRpcResponse(request, new PublicGuestbookApi(this, registry));
+      return newWorkersWebSocketRpcResponse(request, new GuestbookApi(this, registry));
     }
     if (request.method !== "GET" || url.pathname !== "/") {
       return new Response("not found", { status: 404 });
@@ -124,7 +125,7 @@ export class GuestbookApp extends IterateDurableObject {
   }
 }
 
-class PublicGuestbookApi extends RpcTarget implements GuestbookApi {
+export class GuestbookApi extends RpcTarget {
   readonly #liveState: LiveStateRpcTarget<GuestbookState>;
 
   constructor(

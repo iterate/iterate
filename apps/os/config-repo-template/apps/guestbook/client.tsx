@@ -2,21 +2,11 @@
  * Public guestbook UI. The provider owns the reconnectable Cap'n Web root;
  * useLiveState consumes the nearest root.
  */
-import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "iterate/sdk/capnweb";
 import React, { type FormEvent, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { LiveStateRpc } from "iterate/live-state";
-import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/live-state/react";
-
-type GuestbookState = {
-  birthCertificate: { config: { title: string } } | null;
-  entries: Array<{ name: string; message: string; signedAt: string }>;
-};
-
-type GuestbookApi = {
-  liveState: LiveStateRpc<GuestbookState>;
-  sign(name: string, message: string): Promise<void>;
-};
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/sdk/capnweb/react";
+import type { GuestbookApi } from "./server.tsx";
 
 function makeConnection() {
   const endpoint = new URL("/api", window.location.href);

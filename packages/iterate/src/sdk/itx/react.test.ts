@@ -125,7 +125,7 @@ async function openLatest() {
 
 describe("itx session socket", () => {
   test("ONE socket for the whole tab: connectIterateSession returns the same promise and resolves to the Session", async () => {
-    const { connectIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession } = await import("./react.ts");
     const a = connectIterateSession();
     expect(connectIterateSession()).toBe(a); // one dial, the stable promise use() needs
     expect(FakeWebSocket.instances).toHaveLength(1);
@@ -135,7 +135,7 @@ describe("itx session socket", () => {
   });
 
   test("connectItx narrows the ONE session to a project stub — no second socket", async () => {
-    const { connectIterateSession, connectItx } = await import("./itx-react.ts");
+    const { connectIterateSession, connectItx } = await import("./react.ts");
     const session = connectIterateSession(); // dials the one socket
     await openLatest();
     const acme = await connectItx("acme");
@@ -148,7 +148,7 @@ describe("itx session socket", () => {
   });
 
   test("a dial that closes before opening rejects awaiters instead of hanging, then re-dials", async () => {
-    const { connectIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession } = await import("./react.ts");
     const first = connectIterateSession();
     onlySocket().fire("close"); // closed before it ever opened
     await expect(first).rejects.toThrow(/closed before connecting/);
@@ -159,7 +159,7 @@ describe("itx session socket", () => {
   });
 
   test("INVISIBLE RECONNECT: a live session survives a transport gap and auto-redials", async () => {
-    const { connectIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession } = await import("./react.ts");
     const first = connectIterateSession();
     await openLatest();
     const session = await first;
@@ -179,7 +179,7 @@ describe("itx session socket", () => {
   });
 
   test("reconnectIterateSession (semantic reset) retires the old session only once its successor publishes", async () => {
-    const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession, reconnectIterateSession } = await import("./react.ts");
     const first = connectIterateSession();
     await openLatest();
     const session = await first;
@@ -195,7 +195,7 @@ describe("itx session socket", () => {
   });
 
   test("a superseded generation's late open never publishes over the live one", async () => {
-    const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession, reconnectIterateSession } = await import("./react.ts");
     const superseded = connectIterateSession();
     reconnectIterateSession(); // supersede the first dial before it ever opened
     await expect(superseded).rejects.toThrow(/closed before connecting/);
@@ -218,7 +218,7 @@ describe("itx session socket", () => {
     // is alive, so two 10s windows must NOT retire the socket.
     vi.useFakeTimers();
     try {
-      const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.ts");
+      const { connectIterateSession, reportTransportSuspicion } = await import("./react.ts");
       const first = connectIterateSession();
       FakeWebSocket.instances[0]!.fire("open");
       await vi.advanceTimersByTimeAsync(0);
@@ -237,7 +237,7 @@ describe("itx session socket", () => {
   test("repeated closed-before-open dials get backoff from the SECOND consecutive failure", async () => {
     vi.useFakeTimers();
     try {
-      const { connectIterateSession } = await import("./itx-react.ts");
+      const { connectIterateSession } = await import("./react.ts");
       connectIterateSession();
       FakeWebSocket.instances[0]!.fire("close"); // failure 1
       connectIterateSession(); // first retry is immediate
@@ -253,7 +253,7 @@ describe("itx session socket", () => {
   });
 
   test("isItxTransportError classifies exactly the four transport signatures", async () => {
-    const { isItxTransportError } = await import("./itx-react.ts");
+    const { isItxTransportError } = await import("./react.ts");
     expect(isItxTransportError(new Error("itx WebSocket closed before connecting"))).toBe(true);
     expect(isItxTransportError(new Error("Peer closed WebSocket: 1006 "))).toBe(true);
     expect(isItxTransportError(new Error("WebSocket connection failed."))).toBe(true);
@@ -268,12 +268,12 @@ describe("itx session socket", () => {
   test("configureIterateSession dials the configured deployment with the given credentials", async () => {
     // The non-browser lane (TUI, keeper-based scripts): an explicit base URL +
     // credentials replace the window-derived /api + cookie default.
-    const { configureIterateSession, connectIterateSession } = await import("./itx-react.ts");
+    const { configureIterateSession, connectIterateSession } = await import("./react.ts");
     configureIterateSession({
       baseUrl: "https://os.example.com/",
       credentials: { type: "admin-secret", secret: "s3cr3t" },
     });
-    const { reportTransportSuspicion } = await import("./itx-react.ts");
+    const { reportTransportSuspicion } = await import("./react.ts");
     const first = connectIterateSession();
     expect(onlySocket().url).toBe("wss://os.example.com/api");
     await openLatest();
@@ -292,7 +292,7 @@ describe("itx session socket", () => {
   });
 
   test("configured credentials are resolved for each dial and force-refreshed once after an auth rejection", async () => {
-    const { configureIterateSession, connectIterateSession } = await import("./itx-react.ts");
+    const { configureIterateSession, connectIterateSession } = await import("./react.ts");
     const requests: Array<{ forceRefresh: boolean }> = [];
     configureIterateSession({
       baseUrl: "https://os.example.com",
@@ -321,7 +321,7 @@ describe("itx session socket", () => {
   });
 
   test("configureIterateSession keeps the same target stable and replaces a different deployment", async () => {
-    const { configureIterateSession, connectIterateSession } = await import("./itx-react.ts");
+    const { configureIterateSession, connectIterateSession } = await import("./react.ts");
     configureIterateSession({ baseUrl: "https://os.example.com" });
     const first = connectIterateSession();
     await openLatest();
@@ -343,7 +343,7 @@ describe("itx session socket", () => {
 
   test("disconnectIterateSession releases the current authority and leaves the keeper idle", async () => {
     const { configureIterateSession, connectIterateSession, disconnectIterateSession } =
-      await import("./itx-react.ts");
+      await import("./react.ts");
     configureIterateSession({ baseUrl: "https://os.example.com" });
     const first = connectIterateSession();
     await openLatest();
@@ -367,7 +367,7 @@ describe("itx session socket", () => {
     // the hook and the imperative path must hand out the SAME resolved stub.
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const [{ useIterateSession, connectIterateSession }, React, { createRoot }] = await Promise.all(
-      [import("./itx-react.ts"), import("react"), import("react-dom/client")],
+      [import("./react.ts"), import("react"), import("react-dom/client")],
     );
     const { act, createElement, Component, Suspense } = React;
 
@@ -430,7 +430,7 @@ describe("itx session socket", () => {
     // be a FAILED dial (close → paced re-dial), not an infinite spinner.
     vi.useFakeTimers();
     try {
-      const { connectIterateSession } = await import("./itx-react.ts");
+      const { connectIterateSession } = await import("./react.ts");
       control.hangFirstAuth = true;
       const first = connectIterateSession();
       FakeWebSocket.instances[0]!.closeEmitsEvent = false;
@@ -456,7 +456,7 @@ describe("itx session socket", () => {
     // dials when the slot is empty) and the failure's own setState re-renders —
     // clearing the slot here would be an unbounded WebSocket storm.
     const { connectIterateSession, useIterateSession, reconnectIterateSession } =
-      await import("./itx-react.ts");
+      await import("./react.ts");
     control.authError = new Error("handshake rejected for this principal");
     const first = connectIterateSession();
     FakeWebSocket.instances[0]!.fire("open");
@@ -519,7 +519,7 @@ describe("itx session socket", () => {
   });
 
   test("an imperative retry revives a parked terminal auth failure", async () => {
-    const { connectIterateSession, retryFailedIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession, retryFailedIterateSession } = await import("./react.ts");
     control.authError = new Error("session token expired");
     const first = connectIterateSession();
     FakeWebSocket.instances[0]!.fire("open");
@@ -539,7 +539,7 @@ describe("itx session socket", () => {
     // Keeping the prior session would be a ZOMBIE — its transport is closed, so
     // hooks would serve stubs whose every call fails with transport-shaped
     // errors while the real auth error never surfaces.
-    const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.ts");
+    const { connectIterateSession, reconnectIterateSession } = await import("./react.ts");
     const first = connectIterateSession();
     await openLatest();
     const session = (await first) as unknown as { [Symbol.dispose]: ReturnType<typeof vi.fn> };
@@ -564,7 +564,7 @@ describe("itx session socket", () => {
   test("a semantic reset clears dial backoff so new claims dial immediately", async () => {
     vi.useFakeTimers();
     try {
-      const { connectIterateSession, reconnectIterateSession } = await import("./itx-react.ts");
+      const { connectIterateSession, reconnectIterateSession } = await import("./react.ts");
       connectIterateSession();
       FakeWebSocket.instances[0]!.fire("close"); // failure 1 → immediate re-dial
       FakeWebSocket.instances[1]!.fire("close"); // failure 2 → next dial is now paced
@@ -579,7 +579,7 @@ describe("itx session socket", () => {
   });
 
   test("reportTransportSuspicion leaves a HEALTHY socket alone (no false-positive reconnect)", async () => {
-    const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.ts");
+    const { connectIterateSession, reportTransportSuspicion } = await import("./react.ts");
     const first = connectIterateSession();
     await openLatest();
     await first;
@@ -594,7 +594,7 @@ describe("itx session socket", () => {
   test("reportTransportSuspicion re-dials a genuinely half-open socket after two strikes", async () => {
     vi.useFakeTimers();
     try {
-      const { connectIterateSession, reportTransportSuspicion } = await import("./itx-react.ts");
+      const { connectIterateSession, reportTransportSuspicion } = await import("./react.ts");
       const first = connectIterateSession();
       FakeWebSocket.instances[0]!.fire("open");
       await vi.advanceTimersByTimeAsync(0);
@@ -626,7 +626,7 @@ describe("itx session socket", () => {
 describe("ProjectScope", () => {
   test("renders on the server without trying to connect", async () => {
     const [{ ProjectScope }, React, { renderToString }] = await Promise.all([
-      import("./itx-react.ts"),
+      import("./react.ts"),
       import("react"),
       import("react-dom/server"),
     ]);
@@ -673,7 +673,7 @@ describe("useItxSubscription liveness", () => {
     wrapSubscribe?: (handle: TestHandle) => Promise<TestHandle>,
   ) {
     const [{ useItxSubscription, ProjectScope }, React, { createRoot }] = await Promise.all([
-      import("./itx-react.ts"),
+      import("./react.ts"),
       import("react"),
       import("react-dom/client"),
     ]);
@@ -916,7 +916,7 @@ describe("useItxSubscription liveness", () => {
     // mounted hook. Project A's state must never render under project B — the
     // node key includes the EFFECTIVE slug, so the switch resets + barriers.
     const [{ useLiveState, ProjectScope }, React, { createRoot }] = await Promise.all([
-      import("./itx-react.ts"),
+      import("./react.ts"),
       import("react"),
       import("react-dom/client"),
     ]);
@@ -975,7 +975,7 @@ describe("useItxSubscription liveness", () => {
 
   test("useIterateSessionLiveState is inert while disabled and resets when its node changes", async () => {
     const [{ useIterateSessionLiveState }, React, { createRoot }] = await Promise.all([
-      import("./itx-react.ts"),
+      import("./react.ts"),
       import("react"),
       import("react-dom/client"),
     ]);

@@ -6,13 +6,13 @@
   "files": [
     "src/sdk.ts",
     "src/client.ts",
-    "src/live-state/index.ts",
-    "src/live-state/react.tsx",
     "src/node.ts",
     "src/processors/cloudflare.ts",
     "src/processors/index.ts",
     "src/processors/testing.ts",
-    "src/react.ts",
+    "src/sdk/capnweb/index.ts",
+    "src/sdk/capnweb/react.tsx",
+    "src/sdk/itx/react.ts",
     "src/cloudflare-workers.d.ts"
   ],
   "compilerOptions": {

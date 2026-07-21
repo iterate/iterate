@@ -64,7 +64,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { useIterateSessionQuery, useLiveState } from "iterate/react";
+import { useIterateSessionQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
 import { SidebarAgents } from "./agents/sidebar-agents.tsx";

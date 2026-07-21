@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
-import { useItx } from "iterate/react";
+import { useItx } from "iterate/sdk/itx/react";
 import {
   fallbackTaskCommitMessage,
   taskCommitMessagePrompt,

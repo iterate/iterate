@@ -1640,7 +1640,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/mobile/**",
       // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
       ".bun-version",
-      // OS imports iterate/react, and its preview e2e lane builds and runs the
+      // OS imports iterate/sdk/itx/react, and its preview e2e lane builds and runs the
       // iterate TUI artifact. A CLI-only change therefore still needs the OS
       // deployment and post-deploy PTY proof.
       "packages/iterate/**",

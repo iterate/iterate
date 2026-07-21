@@ -119,7 +119,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(await read.text()).toContain('count: <span id="n">2</span>');
 
   // createApp compiles the browser entry at its unchanged repo path, resolves
-  // ordinary package.json dependencies (including iterate/live-state/react),
+  // ordinary package.json dependencies (including iterate/sdk/capnweb/react),
   // and lets worker-bundler's asset handler serve the result.
   const guestbook = await fetchAppReady(`guestbook--${slug}`);
   expect(guestbook).toMatchObject({ status: 200 });

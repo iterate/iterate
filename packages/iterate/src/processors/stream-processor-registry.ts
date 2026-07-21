@@ -70,7 +70,7 @@
 // retry-forever.
 
 import * as cloudflareWorkers from "cloudflare:workers";
-import { LiveState } from "../live-state/engine.ts";
+import { LiveState } from "../sdk/capnweb/live-state/engine.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";

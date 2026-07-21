@@ -11,8 +11,8 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { createLiveStateStore } from "./store.ts";
-import type { LiveStateRpc, LiveStateSubscriptionHandle } from "./types.ts";
+import { createLiveStateStore } from "./live-state/store.ts";
+import type { LiveStateRpc, LiveStateSubscriptionHandle } from "./live-state/types.ts";
 
 export type CapnWebRoot = object &
   Partial<Disposable> & {

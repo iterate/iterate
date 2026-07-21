@@ -15,7 +15,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@iterate-com/ui
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { useItx, useItxQuery } from "iterate/react";
+import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import {
   assertInstallationRepoCanBeCreated,
   githubRepoCreateRequest,

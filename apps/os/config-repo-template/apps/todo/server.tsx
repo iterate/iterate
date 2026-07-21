@@ -1,5 +1,10 @@
-import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
-import { LiveState, LiveStateRpcTarget, type LiveStateRpc } from "iterate/live-state";
+import {
+  LiveState,
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+  type LiveStateRpc,
+} from "iterate/sdk/capnweb";
 import { IterateDurableObject } from "iterate/sdk";
 
 export type Todo = {
@@ -10,13 +15,6 @@ export type Todo = {
 };
 
 type TodoListState = { todos: Todo[] };
-
-type TodoApi = {
-  liveState: LiveStateRpc<TodoListState>;
-  add(title: string): Promise<void>;
-  setDone(id: string, done: boolean): Promise<void>;
-  remove(id: string): Promise<void>;
-};
 
 /** One createApp Durable Object owns the page, API, persistence, and live value. */
 export class TodoApp extends IterateDurableObject {
@@ -78,7 +76,7 @@ export class TodoApp extends IterateDurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api") {
-      return newWorkersWebSocketRpcResponse(request, new PublicTodoApi(this, this.#live));
+      return newWorkersWebSocketRpcResponse(request, new TodoApi(this, this.#live));
     }
     if (request.method !== "GET" || url.pathname !== "/") {
       return new Response("not found", { status: 404 });
@@ -116,7 +114,7 @@ export class TodoApp extends IterateDurableObject {
   }
 }
 
-class PublicTodoApi extends RpcTarget implements TodoApi {
+export class TodoApi extends RpcTarget {
   readonly #liveState: LiveStateRpcTarget<TodoListState>;
 
   constructor(

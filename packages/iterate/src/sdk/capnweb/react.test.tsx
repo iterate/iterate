@@ -3,7 +3,7 @@ import React, { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CapnWebProvider, useLiveState } from "./react.tsx";
-import type { LiveUpdate } from "./protocol.ts";
+import type { LiveUpdate } from "./live-state/protocol.ts";
 
 type State = { name: string };
 

@@ -1,6 +1,6 @@
 /**
- * itx-react — the React surface for itx: hooks over the framework-free session
- * keeper in ./itx-session.ts (one WebSocket per tab, generations, invisible
+ * `iterate/sdk/itx/react` — hooks over the framework-free session keeper in
+ * ../../itx/itx-session.ts (one WebSocket per tab, generations, invisible
  * reconnect — the session model lives there) plus TanStack Query for reads.
  *
  * Renderer-agnostic on purpose: nothing here touches the DOM, so the same
@@ -67,12 +67,12 @@ import {
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import type { LiveStateRpc } from "../itx-api.generated.ts";
+import type { LiveStateRpc } from "../../itx-api.generated.ts";
 import {
   CapnWebProvider,
   useLiveState as useCapnWebLiveState,
   type LiveStateStatus,
-} from "../live-state/react.tsx";
+} from "../capnweb/react.tsx";
 import {
   connectIterateSession,
   connectItx,
@@ -87,7 +87,7 @@ import {
   type ItxLiveSubscriptionHandle,
   type ProjectStub,
   type SessionStub,
-} from "./itx-session.ts";
+} from "../../itx/itx-session.ts";
 
 // The React entry is one-stop: everything a component file needs — hooks AND
 // the imperative/keeper surface — importable from one place.
@@ -105,8 +105,9 @@ export {
   type IterateSessionConfig,
   type ProjectStub,
   type SessionStub,
-} from "./itx-session.ts";
-export { createIterateQueryClient } from "./query-client.ts";
+} from "../../itx/itx-session.ts";
+export { createIterateQueryClient } from "../../itx/query-client.ts";
+export type * from "../../itx-api.generated.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Connection: <ProjectScope> (ambient slug + pre-warm) + useIterateSession/useItx
@@ -151,7 +152,7 @@ export function useItx(explicitSlug?: string): ProjectStub {
 /**
  * Set the ambient project for a subtree and provide its reconnectable Cap'n Web
  * root. The project-specific layer is deliberately only a connection factory;
- * live-state ownership and recovery live in `iterate/live-state/react`.
+ * live-state ownership and recovery live in `iterate/sdk/capnweb/react`.
  *
  * The provider dials in an effect, never during render, so this context remains
  * safe to render on the server. The duplicate belongs to the provider; the
@@ -534,7 +535,7 @@ export function useItxSubscription(
 /**
  * THE live-state primitive: subscribe to any `.liveState` node, render the slice
  * you pick. The server pushes a snapshot then minimal diffs; this hook
- * reassembles them (see ../live-state/store) and hands back `selector(state)`.
+ * reassembles them and hands back `selector(state)`.
  *
  *   const streams = useLiveState((itx) => itx.liveState, (s) => s.streamsIndex);
  *

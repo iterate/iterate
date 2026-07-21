@@ -9,11 +9,27 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
-import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
-import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
-import { guestbookAppRef } from "./apps/guestbook/ref.ts";
-
+import {
+  LiveState,
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+} from "iterate/sdk/capnweb";
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
+
+const guestbookAppRef = {
+  className: "GuestbookApp",
+  durableWorkerKey: "app-guestbook-stream",
+  path: "/",
+  source: {
+    createApp: {
+      client: "apps/guestbook/client.tsx",
+      files: repoFiles,
+      server: "apps/guestbook/server.tsx",
+    },
+  },
+  type: "stateful",
+} satisfies StatefulDynamicWorkerRef;
 
 const todoAppRef = {
   className: "TodoApp",
@@ -138,6 +154,31 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
+      using itx = await this.env.ITX.get();
+      await itx.streams.get("/guestbook").append(
+        {
+          type: "events.iterate.com/guestbook/created",
+          payload: { config: { title: "Guestbook" } },
+          idempotencyKey: "guestbook/created",
+        },
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "app-guestbook#guestbook",
+            delivery: {
+              mode: "wake",
+              expression: [
+                "workers",
+                ["get", guestbookAppRef],
+                "processor",
+                "wakeStreamSubscriber",
+              ],
+              processorSlug: "guestbook",
+            },
+          },
+          idempotencyKey: "guestbook/subscription:v1",
+        },
+      );
       return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app === "tasks") {
