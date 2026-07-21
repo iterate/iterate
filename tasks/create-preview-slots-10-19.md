@@ -16,11 +16,14 @@ GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
 is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
-verification is green. Draft PR #2161 is open without a preview label; its
-required checks are green and no review threads are open. Production deployment
-and Semaphore lease publication remain later, separate approval boundaries. A
-stacked Semaphore compatibility PR and a strict PR-body slot selector now make
-it possible to canary one expanded slot without exposing all ten to old clients.
+verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
+ready for review against `main`. Two valid Bugbot findings now have regression
+coverage: requested-slot adoption erases unknown-provenance data, and seeded
+repository lookup no longer depends on Cloudflare subscription setup. Local OS
+tests and typecheck are green; fresh CI and Bugbot review remain before merge.
+Production deployment and Semaphore lease publication remain later, separate
+approval boundaries. The strict PR-body slot selector makes it possible to
+canary one expanded slot without exposing all ten to old clients.
 
 ## Goal
 
@@ -385,3 +388,12 @@ the recorded projection.
   lint/typecheck. GitHub reports clean merge state with zero reviews and zero
   unresolved threads. The repo has no active dispatchable review-monitor
   workflow, so no passive process is being represented as a persistent monitor.
+- 2026-07-21: Merged prerequisite PR #2163 after two Bugbot fixes hardened
+  allow-list-aware waiter dispatch. Merged current `main` into #2161, retargeted
+  it to `main`, and marked it ready for review.
+- 2026-07-21: Fixed two valid #2161 Bugbot findings test-first. Requested-slot
+  assignment now erases an adopted slot unless it matches the PR's recorded
+  provenance. Artifact creation now runs exact-subscription setup only before
+  the first push, preserving interrupted-create recovery without making seeded
+  repository lookup depend on Cloudflare's subscriptions API. All 2,048 OS
+  unit tests, three new creation-boundary tests, and OS typecheck pass locally.

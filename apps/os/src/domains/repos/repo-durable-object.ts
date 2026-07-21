@@ -73,6 +73,7 @@ import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-eve
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifact } from "./artifact-import.ts";
+import { getOrCreateArtifact } from "./artifact-creation.ts";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
@@ -1480,6 +1481,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         repo: input.repo,
       });
     });
+    await this.ensureArtifactRepoEventSubscription(artifactName);
     return {
       artifactName,
       defaultBranch: REPO_DEFAULT_BRANCH,
@@ -1562,22 +1564,10 @@ export class RepoDurableObject extends DurableObject<Env> {
   private async getOrCreateArtifact(
     name: string,
   ): Promise<{ created: boolean; lastPushAt: string | null }> {
-    let result: { created: boolean; lastPushAt: string | null };
-    try {
-      await this.requireArtifacts().create(name, {
-        setDefaultBranch: REPO_DEFAULT_BRANCH,
-      });
-      result = { created: true, lastPushAt: null };
-    } catch (error) {
-      // Only the race we mean to tolerate. The old blind catch masked real
-      // failures (an INTERNAL_ERROR here fell through to get(), which then
-      // reported a misleading NOT_FOUND).
-      if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
-      const existing = await this.requireArtifacts().get(name);
-      result = { created: false, lastPushAt: existing.lastPushAt };
-    }
-    await this.ensureArtifactRepoEventSubscription(name);
-    return result;
+    return await getOrCreateArtifact(this.requireArtifacts(), name, {
+      beforeFirstPush: () => this.ensureArtifactRepoEventSubscription(name),
+      defaultBranch: REPO_DEFAULT_BRANCH,
+    });
   }
 
   private async ensureArtifactRepoEventSubscription(repoName: string): Promise<void> {
