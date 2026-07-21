@@ -39,7 +39,8 @@ test("reactivity page repaints from a stream subscription after a page action", 
     .waitFor(DELIVERY_WAIT);
 });
 
-test("reactivity page appends a batch and renders every delivered marker", async ({
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("reactivity page appends a batch and renders every delivered marker", async ({
   helpers,
   page,
 }) => {

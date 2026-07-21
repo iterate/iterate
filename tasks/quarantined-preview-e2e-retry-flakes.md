@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after first-attempt failures
 
-Eight live preview tests were quarantined on 2026-07-21 while landing PR
+Twelve live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 although every test eventually passed, a failed first attempt made the preview
 proof red instead of silently treating the retry as success.
@@ -38,19 +38,41 @@ Streams example app took 73.6s. The retry telemetry recorded:
 - `log, commitDetails and pinned readFile over a few commits`: `Durable Object
   reset because its code was updated`; both attempts consumed 36.8s in total.
 
+The next exact-head run was
+[Depot job 0lprh8vpgt](https://depot.dev/orgs/0p91s0lz49/workflows/43rv0tgb8x?job=0lprh8vpgt)
+at commit `11f1e5d1fdb2304c9c3038c1e331997eb8139007`. It proved that all eight
+skips were active and then surfaced four more passed-on-retry failures:
+
+- `two browser tabs update and hand off leadership after the writer closes`:
+  the stream's `created` event did not appear for 15s; the 16.1s first attempt
+  failed and the retry passed in 3.0s.
+- `reactivity page appends a batch and renders every delivered marker`:
+  `stream-unavailable: Durable Object reset because its code was updated`; the
+  4.3s first attempt failed and the retry passed in 15.7s.
+- catalogue example `append-and-read-stream`: its `run-script` runtime exceeded
+  its 90s deadline; the retry passed and both attempts consumed 107.1s.
+- `a second project's onboarding turn is served from the AI Gateway cache`:
+  `internal error; reference = mm3d1ajvnjqtgh9fm7n3stpl`; the retry passed and
+  both attempts consumed 51.2s.
+
 These are not assertion changes hidden by this PR. Against `origin/main`, the
-five directly skipped OS spec/Vitest files are unchanged, the Streams spec
+five initially skipped OS spec/Vitest files are unchanged, the Streams spec
 only imports the shared retry-aware Playwright fixture, and the catalogue
 runtime helper only adds diagnostic stderr to the same thrown CLI failure.
 The failures span independently named projects and then pass with fresh
 attempts, matching the fleet-wide preview instability that motivated explicit
 retry failure and quarantine rather than reruns-until-green.
 
+The second run has the same independence evidence: the two browser test bodies
+are unchanged from `main`, the catalogue body is unchanged, and the AI Gateway
+case failed with a server-internal reference before its changed assertions
+could run. Those failures also passed on a fresh attempt.
+
 ## Quarantined coverage
 
-- The five Playwright tests above use narrow `test.skip` markers.
-- The repo-history Vitest test uses a narrow `test.skip` marker.
-- The two generated catalogue cases remain discoverable but are registered
+- The seven Playwright tests above use narrow `test.skip` markers.
+- The repo-history and AI Gateway Vitest tests use narrow `test.skip` markers.
+- The three generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 

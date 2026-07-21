@@ -412,7 +412,8 @@ test("split view can mount the same stream twice and mirror appends", async ({ p
 
 // Covers the original leadership requirement across browser tabs. Closing the elected writer
 // must release the lock, promote the follower, reconnect, and keep future appends live.
-test("two browser tabs update and hand off leadership after the writer closes", async ({
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("two browser tabs update and hand off leadership after the writer closes", async ({
   context,
   page,
 }) => {

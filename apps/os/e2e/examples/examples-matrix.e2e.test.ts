@@ -41,7 +41,11 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
     (EXAMPLE_CASES[right.id]?.completionTimeoutMs ?? 90_000) -
     (EXAMPLE_CASES[left.id]?.completionTimeoutMs ?? 90_000),
 );
-const QUARANTINED_MATRIX_EXAMPLES = new Set(["repo-edit-file", "run-script"]);
+const QUARANTINED_MATRIX_EXAMPLES = new Set([
+  "append-and-read-stream",
+  "repo-edit-file",
+  "run-script",
+]);
 
 // Fixed capability mounts, the config repo, and the repo-sourced project
 // worker are project-global mutable resources. Give each runtime its own pool
