@@ -53,7 +53,6 @@ export const AgentCollectionProcessorContract = defineProcessorContract({
     "events.iterate.com/agent-collection/created": {
       description: "Creates the singleton agent collection processor for a project.",
       payloadSchema: z.strictObject({}),
-      examples: [{ description: "Create the project agent collection.", payload: {} }],
     },
   },
   consumes: [
