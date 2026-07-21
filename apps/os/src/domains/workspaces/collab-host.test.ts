@@ -311,6 +311,66 @@ describe("collab host", () => {
     }
   });
 
+  test("an IN-FLIGHT flush aborted by destruction cannot resurrect the file", async () => {
+    const { store } = fakeSessionStore();
+    const { files, fs } = fakeFs({ [PATH]: SEED });
+    let releaseRead: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (releaseRead = resolve));
+    let reads = 0;
+    const slowFs: CollabSettledFs = {
+      readFile: async (path) => {
+        // Only the flush's pre-write read is slowed (the seed read is first).
+        if (++reads > 1) await gate;
+        return fs.readFile(path);
+      },
+      writeFile: fs.writeFile,
+    };
+    const host = new CollabHost({ fs: slowFs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "doomed ", SEED.length);
+
+    const flushing = host.reconcile(); // enters #flush, parks on the slow read
+    await Promise.resolve();
+    host.endSessions([PATH]); // deleteFile lands mid-flight
+    releaseRead();
+    await flushing;
+    expect(files.get(PATH)).toBe(SEED); // never written — no resurrection
+  });
+
+  test("commit stamping matches EXACTLY what was flushed, even under racing pushes", async () => {
+    const { store } = fakeSessionStore();
+    const { files, fs } = fakeFs({ [PATH]: SEED });
+    let slowWrites = false;
+    let releaseWrite: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (releaseWrite = resolve));
+    const slowFs: CollabSettledFs = {
+      readFile: fs.readFile,
+      writeFile: async (path, content) => {
+        if (slowWrites) await gate;
+        return fs.writeFile(path, content);
+      },
+    };
+    const host = new CollabHost({ fs: slowFs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "committed ", SEED.length);
+
+    slowWrites = true;
+    const barrier = host.reconcile(); // captures the head, parks on the write
+    await Promise.resolve();
+    // A keystroke races the barrier: accepted AFTER the head was captured.
+    await pushOne(host, { epoch: opened.epoch, version: 1 }, "late ", SEED.length + 10, 1);
+    releaseWrite();
+    const settled = await barrier;
+    host.markCommitted(settled);
+
+    // The stamped baseline is what the overlay (and the commit) contains…
+    expect(settled).toEqual([{ content: `committed ${SEED}`, path: PATH, version: 1 }]);
+    expect(files.get(PATH)).toBe(`committed ${SEED}`);
+    // …and the raced push SURVIVES in the redline instead of vanishing.
+    const redline = await host.changes(PATH);
+    expect(redline.segments).toEqual([{ clientId: "peer", from: 0, kind: "inserted", to: 5 }]);
+  });
+
   test("a delete racing a slow-seeding open wins: no resurrection", async () => {
     const { sessions, store } = fakeSessionStore();
     const { fs } = fakeFs({ [PATH]: SEED });

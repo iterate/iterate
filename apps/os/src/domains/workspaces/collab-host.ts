@@ -236,12 +236,10 @@ export class CollabHost {
    * swallowing post-barrier keystrokes.
    */
   async reconcile(): Promise<SettledFile[]> {
-    const dirty = new Set(this.#store.dirtySessions());
     const settled: SettledFile[] = [];
     for (const path of this.#store.livePaths()) {
-      if (dirty.has(path)) await this.#flush(path);
-      const head = await this.#opened(path);
-      settled.push({ content: head.content, path, version: head.version });
+      const file = await this.#flush(path);
+      if (file !== null) settled.push(file);
     }
     return settled;
   }
@@ -313,12 +311,23 @@ export class CollabHost {
     }
   }
 
-  async #flush(path: string): Promise<void> {
+  /**
+   * Settle one session and return EXACTLY what was settled. The head is
+   * captured ONCE — a push accepted mid-flush stays unflushed (and in the
+   * redline) rather than being stamped as committed — and the destruction
+   * generation is re-checked after every await so an in-flight flush can
+   * never resurrect a path a destructive op just ended.
+   */
+  async #flush(path: string): Promise<SettledFile | null> {
     this.#clearFlush(path);
+    const generation = this.#destroyed.get(path) ?? 0;
+    if (!this.isLive(path)) return null;
     const head = await this.#opened(path);
     const settled = await this.#fs.readFile(path);
+    if ((this.#destroyed.get(path) ?? 0) !== generation || !this.isLive(path)) return null;
     if (settled !== head.content) await this.#fs.writeFile(path, head.content);
     this.#store.markFlushed(path, head.version);
+    return { content: head.content, path, version: head.version };
   }
 
   #scheduleFlush(path: string): void {
