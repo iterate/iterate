@@ -49,10 +49,6 @@ function nodeSqliteStorage() {
   };
 }
 
-function nodeSqliteStore(): CollabSessionStore {
-  return sqliteCollabStore(nodeSqliteStorage());
-}
-
 const PATH = "/tasks/x.md";
 const EPOCH = "e1";
 const op = (version: number, clientId = "a", clientSeq = version) => ({
@@ -67,7 +63,9 @@ const op = (version: number, clientId = "a", clientSeq = version) => ({
 const implementations: [string, () => CollabSessionStore][] = [
   ["fake", () => fakeSessionStore().store],
 ];
-if (sqlite !== null) implementations.push(["sqlite", nodeSqliteStore]);
+if (sqlite !== null) {
+  implementations.push(["sqlite", () => sqliteCollabStore(nodeSqliteStorage())]);
+}
 
 describe.each(implementations)("collab store contract (%s)", (_name, makeStore) => {
   test("birth: putSnapshot creates session + base idempotently", async () => {
