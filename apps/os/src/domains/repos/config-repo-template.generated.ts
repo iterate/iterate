@@ -8,94 +8,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "AGENTS.md",
     content:
-      "# Project Agent Notes\n" +
-      "\n" +
-      "This private repo is the durable brain for the project's agents.\n" +
-      "\n" +
-      "Agents should keep useful, stable project knowledge here: user preferences,\n" +
-      "working agreements, product decisions, research summaries, unresolved questions,\n" +
-      "and implementation notes that future agents should inherit. Prefer concise\n" +
-      "markdown files that are easy to scan and update. Commit changes with\n" +
-      "`itx.repo.commitFiles({ message, changes: [{ path, content }] })`.\n" +
-      "\n" +
-      "The project worker entrypoint is `worker.ts` (TypeScript). Its default export\n" +
-      "handles HTTP for the project's hosts, receives every committed event on every\n" +
-      "stream in the project through `processEvent(event)` (checkpointed,\n" +
-      "at-least-once, per-stream order — `event.path` says which stream), and reaches\n" +
-      "the project's capabilities through `await this.env.ITX.get()`. The seeded GitHub pull-request review bot and its structural-review policy live in\n" +
-      "`apps/review-bot` as a stream processor on each GitHub connection's webhook\n" +
-      "stream; `worker.ts` keeps only the small bootstrap that offers the bot's\n" +
-      "wake subscription when a repo is linked to GitHub. The example browser apps\n" +
-      "are the `createApp` pairs `apps/todo` and `apps/guestbook`. The worker is built by the platform's worker build\n" +
-      "pipeline: it passes the repo file map and build options to\n" +
-      "`@cloudflare/worker-bundler`, which follows local imports and attempts to\n" +
-      "install dependencies declared in `package.json`. The platform's capability\n" +
-      "types and worker base classes come from the `iterate` package —\n" +
-      "`import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from\n" +
-      "\"iterate/sdk\"`. `iterate` is an ordinary runtime dependency: the platform pins\n" +
-      "it to the deployment's immutable SDK build, and worker-bundler installs and\n" +
-      "bundles the same package graph—including Iterate's one Cap'n Web copy—used by\n" +
-      "local typechecking.\n" +
-      "\n" +
-      "Every worker class — the root project worker AND the apps — extends one of\n" +
-      "the two SDK base classes: `IterateWorkerEntrypoint` (stateless) or\n" +
-      "`IterateDurableObject` (stateful). Both carry the same platform surface:\n" +
-      "`processEventBatch` unpacks delivered event batches into overrideable\n" +
-      "`processEvent(event)` calls, `invokeCapability` dispatches flattened\n" +
-      "`itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP\n" +
-      "into sibling workers. Env defaults to `{ ITX: ItxBinding }`.\n" +
-      "\n" +
-      "The example apps live under `apps/`: `apps/todo` and `apps/guestbook`\n" +
-      "(`createApp` server/client pairs), and `apps/review-bot`. Their\n" +
-      "dynamic-worker refs are inlined at the top of `worker.ts` so the router\n" +
-      "shows exactly what it dials. The router dispatches every app request through\n" +
-      "`this.fetchDynamicWorker(req, ref)` — inherited from the base class — which\n" +
-      "forwards over the platform's fetch-native worker lane (`env.ITX.fetch` with\n" +
-      "the app's ref in the `x-iterate-worker-dispatch` header). Keep that shape: it\n" +
-      "is what lets WebSocket upgrades and streaming responses tunnel through (an\n" +
-      "`app.fetch(req)` RPC method call cannot carry a socket — the method's\n" +
-      "docstring has the full story).\n" +
-      "\n" +
-      "An app's HTTP handler MUST literally be a method named `fetch` on the\n" +
-      "exported class (a stateless `WorkerEntrypoint` or a stateful `DurableObject`)\n" +
-      "— that is Cloudflare's rule, not the platform's: workerd only performs\n" +
-      "protocol work, WebSocket upgrades included, through that distinguished\n" +
-      "handler on a real worker object. A method named anything else — or a `fetch`\n" +
-      "reached as a capability method call — is ordinary RPC: its arguments and\n" +
-      "results are serialized copies, so it can serve data but never a socket.\n" +
-      "The todo and guestbook `/api` routes are the seeded WebSocket\n" +
-      "proof-of-concept (`newWorkersWebSocketRpcResponse` terminates the upgrade in\n" +
-      "the app's Durable Object); copy that shape for anything real-time. Method calls on apps\n" +
-      "(`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP\n" +
-      "rides the fetch lane. App refs use `source.createApp` directly with ordinary\n" +
-      "worker-bundler `server` and `client` entry-point options; its repo-aware\n" +
-      "`files` option is the only platform adaptation, and file paths reach\n" +
-      "worker-bundler unchanged.\n" +
-      "\n" +
-      "`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app\n" +
-      "shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per\n" +
-      "app. The client entry is served separately and imports React and React DOM as\n" +
-      "ordinary package dependencies; Cap'n Web and LiveState come through\n" +
-      "`iterate/sdk/capnweb` and `iterate/sdk/capnweb/react`. Preview builds pin the\n" +
-      "single `iterate` dependency to that deployment's exact pkg.pr.new artifact.\n" +
-      "This is an example, not a platform file-layout rule. The apps deliberately\n" +
-      "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
-      "can inject the small Iterate status overlay in the corner.\n" +
-      "\n" +
-      "The canonical authenticated userspace-app shape is partial-fetch HTTP auth\n" +
-      "(the router gates the todo app this way) plus an explicitly authenticated\n" +
-      "Cap'n Web `/api` that returns an app-defined, attenuated session. `README.md`\n" +
-      "explains the complete flow.\n" +
-      "\n" +
-      "To give agents a new capability surface, add a getter or method to the\n" +
-      "default-export worker class: the platform dispatches dotted\n" +
-      "`itx.worker.<path>` calls as one flattened `invokeCapability({ path, args })`\n" +
-      "that the base class walks in userland, so a getter can hand back a whole\n" +
-      "platform-supplied SDK surface in a single round trip. Built-in\n" +
-      "integrations (Slack, Gmail, GitHub, Telegram, Waitrose) already live at\n" +
-      "`itx.integrations.<slug>.get()` (or `.get(\"<connection>\")` when the exact\n" +
-      "account matters) — reach for a worker getter when\n" +
-      "the platform has no built-in for a provider.\n",
+      "Iterate project config repo — worker.ts is the project worker ({ fetch, processEvent }); apps/ holds its apps. Real docs coming soon.\n",
   },
   {
     path: "ONBOARDING.md",
@@ -109,8 +22,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "1. Welcome the user briefly (by name only if they gave one).\n" +
       "2. Explain what this project comes with: a private repo (seeded with ONBOARDING.md — this script,\n" +
-      "   AGENTS.md, and the project worker at worker.ts), durable event streams, and\n" +
-      "   agents like you that can act on the project.\n" +
+      "   the project worker at worker.ts, and example apps under apps/), durable\n" +
+      "   event streams, and agents like you that can act on the project.\n" +
       "3. Ask one focused question about what they want this project to help with.\n" +
       "\n" +
       "During onboarding:\n" +
@@ -138,79 +51,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "README.md",
     content:
-      "# Iterate config repo\n" +
-      "\n" +
-      "This repo is seeded at project creation by the repo stream processor.\n" +
-      "\n" +
-      "The project worker entrypoint is `worker.ts` (TypeScript). The worker build\n" +
-      "pipeline bundles it and the files it imports into loader-ready code on first\n" +
-      "use, so committing a change here changes the running worker on its next use.\n" +
-      "The platform passes this repo's files and build options directly to\n" +
-      "`@cloudflare/worker-bundler`; when `package.json` declares dependencies, that\n" +
-      "library attempts to install and bundle them.\n" +
-      "\n" +
-      "`apps/todo` and `apps/guestbook` are deliberately basic browser examples.\n" +
-      "Each contains only `server.tsx` and `client.tsx`: the server exports a\n" +
-      "Durable Object and the client becomes a separately served browser module. JSX is\n" +
-      "compiled by `createApp`; React and React DOM are ordinary `package.json`\n" +
-      "dependencies, while Cap'n Web and LiveState come from `iterate/sdk/capnweb`\n" +
-      "and `iterate/sdk/capnweb/react`. Preview builds replace the declared `iterate`\n" +
-      "spec with that deployment's exact pkg.pr.new artifact before bundling. There is no\n" +
-      "app-local Vite config, router generator, or framework adapter. Iterate injects\n" +
-      "its small status overlay into the HTML response in production.\n" +
-      "Their two-file layout is only an example: app refs may choose arbitrary server\n" +
-      "and client entry points from the complete `files` map passed to the bundler.\n" +
-      "\n" +
-      "## Authenticated web apps\n" +
-      "\n" +
-      "The todo app is project-member-only: the router in `worker.ts` gates its\n" +
-      "pages with auth as a partial fetch before dispatching:\n" +
-      "\n" +
-      "```ts\n" +
-      "using itx = await this.env.ITX.get();\n" +
-      "const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(request);\n" +
-      "if (authResponse) return authResponse;\n" +
-      "\n" +
-      "// Auth inspected headers only. The original request body is still available.\n" +
-      "```\n" +
-      "\n" +
-      "The same app owns an unauthenticated Cap'n Web endpoint at `/api`. Its public\n" +
-      "target exposes one method, `authenticate()`, which exchanges the exact-origin\n" +
-      "HTTP-only cookie for an actor and returns an app-specific session capability:\n" +
-      "\n" +
-      "```ts\n" +
-      "class PublicApi extends RpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly itxBinding: ItxBinding,\n" +
-      "    private readonly request: Request,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  async authenticate(credentials: ProjectAuthCredentials) {\n" +
-      "    using itx = await this.itxBinding.get();\n" +
-      "    const actor = await itx.auth\n" +
-      "      .get({ policy: \"project-member\" })\n" +
-      "      .authenticate(this.request, credentials);\n" +
-      "    return new AppSession(actor);\n" +
-      "  }\n" +
-      "}\n" +
-      "```\n" +
-      "\n" +
-      "The browser calls\n" +
-      "`publicApi.authenticate({ type: \"from-server-cookie\" })` over that WebSocket.\n" +
-      "It receives only `AppSession`, never the project-wide `itx` capability. Add RPC\n" +
-      "methods and getters to `AppSession` to define exactly what the browser may do.\n" +
-      "\n" +
-      "`LiveState` and its read-only `LiveStateRpcTarget` come from the same\n" +
-      "`iterate/sdk/capnweb` module first-party apps use. That same entry re-exports\n" +
-      "Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`, guaranteeing one\n" +
-      "class identity across app and SDK code. The todo and guestbook apps use them to\n" +
-      "push their live state with the same snapshot-and-patch implementation. The\n" +
-      "explicit classes are\n" +
-      "intentional: there is no\n" +
-      "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
-      "authority crosses the wire.\n",
+      "Iterate project config repo — worker.ts is the project worker ({ fetch, processEvent }); apps/ holds its apps. Real docs coming soon.\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -428,83 +269,108 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "apps/guestbook/ref.ts",
+    content:
+      "// The guestbook's shared identity, dependency-free on purpose: worker.ts\n" +
+      "// routes to this ref, and the wake subscription in the creation batch below\n" +
+      "// persists the same ref — so ingress and the stream spine always dial the\n" +
+      "// same Durable Object.\n" +
+      "import type { StreamEventInput } from \"iterate/processors\";\n" +
+      "import type { StatefulDynamicWorkerRef } from \"iterate/sdk\";\n" +
+      "\n" +
+      "export const guestbookStreamPath = \"/guestbook\";\n" +
+      "\n" +
+      "export const guestbookAppRef = {\n" +
+      "  className: \"GuestbookApp\",\n" +
+      "  // \"-stream\" keeps clear of a retired predecessor's durable identity.\n" +
+      "  durableWorkerKey: \"app-guestbook-stream\",\n" +
+      "  path: \"/\",\n" +
+      "  source: {\n" +
+      "    createApp: {\n" +
+      "      client: \"apps/guestbook/client.tsx\",\n" +
+      "      files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "      server: \"apps/guestbook/server.tsx\",\n" +
+      "    },\n" +
+      "  },\n" +
+      "  type: \"stateful\",\n" +
+      "} satisfies StatefulDynamicWorkerRef;\n" +
+      "\n" +
+      "/**\n" +
+      " * The guestbook's creation batch: the birth certificate plus the durable WAKE\n" +
+      " * subscription that puts GuestbookApp on the stream's delivery spine. Every\n" +
+      " * first contact (a page visit, an /api socket, a direct sign) may offer it —\n" +
+      " * the idempotency keys collapse the copies. Bump the subscription key's\n" +
+      " * version whenever the persisted delivery expression changes.\n" +
+      " */\n" +
+      "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
+      "  return [\n" +
+      "    {\n" +
+      "      type: \"events.iterate.com/guestbook/created\",\n" +
+      "      payload: { config: { title: \"Guestbook\" } },\n" +
+      "      idempotencyKey: \"guestbook/created\",\n" +
+      "    },\n" +
+      "    {\n" +
+      "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
+      "      payload: {\n" +
+      "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
+      "        delivery: {\n" +
+      "          mode: \"wake\",\n" +
+      "          expression: [\"workers\", [\"get\", guestbookAppRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
+      "          // Must match GuestbookProcessorContract.slug (processor.ts); a\n" +
+      "          // string literal because this module stays dependency-free.\n" +
+      "          processorSlug: \"guestbook\",\n" +
+      "        },\n" +
+      "      },\n" +
+      "      idempotencyKey: \"guestbook/subscription:v1\",\n" +
+      "    },\n" +
+      "  ];\n" +
+      "}\n",
+  },
+  {
     path: "apps/guestbook/server.tsx",
     content:
-      "import { RpcTarget as WorkersRpcTarget } from \"cloudflare:workers\";\n" +
       "import {\n" +
       "  LiveStateRpcTarget,\n" +
       "  RpcTarget,\n" +
       "  newWorkersWebSocketRpcResponse,\n" +
       "  type LiveStateRpc,\n" +
       "} from \"iterate/sdk/capnweb\";\n" +
-      "import type {\n" +
-      "  StreamEventInput,\n" +
-      "  StreamSubscriberWakeRequest,\n" +
-      "  StreamSubscriberWakeResponse,\n" +
-      "} from \"iterate/processors\";\n" +
-      "import {\n" +
-      "  createStreamProcessorRegistry,\n" +
-      "  type StreamProcessorRegistry,\n" +
-      "} from \"iterate/processors/cloudflare\";\n" +
-      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
+      "import type { StreamProcessorRegistry } from \"iterate/processors/cloudflare\";\n" +
+      "import { IterateDurableObject, createProcessorHost } from \"iterate/sdk\";\n" +
+      "import { guestbookCreationEvents, guestbookStreamPath } from \"./ref.ts\";\n" +
       "import { GuestbookProcessor, type GuestbookState } from \"./processor.ts\";\n" +
-      "\n" +
-      "const guestbookStreamPath = \"/guestbook\";\n" +
-      "\n" +
-      "/** The processor property crosses Workers RPC before its wake method is called. */\n" +
-      "class GuestbookProcessorRpcTarget extends WorkersRpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  async wakeStreamSubscriber(\n" +
-      "    request: StreamSubscriberWakeRequest,\n" +
-      "  ): Promise<StreamSubscriberWakeResponse> {\n" +
-      "    if (request.stream.projectId === null) {\n" +
-      "      throw new Error(\"the guestbook subscribes on project streams only\");\n" +
-      "    }\n" +
-      "    return await this.registryFor(request.stream.projectId).wakeStreamSubscriber(request);\n" +
-      "  }\n" +
-      "}\n" +
       "\n" +
       "/** One createApp Durable Object owns the page, API, processor, and live value. */\n" +
       "export class GuestbookApp extends IterateDurableObject {\n" +
-      "  #registry: StreamProcessorRegistry<GuestbookState> | undefined;\n" +
-      "\n" +
-      "  #ensureRegistry(projectId: string): StreamProcessorRegistry<GuestbookState> {\n" +
-      "    if (this.#registry === undefined) {\n" +
-      "      const stream = itxProjectStream(this.env, guestbookStreamPath);\n" +
-      "      const registry = createStreamProcessorRegistry<GuestbookState>(this.ctx, {\n" +
-      "        path: guestbookStreamPath,\n" +
-      "        projectId,\n" +
-      "        stream,\n" +
-      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "      });\n" +
-      "      registry.register(new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }));\n" +
-      "      this.#registry = registry;\n" +
-      "    }\n" +
-      "    return this.#registry;\n" +
-      "  }\n" +
-      "\n" +
-      "  async #freshRegistry(): Promise<StreamProcessorRegistry<GuestbookState>> {\n" +
-      "    if (this.#registry !== undefined) return this.#registry;\n" +
-      "    using project = await this.env.ITX.get();\n" +
-      "    return this.#ensureRegistry(await project.projectId);\n" +
-      "  }\n" +
-      "\n" +
-      "  async #append(...events: StreamEventInput[]): Promise<void> {\n" +
-      "    using project = await this.env.ITX.get();\n" +
-      "    await project.streams.get(guestbookStreamPath).append(...events);\n" +
-      "  }\n" +
+      "  #host = createProcessorHost<GuestbookState>({\n" +
+      "    ctx: this.ctx,\n" +
+      "    env: this.env,\n" +
+      "    path: guestbookStreamPath,\n" +
+      "    createProcessor: (deps) => new GuestbookProcessor(deps),\n" +
+      "  });\n" +
       "\n" +
       "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
-      "    await (await this.#freshRegistry()).handleAlarm(alarmInfo);\n" +
+      "    await this.#host.handleAlarm(alarmInfo);\n" +
       "  }\n" +
       "\n" +
-      "  get processor(): GuestbookProcessorRpcTarget {\n" +
-      "    return new GuestbookProcessorRpcTarget((projectId) => this.#ensureRegistry(projectId));\n" +
+      "  /** The wake door the stream spine dials — the subscription's persisted\n" +
+      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */\n" +
+      "  get processor() {\n" +
+      "    return this.#host.wakeSubscriber;\n" +
+      "  }\n" +
+      "\n" +
+      "  /** First contact initializes the stream: an empty fold means nobody has\n" +
+      "   * offered the birth certificate + wake subscription yet. The batch is\n" +
+      "   * idempotency-keyed, so every caller may offer it. */\n" +
+      "  async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {\n" +
+      "    const registry = await this.#host.registry();\n" +
+      "    await registry.catchUp(\"guestbook\");\n" +
+      "    if ((await this.#host.snapshot()).state.birthCertificate === null) {\n" +
+      "      using project = await this.env.ITX.get();\n" +
+      "      await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents());\n" +
+      "      await registry.catchUp(\"guestbook\");\n" +
+      "    }\n" +
+      "    return registry;\n" +
       "  }\n" +
       "\n" +
       "  async sign(name: string, message: string): Promise<void> {\n" +
@@ -513,19 +379,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (trimmedName.length === 0 || trimmedMessage.length === 0) {\n" +
       "      throw new TypeError(\"Name and message are required\");\n" +
       "    }\n" +
-      "    await this.#append(\n" +
-      "      {\n" +
-      "        type: \"events.iterate.com/guestbook/created\",\n" +
-      "        payload: { config: { title: \"Guestbook\" } },\n" +
-      "        idempotencyKey: \"guestbook/created\",\n" +
-      "      },\n" +
-      "      {\n" +
-      "        type: \"events.iterate.com/guestbook/entry-signed\",\n" +
-      "        payload: { message: trimmedMessage, name: trimmedName },\n" +
-      "        idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
-      "      },\n" +
-      "    );\n" +
-      "    const registry = await this.#freshRegistry();\n" +
+      "    const registry = await this.#ensureInitialized();\n" +
+      "    using project = await this.env.ITX.get();\n" +
+      "    await project.streams.get(guestbookStreamPath).append({\n" +
+      "      type: \"events.iterate.com/guestbook/entry-signed\",\n" +
+      "      payload: { message: trimmedMessage, name: trimmedName },\n" +
+      "      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,\n" +
+      "    });\n" +
       "    await registry.catchUp(\"guestbook\");\n" +
       "    registry.refreshLive();\n" +
       "  }\n" +
@@ -533,8 +393,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async fetch(request: Request): Promise<Response> {\n" +
       "    const url = new URL(request.url);\n" +
       "    if (url.pathname === \"/api\") {\n" +
-      "      const registry = await this.#freshRegistry();\n" +
-      "      await registry.catchUp(\"guestbook\");\n" +
+      "      const registry = await this.#ensureInitialized();\n" +
       "      await registry.loadAndRefreshLive();\n" +
       "      return newWorkersWebSocketRpcResponse(request, new GuestbookApi(this, registry));\n" +
       "    }\n" +
@@ -595,103 +454,55 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "apps/guestbook/tsconfig.json",
+    content:
+      "{\n" +
+      "  \"compilerOptions\": {\n" +
+      "    \"target\": \"ES2024\",\n" +
+      "    \"module\": \"ESNext\",\n" +
+      "    \"moduleResolution\": \"bundler\",\n" +
+      "    \"strict\": true,\n" +
+      "    \"noEmit\": true,\n" +
+      "    \"skipLibCheck\": true,\n" +
+      "    \"allowImportingTsExtensions\": true,\n" +
+      "    \"jsx\": \"react-jsx\",\n" +
+      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\", \"ESNext.Disposable\"],\n" +
+      "    \"types\": [\"@cloudflare/workers-types\"]\n" +
+      "  },\n" +
+      "  \"include\": [\"*.ts\", \"*.tsx\"]\n" +
+      "}\n",
+  },
+  {
     path: "apps/review-bot/src/review-bot-app.ts",
     content:
-      "import { RpcTarget as WorkersRpcTarget } from \"cloudflare:workers\";\n" +
-      "import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from \"iterate/processors\";\n" +
-      "import {\n" +
-      "  createStreamProcessorRegistry,\n" +
-      "  type StreamProcessorRegistry,\n" +
-      "} from \"iterate/processors/cloudflare\";\n" +
-      "import { IterateDurableObject, itxProjectStream } from \"iterate/sdk\";\n" +
+      "import { IterateDurableObject, createProcessorHost } from \"iterate/sdk\";\n" +
       "import { ReviewBotProcessor } from \"./review-bot.ts\";\n" +
-      "\n" +
-      "const PROJECT_ID_STORAGE_KEY = \"review-bot:project-id\";\n" +
-      "const STREAM_PATH_STORAGE_KEY = \"review-bot:stream-path\";\n" +
-      "\n" +
-      "/** The processor property crosses Workers RPC before its wake method is called. */\n" +
-      "class ReviewBotProcessorRpcTarget extends WorkersRpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly registryFor: (projectId: string, path: string) => StreamProcessorRegistry,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  async wakeStreamSubscriber(\n" +
-      "    request: StreamSubscriberWakeRequest,\n" +
-      "  ): Promise<StreamSubscriberWakeResponse> {\n" +
-      "    if (request.stream.projectId === null) {\n" +
-      "      throw new Error(\"the review bot subscribes on project streams only\");\n" +
-      "    }\n" +
-      "    return await this.registryFor(\n" +
-      "      request.stream.projectId,\n" +
-      "      request.stream.path,\n" +
-      "    ).wakeStreamSubscriber(request);\n" +
-      "  }\n" +
-      "}\n" +
       "\n" +
       "// The review bot's stateful host, one Durable Object instance per GitHub\n" +
       "// connection (the ref's durableWorkerKey carries the connection slug —\n" +
-      "// review-bot-ref.ts). Unlike the guestbook, whose stream path is a constant,\n" +
-      "// this host learns its coordinates from the first wake request and caches\n" +
-      "// them durably so an alarm fire needs no dial. It serves no HTTP and holds no\n" +
-      "// live state: it exists purely to put ReviewBotProcessor on the connection\n" +
-      "// stream's delivery spine.\n" +
+      "// review-bot-ref.ts). No fixed `path`: the host learns its connection stream\n" +
+      "// from the first wake request. It serves no HTTP and holds no live state; it\n" +
+      "// exists purely to put ReviewBotProcessor on the stream's delivery spine.\n" +
       "export class ReviewBotApp extends IterateDurableObject {\n" +
-      "  #registry: StreamProcessorRegistry | undefined;\n" +
+      "  #host = createProcessorHost({\n" +
+      "    ctx: this.ctx,\n" +
+      "    env: this.env,\n" +
+      "    // Keepalive recovery: if an eviction kills this object while it owes\n" +
+      "    // work (a webhook mid-route under blockProcessorWhile), the alarm fires\n" +
+      "    // and the recovered runner gets its delivery turn.\n" +
+      "    recovery: true,\n" +
+      "    createProcessor: (deps) =>\n" +
+      "      new ReviewBotProcessor({ ...deps, getItx: () => this.env.ITX.get() }),\n" +
+      "  });\n" +
       "\n" +
-      "  #ensureRegistry(projectId: string, path: string): StreamProcessorRegistry {\n" +
-      "    if (this.#registry === undefined) {\n" +
-      "      this.ctx.storage.kv.put(PROJECT_ID_STORAGE_KEY, projectId);\n" +
-      "      this.ctx.storage.kv.put(STREAM_PATH_STORAGE_KEY, path);\n" +
-      "      const stream = itxProjectStream(this.env, path);\n" +
-      "      const registry = createStreamProcessorRegistry(this.ctx, {\n" +
-      "        path,\n" +
-      "        projectId,\n" +
-      "        stream,\n" +
-      "        // The worker's own build identity: a version change resets a\n" +
-      "        // crash-looping keepalive's backoff budget, so a broken-then-fixed\n" +
-      "        // worker recovers on its next build (the antidote deploy).\n" +
-      "        version: this.env.ITERATE_WORKER_VERSION,\n" +
-      "      });\n" +
-      "      registry.register(\n" +
-      "        new ReviewBotProcessor({\n" +
-      "          path,\n" +
-      "          projectId,\n" +
-      "          stream,\n" +
-      "          getItx: () => this.env.ITX.get(),\n" +
-      "        }),\n" +
-      "        // Keepalive recovery: if an eviction kills this object while it owes\n" +
-      "        // work (a webhook mid-route under blockProcessorWhile), the alarm\n" +
-      "        // fires and the recovered runner gets its delivery turn.\n" +
-      "        { recovery: true },\n" +
-      "      );\n" +
-      "      this.#registry = registry;\n" +
-      "    }\n" +
-      "    return this.#registry;\n" +
-      "  }\n" +
-      "\n" +
-      "  /** The hosting Durable Object's alarm fire, delivered here like a native\n" +
-      "   * one. Route it to the registry: each keepalive self-gates on its own\n" +
-      "   * persisted record, so a stale fire is a no-op. An alarm can only have been\n" +
-      "   * armed by a hosted registry, which cached its coordinates first — nothing\n" +
-      "   * cached means nothing owed. */\n" +
       "  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {\n" +
-      "    const projectId = this.ctx.storage.kv.get<string>(PROJECT_ID_STORAGE_KEY);\n" +
-      "    const path = this.ctx.storage.kv.get<string>(STREAM_PATH_STORAGE_KEY);\n" +
-      "    if (projectId === undefined || path === undefined) return;\n" +
-      "    await this.#ensureRegistry(projectId, path).handleAlarm(alarmInfo);\n" +
+      "    await this.#host.handleAlarm(alarmInfo);\n" +
       "  }\n" +
       "\n" +
       "  /** The wake door the stream spine dials — the subscription's persisted\n" +
-      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`\n" +
-      "   * (review-bot-ref.ts). The request carries the stream's coordinates, so the\n" +
-      "   * host can construct itself before answering the handshake (checkpoint + a\n" +
-      "   * live sink the stream then delivers frames to). */\n" +
-      "  get processor(): ReviewBotProcessorRpcTarget {\n" +
-      "    return new ReviewBotProcessorRpcTarget((projectId, path) =>\n" +
-      "      this.#ensureRegistry(projectId, path),\n" +
-      "    );\n" +
+      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */\n" +
+      "  get processor() {\n" +
+      "    return this.#host.wakeSubscriber;\n" +
       "  }\n" +
       "}\n",
   },
@@ -1420,6 +1231,25 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "apps/todo/tsconfig.json",
+    content:
+      "{\n" +
+      "  \"compilerOptions\": {\n" +
+      "    \"target\": \"ES2024\",\n" +
+      "    \"module\": \"ESNext\",\n" +
+      "    \"moduleResolution\": \"bundler\",\n" +
+      "    \"strict\": true,\n" +
+      "    \"noEmit\": true,\n" +
+      "    \"skipLibCheck\": true,\n" +
+      "    \"allowImportingTsExtensions\": true,\n" +
+      "    \"jsx\": \"react-jsx\",\n" +
+      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\", \"ESNext.Disposable\"],\n" +
+      "    \"types\": [\"@cloudflare/workers-types\"]\n" +
+      "  },\n" +
+      "  \"include\": [\"*.ts\", \"*.tsx\"]\n" +
+      "}\n",
+  },
+  {
     path: "package.json",
     content:
       "{\n" +
@@ -1469,6 +1299,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StatefulDynamicWorkerRef,\n" +
       "  type StreamEvent,\n" +
       "} from \"iterate/sdk\";\n" +
+      "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
       "import {\n" +
       "  githubConnectionStreamPath,\n" +
       "  reviewBotSubscriptionEvents,\n" +
@@ -1478,7 +1309,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +
       "// occasionally send HTTP requests outwards to the world to take influence on it.\n" +
       "//\n" +
-      "// Interally, different parts of a project communicate by appending and subscribing to append-only\n" +
+      "// Internally, different parts of a project communicate by appending and subscribing to append-only\n" +
       "// event streams.\n" +
       "//\n" +
       "// Hence, the essence of an iterate project can be expressed as two functions:\n" +
@@ -1489,6 +1320,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "/** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */\n" +
       "export const todoAppRef = {\n" +
       "  className: \"TodoApp\",\n" +
+      "  // \"-live\" keeps clear of a retired predecessor's durable identity.\n" +
       "  durableWorkerKey: \"app-todo-live\",\n" +
       "  path: \"/\",\n" +
       "  source: {\n" +
@@ -1500,23 +1332,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  },\n" +
       "  type: \"stateful\",\n" +
       "} satisfies StatefulDynamicWorkerRef;\n" +
-      "\n" +
-      "/** Stream-processor guestbook: reduce on /guestbook (`apps/guestbook`). */\n" +
-      "export const guestbookAppRef = {\n" +
-      "  className: \"GuestbookApp\",\n" +
-      "  durableWorkerKey: \"app-guestbook-stream\",\n" +
-      "  path: \"/\",\n" +
-      "  source: {\n" +
-      "    createApp: {\n" +
-      "      client: \"apps/guestbook/client.tsx\",\n" +
-      "      files: repoFiles,\n" +
-      "      server: \"apps/guestbook/server.tsx\",\n" +
-      "    },\n" +
-      "  },\n" +
-      "  type: \"stateful\",\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n" +
-      "\n" +
-      "let guestbookInitialization: Promise<void> | undefined;\n" +
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
@@ -1556,57 +1371,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      return this.fetchDynamicWorker(req, todoAppRef);\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
-      "      // The guestbook's domain history lives on the project stream at\n" +
-      "      // /guestbook; its app hosts the processor behind a durable WAKE\n" +
-      "      // subscription (apps/guestbook/server.tsx). Unlike the review bot —\n" +
-      "      // whose bootstrap rides the repo-link fact in processEvent above —\n" +
-      "      // nothing platform-side announces \"someone wants a guestbook\", so the\n" +
-      "      // first visit appends the idempotent creation batch here.\n" +
-      "      guestbookInitialization ??= (async () => {\n" +
-      "        using itx = await this.env.ITX.get();\n" +
-      "        await itx.streams.get(\"/guestbook\").append(\n" +
-      "          {\n" +
-      "            type: \"events.iterate.com/guestbook/created\",\n" +
-      "            payload: { config: { title: \"Guestbook\" } },\n" +
-      "            idempotencyKey: \"guestbook/created\",\n" +
-      "          },\n" +
-      "          {\n" +
-      "            type: \"events.iterate.com/stream/subscription-configured\",\n" +
-      "            payload: {\n" +
-      "              subscriptionKey: \"app-guestbook#guestbook\",\n" +
-      "              delivery: {\n" +
-      "                mode: \"wake\",\n" +
-      "                expression: [\n" +
-      "                  \"workers\",\n" +
-      "                  [\"get\", guestbookAppRef],\n" +
-      "                  \"processor\",\n" +
-      "                  \"wakeStreamSubscriber\",\n" +
-      "                ],\n" +
-      "                processorSlug: \"guestbook\",\n" +
-      "              },\n" +
-      "            },\n" +
-      "            idempotencyKey: \"guestbook/subscription:v1\",\n" +
-      "          },\n" +
-      "        );\n" +
-      "      })().catch((error: unknown) => {\n" +
-      "        // A failed setup must be retryable by the next request; successful\n" +
-      "        // setup remains durable and needs no more stream RPCs in this isolate.\n" +
-      "        guestbookInitialization = undefined;\n" +
-      "        throw error;\n" +
-      "      });\n" +
-      "      await guestbookInitialization;\n" +
       "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +
-      "      // A collaborative Kanban board over this repo's tasks/ markdown\n" +
-      "      // (github.com/iterate/tasks): project-member gate, then a transparent\n" +
-      "      // reverse proxy — pages, assets, and WebSocket upgrades — to the\n" +
-      "      // deployed vessel. The ingress already stamps x-itx-project-id and the\n" +
-      "      // platform session cookie rides along, so the vessel authenticates\n" +
-      "      // every connection back to os.iterate.com as the visiting user; no\n" +
-      "      // secrets or state live in the vessel. The kv knob points the proxy at\n" +
-      "      // a dev tunnel while developing the tasks app itself (see its README);\n" +
-      "      // absent knob means the deployed vessel.\n" +
+      "      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted\n" +
+      "      // tasks board (github.com/iterate/tasks), which authenticates each\n" +
+      "      // visitor back to os.iterate.com. The kv knob targets a dev tunnel\n" +
+      "      // while developing the tasks app itself.\n" +
       "      using itx = await this.env.ITX.get();\n" +
       "      const denied = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (denied) return denied;\n" +

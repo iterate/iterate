@@ -6,7 +6,12 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
-import { guestbookAppRef, todoAppRef } from "../../../config-repo-template/worker.ts";
+import { todoAppRef } from "../../../config-repo-template/worker.ts";
+import {
+  guestbookAppRef,
+  guestbookCreationEvents,
+} from "../../../config-repo-template/apps/guestbook/ref.ts";
+import { GuestbookProcessorContract } from "../../../config-repo-template/apps/guestbook/processor.ts";
 import { GuestbookApp } from "../../../config-repo-template/apps/guestbook/server.tsx";
 import { ReviewBotApp } from "../../../config-repo-template/apps/review-bot/src/review-bot-app.ts";
 import {
@@ -50,6 +55,7 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
       "apps/todo/server.tsx",
       "apps/guestbook/client.tsx",
       "apps/guestbook/processor.ts",
+      "apps/guestbook/ref.ts",
       "apps/guestbook/server.tsx",
     ]),
   );
@@ -69,14 +75,36 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
 });
 
 test("browser pairs stay two-file createApp apps behind the thin router", () => {
+  expect(todoAppRef.source.createApp).toMatchObject({
+    client: "apps/todo/client.tsx",
+    server: "apps/todo/server.tsx",
+  });
+  expect(guestbookAppRef.source.createApp).toMatchObject({
+    client: "apps/guestbook/client.tsx",
+    server: "apps/guestbook/server.tsx",
+  });
   const worker = templateFile("worker.ts");
-  expect(worker.match(/createApp:/g)).toHaveLength(2);
-  expect(worker.match(/client: "apps\/(?:todo|guestbook)\/client\.tsx"/g)).toHaveLength(2);
-  expect(worker.match(/server: "apps\/(?:todo|guestbook)\/server\.tsx"/g)).toHaveLength(2);
   expect(worker).not.toContain("rootDir");
   expect(worker).not.toContain("clientEntryPoint");
   expect(worker).not.toContain("pipeline:");
   expect(worker).not.toContain("tanstack");
+});
+
+test("guestbook wake subscription names the hosted processor", () => {
+  const subscription = guestbookCreationEvents()[1];
+  expect(subscription).toMatchObject({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      subscriptionKey: "app-guestbook#guestbook",
+      delivery: {
+        mode: "wake",
+        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
+        // ref.ts is dependency-free, so it repeats the slug as a string;
+        // this is the drift guard.
+        processorSlug: GuestbookProcessorContract.slug,
+      },
+    },
+  });
 });
 
 test("modular createWorker refs point at apps/ entrypoints, not the root worker file", () => {

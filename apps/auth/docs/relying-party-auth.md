@@ -93,9 +93,8 @@ check, and denial response. It is not the OIDC relying-party implementation
 used by OS.
 
 For an app-defined Cap'n Web API, exchange the exact-origin project cookie for
-an actor and return an app-specific session capability; the seeded template's
-[`README`](../../os/config-repo-template/README.md) walks through the pattern
-(the member-gated todo app shows the partial-fetch half live).
+an actor and return an app-specific session capability (the seeded template's
+member-gated todo app shows the partial-fetch half live).
 Cookie authentication performed inside an already-open RPC transport must not
 refresh: it cannot return the rotated `Set-Cookie`. OS enforces that with the
 narrow session method and `refresh: "never"`; non-browser clients use an

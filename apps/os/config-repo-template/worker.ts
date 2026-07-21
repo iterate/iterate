@@ -3,6 +3,7 @@ import {
   type StatefulDynamicWorkerRef,
   type StreamEvent,
 } from "iterate/sdk";
+import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 import {
   githubConnectionStreamPath,
   reviewBotSubscriptionEvents,
@@ -12,7 +13,7 @@ import {
 // HTTP clients on the internet can send us Requests, and we will send responses and
 // occasionally send HTTP requests outwards to the world to take influence on it.
 //
-// Interally, different parts of a project communicate by appending and subscribing to append-only
+// Internally, different parts of a project communicate by appending and subscribing to append-only
 // event streams.
 //
 // Hence, the essence of an iterate project can be expressed as two functions:
@@ -23,6 +24,7 @@ const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 /** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */
 export const todoAppRef = {
   className: "TodoApp",
+  // "-live" keeps clear of a retired predecessor's durable identity.
   durableWorkerKey: "app-todo-live",
   path: "/",
   source: {
@@ -34,23 +36,6 @@ export const todoAppRef = {
   },
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
-
-/** Stream-processor guestbook: reduce on /guestbook (`apps/guestbook`). */
-export const guestbookAppRef = {
-  className: "GuestbookApp",
-  durableWorkerKey: "app-guestbook-stream",
-  path: "/",
-  source: {
-    createApp: {
-      client: "apps/guestbook/client.tsx",
-      files: repoFiles,
-      server: "apps/guestbook/server.tsx",
-    },
-  },
-  type: "stateful",
-} satisfies StatefulDynamicWorkerRef;
-
-let guestbookInitialization: Promise<void> | undefined;
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   // The base class delivers committed events on ANY stream here at least once and in
@@ -90,57 +75,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       return this.fetchDynamicWorker(req, todoAppRef);
     }
     if (app === "guestbook") {
-      // The guestbook's domain history lives on the project stream at
-      // /guestbook; its app hosts the processor behind a durable WAKE
-      // subscription (apps/guestbook/server.tsx). Unlike the review bot —
-      // whose bootstrap rides the repo-link fact in processEvent above —
-      // nothing platform-side announces "someone wants a guestbook", so the
-      // first visit appends the idempotent creation batch here.
-      guestbookInitialization ??= (async () => {
-        using itx = await this.env.ITX.get();
-        await itx.streams.get("/guestbook").append(
-          {
-            type: "events.iterate.com/guestbook/created",
-            payload: { config: { title: "Guestbook" } },
-            idempotencyKey: "guestbook/created",
-          },
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: {
-              subscriptionKey: "app-guestbook#guestbook",
-              delivery: {
-                mode: "wake",
-                expression: [
-                  "workers",
-                  ["get", guestbookAppRef],
-                  "processor",
-                  "wakeStreamSubscriber",
-                ],
-                processorSlug: "guestbook",
-              },
-            },
-            idempotencyKey: "guestbook/subscription:v1",
-          },
-        );
-      })().catch((error: unknown) => {
-        // A failed setup must be retryable by the next request; successful
-        // setup remains durable and needs no more stream RPCs in this isolate.
-        guestbookInitialization = undefined;
-        throw error;
-      });
-      await guestbookInitialization;
       return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app === "tasks") {
-      // A collaborative Kanban board over this repo's tasks/ markdown
-      // (github.com/iterate/tasks): project-member gate, then a transparent
-      // reverse proxy — pages, assets, and WebSocket upgrades — to the
-      // deployed vessel. The ingress already stamps x-itx-project-id and the
-      // platform session cookie rides along, so the vessel authenticates
-      // every connection back to os.iterate.com as the visiting user; no
-      // secrets or state live in the vessel. The kv knob points the proxy at
-      // a dev tunnel while developing the tasks app itself (see its README);
-      // absent knob means the deployed vessel.
+      // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted
+      // tasks board (github.com/iterate/tasks), which authenticates each
+      // visitor back to os.iterate.com. The kv knob targets a dev tunnel
+      // while developing the tasks app itself.
       using itx = await this.env.ITX.get();
       const denied = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (denied) return denied;

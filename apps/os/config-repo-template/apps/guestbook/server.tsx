@@ -1,78 +1,45 @@
-import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import {
   LiveStateRpcTarget,
   RpcTarget,
   newWorkersWebSocketRpcResponse,
   type LiveStateRpc,
 } from "iterate/sdk/capnweb";
-import type {
-  StreamEventInput,
-  StreamSubscriberWakeRequest,
-  StreamSubscriberWakeResponse,
-} from "iterate/processors";
-import {
-  createStreamProcessorRegistry,
-  type StreamProcessorRegistry,
-} from "iterate/processors/cloudflare";
-import { IterateDurableObject, itxProjectStream } from "iterate/sdk";
+import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { IterateDurableObject, createProcessorHost } from "iterate/sdk";
+import { guestbookCreationEvents, guestbookStreamPath } from "./ref.ts";
 import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
-
-const guestbookStreamPath = "/guestbook";
-
-/** The processor property crosses Workers RPC before its wake method is called. */
-class GuestbookProcessorRpcTarget extends WorkersRpcTarget {
-  constructor(
-    private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,
-  ) {
-    super();
-  }
-
-  async wakeStreamSubscriber(
-    request: StreamSubscriberWakeRequest,
-  ): Promise<StreamSubscriberWakeResponse> {
-    if (request.stream.projectId === null) {
-      throw new Error("the guestbook subscribes on project streams only");
-    }
-    return await this.registryFor(request.stream.projectId).wakeStreamSubscriber(request);
-  }
-}
 
 /** One createApp Durable Object owns the page, API, processor, and live value. */
 export class GuestbookApp extends IterateDurableObject {
-  #registry: StreamProcessorRegistry<GuestbookState> | undefined;
-
-  #ensureRegistry(projectId: string): StreamProcessorRegistry<GuestbookState> {
-    if (this.#registry === undefined) {
-      const stream = itxProjectStream(this.env, guestbookStreamPath);
-      const registry = createStreamProcessorRegistry<GuestbookState>(this.ctx, {
-        path: guestbookStreamPath,
-        projectId,
-        stream,
-        version: this.env.ITERATE_WORKER_VERSION,
-      });
-      registry.register(new GuestbookProcessor({ path: guestbookStreamPath, projectId, stream }));
-      this.#registry = registry;
-    }
-    return this.#registry;
-  }
-
-  async #freshRegistry(): Promise<StreamProcessorRegistry<GuestbookState>> {
-    if (this.#registry !== undefined) return this.#registry;
-    using project = await this.env.ITX.get();
-    return this.#ensureRegistry(await project.projectId);
-  }
-
-  async #append(...events: StreamEventInput[]): Promise<void> {
-    using project = await this.env.ITX.get();
-    await project.streams.get(guestbookStreamPath).append(...events);
-  }
+  #host = createProcessorHost<GuestbookState>({
+    ctx: this.ctx,
+    env: this.env,
+    path: guestbookStreamPath,
+    createProcessor: (deps) => new GuestbookProcessor(deps),
+  });
 
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await (await this.#freshRegistry()).handleAlarm(alarmInfo);
+    await this.#host.handleAlarm(alarmInfo);
   }
 
-  get processor(): GuestbookProcessorRpcTarget {
-    return new GuestbookProcessorRpcTarget((projectId) => this.#ensureRegistry(projectId));
+  /** The wake door the stream spine dials — the subscription's persisted
+   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */
+  get processor() {
+    return this.#host.wakeSubscriber;
+  }
+
+  /** First contact initializes the stream: an empty fold means nobody has
+   * offered the birth certificate + wake subscription yet. The batch is
+   * idempotency-keyed, so every caller may offer it. */
+  async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {
+    const registry = await this.#host.registry();
+    await registry.catchUp("guestbook");
+    if ((await this.#host.snapshot()).state.birthCertificate === null) {
+      using project = await this.env.ITX.get();
+      await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents());
+      await registry.catchUp("guestbook");
+    }
+    return registry;
   }
 
   async sign(name: string, message: string): Promise<void> {
@@ -81,19 +48,13 @@ export class GuestbookApp extends IterateDurableObject {
     if (trimmedName.length === 0 || trimmedMessage.length === 0) {
       throw new TypeError("Name and message are required");
     }
-    await this.#append(
-      {
-        type: "events.iterate.com/guestbook/created",
-        payload: { config: { title: "Guestbook" } },
-        idempotencyKey: "guestbook/created",
-      },
-      {
-        type: "events.iterate.com/guestbook/entry-signed",
-        payload: { message: trimmedMessage, name: trimmedName },
-        idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
-      },
-    );
-    const registry = await this.#freshRegistry();
+    const registry = await this.#ensureInitialized();
+    using project = await this.env.ITX.get();
+    await project.streams.get(guestbookStreamPath).append({
+      type: "events.iterate.com/guestbook/entry-signed",
+      payload: { message: trimmedMessage, name: trimmedName },
+      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
+    });
     await registry.catchUp("guestbook");
     registry.refreshLive();
   }
@@ -101,8 +62,7 @@ export class GuestbookApp extends IterateDurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api") {
-      const registry = await this.#freshRegistry();
-      await registry.catchUp("guestbook");
+      const registry = await this.#ensureInitialized();
       await registry.loadAndRefreshLive();
       return newWorkersWebSocketRpcResponse(request, new GuestbookApi(this, registry));
     }
