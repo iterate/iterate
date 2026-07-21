@@ -645,7 +645,7 @@ creep.
 
 ### F2. `settle()`'s fixpoint under-waits; failure output is thin
 
-**Status:** in-pr.
+**Status:** in-pr #2194.
 
 `testing.ts:424-431`: settle stops on the first head-quiet round after
 draining exactly two macrotasks — the "2" is load-bearing and undocumented.
@@ -664,7 +664,7 @@ types + head offset; `play` wraps step failures with step index/kind via
 
 ### F3. `h.events()` is untyped → 50 payload casts across suites
 
-**Status:** in-pr.
+**Status:** in-pr #2194.
 
 Harness returns `payload: unknown`; suites cast (`payload as {…}`) 50 times —
 one executionId extraction repeated verbatim 8× in `agent-processor.test.ts`
@@ -677,7 +677,7 @@ back to `unknown`. No new method; shortens nearly every existing test.
 
 ### F4. `MemoryStream` has no serialization boundary; runner spec double dedupes key-only
 
-**Status:** in-pr.
+**Status:** in-pr #2194.
 
 `testing.ts:102-108` stores payloads by reference — a cyclic or
 symbol-carrying payload journals happily in tests and breaks at the
@@ -693,7 +693,7 @@ port the spec double's commit to `sameIdempotentEvent`.
 
 ### F5. Harness hides the processor instance and registry-style `reads`
 
-**Status:** in-pr.
+**Status:** in-pr #2194.
 
 `createProcessor` swallows the instance, so suites keep mutable cells
 (`const live = { scheduler: undefined as unknown as SchedulerProcessor }`,
@@ -708,7 +708,7 @@ delete recurring gymnastics.
 
 ### F6. Three append doors, semantics distinguishable only by context
 
-**Status:** in-pr.
+**Status:** in-pr #2194.
 
 `["append", …]` and `h.append()` settle; `h.stream.append()` doesn't — which
 is load-bearing ("committed but undelivered") but invisible: 29 raw
@@ -731,7 +731,7 @@ the trio on `makeProcessorHarness` (+ F5) and delete the local plumbing.
 
 ### F8. Magic `advanceTime` numbers encode config defaults
 
-**Status:** in-pr.
+**Status:** in-pr #2194.
 
 `["advanceTime", 10_000]` silently encodes the debounce default across the
 agent suite; exactly one test reads it honestly
