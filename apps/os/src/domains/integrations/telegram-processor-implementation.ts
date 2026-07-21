@@ -310,7 +310,7 @@ type TelegramProcessorDeps = {
 // -----------------------------------------------------------------------------
 
 export const TELEGRAM_ACCESS_WELCOME_TEXT =
-  "Hello! You now have access to this Iterate project through this bot. Send me a message to get started.";
+  "Hello! You now have access to this iterate project through this bot. Send me a message to get started.";
 
 /** The forwarded-payload annotation for an update that replies to an earlier
  * message: which thread that message belongs to, and how we know. The agent
@@ -562,7 +562,7 @@ function telegramSenderIdFromUpdate(body: unknown): string | undefined {
 
 function telegramAccessDeniedMessage(input: { settingsUrl: string; userId: string }): string {
   return [
-    "Access denied. This Telegram account is not allowed to use this Iterate project.",
+    "Access denied. This Telegram account is not allowed to use this iterate project.",
     `Ask a project owner to add Telegram user ID ${input.userId} to this bot's allowlist:`,
     input.settingsUrl,
     "You can forward this message to them.",

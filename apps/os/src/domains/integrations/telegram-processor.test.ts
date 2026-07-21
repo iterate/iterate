@@ -296,7 +296,7 @@ describe("TelegramProcessor (webhook router)", () => {
         body: {
           chat_id: CHAT_ID,
           text: [
-            "Access denied. This Telegram account is not allowed to use this Iterate project.",
+            "Access denied. This Telegram account is not allowed to use this iterate project.",
             "Ask a project owner to add Telegram user ID 555 to this bot's allowlist:",
             SETTINGS_URL,
             "You can forward this message to them.",

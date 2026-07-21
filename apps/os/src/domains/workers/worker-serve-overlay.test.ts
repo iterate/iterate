@@ -164,7 +164,7 @@ describe("user-space favicon", () => {
     expect(relIncludesIcon(null)).toBe(false);
   });
 
-  test("uses an inverted Iterate mark", async () => {
+  test("uses an inverted iterate mark", async () => {
     const html = workerDefaultFaviconHtml();
     expect(html).toContain('rel="icon"');
     expect(html).toContain("data-iterate-default-favicon");
@@ -187,7 +187,7 @@ describe("user-space favicon", () => {
 });
 
 describe("workerOverlayHtml", () => {
-  test("carries the Iterate mark and serve info in a scriptless shadow component", () => {
+  test("carries the iterate mark and serve info in a scriptless shadow component", () => {
     const html = workerOverlayHtml(
       { commitOid, kind: "live" },
       { styleNonce: "c3Atc2FmZS1ub25jZQ" },

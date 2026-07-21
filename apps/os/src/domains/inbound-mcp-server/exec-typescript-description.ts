@@ -6,7 +6,7 @@
 
 export function inboundMcpServerInstructions(input: { withAgent: boolean }): string {
   return [
-    "Iterate OS makes each project a programmable workspace. Use exec_typescript to inspect or change the selected project through its itx capability tree.",
+    "iterate OS makes each project a programmable workspace. Use exec_typescript to inspect or change the selected project through its itx capability tree.",
     "exec_typescript accepts one TypeScript async arrow function, async (itx) => { ... }, and returns the function's JSON-serializable return value. Use several small data-first calls: inspect, return the result, then decide the next call. Use Promise.all only for independent work inside one call.",
     ...(input.withAgent
       ? [
@@ -20,7 +20,7 @@ export function inboundMcpServerInstructions(input: { withAgent: boolean }): str
 }
 
 export const EXEC_TYPESCRIPT_DESCRIPTION = [
-  "Execute TypeScript against an Iterate project. Pass exactly one async arrow function as code: async (itx) => { ... }. Its JSON-serializable return value becomes this tool result; a thrown error becomes the tool error.",
+  "Execute TypeScript against an iterate project. Pass exactly one async arrow function as code: async (itx) => { ... }. Its JSON-serializable return value becomes this tool result; a thrown error becomes the tool error.",
   "STANDARD TYPESCRIPT FENCE: open examples with ```ts. Pass only the function inside the fence as exec_typescript.code.",
   "DEEPER DOCS: https://github.com/iterate/iterate — start with apps/os/src/README.md, apps/os/docs/, apps/os/src/itx/examples.ts, and apps/os/src/itx-api.generated.ts.",
   "",
@@ -95,7 +95,7 @@ export const EXEC_TYPESCRIPT_DESCRIPTION = [
   'Read pages with `itx.mcp.exa.web_fetch_exa({ urls, maxCharacters })` or `itx.browser.quickAction("markdown", { url })`. Search docs before using unfamiliar integration methods: each connection and capability can have a project-specific shape.',
   "",
   "DOCUMENTATION LADDER",
-  "Use `itx.docs.search/get/typecheck` for executable platform documentation; use `__describe()` for the live tree and project-specific mounts; read the config repo's `AGENTS.md` and relevant source for project-local knowledge. For deeper platform research, Iterate is open source at https://github.com/iterate/iterate: `apps/os/src/README.md` explains itx architecture, `apps/os/docs/` covers platform subsystems, `apps/os/src/itx/examples.ts` is the example catalogue, `apps/os/src/rpc-targets.ts` defines runtime capability behaviour, and `apps/os/src/itx-api.generated.ts` is the generated script-facing type surface. You can locate and read those pages with the built-in Exa tools. Architecture summaries are also available at https://deepwiki.com/iterate/iterate.",
+  "Use `itx.docs.search/get/typecheck` for executable platform documentation; use `__describe()` for the live tree and project-specific mounts; read the config repo's `AGENTS.md` and relevant source for project-local knowledge. For deeper platform research, iterate is open source at https://github.com/iterate/iterate: `apps/os/src/README.md` explains itx architecture, `apps/os/docs/` covers platform subsystems, `apps/os/src/itx/examples.ts` is the example catalogue, `apps/os/src/rpc-targets.ts` defines runtime capability behaviour, and `apps/os/src/itx-api.generated.ts` is the generated script-facing type surface. You can locate and read those pages with the built-in Exa tools. Architecture summaries are also available at https://deepwiki.com/iterate/iterate.",
   "",
   "Useful starting points after discovery: create an agent explicitly with `const agent = itx.agents.get(path); await agent.create(); await agent.message(task)` to delegate durable work; `itx.scheduler` runs a stringified itx script later; `itx.files` stores and shares bytes; `itx.mcp.connect` and `itx.openapi.connect` turn external APIs into callable targets. Do not assume their signatures—fetch the matching example or type first. If a pipelined handle call fails oddly, await the handle first and call its method in a second statement.",
 ].join("\n");

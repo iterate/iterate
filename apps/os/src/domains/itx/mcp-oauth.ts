@@ -56,7 +56,7 @@ import type { SecretRefresh } from "../secrets/types.ts";
  * not a standing credential. */
 const STATE_TTL_MS = 15 * 60 * 1000;
 
-const CLIENT_NAME = "Iterate";
+const CLIENT_NAME = "iterate";
 
 /** A message meant for a human (agent or dashboard) — thrown when the flow
  * cannot proceed and the reason is worth surfacing verbatim. */

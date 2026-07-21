@@ -406,7 +406,7 @@ function repoCreateRequestSchema() {
       .strictObject({
         type: z.literal("empty"),
       })
-      .meta({ description: "Seed a fresh repo with Iterate's starter files." }),
+      .meta({ description: "Seed a fresh repo with iterate's starter files." }),
     z
       .strictObject({
         type: z.literal("github-private"),
