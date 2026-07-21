@@ -47,6 +47,7 @@ const QUARANTINED_MATRIX_EXAMPLES = new Set([
   "discover-tree",
   "ephemeral-events",
   "repo-edit-file",
+  "repo-read-file",
   "run-script",
   "sandbox-exec",
   "secrets-lifecycle",

@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after live failures
 
-Thirty live preview tests were quarantined on 2026-07-21 while landing PR
+Thirty-two live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 a failed first attempt made the preview proof red instead of silently treating
 the retry as success. A separate retry-disabled test exhausted its bounded
@@ -196,14 +196,31 @@ unchanged from `main`; the connection test uses the shared fixture whose new
 idempotency key also passed immediately on retry. CI correctly rejected the
 otherwise-green 155.6s OS phase, and both cases are quarantined explicitly.
 
+The ninth exact-head run was
+[Depot job 25bs88bgkd](https://depot.dev/orgs/0p91s0lz49/workflows/wqfkxwss4m?job=25bs88bgkd)
+at commit `4294f8a74e612e117315bfd8468a3ddf920cdb12`. All five deployments
+completed without a rate-limit failure and the complete OS lane took 171.3s,
+but two cases passed only on retry:
+
+- `project REPL accepts a forged session` left
+  `<body data-hydrated="false">` visible for its 30s wait; the first attempt
+  failed in 41.9s and its retry passed in 12.2s.
+- catalogue example `repo-read-file` exceeded the `run-script` runtime's 90s
+  deadline; its retry passed.
+
+Both test bodies, the catalogue case definition, and the source example are
+unchanged from `main`. The retry gate correctly rejected the run, and both
+cases are quarantined explicitly rather than allowing their second attempts
+to certify this PR.
+
 ## Quarantined coverage
 
-- The eight Playwright tests above use narrow `test.skip` markers.
+- The nine Playwright tests above use narrow `test.skip` markers.
 - The repo-history, AI Gateway, project fast-path, itx worker-composition,
   sandbox-timeout, script-concurrency, subscription-validation, agent-tools,
   key-value, and configured-connection Vitest tests use narrow `test.skip`
   markers.
-- The ten generated catalogue cases remain discoverable but are registered
+- The eleven generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 - The two Dummy Petshop OAuth cases use narrow `test.skip` markers; the other
@@ -251,6 +268,11 @@ otherwise-green 155.6s OS phase, and both cases are quarantined explicitly.
   determine why the Node runtime reached an old Durable Object incarnation.
 - Trace the configured-connection WebSocket dial failure and determine whether
   it shares the same post-deploy readiness gap.
+- Correlate the forged-session REPL hydration stall with its document/assets,
+  browser console, and `/api` WebSocket trace from the retained Playwright
+  artifact.
+- Trace the `repo-read-file` `run-script` deadline and compare it with the
+  independently executed Node and browser runtimes from the same run.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 
