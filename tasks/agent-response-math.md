@@ -5,7 +5,7 @@ size: small
 
 # Render maths in agent responses
 
-Status: The shared response renderer now produces styled, accessible inline and display maths. Automated checks and a real local agent conversation pass; a draft, preview-labelled sandbox PR is requested solely for evaluation and is not intended for merge.
+Status: The shared response renderer now produces styled, accessible inline and display maths. Automated checks and a real local agent conversation pass; draft PR #2210 is preview-labelled solely for sandbox evaluation and is not intended for merge.
 
 Add Streamdown's KaTeX-backed maths plugin to the shared UI response renderer so agent answers can render inline and display LaTeX instead of showing delimiter source.
 
@@ -23,7 +23,7 @@ Add Streamdown's KaTeX-backed maths plugin to the shared UI response renderer so
 - [x] Prove inline and display maths render through the shared response component. *The agent-feed test asserts KaTeX display markup and accessible MathML for both forms.*
 - [x] Run focused tests and typechecks. *The agent-feed suite and both `@iterate-com/ui` and `@iterate-com/os` typechecks pass.*
 - [x] Start local OS and provide a usable agent-chat URL for manual testing. *Local OS runs on port 61293 with project `math-rendering` and agent `/agents/web/math-demo`.*
-- [ ] Open a draft, `preview`-labelled pull request that is explicitly not intended for merge.
+- [x] Open a draft, `preview`-labelled pull request that is explicitly not intended for merge. *Draft PR #2210 uses a “PREVIEW ONLY — DO NOT MERGE” title and warning.*
 
 ## Implementation log
 
@@ -31,3 +31,4 @@ Add Streamdown's KaTeX-backed maths plugin to the shared UI response renderer so
 - 2026-07-21: A red rendering test exposed that Streamdown 1.6's bundled KaTeX transform runs before its sanitizer, which strips KaTeX's presentation classes. The shared rich-response module removes that transform and appends the official plugin after sanitization.
 - 2026-07-21: Verified a real local agent response in a headed browser: one `.katex-display`, one `<math>` accessibility tree, correct visual layout, and no browser console errors.
 - 2026-07-21: After the localhost check, the user requested a draft preview PR for sandbox evaluation, explicitly not for merge. Merged the latest `origin/main` before preparing it.
+- 2026-07-21: Opened https://github.com/iterate/iterate/pull/2210 as a draft with the `preview` label. The title, opening warning, and merge-status section all mark it not intended for merge.
