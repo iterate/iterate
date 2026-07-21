@@ -20,7 +20,7 @@ import { ChangeSet, Text } from "@codemirror/state";
  * the store's business; orchestration (what the base is) is the host's.
  */
 
-export type CollabChangeSegment =
+type CollabChangeSegment =
   | { clientId: string; createdAt?: number; from: number; kind: "inserted"; to: number }
   | { at: number; clientId: string; createdAt?: number; kind: "deleted"; text: string };
 

@@ -76,7 +76,7 @@ export interface CollabChangesResult {
 
 /** One settled file from a reconcile barrier — exactly what a commit that
  * follows the barrier will contain for that path. */
-export interface SettledFile {
+interface SettledFile {
   content: string;
   epoch: string;
   path: string;
