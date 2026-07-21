@@ -45,10 +45,12 @@ const QUARANTINED_MATRIX_EXAMPLES = new Set([
   "append-and-read-stream",
   "describe-project",
   "discover-tree",
+  "ephemeral-events",
   "repo-edit-file",
   "run-script",
   "secrets-lifecycle",
   "workspace-edit-and-push",
+  "workspace-files-transfer",
 ]);
 
 // Fixed capability mounts, the config repo, and the repo-sourced project

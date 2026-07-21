@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after live failures
 
-Twenty-four live preview tests were quarantined on 2026-07-21 while landing PR
+Twenty-eight live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 a failed first attempt made the preview proof red instead of silently treating
 the retry as success. A separate retry-disabled test exhausted its bounded
@@ -158,13 +158,35 @@ idempotency key in its shared event fixture, but the same validation path
 passed immediately on retry. These remain explicit coverage debt rather than
 allowing transient second attempts to certify the PR.
 
+The seventh exact-head run was
+[Depot job f9fj5d39bl](https://depot.dev/orgs/0p91s0lz49/workflows/34m4qjk5q6?job=f9fj5d39bl)
+at commit `eb76108dbf90a573b5acf849ea3314f24f1d2774`. OS deployed in 43.4s
+and Playwright passed cleanly in 181s, but the 242s OS Vitest lane recorded
+four more passed-on-retry failures:
+
+- catalogue example `workspace-files-transfer` exceeded the `run-script`
+  runtime's 120s deadline; the retry passed and the result consumed 156.842s.
+- catalogue example `ephemeral-events` exceeded the `run-script` runtime's
+  90s deadline; the retry passed and the result consumed 126.948s.
+- `agent runs an itx script that appends a proof event, then replies` failed
+  with `Durable Object reset because its code was updated`; the retry passed
+  and the result consumed 41.905s.
+- `itx.kv round-trips small values, lists by prefix, and is project-scoped`
+  exhausted its 60s stream-event deadline after recovery re-armed the wait;
+  the retry passed and the result consumed 126.366s.
+
+All four test bodies, both catalogue case definitions, and both source
+examples are unchanged from `main`. The retry gate correctly rejected this
+otherwise-green run; each case is quarantined explicitly rather than letting
+its second attempt certify the PR.
+
 ## Quarantined coverage
 
 - The eight Playwright tests above use narrow `test.skip` markers.
 - The repo-history, AI Gateway, project fast-path, itx worker-composition,
-  sandbox-timeout, script-concurrency, and subscription-validation Vitest
-  tests use narrow `test.skip` markers.
-- The seven generated catalogue cases remain discoverable but are registered
+  sandbox-timeout, script-concurrency, subscription-validation, agent-tools,
+  and key-value Vitest tests use narrow `test.skip` markers.
+- The nine generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 - The two Dummy Petshop OAuth cases use narrow `test.skip` markers; the other
@@ -202,6 +224,12 @@ allowing transient second attempts to certify the PR.
 - Correlate the integrations hydration stall with its document/assets,
   browser console, and `/api` WebSocket trace from the retained Playwright
   artifact.
+- Trace the `workspace-files-transfer` and `ephemeral-events` `run-script`
+  deadline tails; the same examples completed in Playwright in this run.
+- Correlate the agent-tools Durable Object reset with the deployed version and
+  determine why the post-deploy readiness boundary still admitted old code.
+- Reproduce the key-value stream wait expiry and explain why recovery re-armed
+  the one-shot wait without delivering its event inside the public deadline.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 
