@@ -294,7 +294,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /** Demo mutation: bump the shared counter and push it to every `itx.liveState` watcher. */
-  incrementLiveDemo(): void {
+  async incrementLiveDemo(): Promise<void> {
+    // External live-state inputs cannot use the synchronous refresh door on a
+    // cold incarnation: it deliberately refuses to assemble from a runner's
+    // schema default. Load every peer before mutating so this update is
+    // published immediately and a load failure rejects the caller.
+    await this.#registry.loadAndRefreshLive();
     this.#liveDemo = { count: this.#liveDemo.count + 1 };
     this.#registry.refreshLive();
   }
@@ -305,7 +310,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * are harmless; a storage/RPC failure rejects the batch instead of silently
    * leaving live state stale.
    */
-  indexCommittedBatchFacts(input: { stream: TouchInput }): void {
+  async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
+    // See incrementLiveDemo: once this resolves every peer slice is real, so
+    // the synchronous refresh below cannot drop this external index update.
+    await this.#registry.loadAndRefreshLive();
     const streamsBefore = this.#streamDatabase.all();
     this.#streamDatabase.touch(input.stream);
     if (streamsBefore !== this.#streamDatabase.all()) {
