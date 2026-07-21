@@ -17,7 +17,7 @@ is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
 verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Nine valid Bugbot findings now have regression
+ready for review against `main`. Ten valid Bugbot findings now have regression
 coverage: requested-slot adoption erases unknown-provenance data, seeded
 repository lookup no longer depends on Cloudflare subscription setup, and a
 server-side GitHub import records its initial commit even though the exact-repo
@@ -450,3 +450,9 @@ the recorded projection.
   `log_7994cc2aba7046429a3ffcecd52522de`; the latter traces to
   `cd8ed0b43cce8ac8988f2b5d3247f74f`. All 2,116 OS unit tests, OS typecheck,
   and changed-file lint/format checks pass locally.
+- 2026-07-21: Fixed Bugbot's sorted-page overshoot finding test-first. If an
+  exponential probe lands after the desired subscription, lookup now brackets
+  and searches the skipped pages instead of declaring the subscription absent
+  and attempting a duplicate POST. The regression places the existing item on
+  page 3 and later names on page 4. All 2,116 OS unit tests, OS typecheck, lint,
+  and changed-file format checks pass locally.

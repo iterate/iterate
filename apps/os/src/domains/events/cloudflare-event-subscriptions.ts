@@ -105,6 +105,11 @@ async function findArtifactEventSubscription(
       upperPage = page - 1;
       break;
     }
+    const firstName = items[0]?.name || "";
+    if (input.name < firstName) {
+      upperPage = page - 1;
+      break;
+    }
     const lastName = items.at(-1)?.name || "";
     if (input.name <= lastName || items.length < pageSize) return undefined;
     lowerPage = page;

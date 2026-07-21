@@ -172,7 +172,12 @@ it("finds one worker subscription without scanning every subscription page", asy
         name: `b-${String(index).padStart(3, "0")}`,
       })) as T;
     }
-    if (path === `${prefix}&page=4&per_page=100`) return [] as T;
+    if (path === `${prefix}&page=4&per_page=100`) {
+      return Array.from({ length: 100 }, (_, index) => ({
+        id: `z-${index}`,
+        name: `z-${String(index).padStart(3, "0")}`,
+      })) as T;
+    }
     if (path === `${prefix}&page=3&per_page=100`) {
       return [
         {
