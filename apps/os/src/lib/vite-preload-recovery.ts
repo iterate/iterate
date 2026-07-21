@@ -1,144 +1,65 @@
-const recoverySearchParameter = "__iterate_vite_preload_recovery";
-const recoveryLogPrefix = "[boot-recovery]";
-
-type RecoveryWindow = {
-  addEventListener(type: string, listener: (event: Event & { payload?: unknown }) => void): void;
-  console: Pick<Console, "error" | "warn">;
-  history: Pick<History, "replaceState" | "state">;
-  location: Pick<Location, "href" | "replace">;
-};
-
-type RecoveryDocument = Pick<
-  Document,
-  "addEventListener" | "body" | "createElement" | "documentElement"
->;
-
-type RecoveryRuntime = {
-  document: RecoveryDocument;
-  MutationObserver: typeof MutationObserver;
-  URL: typeof URL;
-  window: RecoveryWindow;
-};
-
-/** Install before Vite's module scripts. A failed preload gets one full-page
- * replacement; failure on that replacement is terminal and visible. */
-export function installVitePreloadRecovery(runtime?: RecoveryRuntime) {
-  const browserWindow = runtime?.window ?? (window as unknown as RecoveryWindow);
-  const browserDocument = runtime?.document ?? (document as unknown as RecoveryDocument);
-  const BrowserMutationObserver = runtime?.MutationObserver ?? MutationObserver;
-  const BrowserURL = runtime?.URL ?? URL;
-  const marker = "__iterate_vite_preload_recovery";
-  const logPrefix = "[boot-recovery]";
-  let arrivedFromRecovery = new BrowserURL(browserWindow.location.href).searchParams.has(marker);
-  let recoveryFailed = false;
-  let recoveryObserver: MutationObserver | null = null;
-  let replacementStarted = false;
-
-  const errorMessage = (error: unknown) =>
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : "The application bundle could not be loaded.";
-
-  const withoutMarker = () => {
-    const url = new BrowserURL(browserWindow.location.href);
-    url.searchParams.delete(marker);
-    return url;
+// Inline <head> script, installed before Vite's module scripts: a deploy can
+// swap hashed assets under an already-served HTML shell, making a preload 404
+// into a blank page. Vite's documented answer is to reload on
+// vite:preloadError (vite.dev/guide/build#load-error-handling); this adds a
+// sessionStorage one-shot guard so a persistently broken deploy renders a
+// visible terminal message instead of a reload loop.
+//
+// Kept as a plain static string on purpose: it ships verbatim as a classic
+// script, so no bundler transform can break it (serializing a bundled
+// function with toString() could pick up injected helpers). The
+// [boot-recovery] console lines are load-bearing — the Playwright harness
+// (specs/test-support/test.ts) surfaces them as test annotations so absorbed
+// recoveries stay counted rather than silently masking deploy races.
+export const vitePreloadRecoveryScript = `(function () {
+  var key = "iterate:vite-preload-recovery";
+  var prefix = "[boot-recovery]";
+  var failed = false;
+  var describe = function (payload) {
+    return payload && payload.message ? payload.message : String(payload);
   };
-
-  const renderFatalError = (error: unknown) => {
-    recoveryFailed = true;
-    recoveryObserver?.disconnect();
-    const render = () => {
-      const body = browserDocument.body;
-      if (!body) return;
-
-      browserDocument.documentElement.dataset.bootRecovery = "failed";
-      body.dataset.hydrated = "true";
-      const main = browserDocument.createElement("main");
-      main.setAttribute("role", "alert");
-      main.style.cssText =
-        "max-width:42rem;margin:10vh auto;padding:2rem;font:16px/1.5 system-ui,sans-serif";
-      const heading = browserDocument.createElement("h1");
-      heading.textContent = "Iterate could not finish loading";
-      const explanation = browserDocument.createElement("p");
-      explanation.textContent =
-        "A browser asset failed twice. Automatic recovery stopped to avoid a reload loop.";
-      const detail = browserDocument.createElement("pre");
-      detail.textContent = errorMessage(error);
-      detail.style.whiteSpace = "pre-wrap";
-      const retry = browserDocument.createElement("button");
-      retry.type = "button";
-      retry.textContent = "Try loading again";
-      retry.addEventListener("click", () => browserWindow.location.replace(withoutMarker().href));
-      main.appendChild(heading);
-      main.appendChild(explanation);
-      main.appendChild(detail);
-      main.appendChild(retry);
-      body.replaceChildren(main);
-    };
-
-    if (browserDocument.body) render();
-    else browserDocument.addEventListener("DOMContentLoaded", render, { once: true });
+  var alreadyAttempted = function () {
+    try {
+      return sessionStorage.getItem(key) !== null;
+    } catch (error) {
+      return true; // No storage means no loop guard: never auto-reload.
+    }
   };
-
-  const finishRecoveryAfterHydration = () => {
-    const body = browserDocument.body;
-    if (recoveryFailed || !arrivedFromRecovery || body?.dataset.hydrated !== "true") return false;
-
-    browserWindow.history.replaceState(browserWindow.history.state, "", withoutMarker().href);
-    browserDocument.documentElement.dataset.bootRecovery = "recovered";
-    arrivedFromRecovery = false;
-    browserWindow.console.warn(`${logPrefix} recovered after one full-page reload`);
-    return true;
-  };
-
-  if (arrivedFromRecovery) {
-    browserDocument.documentElement.dataset.bootRecovery = "recovering";
-    const observer = new BrowserMutationObserver(() => {
-      if (finishRecoveryAfterHydration()) observer.disconnect();
-    });
-    recoveryObserver = observer;
-    observer.observe(browserDocument.documentElement, {
-      attributeFilter: ["data-hydrated"],
-      attributes: true,
-      subtree: true,
-    });
-    browserDocument.addEventListener(
-      "DOMContentLoaded",
-      () => {
-        if (finishRecoveryAfterHydration()) observer.disconnect();
-      },
-      { once: true },
-    );
-  }
-
-  browserWindow.addEventListener("vite:preloadError", (event) => {
+  window.addEventListener("vite:preloadError", function (event) {
     event.preventDefault();
-    if (replacementStarted) return;
-
-    if (arrivedFromRecovery) {
-      const message = errorMessage(event.payload);
-      browserWindow.console.error(`${logPrefix} replacement boot failed: ${message}`);
-      renderFatalError(event.payload);
+    if (failed) return;
+    if (!alreadyAttempted()) {
+      try {
+        sessionStorage.setItem(key, "1");
+      } catch (error) {}
+      console.warn(prefix + " asset preload failed; attempting one full-page reload: " + describe(event.payload));
+      location.reload();
       return;
     }
-
-    replacementStarted = true;
-    const replacementUrl = new BrowserURL(browserWindow.location.href);
-    replacementUrl.searchParams.set(marker, "1");
-    browserDocument.documentElement.dataset.bootRecovery = "reloading";
-    browserWindow.console.warn(
-      `${logPrefix} asset preload failed; attempting one full-page reload: ${errorMessage(event.payload)}`,
-    );
-    browserWindow.location.replace(replacementUrl.href);
+    failed = true;
+    console.error(prefix + " replacement boot failed: " + describe(event.payload));
+    var render = function () {
+      var main = document.createElement("main");
+      main.setAttribute("role", "alert");
+      main.style.cssText = "max-width:42rem;margin:10vh auto;padding:2rem;font:16px/1.5 system-ui,sans-serif";
+      main.innerHTML = "<h1>Iterate could not finish loading</h1><p>A required script failed to load and automatic recovery stopped to avoid a reload loop. Reload the page to try again.</p>";
+      var detail = document.createElement("pre");
+      detail.style.whiteSpace = "pre-wrap";
+      detail.textContent = describe(event.payload);
+      main.appendChild(detail);
+      document.body.replaceChildren(main);
+    };
+    if (document.body) render();
+    else document.addEventListener("DOMContentLoaded", render, { once: true });
   });
-}
-
-export const vitePreloadRecoveryScript = `(${installVitePreloadRecovery.toString()})()`;
-
-export const vitePreloadRecoveryContract = {
-  logPrefix: recoveryLogPrefix,
-  searchParameter: recoverySearchParameter,
-} as const;
+  window.addEventListener("load", function () {
+    if (failed) return;
+    try {
+      if (sessionStorage.getItem(key) === null) return;
+      sessionStorage.removeItem(key);
+    } catch (error) {
+      return;
+    }
+    console.warn(prefix + " recovered after one full-page reload");
+  });
+})();`;
