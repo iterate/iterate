@@ -1541,6 +1541,30 @@ describe("preview deploy selection", () => {
     ]);
   });
 
+  test("selects the full fleet for an orchestrator-test-only change", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["scripts/preview/preview.test.ts"],
+      }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "semaphore",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
+  });
+
   test("self-heals an erased slot: a parked recorded-green app is redeployed with its dependencies", async () => {
     // Live incident (PR #1793 on preview-7, 2026-07-09): e2e failed with
     // "no such column: epoch", the documented remedy `erase-data` parked the

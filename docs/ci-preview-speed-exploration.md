@@ -164,6 +164,17 @@ same-slot treatment saved 76 seconds (4m28s to 3m12s), matching the 77-second
 reduction in the fleet deploy barrier. This is causal evidence that proven
 reuse removes deployment time rather than merely shifting it into tests.
 
+The generalized all-app recording arm, Depot job
+[`vfx607kt7h`](https://depot.dev/orgs/0p91s0lz49/workflows/6klnbcjs39?job=vfx607kt7h),
+passed in 4m02s with zero retries. It intentionally uploaded all five apps to
+establish the new deployment identities. OS was the deploy barrier at 83.19s
+(41.96s command plus 40.72s readiness) and the test barrier at 139.91s.
+Streams also made the rollout cost visible: its command took 12.47s, while
+exact-version readiness took 39.19s after two old Durable Object placements
+lagged. The remaining deploys were 6.60–16.43s. This is the control for an
+orchestrator-test-only head that selects and tests the whole fleet without
+changing any app's deployment fingerprint.
+
 ### Fresh-slot correctness baseline
 
 Depot run [`jfq7cp9kfk`](https://depot.dev/orgs/0p91s0lz49/workflows/p5bl4dpj76?job=qr4sf7mn3h&attempt=hld2q92zdj)
@@ -302,6 +313,7 @@ the exploration is active.
 | 2026-07-21 23:16 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:23 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:27 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:34 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 
 ## Decision log
 
@@ -332,3 +344,4 @@ the exploration is active.
 | 2026-07-21 | Repeat the failed stream test after rollout. | The exact-deployment target runner passed 10/10 attempts with zero retries in 11.96–19.14s (15.54s median), without deploy or erase.                                                                        | Rollout contamination is the leading explanation; retain full-suite A/B and telemetry as the stronger acceptance test.               |
 | 2026-07-21 | Re-record after merging the latest main.     | Depot job `w6f1rkx69x` passed in 4m28s. OS deployment/readiness took 93.67s; OS tests took 153.99s with zero retries. It recorded version `92e30c6d-c9de-4afd-868e-723a4f196f73`.                           | Use this run as the same-slot control for an e2e-documentation-only revision that must reuse this exact OS version.                  |
 | 2026-07-21 | Reuse the proven OS deployment.              | Depot job `zcrrj5v518` passed in 3m12s. Exact-version and same-input proof took 0.82s versus the control's 93.67s deploy; OS tests took 156.88s with zero retries.                                          | Generalize fail-closed reuse to every app, then run an all-app test-only head to measure the full-fleet ceiling.                     |
+| 2026-07-21 | Record generalized all-app identities.       | Depot job `vfx607kt7h` passed in 4m02s with zero retries. OS was the 83.19s deploy barrier and 139.91s test barrier; Streams spent 39.19s of its 52.25s deploy waiting for exact-version rollout.           | Use this exact slot and five-version set as the control for an orchestrator-test-only full-fleet reuse arm.                          |
