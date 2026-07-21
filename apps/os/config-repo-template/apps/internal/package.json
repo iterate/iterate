@@ -1,0 +1,14 @@
+{
+  "name": "project-internal",
+  "private": true,
+  "type": "module",
+  "description": "Seeded project-member-only app: partial-fetch HTTP auth plus authenticated Cap'n Web /api. Built by the platform worker-bundler.",
+  "dependencies": {
+    "@iterate-com/capnweb": "0.10.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "typescript": "^5.9.3"
+  }
+}

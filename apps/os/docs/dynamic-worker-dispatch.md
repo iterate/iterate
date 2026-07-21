@@ -166,7 +166,7 @@ deliberately not blessed here: the specification above is the intended shape.
   worker-to-worker HTTP is `env.ITX.fetch` with the dispatch header.
 - WebSockets specifically: `fetch` checks the `upgrade` header, returns
   `new Response(null, { status: 101, webSocket })`. The seeded `CounterApp`'s
-  `/ws` route (a named export of the one-file seeded `worker.ts`) is the
+  `/ws` route (`apps/counter` in the seeded config repo) is the
   reference; `project-ingress.e2e.test.ts` proves the lane end to end.
 - Calling methods on a worker (`itx.worker.<getter>.<method>`, provided
   capabilities, probes)? That is the capability tree — RPC dispatch,

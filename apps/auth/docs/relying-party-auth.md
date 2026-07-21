@@ -95,7 +95,7 @@ used by OS.
 For an app-defined Cap'n Web API, exchange the exact-origin project cookie for
 an actor and return an app-specific session capability. The complete working
 example is in
-[`apps/os/config-repo-template/worker.ts`](../../os/config-repo-template/worker.ts).
+[`apps/os/config-repo-template/apps/internal`](../../os/config-repo-template/apps/internal/src/internal-app.ts).
 Cookie authentication performed inside an already-open RPC transport must not
 refresh: it cannot return the rotated `Set-Cookie`. OS enforces that with the
 narrow session method and `refresh: "never"`; non-browser clients use an

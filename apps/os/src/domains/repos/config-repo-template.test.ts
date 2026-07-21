@@ -6,43 +6,70 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
+import {
+  counterAppRef,
+  guestbookAppRef,
+  helloAppRef,
+  internalAppRef,
+  todoAppRef,
+} from "../../../config-repo-template/worker.ts";
+import { reviewBotAppRef } from "../../../config-repo-template/apps/review-bot/src/review-bot-ref.ts";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template ships only the two deliberately basic app pairs", () => {
+test("template ships modular apps under apps/ and a thin worker router", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
   // itx.integrations.<slug>), projects grow their own apps/ and
   // integrations/ by editing their repo, and the complete GitHub review
-  // workflow is userspace code in worker.ts.
+  // workflow is userspace code in apps/review-bot.
   const paths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path);
   expect(paths).not.toContain("sdk.ts");
-  const appPaths = paths.filter((path) => path.startsWith("apps/"));
-  expect(appPaths).toEqual([
-    "apps/guestbook/client.tsx",
-    "apps/guestbook/server.tsx",
-    "apps/todo/client.tsx",
-    "apps/todo/server.tsx",
-  ]);
   expect(paths.filter((path) => path.startsWith("integrations/"))).toEqual([]);
   expect(paths.filter((path) => path.startsWith("agents/"))).toEqual([]);
   expect(paths).not.toContain("github-reviews.ts");
+
+  const appPaths = paths.filter((path) => path.startsWith("apps/"));
+  expect(appPaths.length).toBeGreaterThan(0);
+  expect(
+    appPaths.every(
+      (path) =>
+        path.startsWith("apps/hello/") ||
+        path.startsWith("apps/internal/") ||
+        path.startsWith("apps/counter/") ||
+        path.startsWith("apps/todo/") ||
+        path.startsWith("apps/guestbook/") ||
+        path.startsWith("apps/review-bot/"),
+    ),
+  ).toBe(true);
+  expect(paths).toEqual(
+    expect.arrayContaining([
+      "apps/hello/src/hello-app.ts",
+      "apps/internal/src/internal-app.ts",
+      "apps/counter/src/counter-app.ts",
+      "apps/review-bot/src/review-bot-app.ts",
+      "apps/todo/client.tsx",
+      "apps/todo/server.tsx",
+      "apps/guestbook/client.tsx",
+      "apps/guestbook/server.tsx",
+    ]),
+  );
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies?: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  // The seed needs no runtime packages because its root Worker uses platform
-  // virtual modules. This is a template choice, not a build restriction.
+  // Root worker is a thin router; shared Cap'n Web deps for InternalApp live in
+  // apps/internal/package.json. Root stays free of runtime dependencies.
   expect(templatePackageJson.dependencies).toBeUndefined();
   expect(templatePackageJson.devDependencies).toMatchObject({
     "@iterate-com/capnweb": expect.any(String),
   });
 });
 
-test("basic apps use one server entry, one client entry, and external browser imports", () => {
+test("createApp browser pairs stay dependency-free React + SQLite examples", () => {
   for (const app of ["guestbook", "todo"]) {
     expect(templateFile(`apps/${app}/server.tsx`)).toContain('from "cloudflare:workers"');
     const client = templateFile(`apps/${app}/client.tsx`);
@@ -62,6 +89,17 @@ test("basic apps use one server entry, one client entry, and external browser im
   expect(worker).not.toContain("clientEntryPoint");
   expect(worker).not.toContain("pipeline:");
   expect(worker).not.toContain("tanstack");
+});
+
+test("modular createWorker refs point at apps/ entrypoints, not the root worker file", () => {
+  expect(helloAppRef.source.createWorker.entryPoint).toBe("apps/hello/src/hello-app.ts");
+  expect(internalAppRef.source.createWorker.entryPoint).toBe("apps/internal/src/internal-app.ts");
+  expect(counterAppRef.source.createWorker.entryPoint).toBe("apps/counter/src/counter-app.ts");
+  expect(reviewBotAppRef("install-789").source.createWorker.entryPoint).toBe(
+    "apps/review-bot/src/review-bot-app.ts",
+  );
+  expect("createApp" in todoAppRef.source).toBe(true);
+  expect("createApp" in guestbookAppRef.source).toBe(true);
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {

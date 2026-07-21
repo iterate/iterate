@@ -415,15 +415,15 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       [
         "get",
         {
-          // The seeded stateful app: CounterApp is a named export of the
-          // one-file seeded worker.ts.
+          // The seeded stateful app under apps/counter.
           className: "CounterApp",
           durableWorkerKey,
           path: agentPath,
           source: {
             createWorker: {
-              entryPoint: "worker.ts",
+              entryPoint: "apps/counter/src/counter-app.ts",
               files: { repoPath: "/repos/config", type: "repo" },
+              minify: true,
             },
           },
           type: "stateful",

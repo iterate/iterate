@@ -1,0 +1,14 @@
+{
+  "name": "project-review-bot",
+  "private": true,
+  "type": "module",
+  "description": "The project's GitHub pull-request review bot: a stream processor on each GitHub connection's webhook stream, hosted in a per-connection Durable Object, that routes pull-request webhooks into per-PR agents. Built by the platform's worker build pipeline (no vite/npm build of its own); `iterate` stays a devDependency because the platform supplies those modules to every worker build.",
+  "dependencies": {
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "typescript": "^5.9.3"
+  }
+}

@@ -21,8 +21,8 @@ and client entry points from the complete `files` map passed to the bundler.
 
 ## Authenticated web apps
 
-`InternalApp` in `worker.ts` is a complete project-member-only app. Its normal
-HTTP routes use auth as a partial fetch:
+`InternalApp` in `apps/internal` is a complete project-member-only app. Its
+normal HTTP routes use auth as a partial fetch:
 
 ```ts
 using itx = await this.env.ITX.get();

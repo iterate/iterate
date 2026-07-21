@@ -146,16 +146,20 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(tree).toMatchObject({
     paths: expect.arrayContaining([
       "AGENTS.md",
+      "apps/counter/src/counter-app.ts",
       "apps/guestbook/client.tsx",
       "apps/guestbook/server.tsx",
+      "apps/hello/src/hello-app.ts",
+      "apps/internal/src/internal-app.ts",
+      "apps/review-bot/src/review-bot.ts",
       "apps/todo/client.tsx",
       "apps/todo/server.tsx",
       "package.json",
       "worker.ts",
     ]),
   });
-  // The hello/counter examples are named exports; the basic browser apps each
-  // have one server and one client entry.
+  // Hello/counter/internal/review-bot live under apps/; the basic browser
+  // apps each have one server and one client entry.
   expect(tree.paths).not.toContain("sdk.ts");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 

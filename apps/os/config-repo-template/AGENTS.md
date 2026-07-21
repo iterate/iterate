@@ -12,41 +12,41 @@ The project worker entrypoint is `worker.ts` (TypeScript). Its default export
 handles HTTP for the project's hosts, receives every committed event on every
 stream in the project through `processEvent(event)` (checkpointed,
 at-least-once, per-stream order — `event.path` says which stream), and reaches
-the project's capabilities through `await this.env.ITX.get()`. The seeded
-GitHub pull-request router and structural-review policy are deliberately
-inline in `worker.ts`: it is a complete, copyable userspace example. Extract
-local modules only when project-specific logic earns them. The worker is built
-by the platform's worker build pipeline: it passes the repo file map and build
-options to `@cloudflare/worker-bundler`, which follows local imports and
-attempts to install dependencies declared in `package.json`. The platform's
-capability types and worker base classes come from the `iterate` package —
+the project's capabilities through `await this.env.ITX.get()`. The seeded GitHub pull-request review bot and its structural-review policy live in
+`apps/review-bot` as a stream processor on each GitHub connection's webhook
+stream; `worker.ts` keeps only the small bootstrap that offers the bot's
+wake subscription when a repo is linked to GitHub. Example HTTP apps live under
+`apps/` too (`hello`, `internal`, `counter`, plus the `createApp` browser pairs
+`todo` and `guestbook`). The worker is built by the platform's worker build
+pipeline: it passes the repo file map and build options to
+`@cloudflare/worker-bundler`, which follows local imports and attempts to
+install dependencies declared in `package.json`. The platform's capability
+types and worker base classes come from the `iterate` package —
 `import { IterateWorkerEntrypoint, IterateDurableObject, type StreamEvent } from
 "iterate/sdk"`. It's a devDependency here: the platform supplies the runtime
 `iterate/*` subpaths and `@iterate-com/capnweb` to ordinary worker builds, so
 `npm install` is only for local typechecking and editor support.
 
-The root project worker and its in-file examples extend one of the two SDK
-base classes: `IterateWorkerEntrypoint` (stateless) or
+Every worker class — the root project worker AND the apps — extends one of
+the two SDK base classes: `IterateWorkerEntrypoint` (stateless) or
 `IterateDurableObject` (stateful). Both carry the same platform surface:
 `processEventBatch` unpacks delivered event batches into overrideable
 `processEvent(event)` calls, `invokeCapability` dispatches flattened
 `itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP
 into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
-The in-file example apps are named exports of the same `worker.ts`, routed by the
-default export's `fetch`: `HelloApp` (stateless, extends
-`IterateWorkerEntrypoint`), `InternalApp` (stateless, with authenticated HTML
-and a Cap'n Web API), and `CounterApp` (stateful, extends
-`IterateDurableObject` — a mini client-side app whose count updates live over
-a WebSocket at `/ws`).
-The router dispatches every app request through `this.fetchDynamicWorker(req,
-ref)` — inherited from the base class — which forwards over the platform's
-fetch-native worker lane (`env.ITX.fetch` with the app's ref in the
-`x-iterate-worker-dispatch` header). Keep that shape: it is what lets
-WebSocket upgrades and streaming responses tunnel through (an
+The example apps live under `apps/`: `apps/hello` (stateless JSON),
+`apps/internal` (authenticated HTML + Cap'n Web API), `apps/counter`
+(stateful Durable Object with live WebSocket count), `apps/todo` and
+`apps/guestbook` (`createApp` server/client pairs), and `apps/review-bot`.
+Their dynamic-worker refs are inlined at the top of `worker.ts` so the router
+shows exactly what it dials. The router dispatches every app request through
+`this.fetchDynamicWorker(req, ref)` — inherited from the base class — which
+forwards over the platform's fetch-native worker lane (`env.ITX.fetch` with
+the app's ref in the `x-iterate-worker-dispatch` header). Keep that shape: it
+is what lets WebSocket upgrades and streaming responses tunnel through (an
 `app.fetch(req)` RPC method call cannot carry a socket — the method's
-docstring has the full story). When an app outgrows the shared file, move its
-class into its own module and point the ref's `entryPoint` at it.
+docstring has the full story).
 
 An app's HTTP handler MUST literally be a method named `fetch` on the
 exported class (a stateless `WorkerEntrypoint` or a stateful `DurableObject`)
@@ -71,7 +71,7 @@ This is an example, not a platform file-layout rule. The apps deliberately
 avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform
 can inject the small Iterate status overlay in the corner.
 
-`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch
+`InternalApp` (`apps/internal`) is the canonical authenticated userspace-app shape: partial-fetch
 HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an
 app-defined, attenuated session. `README.md` explains the complete flow.
 
