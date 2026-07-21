@@ -468,13 +468,6 @@ function detachPlainRpcResult(result: object): object {
 }
 
 /**
- * Durable event stream capability.
- *
- * Streams are the public coordination primitive, not an internal queue hidden
- * behind domain methods. Domain helpers can construct common event shapes, but
- * callers and processors still work with explicit events.
- */
-/**
  * One replay of an idempotent Durable Object call with the absorbed first
  * failure logged — the single onRetry shape shared by every retrying door in
  * this file (stream reads, keyed appends, workspace reads, script rejoins,
@@ -493,6 +486,13 @@ function retryLoggedIdempotentOperation<Result>(input: {
   });
 }
 
+/**
+ * Durable event stream capability.
+ *
+ * Streams are the public coordination primitive, not an internal queue hidden
+ * behind domain methods. Domain helpers can construct common event shapes, but
+ * callers and processors still work with explicit events.
+ */
 export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async __describe(): Promise<Description> {
     return describeNode({
