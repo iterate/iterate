@@ -758,6 +758,96 @@ describe("preview readiness URLs", () => {
     }
   });
 
+  test("retries an unattributed framework error within the bounded rollout window", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            message: "HTTPError",
+            status: 500,
+            unhandled: true,
+          },
+          { status: 500 },
+        ),
+      )
+      .mockImplementation(async (input) => {
+        const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
+        return Response.json(
+          { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
+          {
+            status: 200,
+            headers: { "x-iterate-worker-version": "expected-version" },
+          },
+        );
+      });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("reports the last unattributed framework error when the rollout window expires", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json(
+        {
+          message: "HTTPError",
+          reference: "8hluru350urjpunkhe9eq8e0",
+          status: 500,
+          unhandled: true,
+        },
+        { status: 500 },
+      ),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 1_500,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(readiness).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining("8hluru350urjpunkhe9eq8e0"),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   test("cannot report ready when final wave validation finishes after the deadline", async () => {
     vi.useFakeTimers();
     let requestCount = 0;
