@@ -413,7 +413,9 @@ async function parseSlackWebApiResponse(
   }
   if (!response.ok || result.ok === false) {
     const error = typeof result.error === "string" ? result.error : `HTTP ${response.status}`;
-    throw new Error(`Slack Web API ${method} failed: ${error}`);
+    throw Object.assign(new Error(`Slack Web API ${method} failed: ${error}`), {
+      slackErrorCode: error,
+    });
   }
   return result;
 }

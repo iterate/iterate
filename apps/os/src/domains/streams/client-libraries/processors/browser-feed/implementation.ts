@@ -5,7 +5,7 @@ import {
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamProcessor } from "iterate/processors";
-import type { StreamEvent } from "iterate/processors";
+import type { ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import { ensureBrowserProcessorProgressSchema } from "../../browser/processor-state-storage.ts";
 import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
@@ -106,15 +106,11 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     this.#volatileAgentState = null;
   }
 
-  protected override reduce(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["reduce"]>[0],
-  ): BrowserFeedState {
+  protected override reduce(args: ReduceArgs<BrowserFeedContract>): BrowserFeedState {
     return planBrowserFeedOps(args.state, [args.event]).endState;
   }
 
-  protected override processEvent(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
-  ): undefined {
+  protected override processEvent(args: ProcessEventArgs<BrowserFeedContract>): undefined {
     // Event-less at-head pass: this projection has no at-head work.
     const { event } = args;
     if (event === null) return;

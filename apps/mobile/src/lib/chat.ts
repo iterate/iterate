@@ -3,7 +3,7 @@
 // visible-message event types plus a derived "working…" flag, not the web's
 // full activity feed (packages/ui/src/components/events/agent-ui-reducer.ts).
 
-import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
+import type { StreamEvent } from "iterate/react";
 
 // User messages travel as a context-added event with role "user" (the single
 // inbound door every caller — web, Slack, mobile — now shares); there is no

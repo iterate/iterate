@@ -1,7 +1,7 @@
 // In-memory test doubles for the stream substrate — the ONE MemoryStream
 // (plus MemoryStreamNetwork for router suites observing cross-stream
-// forwards) — and `driveProcessor`, REAL runner drive over the in-memory
-// stream: the shared form of the cutover suites' local `drive()` helpers.
+// forwards). The generic step harness drives the real runner over that
+// in-memory stream.
 // Registry-level harnesses (fake DurableObjectState, virtual clock, alarm
 // cell, crash-as-eviction) live inline in the suites that need them
 // (stream-processor-registry.test.ts, the per-domain *-recovery tests).
@@ -226,49 +226,6 @@ export class MemoryStreamNetwork {
   eventsAt(path: string): StreamEvent[] {
     return this.streams.get(path)?.events ?? [];
   }
-}
-
-/** What {@link driveProcessor} returns: REAL runner drive for one processor. */
-type ProcessorDriver<Contract extends StreamProcessorContract> = {
-  /** The driving runner, for tests that need its full surface. */
-  runner: StreamProcessorRunner<Contract>;
-  /** One catch-up pass to the stream's current head — the production
-   * delivery cadence. Failures RETHROW with the cursor held, so a retry
-   * redelivers the failed events exactly like the transport would. */
-  deliver(): Promise<void>;
-  /** The runner's committed reduced state (schema default until the first pass). */
-  readonly state: ProcessorState<Contract>;
-  /** One consistent read of the reduced state, pinned to its offset. */
-  snapshot(): Promise<{ offset: number; state: ProcessorState<Contract> }>;
-};
-
-/**
- * REAL runner drive over an in-memory stream — the shared form of the
- * cutover suites' local `drive()` helpers: one StreamProcessorRunner per
- * processor (in-memory progress; a fresh driver over the same stream
- * replays from scratch, which is the full-replay recipe). The processor
- * instance holds no reduced state of its own — read `driver.state` /
- * `driver.snapshot()`.
- */
-export function driveProcessor<Contract extends StreamProcessorContract, Deps extends object>(
-  processor: StreamProcessor<Contract, Deps>,
-  stream: MemoryStream,
-): ProcessorDriver<Contract> {
-  const runner = new StreamProcessorRunner({ processor, stream });
-  return {
-    runner,
-    deliver: () => runner.catchUp(),
-    get state() {
-      return runner.currentState;
-    },
-    snapshot: () => runner.snapshot(),
-  };
-}
-
-/** The events of one type on a stream (or plain event array), in order. */
-export function eventsOfType(source: MemoryStream | StreamEvent[], type: string): StreamEvent[] {
-  const events = Array.isArray(source) ? source : source.events;
-  return events.filter((event) => event.type === type);
 }
 
 // =============================================================================

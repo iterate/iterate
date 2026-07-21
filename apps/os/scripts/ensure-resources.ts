@@ -28,7 +28,7 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
-import { emailDomainForDeployment } from "../src/domains/email/utils.ts";
+import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /**
@@ -156,42 +156,14 @@ export default async function ensureResources(
   }
 
   // ---- Email Routing: inbound project email -------------------------------
-  // Inbound mail (<slug>@<base>, thread tags <slug>+t<id>@<base>) is delivered
-  // to the OS worker's email() handler through a zone catch-all rule. ONLY the
-  // first hostname base gets routing: it is the deployment's email domain —
-  // the ingress door rejects every other domain and all outbound From/Reply-To
-  // addresses are built from it. Enabling Email Routing adds and locks the
-  // zone's MX + SPF records; both calls are idempotent. NOTE: Email SENDING
-  // (the itx.email outbound half) is onboarded separately in the dashboard —
-  // there is no public API for sending onboarding yet.
-  const emailBase = emailDomainForDeployment(env.projectHostnameBases);
-  const emailZones = emailBase === null ? [] : [emailBase];
-  for (const base of emailZones) {
-    const zone = zones.find((candidate) => candidate.name === base);
-    if (!zone) {
-      console.warn(`no zone named ${base} in account ${env.cloudflareAccountId}; skipping email`);
-      continue;
-    }
-    const routing = await cfV4<{ enabled?: boolean }>(`/zones/${zone.id}/email/routing`).catch(
-      () => null,
-    );
-    if (routing?.enabled !== true) {
-      await cfV4(`/zones/${zone.id}/email/routing/enable`, { method: "POST", body: "{}" });
-      console.log(`enabled Email Routing on ${zone.name}`);
-    } else {
-      console.log(`Email Routing on ${zone.name} already enabled`);
-    }
-    await cfV4(`/zones/${zone.id}/email/routing/rules/catch_all`, {
-      method: "PUT",
-      body: JSON.stringify({
-        matchers: [{ type: "all" }],
-        actions: [{ type: "worker", value: [env.osWorkerName] }],
-        enabled: true,
-        name: `${ctx.name} inbound project email (ensure-resources.ts)`,
-      }),
-    });
-    console.log(`Email Routing catch-all on ${zone.name} -> worker ${env.osWorkerName}`);
-  }
+  // Cloudflare accepts a Worker action only after that script exists. A fresh
+  // slot therefore enables routing now and explicitly defers the catch-all;
+  // deploy.ts requires and installs it after the first Worker upload.
+  await ensureInboundEmailRouting(ctx, {
+    projectHostnameBases: env.projectHostnameBases,
+    workerName: env.osWorkerName,
+    workerRequirement: "allow-missing-before-first-deploy",
+  });
 
   // ---- Reconcile against envs.ts -----------------------------------------------
   reconcileResources(ctx.name, env.resources, {

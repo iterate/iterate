@@ -330,8 +330,8 @@ To expand the fleet rather than use an existing slot, see
 
 Each preview slot N is a complete, isolated stack on the dev/preview
 Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
-and `<proj-slug>.iterate-preview-N.app`. There are nine slots
-(`preview-1..9`), leased via semaphore (`environment-config-lease`).
+and `<proj-slug>.iterate-preview-N.app`. There are currently nineteen
+`preview-<n>` slots, leased via semaphore (`environment-config-lease`).
 
 ### The lease model: one slot per PR, for the PR's whole life
 
@@ -349,7 +349,7 @@ invariants:
   teardown is decoupled from releasing the slot (and how disposable data
   expires 3h after last use).
 - **Draft PRs don't claim a slot unless they ask.** Drafts are the default
-  for agent-opened PRs, and nine slots don't survive a busy night of them. A
+  for agent-opened PRs, and nineteen slots don't survive a busy night of them. A
   draft asks by wearing the `preview` label (durable — previews then behave
   as for a ready PR), being marked ready for review, or a one-shot explicit
   run (dispatching the `Cloudflare Previews` workflow, or
@@ -364,7 +364,7 @@ invariants:
   the answer is "not that one". So a stale PR's cleanup can never destroy
   another PR's preview, e2e never runs against someone else's deployment, and
   nothing steals a live lease without a human `--force`.
-- **Contention queues instead of exploding.** When all nine slots are leased,
+- **Contention queues instead of exploding.** When all nineteen slots are leased,
   `preview deploy` waits in line (logging who holds what every few minutes)
   for up to 6 minutes before failing with the full holder table and
   remediation steps. `PREVIEW_SLOT_WAIT_MS=0` makes it fail fast.
@@ -376,7 +376,7 @@ invariants:
 - **Everything is attributable and visible.** `pnpm preview status` shows
   each slot's holder, PR open/closed state, idle/orphaned verdict, open
   preview-eligible PRs without a slot, and reclaim commands when the fleet
-  is full for a reason other than "nine open PRs". The semaphore UI at
+  is full for a reason other than "nineteen open PRs". The semaphore UI at
   semaphore.iterate.com shows the same live leases; every lease transition
   (acquired/renewed/evicted/expired/force-released) is logged as an event in
   the coordinator. Exceptional states — waiting for a slot, no slot
@@ -392,6 +392,18 @@ invariants:
   # --dry-run to preview). Never touches a live lease.
   doppler run --project _shared --config prd -- pnpm preview gc --dry-run
   ```
+
+An eligible PR can request one configured slot by putting an exact standalone
+line in its body:
+
+```text
+preview_environment=preview-17
+```
+
+This selects a slot; it does not opt a draft into previews. The PR must still
+carry the `preview` label, be ready for review, or use an explicit one-off run.
+If the requested slot is unknown or held by another owner, acquisition fails
+without forcing the holder or silently falling back to another slot.
 
 CI and local machines run the **same preview commands against the same
 semaphore**. CI additionally checks the deployment epoch before invoking those

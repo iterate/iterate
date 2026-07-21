@@ -132,7 +132,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // head — behind it the state is partial and settlements may sit in pages
     // not yet replayed.
     if (!delivery.caughtUp || state.birthCertificate === null) return;
-    const { pushTokenSecretPath, pushTokenSecretUpdatedOffset } = state;
+    const { pushTokenSecret } = state;
 
     // Settle what can no longer be attempted. Whether an orphaned `started`
     // attempt fails or re-drives is a domain decision: pushes fail-uncertain,
@@ -143,7 +143,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       const requestOffset = Number(offset);
       if (notification.status === "requested" && notification.expiresAt <= this.deps.now()) {
         settlements.push({ requestOffset, outcome: { kind: "expired" } });
-      } else if (notification.status === "requested" && pushTokenSecretPath === null) {
+      } else if (notification.status === "requested" && pushTokenSecret === null) {
         settlements.push({ requestOffset, outcome: { kind: "device-unavailable" } });
       } else if (notification.status === "started" && !this.#liveSendAttempts.has(requestOffset)) {
         settlements.push({
@@ -194,12 +194,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // in this incarnation is already driving. The live-set entry is taken
     // SYNCHRONOUSLY, before any await, so the same pass never classifies its
     // own attempt as orphaned.
-    if (
-      pushTokenSecretPath === null ||
-      pushTokenSecretUpdatedOffset === null ||
-      this.projectId === null
-    )
-      return;
+    if (pushTokenSecret === null || this.projectId === null) return;
     for (const [offset, notification] of Object.entries(state.notifications)) {
       const requestOffset = Number(offset);
       if (
@@ -213,8 +208,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       runInBackground(() =>
         this.#sendNotification({
           notification,
-          pushTokenSecretPath,
-          pushTokenSecretUpdatedOffset,
+          pushTokenSecretPath: pushTokenSecret.path,
+          pushTokenSecretUpdatedOffset: pushTokenSecret.updatedOffset,
           requestOffset,
         }),
       );
@@ -232,8 +227,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         return {
           ...state,
           birthCertificate: event.payload,
-          pushTokenSecretPath: event.payload.config.pushTokenSecretPath,
-          pushTokenSecretUpdatedOffset: event.payload.config.pushTokenSecretUpdatedOffset,
+          pushTokenSecret: {
+            path: event.payload.config.pushTokenSecretPath,
+            updatedOffset: event.payload.config.pushTokenSecretUpdatedOffset,
+          },
           tokenUpdatedOffset: event.offset,
         };
       case "events.iterate.com/device/push-token-updated":
@@ -255,8 +252,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                     pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
                   },
                 },
-          pushTokenSecretPath: event.payload.pushTokenSecretPath,
-          pushTokenSecretUpdatedOffset: event.payload.pushTokenSecretUpdatedOffset,
+          pushTokenSecret: {
+            path: event.payload.pushTokenSecretPath,
+            updatedOffset: event.payload.pushTokenSecretUpdatedOffset,
+          },
           // Re-enrollment: a fresh credential un-revokes the device.
           revokedAt: null,
           tokenUpdatedOffset: event.offset,
@@ -264,8 +263,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/revoked":
         return {
           ...state,
-          pushTokenSecretPath: null,
-          pushTokenSecretUpdatedOffset: null,
+          pushTokenSecret: null,
           revokedAt: event.createdAt,
         };
       case "events.iterate.com/device/notification-requested":
@@ -390,10 +388,10 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     // with: a rotation that landed meanwhile makes it a no-op, and only a
     // WINNING clear may revoke the device.
     const pushTokenInvalidated =
-      pushTokenInvalid && state.pushTokenSecretPath !== null
+      pushTokenInvalid && state.pushTokenSecret !== null
         ? await this.deps.clearPushToken({
-            pushTokenSecretPath: state.pushTokenSecretPath,
-            pushTokenSecretUpdatedOffset: state.pushTokenSecretUpdatedOffset!,
+            pushTokenSecretPath: state.pushTokenSecret.path,
+            pushTokenSecretUpdatedOffset: state.pushTokenSecret.updatedOffset,
           })
         : false;
     if (pushTokenInvalid || settlements.length > 0) {

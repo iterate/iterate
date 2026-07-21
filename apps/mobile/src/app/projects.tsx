@@ -1,17 +1,15 @@
 // Project picker. Adapted from the voice-ios-app branch (PR #1605)
 // apps/mobile/src/app/projects.tsx; divergences: selecting a project persists
-// it as the boot destination, sign-out also tears down live thread
-// subscriptions, and opening a project backfills a missing OS-side bootstrap
-// first (see lib/open-project.ts).
+// it as the boot destination, and opening a project backfills a missing
+// OS-side bootstrap first (see lib/open-project.ts). Shared subscription hooks
+// own their teardown when sign-out replaces this route.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import type { ProjectListEntry } from "../../../os/src/itx-api.generated.ts";
+import type { ProjectListEntry } from "iterate/react";
 import { SignInRequiredError, signOut } from "../lib/auth.ts";
-import { getItxSession, resetItxSession } from "../lib/itx.ts";
-import { stopAllApprovals } from "../lib/live-approvals.ts";
-import { stopAllThreads } from "../lib/live-thread.ts";
+import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
 import { revokeEnrolledPushDevices } from "../lib/push-device.ts";
 import { DEFAULT_SERVER } from "../lib/servers.ts";
@@ -29,7 +27,6 @@ export default function ProjectsScreen() {
         const list = await itx.projects.list({ scope: "mine" });
         return { baseUrl, list };
       } catch (error) {
-        resetItxSession();
         // Redirect from the async failure, not render: render-time
         // navigation re-fires on every re-render while the error persists.
         if (error instanceof SignInRequiredError) router.replace("/");
@@ -65,9 +62,7 @@ export default function ProjectsScreen() {
                 const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
                 await revokeEnrolledPushDevices(baseUrl);
                 await signOut(baseUrl);
-                stopAllThreads();
-                stopAllApprovals();
-                resetItxSession();
+                disconnectItxSession();
                 queryClient.clear();
                 router.replace("/");
               }}

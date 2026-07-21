@@ -98,13 +98,17 @@ cover only the shared Cloudflare resource/deploy skeleton.
 
 1. Add the entry to envs.ts (preview slots: `previewSlot(N, {...UNPROVISIONED})`).
 2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
-   and prints the IDs to paste into envs.ts.
+   and prints the IDs to paste into envs.ts. A brand-new OS Worker defers its
+   inbound-email catch-all until deploy because Cloudflare does not accept a
+   route to a missing script.
 3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
 4. After Doppler and resources are ready, deploy auth and os concurrently.
    Both consume one Doppler-owned signing key; os derives only its public half
    and never waits for auth's JWKS endpoint. A brand-new environment still
    needs the auth service to exist before Cloudflare can resolve os's service
-   binding, but subsequent revisions have no JWT-driven deployment order.
+   binding, but subsequent revisions have no JWT-driven deployment order. The
+   os deploy also requires the post-upload inbound-email catch-all to
+   reconcile.
 
 ## Cloudflare accounts
 

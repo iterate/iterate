@@ -97,7 +97,7 @@ export class EmailAgentProcessor extends StreamProcessor<
           // in the transcription still let the agent reach any surviving
           // bytes via itx.files.get(path).
           const stored = (event.payload.message.attachments ?? []).filter(
-            (attachment): attachment is StoredInboundAttachment & { size: number } =>
+            (attachment): attachment is typeof attachment & { path: string } =>
               typeof attachment.path === "string",
           );
           let files: AgentFileAttachment[] | undefined;
@@ -108,7 +108,7 @@ export class EmailAgentProcessor extends StreamProcessor<
                 stored.map((attachment) => ({
                   filename: attachment.filename ?? null,
                   mimeType: attachment.mimeType ?? null,
-                  path: attachment.path!,
+                  path: attachment.path,
                   size: attachment.size ?? 0,
                 })),
               );
