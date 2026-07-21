@@ -141,16 +141,23 @@ Successful repo-backed fetches carry platform-authored
 removes any value user code tried to spoof before stamping this header.
 Project ingress uses it to inject the small **Iterate overlay** into HTML
 documents (HTMLRewriter, appended before `</body>`). Injection is skipped for
-non-documents, encoded bodies, responses with CSP, and responses opting out
-through `x-iterate-overlay`; the seeded basic apps intentionally omit CSP so
-the floating corner mark remains visible. The same streaming transform adds
-an inverted Iterate favicon at document end when the app has no `rel=icon`
-link anywhere in its document. Its reserved same-origin asset lives at
+non-documents, encoded bodies, and responses opting out through
+`x-iterate-overlay`. The live overlay is scriptless declarative shadow DOM;
+native details/summary provides its click-open panel. For a CSP-protected
+document, ingress generates a per-response nonce, authorizes it only in the
+style directive governing elements (in every header or meta policy), and puts
+it on the overlay's isolated stylesheet. When styles fall back to
+`default-src`, ingress copies those sources into a new `style-src` directive
+before adding the nonce; the nonce never enters `default-src`, where it could
+also become script permission. It never adds `unsafe-inline` or a new host
+source. The same streaming transform adds an
+inverted Iterate favicon at document end when the app has no `rel=icon` link
+anywhere in its document. Its reserved same-origin asset lives at
 `/.iterate/favicon.svg`, so normal self-only CSPs accept it without embedding
 the full SVG in every document. On the `/prj_<id>` path lane, the link keeps
 that browser-visible prefix while dispatch serves the rewritten project path.
-CSP and overlay opt-out affect the script widget, not the favicon fallback; an
-app-provided icon always wins. See `worker-serve-overlay.ts`.
+Overlay opt-out does not affect the favicon fallback; an app-provided icon
+always wins. See `worker-serve-overlay.ts`.
 
 ## Live capabilities and WebSockets: the specification, and today's boundary
 
