@@ -83,7 +83,35 @@ async function runTuiTest(input: { env: NodeJS.ProcessEnv }) {
   }
 
   if (result.exitCode !== 0) {
+    await dumpChatPtyTranscript(input.env);
     throw new Error(`tui-test exited with code ${result.exitCode ?? "unknown"}.`);
+  }
+}
+
+/**
+ * A tui-test timeout reports nothing about WHAT the terminal showed — in CI
+ * that is the difference between "the agent was slow" and "the CLI crashed at
+ * import". On failure, re-run the exact chat command under a real PTY
+ * (util-linux `script` on the runners; BSD `script` locally) for a bounded
+ * window and print the raw transcript, crash output included.
+ */
+async function dumpChatPtyTranscript(env: NodeJS.ProcessEnv) {
+  const iterateBin = join(repositoryRoot, "packages/iterate/bin/iterate.js");
+  const chat = `${process.execPath} ${iterateBin} chat --project ${env.OS_E2E_TUI_PROJECT_ID} --agent-path /agents/tui-diagnostic`;
+  const command =
+    process.platform === "linux"
+      ? ["script", ["-qec", `timeout 20 ${chat}`, "/dev/null"]]
+      : (["script", ["-q", "/dev/null", "sh", "-c", `${chat} & sleep 20; kill %1`]] as const);
+  console.info(`[tui-test] diagnostic PTY transcript of: ${chat}`);
+  try {
+    await runProcess(command[0] as string, command[1] as string[], {
+      cwd: thisDir,
+      env,
+      captureOutput: false,
+    });
+  } catch (error) {
+    // The timeout kill is the expected exit; a spawn failure is itself signal.
+    console.info(`[tui-test] diagnostic PTY run ended: ${String(error)}`);
   }
 }
 
