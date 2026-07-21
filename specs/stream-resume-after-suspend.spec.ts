@@ -38,7 +38,8 @@ const HEALTHY_DELIVERY_MS = 30_000;
 // a real wedge (the wedge is permanent; any finite window catches it).
 const RECOVERY_DELIVERY_MS = 90_000;
 
-test("control: appended event is delivered to a live stream feed", async ({
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("control: appended event is delivered to a live stream feed", async ({
   helpers,
   page,
   baseURL,

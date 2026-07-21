@@ -60,6 +60,7 @@ import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 const RETIRED_ARTIFACT_EVENTS_QUEUE_SUFFIX = "-events";
+const RETIRED_QUEUE_PAGE_SIZE = 100;
 
 const RetiredQueue = z.object({
   queue_id: z.string(),
@@ -68,6 +69,7 @@ const RetiredQueue = z.object({
 const RetiredQueueConsumer = z.object({
   consumer_id: z.string(),
   script: z.string().optional(),
+  script_name: z.string().optional(),
   type: z.string().optional(),
 });
 
@@ -83,10 +85,14 @@ export async function detachRetiredArtifactEventQueueConsumer(input: {
   workerName: string;
 }): Promise<"absent" | "detached"> {
   const queueName = `${input.workerName}${RETIRED_ARTIFACT_EVENTS_QUEUE_SUFFIX}`;
-  // One account has far fewer than 100 deployment queues. Keep this to one
-  // bounded read; EnvContext rejects a truncated result via result_info.
-  const queues = z.array(RetiredQueue).parse(await input.cf("/queues?per_page=100"));
-  const queue = queues.find((candidate) => candidate.queue_name === queueName);
+  let queue: z.infer<typeof RetiredQueue> | undefined;
+  for (let page = 1; queue === undefined; page += 1) {
+    const queues = z
+      .array(RetiredQueue)
+      .parse(await input.cf(`/queues?per_page=${RETIRED_QUEUE_PAGE_SIZE}&page=${page}`));
+    queue = queues.find((candidate) => candidate.queue_name === queueName);
+    if (queues.length < RETIRED_QUEUE_PAGE_SIZE) break;
+  }
   if (!queue) {
     console.log(`retired Artifact event Queue absent: ${queueName}`);
     return "absent";
@@ -96,7 +102,9 @@ export async function detachRetiredArtifactEventQueueConsumer(input: {
     .array(RetiredQueueConsumer)
     .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
   const consumer = consumers.find(
-    (candidate) => candidate.type === "worker" && candidate.script === input.workerName,
+    (candidate) =>
+      candidate.type === "worker" &&
+      (candidate.script === input.workerName || candidate.script_name === input.workerName),
   );
   if (!consumer) {
     console.log(`retired Artifact event Queue consumer absent: ${queueName}`);

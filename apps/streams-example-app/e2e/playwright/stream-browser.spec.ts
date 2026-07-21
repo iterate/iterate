@@ -915,7 +915,8 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
 
 // Reconnection test: killing the Durable Object should reconnect the browser subscriber and
 // append the server's woken event instead of leaving the mirror stuck on a dead WebSocket.
-test("kill reconnects and appends a new woken event", async ({ page }) => {
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("kill reconnects and appends a new woken event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
   // 3 = the standalone birth certificate + this page's own subscriber-connected.

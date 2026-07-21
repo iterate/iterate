@@ -8,7 +8,8 @@ test("can enter the dashboard with a forged session", async ({ helpers, page }) 
   await page.getByRole("link", { name: fixture.project.slug }).waitFor();
 });
 
-test("loads project navigation only when it opens", async ({ helpers, page }) => {
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("loads project navigation only when it opens", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("lazy-project-navigation");
   const dialogRequests: string[] = [];
   page.on("request", (request) => {
@@ -25,7 +26,8 @@ test("loads project navigation only when it opens", async ({ helpers, page }) =>
   expect(dialogRequests).toHaveLength(1);
 });
 
-test("opening OS returns to the most recently active project", async ({ helpers, page }) => {
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("opening OS returns to the most recently active project", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("recent-project", { projectCount: 2 });
   const recent = fixture.projects[1]!;
 

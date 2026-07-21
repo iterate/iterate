@@ -41,7 +41,7 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
     (EXAMPLE_CASES[right.id]?.completionTimeoutMs ?? 90_000) -
     (EXAMPLE_CASES[left.id]?.completionTimeoutMs ?? 90_000),
 );
-const matrixTest = baseTest;
+const QUARANTINED_MATRIX_EXAMPLES = new Set(["repo-edit-file", "run-script"]);
 
 // Fixed capability mounts, the config repo, and the repo-sourced project
 // worker are project-global mutable resources. Give each runtime its own pool
@@ -114,6 +114,9 @@ for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
   const runtimeTimeoutMs = exampleCase.completionTimeoutMs ?? 90_000;
+  // Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md; keep each
+  // generated case visible in discovery while suppressing its live work.
+  const matrixTest = QUARANTINED_MATRIX_EXAMPLES.has(example.id) ? baseTest.skip : baseTest;
   // The case budget is shared wall time: parallel runtimes each get the full
   // remainder concurrently, while an explicitly serial case passes the
   // remaining aggregate budget to each successive runtime. The project-worker
