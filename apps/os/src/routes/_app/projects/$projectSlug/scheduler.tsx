@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { useItx, useItxQuery } from "iterate/react";
+import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import type { ScheduleView, SchedulerRecurrence } from "../../../../domains/scheduler/types.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SCHEDULER_PRIMARY_PATH } from "~/domains/scheduler/utils.ts";

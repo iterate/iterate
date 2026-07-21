@@ -1,5 +1,5 @@
 import type { StreamEvent } from "../itx-api.generated.ts";
-import type { Itx } from "../itx/itx-react.ts";
+import type { Itx } from "../sdk/itx/react.ts";
 
 const EVENT_PAGE_SIZE = 500;
 

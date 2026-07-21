@@ -15,7 +15,7 @@ const liveStateMocks = vi.hoisted(() => ({
   session: vi.fn(),
 }));
 
-vi.mock("iterate/react", () => ({
+vi.mock("iterate/sdk/itx/react", () => ({
   useLiveState: liveStateMocks.project,
   useIterateSessionLiveState: liveStateMocks.session,
 }));

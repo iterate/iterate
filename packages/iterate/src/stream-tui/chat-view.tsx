@@ -12,7 +12,7 @@ import type {
   AgentUiItem,
   AgentUiMessageItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { ItxSubscriptionStatus } from "../itx/itx-react.ts";
+import type { ItxSubscriptionStatus } from "../sdk/itx/react.ts";
 import { COLORS } from "./chat-colors.ts";
 import {
   formatActivitySummary,

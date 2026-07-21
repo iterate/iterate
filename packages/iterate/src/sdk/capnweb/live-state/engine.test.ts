@@ -109,7 +109,7 @@ describe("LiveState", () => {
   });
 
   // The retention lifecycle below is the trickiest RPC knowledge in the
-  // codebase (see lib/rpc/retain.ts); these cases were originally proven on
+  // codebase (see ./retain.ts); these cases were originally proven on
   // the deleted processor onStateChange lane and MUST hold here too.
 
   it("an async delivery rejection drops the subscriber (dead remotes self-prune)", async () => {

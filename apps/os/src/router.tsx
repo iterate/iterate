@@ -2,7 +2,7 @@ import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
 import { capturePosthogException } from "@iterate-com/ui/components/posthog";
-import { createIterateQueryClient } from "iterate/react";
+import { createIterateQueryClient } from "iterate/sdk/itx/react";
 import { RoutePending } from "./components/route-pending.tsx";
 import { routeTree } from "./routeTree.gen.ts";
 

@@ -138,7 +138,7 @@ remaining work is _completing_ the model, not undoing a parallel one.
 - **Extract a non-React client core** (codex #6) — **DONE**: the keeper
   (transport, generations, verification, subscription watchdog) now lives
   framework-free in `packages/iterate/src/itx/itx-session.ts` (`iterate/client`),
-  with the hooks as a thin binding in `itx-react.ts` (`iterate/react`) — moved
+  with the hooks as a thin binding in `itx-react.ts` (`iterate/sdk/itx/react`) — moved
   behavior-preservingly with the full test suite; the chat TUI is the first
   non-browser consumer (`configureIterateSession` + the same hooks under
   OpenTUI). Remaining refinement if it ever earns its keep: injected

@@ -4,7 +4,6 @@
  * These are hand-authored shapes (generics preserved) that both the public itx
  * contract and the server-side host/subscriber machinery build against.
  */
-import type { LiveUpdate } from "../itx/live-state/protocol.ts";
 import type { StreamEvent } from "./schemas.ts";
 
 /** Stable identity for one stream subscription connection. */
@@ -72,10 +71,7 @@ export interface StreamProcessorRpc<State = unknown> {
  * Live handle for one live-state subscription. `ping()` reports liveness (and
  * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
  */
-export type LiveStateSubscriptionHandle = Disposable & {
-  ping(): boolean | Promise<boolean>;
-  unsubscribe(): void;
-};
+export type { LiveStateRpc, LiveStateSubscriptionHandle } from "../sdk/capnweb/live-state/types.ts";
 
 /**
  * A node's live state — a source-agnostic reactive value. `get()` reads it once;
@@ -91,11 +87,6 @@ export type LiveStateSubscriptionHandle = Disposable & {
  * `set`/`assign` would let any principal that can reach the node broadcast
  * fabricated state to every subscriber.
  */
-export interface LiveStateRpc<State = unknown> {
-  get(): Promise<State>;
-  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
-}
-
 /**
  * Batch delivered to stream processors and live subscribers.
  *

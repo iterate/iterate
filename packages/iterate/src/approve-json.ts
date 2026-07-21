@@ -32,7 +32,7 @@
 
 import { createInterface } from "node:readline";
 
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
 import { loadApprovalKey } from "./approval-keys.ts";

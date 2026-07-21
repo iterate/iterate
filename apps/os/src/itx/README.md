@@ -8,7 +8,7 @@
 > current implementation inherits (describe(), instructions/types, capabilities as
 > stream events). **The current implementation lives at `apps/os/src/`**
 > (`README.md` + `types.ts`), and the browser hooks moved to the `iterate`
-> package (`packages/iterate/src/itx/` — `iterate/client` + `iterate/react`;
+> package (`packages/iterate/src/itx/` — `iterate/client` + `iterate/sdk/itx/react`;
 > guide: `docs/frontend-development.md`). What actually remains in THIS folder is
 > `browser-repl.ts`
 > (REPL compiler), `path-proxy.ts`, `examples.ts` (the example catalogue),

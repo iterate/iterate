@@ -715,9 +715,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2)
-      '@iterate-com/capnweb':
-        specifier: 0.10.0
-        version: 0.10.0
       '@microsoft/tui-test':
         specifier: 0.0.4
         version: 0.0.4(@swc/helpers@0.5.19)
@@ -1088,12 +1085,9 @@ importers:
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.1.0
-      '@opentui/core':
-        specifier: 0.4.5
-        version: 0.4.5(typescript@5.9.3)(web-tree-sitter@0.25.10)
-      '@opentui/react':
-        specifier: 0.4.5
-        version: 0.4.5(react-devtools-core@7.0.1)(react@19.2.7)(typescript@5.9.3)(web-tree-sitter@0.25.10)(ws@8.19.0)
+      '@iterate-com/capnweb':
+        specifier: ^0.10.0
+        version: 0.10.0
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -1103,18 +1097,6 @@ importers:
       '@tanstack/react-query':
         specifier: 5.101.2
         version: 5.101.2(react@19.2.7)
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.13
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      capnweb:
-        specifier: npm:@iterate-com/capnweb@0.10.0
-        version: '@iterate-com/capnweb@0.10.0'
-      octokit:
-        specifier: ^5.0.5
-        version: 5.0.5
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -1131,15 +1113,24 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../ui
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.13
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       jsdom:
         specifier: 27.4.0
         version: 27.4.0(@noble/hashes@2.2.0)
+      octokit:
+        specifier: ^5.0.5
+        version: 5.0.5
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
@@ -1152,6 +1143,13 @@ importers:
       vitest:
         specifier: 4.0.15
         version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@22.19.13)(@vitest/browser-playwright@4.0.15)(@vitest/ui@4.0.15)(jiti@2.7.0)(jsdom@27.4.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(msw@2.13.3(@types/node@22.19.13)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
+    optionalDependencies:
+      '@opentui/core':
+        specifier: 0.4.5
+        version: 0.4.5(typescript@5.9.3)(web-tree-sitter@0.25.10)
+      '@opentui/react':
+        specifier: 0.4.5
+        version: 0.4.5(react-devtools-core@7.0.1)(react@19.2.7)(typescript@5.9.3)(web-tree-sitter@0.25.10)(ws@8.19.0)
 
   packages/shared:
     dependencies:

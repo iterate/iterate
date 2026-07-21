@@ -1,4 +1,4 @@
-// The mobile binding for iterate/react's renderer-agnostic session keeper.
+// The mobile binding for iterate/sdk/itx/react's renderer-agnostic session keeper.
 // Deployment selection and OAuth token storage belong to the app; socket
 // ownership, reconnects, liveness, project-stub caching, and the one forced
 // credential refresh belong to the shared client.
@@ -10,7 +10,7 @@ import {
   reconnectIterateSession,
   retryFailedIterateSession,
   type SessionStub,
-} from "iterate/react";
+} from "iterate/sdk/itx/react";
 import { getAccessToken } from "./auth.ts";
 
 export type ItxSession = SessionStub;

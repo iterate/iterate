@@ -25,7 +25,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { useItx, useLiveState } from "iterate/react";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import {

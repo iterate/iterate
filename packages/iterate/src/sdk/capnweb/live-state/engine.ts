@@ -3,7 +3,7 @@ import {
   isThenable,
   retainCallback,
   type RetainedCallback,
-} from "../rpc/retain.ts";
+} from "./retain.ts";
 import { diff } from "./diff.ts";
 import type { LiveUpdate } from "./protocol.ts";
 

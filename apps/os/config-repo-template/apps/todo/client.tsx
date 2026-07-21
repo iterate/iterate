@@ -1,66 +1,45 @@
-import React, {
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useState,
-} from "https://esm.sh/react@19.2.4";
-import { createRoot } from "https://esm.sh/react-dom@19.2.4/client";
+/**
+ * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.
+ */
+import { newWebSocketRpcSession, type RpcStub } from "iterate/sdk/capnweb";
+import React, { type FormEvent, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/sdk/capnweb/react";
+import type { TodoApi } from "./server.tsx";
 
-type Todo = {
-  createdAt: string;
-  done: boolean;
-  id: string;
-  title: string;
-};
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  if (!response.ok)
-    throw new Error((await response.text()) || `request failed (${response.status})`);
-  return (response.status === 204 ? undefined : await response.json()) as T;
+function makeConnection() {
+  const endpoint = new URL("/api", window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  return newWebSocketRpcSession<TodoApi>(endpoint.toString());
 }
 
 export function TodoClient() {
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+  const api = useCapnWebRoot<RpcStub<TodoApi>>();
+  const { value: state, error: liveError } = useLiveState(
+    (session: RpcStub<TodoApi>) => session.liveState,
+    (s) => s,
+  );
   const [title, setTitle] = useState("");
-  const [todos, setTodos] = useState<Todo[]>([]);
+  const [actionError, setActionError] = useState("");
 
-  const load = useCallback(async () => {
+  const error = liveError ?? (actionError.length > 0 ? actionError : undefined);
+  const todos = state?.todos ?? [];
+
+  const run = async (action: () => Promise<void>) => {
+    setActionError("");
     try {
-      setTodos(await api<Todo[]>("/api/todos"));
-      setError("");
+      await action();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const mutate = async (mutation: () => Promise<unknown>) => {
-    try {
-      await mutation();
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setActionError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
-    if (title.trim().length === 0) return;
-    await mutate(async () => {
-      await api<Todo>("/api/todos", {
-        body: JSON.stringify({ title }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      });
-      setTitle("");
-    });
+    if (api == null || title.trim().length === 0) return;
+    const next = title;
+    setTitle("");
+    await run(() => api.add(next));
   };
 
   return (
@@ -77,10 +56,12 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button type="submit">Add</button>
+        <button disabled={api == null} type="submit">
+          Add
+        </button>
       </form>
-      {error.length > 0 && <p role="alert">{error}</p>}
-      {loading ? (
+      {error !== undefined && <p role="alert">{error}</p>}
+      {state === undefined ? (
         <p>Loading…</p>
       ) : todos.length === 0 ? (
         <p>No todos yet.</p>
@@ -93,24 +74,16 @@ export function TodoClient() {
                 checked={todo.done}
                 onChange={(event) => {
                   const done = event.currentTarget.checked;
-                  void mutate(async () => {
-                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {
-                      body: JSON.stringify({ done }),
-                      headers: { "content-type": "application/json" },
-                      method: "PATCH",
-                    });
-                  });
+                  if (api == null) return;
+                  void run(() => api.setDone(todo.id, done));
                 }}
                 type="checkbox"
               />
               <span className={todo.done ? "done" : ""}>{todo.title}</span>
               <button
                 onClick={() => {
-                  void mutate(async () => {
-                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {
-                      method: "DELETE",
-                    });
-                  });
+                  if (api == null) return;
+                  void run(() => api.remove(todo.id));
                 }}
                 type="button"
               >
@@ -126,4 +99,8 @@ export function TodoClient() {
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("missing #root");
-createRoot(root).render(<TodoClient />);
+createRoot(root).render(
+  <CapnWebProvider makeConnection={makeConnection}>
+    <TodoClient />
+  </CapnWebProvider>,
+);

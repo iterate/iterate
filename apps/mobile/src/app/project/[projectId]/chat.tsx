@@ -1,6 +1,6 @@
 // Chat thread — one agent stream rendered as a feed. The heart of the app.
 //
-// Data flow: useLiveEvents reads the stream, then uses iterate/react's
+// Data flow: useLiveEvents reads the stream, then uses iterate/sdk/itx/react's
 // useItxSubscription to feed server-pushed batches into the same query cache.
 // Sending appends to the agent stream over itx (the same lane the web dashboard
 // uses); the echo of our own message and everything the agent does arrive
@@ -40,7 +40,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
-import type { Agent, StreamEvent } from "iterate/react";
+import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";

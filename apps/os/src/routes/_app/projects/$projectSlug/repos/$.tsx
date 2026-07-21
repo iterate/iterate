@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { RepoIde } from "~/components/repo-ide/repo-ide.lazy.tsx";

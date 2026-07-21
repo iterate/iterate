@@ -52,7 +52,7 @@ import {
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
-} from "iterate/live-state";
+} from "iterate/sdk/capnweb";
 import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
@@ -5790,7 +5790,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 // ---------------------------------------------------------------------------
 // Every OS-owned RpcTarget that defines or relays an itx contract lives in this
 // module. Transport primitives shared with userspace, such as the read-only
-// target from `iterate/live-state`, stay in that package; the local relay below
+// target from `iterate/sdk/capnweb`, stay in that package; the local relay below
 // only bridges that target across the Durable Object hop.
 // ---------------------------------------------------------------------------
 
