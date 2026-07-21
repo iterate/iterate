@@ -45,6 +45,8 @@ const todoAppRef = {
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
 
+let guestbookInitialization: Promise<void> | undefined;
+
 // This is ordinary project policy. Every GitHub-linked project repository is
 // in scope; no platform GitHub code knows that pull-request agents exist.
 // Record keys are stable rule IDs: duplicate identities are structurally
@@ -154,31 +156,39 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       });
     }
     if (app === "guestbook") {
-      using itx = await this.env.ITX.get();
-      await itx.streams.get("/guestbook").append(
-        {
-          type: "events.iterate.com/guestbook/created",
-          payload: { config: { title: "Guestbook" } },
-          idempotencyKey: "guestbook/created",
-        },
-        {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            subscriptionKey: "app-guestbook#guestbook",
-            delivery: {
-              mode: "wake",
-              expression: [
-                "workers",
-                ["get", guestbookAppRef],
-                "processor",
-                "wakeStreamSubscriber",
-              ],
-              processorSlug: "guestbook",
-            },
+      guestbookInitialization ??= (async () => {
+        using itx = await this.env.ITX.get();
+        await itx.streams.get("/guestbook").append(
+          {
+            type: "events.iterate.com/guestbook/created",
+            payload: { config: { title: "Guestbook" } },
+            idempotencyKey: "guestbook/created",
           },
-          idempotencyKey: "guestbook/subscription:v1",
-        },
-      );
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: "app-guestbook#guestbook",
+              delivery: {
+                mode: "wake",
+                expression: [
+                  "workers",
+                  ["get", guestbookAppRef],
+                  "processor",
+                  "wakeStreamSubscriber",
+                ],
+                processorSlug: "guestbook",
+              },
+            },
+            idempotencyKey: "guestbook/subscription:v1",
+          },
+        );
+      })().catch((error: unknown) => {
+        // A failed setup must be retryable by the next request; successful
+        // setup remains durable and needs no more stream RPCs in this isolate.
+        guestbookInitialization = undefined;
+        throw error;
+      });
+      await guestbookInitialization;
       return this.fetchDynamicWorker(req, guestbookAppRef);
     }
     if (app === "tasks") {
