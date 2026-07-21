@@ -1743,6 +1743,7 @@ export type ProjectProcessorState = {
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
   customDomains: {
+    kind: "cloudflare" | "direct";
     createdAt: string;
     updatedAt: string;
     cloudflareHostnameId: string | null;

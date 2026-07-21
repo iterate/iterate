@@ -95,6 +95,16 @@ export const ProjectProcessorContract = defineProcessorContract({
     customDomains: z
       .array(
         projectCustomDomainCloudflareSnapshotSchema().extend({
+          kind: z
+            .enum(["cloudflare", "direct"])
+            .default("cloudflare")
+            .meta({
+              description:
+                "How the hostname routes: `cloudflare` = a Cloudflare-for-SaaS custom hostname " +
+                "this processor provisions and polls; `direct` = a platform-owned apex served " +
+                "by worker routes plus an operator-primed hostname-directory registration — " +
+                "no provisioning lifecycle, and the provisioner must never touch it.",
+            }),
           createdAt: z
             .string()
             .meta({ description: "createdAt of the event that first recorded this hostname." }),
@@ -190,6 +200,19 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/custom-domain-cloudflare-observed": {
       description: "Cloudflare custom-hostname status observed for a project custom domain.",
       payloadSchema: projectCustomDomainCloudflareSnapshotSchema(),
+    },
+    "events.iterate.com/project/custom-domain-direct-observed": {
+      description:
+        "The hostname routes to this project directly: a platform-owned apex served by worker " +
+        "routes plus an operator-primed hostname-directory registration, with no " +
+        "Cloudflare-for-SaaS custom hostname behind it. Appended by platform operators, never by " +
+        "this processor; recording it keeps the settings UI honest without starting any " +
+        "provisioning lifecycle — add/refresh/remove requests for a direct hostname are inert.",
+      payloadSchema: z.object({
+        hostname: z
+          .string()
+          .meta({ description: "The directly routed hostname, e.g. iterate.com." }),
+      }),
     },
     "events.iterate.com/project/custom-domain-provision-failed": {
       description: "Custom-domain provisioning failed before an observed Cloudflare status.",
@@ -330,6 +353,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/human-approval-requested",
     "events.iterate.com/project/custom-domain-add-requested",
     "events.iterate.com/project/custom-domain-cloudflare-observed",
+    "events.iterate.com/project/custom-domain-direct-observed",
     "events.iterate.com/project/custom-domain-provision-failed",
     "events.iterate.com/project/custom-domain-refresh-requested",
     "events.iterate.com/project/custom-domain-remove-requested",
