@@ -204,6 +204,20 @@ export class WorkspaceCore {
     // DIRECTORY in the merged view: an outer repo's file at the same path is
     // masked, exactly as files under a deeper mount point are shadowed.
     if (isVirtualDirectoryPath(mounts, path)) return null;
+    return this.#mountRead(mounts, path);
+  }
+
+  /** The BASE of a path — its mount's content at HEAD, ignoring the overlay
+   * and whiteouts entirely. This is what uncommitted work diffs against
+   * (redlines, merge views); null for unmounted/scratch paths. */
+  async readBase(path: string): Promise<string | null> {
+    const mounts = await this.#mounts();
+    if (isVirtualDirectoryPath(mounts, path)) return null;
+    return this.#mountRead(mounts, path);
+  }
+
+  /** The mount fall-through arm shared by readFile and readBase. */
+  async #mountRead(mounts: Record<string, WorkspaceMount>, path: string): Promise<string | null> {
     const resolved = routeMount(mounts, path);
     if (resolved === null || resolved.repoRelativePath === "") return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
@@ -803,7 +817,10 @@ function isVirtualDirectoryPath(mounts: Record<string, WorkspaceMount>, path: st
   });
 }
 
-function routeMount(mounts: Record<string, WorkspaceMount>, path: string): ResolvedMount | null {
+export function routeMount(
+  mounts: Record<string, WorkspaceMount>,
+  path: string,
+): ResolvedMount | null {
   const resolved = resolveAbsolutePath(path);
   let best: { mount: WorkspaceMount; mountPath: string } | null = null;
   for (const [key, mount] of Object.entries(mounts)) {

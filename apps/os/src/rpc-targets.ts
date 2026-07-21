@@ -1821,12 +1821,15 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         edit: "Replace an exact string in one file (copies a mount file up first); private until committed.",
         exists: "Whether a path exists in the merged view.",
         getConfig: "The folded configuration (birth certificate + configured patches).",
+        collab:
+          "Collaborative session lane: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
         glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
         listAllFiles: "Every file path in the merged view (local layer + every mount, sorted).",
         processor: "The workspace stream processor (snapshot/state).",
-        readFile: "One file's contents; null when missing.",
+        readBase: "A path's mount content at HEAD — what uncommitted work diffs against.",
+        readFile: "One file's contents; null when missing (routes through a live collab session).",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
         reset:
           "Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST.",
@@ -1912,6 +1915,16 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null> {
     return this.durableObjectStub.readFile(path);
+  }
+
+  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
+  get collab(): WorkspaceCollabRpcTarget {
+    return new WorkspaceCollabRpcTarget(this.props);
+  }
+
+  /** A path's mount content at HEAD — the base uncommitted work diffs against. */
+  readBase(path: string): Promise<string | null> {
+    return this.durableObjectStub.readBase(path);
   }
 
   /** One file's raw bytes from the merged view; null when missing. */
@@ -2020,6 +2033,71 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]> {
     return this.durableObjectStub.gitLog(input);
+  }
+}
+
+/**
+ * The collaborative session lane of a workspace: server-authoritative
+ * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
+ * versions, optimistic clients rebasing unconfirmed edits). Sessions are
+ * durable; the workspace's ordinary filesystem RPC reads/writes route through
+ * live sessions automatically, so this surface is only for LIVE participants
+ * (editors) and redline consumers.
+ */
+class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `Collaborative session lane of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
+      children: {
+        changes: "Attributed tracked changes since the last commit (redline segments).",
+        open: "Join (or start) the collaborative editing session for one file.",
+        push: "Submit a client update batch ({ path, epoch, baseVersion, clientId, ops }).",
+        wait: "Long-poll catch-up: ops after a version, a snapshot past the floor, or ended.",
+      },
+      parent: "a workspace (workspace.collab)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /** @internal */
+  get durableObjectStub() {
+    return env.WORKSPACE_V2.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  /** Join (or start) the collaborative editing session for one file. */
+  open(path: string): Promise<{ content: string; epoch: string; version: number }> {
+    return this.durableObjectStub.collabOpen(path);
+  }
+
+  /** Submit a client update batch (rebase model; idempotent via clientSeq). */
+  push(input: {
+    baseVersion: number;
+    clientId: string;
+    epoch: string;
+    ops: { changes: unknown; clientSeq: number }[];
+    path: string;
+  }) {
+    return this.durableObjectStub.collabPush(input);
+  }
+
+  /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
+   * snapshot when past the retained floor, or ended after a destructive op. */
+  wait(path: string, epoch: string, afterVersion: number) {
+    return this.durableObjectStub.collabWait(path, epoch, afterVersion);
+  }
+
+  /** Attributed tracked changes since the last commit (redline segments). */
+  changes(path: string) {
+    return this.durableObjectStub.collabChanges(path);
   }
 }
 

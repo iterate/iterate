@@ -31,6 +31,10 @@ import {
 } from "./workspace-processor-implementation.ts";
 import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
 import { normalizeWorkspaceMountKeys } from "./utils.ts";
+import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
+import { CollabHost } from "./collab-host.ts";
+import { sqliteCollabStore } from "./collab-store.ts";
+import { routeMount } from "./workspace-core.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 // Configuration appends assert their exact stream offset (no interleaved
@@ -228,6 +232,10 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       input.config.mounts === undefined
         ? input.config
         : { ...input.config, mounts: normalizeWorkspaceMountKeys(input.config.mounts) };
+    // Settle live sessions first so their dirtiness is visible to the
+    // transition-safety check — an unflushed session is exactly the
+    // "uncommitted work bound to a repo identity" that guard protects.
+    await this.#collab.reconcile();
     // Serialized with the core's mutations and commits: an unmount or repo
     // swap must never interleave a commit that already classified against the
     // old table.
@@ -251,16 +259,32 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     );
   }
 
+  // A live collaborative session is the current truth for its path, and the
+  // durable session table (not this incarnation's memory) decides liveness —
+  // so every fs method routes through the host's gateway first, and every
+  // settled-truth classifier runs the host's reconcile barrier first. See
+  // collab-host.ts for the invariants.
+  readonly #collab = new CollabHost({
+    fs: this.#core,
+    store: sqliteCollabStore(this.ctx.storage),
+  });
+
   // -- filesystem ----------------------------------------------------------------
 
   async readFile(path: string): Promise<string | null> {
     await this.#assertCreated();
-    return this.#core.readFile(path);
+    return (await this.#collab.readFile(path)) ?? this.#core.readFile(path);
   }
 
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     await this.#assertCreated();
-    return this.#core.readFileBytes(path);
+    return (await this.#collab.readFileBytes(path)) ?? this.#core.readFileBytes(path);
+  }
+
+  /** A path's mount content at HEAD — what uncommitted work diffs against. */
+  async readBase(path: string): Promise<string | null> {
+    await this.#assertCreated();
+    return this.#core.readBase(path);
   }
 
   async exists(path: string): Promise<boolean> {
@@ -270,21 +294,27 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async writeFile(path: string, content: string): Promise<void> {
     await this.#assertCreated();
+    if (await this.#collab.writeFile(path, content)) return;
     return this.#core.writeFile(path, content);
   }
 
   async writeFileBytes(path: string, data: Uint8Array): Promise<void> {
     await this.#assertCreated();
+    // A binary replace ends any text session (unflushed edits discarded by
+    // design — same posture as delete/reset).
+    this.#collab.endSessions([path]);
     return this.#core.writeFileBytes(path, data);
   }
 
   async edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult> {
     await this.#assertCreated();
-    return this.#core.edit(input);
+    return (await this.#collab.edit(input)) ?? this.#core.edit(input);
   }
 
   async deleteFile(path: string): Promise<boolean> {
     await this.#assertCreated();
+    // End the session BEFORE the whiteout lands, so no flush can resurrect.
+    this.#collab.endSessions([path]);
     return this.#core.deleteFile(path);
   }
 
@@ -300,24 +330,62 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async reset(): Promise<void> {
     await this.#assertCreated();
+    this.#collab.endSessions();
     return this.#core.reset();
   }
 
   async revert(path: string): Promise<void> {
     await this.#assertCreated();
+    this.#collab.endSessions([path]);
     return this.#core.revert(path);
+  }
+
+  // -- collaborative sessions (see collab-host.ts / collab-engine.ts) --------------
+
+  async collabOpen(path: string): Promise<{ content: string; epoch: string; version: number }> {
+    await this.#assertCreated();
+    return this.#collab.open(path);
+  }
+
+  async collabPush(input: CollabPush): Promise<CollabPushResult> {
+    await this.#assertCreated();
+    return this.#collab.push(input);
+  }
+
+  /** Long-poll lane: resolves when ops land past afterVersion (or ~20s). */
+  async collabWait(path: string, epoch: string, afterVersion: number): Promise<CollabPull> {
+    await this.#assertCreated();
+    return this.#collab.wait(path, epoch, afterVersion);
+  }
+
+  /** Attributed tracked changes since the last commit (redline segments). */
+  async collabChanges(path: string) {
+    await this.#assertCreated();
+    return this.#collab.changes(path);
   }
 
   // -- git -------------------------------------------------------------------------
 
   async gitStatus(): Promise<WorkspaceStatus> {
     await this.#assertCreated();
+    await this.#collab.reconcile();
     return this.#core.gitStatus();
   }
 
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     await this.#assertCreated();
-    return this.#core.gitCommit(input);
+    const settled = await this.#collab.reconcile();
+    const result = await this.#core.gitCommit(input);
+    // Baselines advance to exactly the barrier snapshot the commit contains —
+    // post-barrier keystrokes stay uncommitted AND stay in the redline. Scoped
+    // to the COMMITTED mount only: a commit never spans mounts, so stamping a
+    // session under another mount would silently erase (and prune!) its
+    // still-uncommitted redline.
+    const mounts = this.#currentConfig().mounts;
+    this.#collab.markCommitted(
+      settled.filter((file) => routeMount(mounts, file.path)?.mountPath === result.mount),
+    );
+    return result;
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {
