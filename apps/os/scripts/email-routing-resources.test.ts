@@ -4,7 +4,11 @@ import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 it("enables routing but explicitly defers a catch-all for a worker that is not deployed yet", async () => {
   const calls: string[] = [];
-  const ctx = emailRoutingContext(calls, { routingEnabled: false, workerExists: false });
+  const ctx = emailRoutingContext(calls, {
+    routingEnabled: false,
+    workerExists: false,
+    zoneExists: true,
+  });
 
   await expect(
     ensureInboundEmailRouting(ctx, {
@@ -24,7 +28,11 @@ it("enables routing but explicitly defers a catch-all for a worker that is not d
 
 it("installs the catch-all when the worker exists", async () => {
   const calls: string[] = [];
-  const ctx = emailRoutingContext(calls, { routingEnabled: true, workerExists: true });
+  const ctx = emailRoutingContext(calls, {
+    routingEnabled: true,
+    workerExists: true,
+    zoneExists: true,
+  });
 
   await expect(
     ensureInboundEmailRouting(ctx, {
@@ -44,7 +52,11 @@ it("installs the catch-all when the worker exists", async () => {
 
 it("fails a post-deploy reconciliation when the worker is still missing", async () => {
   const calls: string[] = [];
-  const ctx = emailRoutingContext(calls, { routingEnabled: true, workerExists: false });
+  const ctx = emailRoutingContext(calls, {
+    routingEnabled: true,
+    workerExists: false,
+    zoneExists: true,
+  });
 
   await expect(
     ensureInboundEmailRouting(ctx, {
@@ -55,9 +67,41 @@ it("fails a post-deploy reconciliation when the worker is still missing", async 
   ).rejects.toThrow("requires deployed worker os-preview-10");
 });
 
+it("defers a missing zone during create-only setup but rejects it after deployment", async () => {
+  const setupCalls: string[] = [];
+  const setupContext = emailRoutingContext(setupCalls, {
+    routingEnabled: false,
+    workerExists: false,
+    zoneExists: false,
+  });
+
+  await expect(
+    ensureInboundEmailRouting(setupContext, {
+      projectHostnameBases: ["iterate-preview-10.app"],
+      workerName: "os-preview-10",
+      workerRequirement: "allow-missing-before-first-deploy",
+    }),
+  ).resolves.toBe("deferred-until-zone");
+  expect(setupCalls).toEqual(["GET /zones?account.id=account-1&per_page=500"]);
+
+  const deployCalls: string[] = [];
+  const deployContext = emailRoutingContext(deployCalls, {
+    routingEnabled: false,
+    workerExists: true,
+    zoneExists: false,
+  });
+  await expect(
+    ensureInboundEmailRouting(deployContext, {
+      projectHostnameBases: ["iterate-preview-10.app"],
+      workerName: "os-preview-10",
+      workerRequirement: "require-deployed-worker",
+    }),
+  ).rejects.toThrow("no zone named iterate-preview-10.app");
+});
+
 function emailRoutingContext(
   calls: string[],
-  options: { routingEnabled: boolean; workerExists: boolean },
+  options: { routingEnabled: boolean; workerExists: boolean; zoneExists: boolean },
 ) {
   return {
     name: "preview_10",
@@ -76,7 +120,7 @@ function emailRoutingContext(
     cfV4: async <T>(path: string, init?: RequestInit): Promise<T> => {
       calls.push(`${init?.method || "GET"} ${path}`);
       if (path === "/zones?account.id=account-1&per_page=500") {
-        return [{ id: "zone-10", name: "iterate-preview-10.app" }] as T;
+        return (options.zoneExists ? [{ id: "zone-10", name: "iterate-preview-10.app" }] : []) as T;
       }
       if (path === "/zones/zone-10/email/routing") {
         return { enabled: options.routingEnabled } as T;

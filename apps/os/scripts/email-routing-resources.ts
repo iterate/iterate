@@ -15,7 +15,7 @@ export async function ensureInboundEmailRouting(
     workerName: string;
     workerRequirement: "allow-missing-before-first-deploy" | "require-deployed-worker";
   },
-): Promise<"configured" | "deferred-until-worker-deploy"> {
+): Promise<"configured" | "deferred-until-worker-deploy" | "deferred-until-zone"> {
   const emailBase = emailDomainForDeployment(input.projectHostnameBases);
   if (emailBase === null) {
     throw new Error(`${ctx.name} has no project hostname base for inbound email`);
@@ -26,6 +26,12 @@ export async function ensureInboundEmailRouting(
   );
   const zone = zones.find((candidate) => candidate.name === emailBase);
   if (!zone) {
+    if (input.workerRequirement === "allow-missing-before-first-deploy") {
+      console.warn(
+        `no zone named ${emailBase} in account ${ctx.env.cloudflareAccountId}; Email Routing deferred until the zone exists`,
+      );
+      return "deferred-until-zone";
+    }
     throw new Error(`no zone named ${emailBase} in account ${ctx.env.cloudflareAccountId}`);
   }
 
