@@ -483,7 +483,7 @@ Doc rule shipped in the docs PR; code half still open.
 
 ### D7. Only the agent emits `stream/error-occurred`
 
-**Status:** in-pr #2186.
+**Status:** in-pr #2188.
 
 The style guide says failures journal `stream/error-occurred` next to
 settlements; in code only the agent does (`:562,699`). Everyone else uses
@@ -566,7 +566,7 @@ home).
 
 ### E2. The same-key-different-body conflict rule is implemented 5×, documented 0×
 
-**Status:** in-pr #2186.
+**Status:** in-pr #2188.
 
 The doc's replay story (`:170-172`) stops at "races collapse at the append
 dedup layer" — identical bodies only. Real settle bodies carry
@@ -579,7 +579,7 @@ when each applies (pairs with A1's predicate).
 
 ### E3. "Deterministic body: anchor to `event.createdAt`, never `now`" — codify
 
-**Status:** in-pr #2186.
+**Status:** in-pr #2188.
 
 The replay-wedge rule (a `now`-stamped expiry turns redelivery into a
 same-key conflict forever) is re-explained in near-identical comments at 5+
@@ -590,7 +590,7 @@ shrink to one line naming the concrete hazard.
 
 ### E4. `<domain>-defaults.ts` creation-batch convention — write it down
 
-**Status:** in-pr #2186.
+**Status:** in-pr #2188.
 
 ~9 files export deterministic birth batches (`capabilityHostCreationEvents`,
 `schedulerCreationEvents`, `agentCreationForPath`, …); the load-bearing
@@ -607,7 +607,7 @@ contact, shared by create doors and birthing routers.
 
 ### E5. Chat-facet transcription wire shape — convention, not code
 
-**Status:** in-pr #2186.
+**Status:** in-pr #2188.
 
 slack-agent/telegram-agent/email-agent share an identical `refs` block
 (email:141-148, telegram:225-232, slack:191-197), identical YAML transcript
