@@ -1,5 +1,5 @@
 ---
-state: in-progress
+state: complete
 priority: high
 size: medium
 dependsOn: []
@@ -8,11 +8,11 @@ tags: [mobile, itx, iterate-package, consolidation]
 
 # Move apps/mobile onto the shared itx client (`iterate/client` + `iterate/react`)
 
-**Status summary:** implementation is starting on `mobile-shared-itx-react`. The
-target is a behavior-preserving consolidation: mobile should consume the shared
-keeper and React subscription hooks, deleting its local keeper/watchdogs. No
-runtime behavior or screen UX is intentionally changing. The migration only
-ships if the resulting ownership and code are materially simpler.
+**Status summary:** complete on `mobile-shared-itx-react`. Mobile now consumes
+the shared keeper and `useItxSubscription`; its local dialer and two watchdogs
+are deleted. Shared lifecycle coverage, native/web bundles, browser smoke, and
+deployment-backed mobile round trips pass. Production code is 59 lines smaller
+overall, including the new reusable shared lifecycle contracts.
 
 Mobile is the codebase's last hand-rolled itx transport — the "third keeper"
 (PR #2063's reviews called it exactly that). It duplicates machinery the
@@ -26,28 +26,40 @@ shared client already owns, live-proven in the browser and the chat TUI:
 
 ## What to do
 
-- [ ] Replace the dial/keeper with `configureIterateSession` + `connectItx`
+- [x] Replace the dial/keeper with `configureIterateSession` + `connectItx`
       from `iterate/react` (the React entry is deliberately the one-stop import
       for hooks and imperative calls). React Native's global WebSocket satisfies
-      capnweb.
-- [ ] Replace both watchdog lifecycles with `useItxSubscription` or
+      capnweb. _`apps/mobile/src/lib/itx.ts` is now only the OAuth/deployment binding._
+- [x] Replace both watchdog lifecycles with `useItxSubscription` or
       `useLiveState` from `iterate/react`; keep initial reads and pushed-event
-      cache behavior identical.
+      cache behavior identical. _`use-live-events.ts` preserves query keys,
+      offset merging, replay cursors, and error/refetch behavior while the shared
+      hook owns reconnect/watchdog/teardown._
 - [x] ~~Wire `AppState` → `focusManager.setFocused`.~~ _Landed in PR #2084 for native push-enrollment reconciliation._
-- [ ] Wire native online state into TanStack's `onlineManager`, and call
-      `reportTransportSuspicion()` on app foreground once mobile adopts the
-      shared keeper.
-- [ ] Re-point mobile's deep-relative `apps/os/src/itx-api.generated.ts` type
+- [x] Call `reportTransportSuspicion()` on app foreground once mobile adopts the
+      shared keeper. _The existing `AppState` listener now probes the transport._
+- [x] ~~Add a separate native online-state integration.~~ _Omitted deliberately:
+      mobile has no NetInfo/expo-network dependency, and adding one would change
+      runtime behavior rather than consolidate it. The shared 45-second verifier
+      plus foreground probe preserves the existing contract._
+- [x] Re-point mobile's deep-relative `apps/os/src/itx-api.generated.ts` type
       imports at `iterate` too; nothing outside `apps/os` should reach into its
-      generated contract source.
-- [ ] Prove Metro resolves `iterate/react` without bundling a second React copy.
-- [ ] Collapse mobile e2e's direct capnweb dials onto `iterate/node` where that
-      reduces plumbing without weakening the production-code proof.
-- [ ] Delete superseded mobile keeper/subscription modules and update nearby
-      documentation.
-- [ ] Run mobile typecheck/unit tests, shared-client tests, lint/format, Expo web
+      generated contract source. _Mobile imports generated types from
+      `iterate/react`; its Node e2e lane uses `iterate/node`._
+- [x] Prove Metro resolves `iterate/react` without bundling a second React copy.
+      _Metro pins React and TanStack Query to the app-owned runtime; clean web and
+      iOS exports contain Expo's React 19.1 and no package-local React 19.2._
+- [x] Collapse mobile e2e's direct capnweb dials onto `iterate/node` where that
+      reduces plumbing without weakening the production-code proof. _All three
+      live specs use owned `connectItx` handles and still pass against local OS._
+- [x] Delete superseded mobile keeper/subscription modules and update nearby
+      documentation. _Deleted `itx-core.ts`, `live-thread.ts`, and
+      `live-approvals.ts`; updated mobile and frontend-development docs._
+- [x] Run mobile typecheck/unit tests, shared-client tests, lint/format, Expo web
       bundling, and the live mobile e2e lane when local credentials are
-      available.
+      available. _Root test/typecheck/lint/knip/format pass; 47 mobile unit tests,
+      153 shared-client tests, five live mobile e2e tests, the headed mobile
+      Playwright smoke, and clean Expo web/iOS exports pass._
 
 ## Behavior contract
 
@@ -92,3 +104,19 @@ Proof: the mobile e2e suite drives the exact phone code from Node
 
 Context: PR #2063 (the extraction), the consolidation-sweep findings in its
 description, `docs/frontend-development.md`.
+
+## Implementation notes
+
+- The shared keeper accepts a credential provider resolved on every dial,
+  retries one auth-shaped rejection with `forceRefresh: true`, replaces a live
+  session immediately when its configured deployment changes, and exposes an
+  explicit disconnect for native sign-out. Package tests cover each boundary.
+- App-owned connection/live-subscription code fell from 295 lines across
+  `itx-core.ts`, `itx.ts`, `live-thread.ts`, and `live-approvals.ts` to 109 lines
+  across the mobile binding and query-cache adapter. Including the reusable
+  shared contracts and Metro singleton rule, production code is net -59 lines.
+- Browser smoke initially failed before tests started. Diagnostic server logs
+  showed a transient Playwright launch failure; an exact rerun brought up both
+  servers and passed. Metro consistently waits 60 seconds for this worktree's
+  unhealthy Watchman before its successful node-crawler fallback; that
+  pre-existing tooling issue is unrelated to the migration.
