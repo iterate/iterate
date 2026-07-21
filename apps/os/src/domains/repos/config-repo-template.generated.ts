@@ -704,6 +704,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
+      "import { pkgPrNewPreviewProof } from \"iterate/preview-proof\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
       "\n" +
@@ -886,6 +887,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          <body>\n" +
       "            <main>\n" +
       "              <p>Hello from your Iterate project worker.</p>\n" +
+      "              <p><strong>${pkgPrNewPreviewProof()}</strong></p>\n" +
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
