@@ -349,9 +349,11 @@ gets its alarm fired in a fresh incarnation, which revives the processor:
 1. append one `events.iterate.com/stream/processor-revived` fact to the
    stream (durable evidence; also cold-boots the stream DO, whose `woken`
    fan-out restores the spine's deliveries);
-2. let its ordinary delivery drive the named processor through the runner;
-   the consumed fact guarantees a turn, and the runner guarantees the final
-   at-head pass even if a later unconsumed raw event has reached the stream.
+2. let ordinary delivery drive the named processor through the runner; a
+   processor may consume the fact when it reacts to the fact itself, but
+   consumption is not required for recovery: reaching head guarantees either
+   a consumed event with `caughtUp: true` or the eventless
+   `processEvent(event: null, caughtUp: true)` pass.
 
 Recovery therefore has exactly one entrypoint — batch delivery. For Agent, the
 stream story is `…llm-request-requested` → `…/revived` →
@@ -395,12 +397,15 @@ What hosting code must do:
 
 ## Testing: every failure above is a few lines of plain node
 
-The recovery suites boot the real `createStreamProcessorRegistry`, runner,
-durability adapter, and processors over an in-memory stream, fake
-`DurableObjectState`, and mutable virtual clock. Start with
-`agent-eviction-recovery.test.ts` and
-`capability-host-recovery.test.ts`; the registry's own isolation harness is
-`stream-processor-registry.test.ts`.
+`makeProcessorHarness` has one shape for every suite: the real runner,
+`ProcessorKeepalive`, recovery adapter, Durable Object KV-backed progress,
+alarm cell, virtual clock, and `MemoryStream`. `crash()` is eviction and does
+not attach its successor; a new append or a due alarm is the production-real
+wake. See `email-agent-recovery.test.ts`, `repo-recovery.test.ts`,
+`capability-host-recovery.test.ts`, and `telegram-agent-recovery.test.ts`.
+The registry's own isolation fakes remain in
+`stream-processor-registry.test.ts` because that suite tests the registry
+layer itself.
 
 With `makeProcessorHarness`, step tuples are the scenario spine; use
 `h.append(...)` and `h.advanceTime(...)` for single actions. Raw

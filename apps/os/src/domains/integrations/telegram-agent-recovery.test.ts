@@ -21,7 +21,6 @@ function makeHarness() {
     },
   };
   const harness = makeProcessorHarness<TelegramAgentProcessorContract, TelegramAgentProcessor>({
-    recovery: true,
     substrate: {
       clock,
       stream: network.get(HOME),

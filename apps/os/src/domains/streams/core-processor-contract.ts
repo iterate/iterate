@@ -453,7 +453,7 @@ export const CoreProcessorContract = defineProcessorContract({
     },
     [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
       description:
-        "A recovery-wired stream processor was revived after its incarnation died owing background work (in-flight obligations lost to an eviction). Appended by the platform's recovery keepalive, never emitted by a processor; the payload's processorSlug names which processor was revived (the type string is shared by every recovery-wired processor). Recovery-wired contracts consume it so its ordinary delivery guarantees an at-head reconcile turn (processEvent under delivery.caughtUp) that re-drives the processor's open obligations.",
+        "A recovery-wired stream processor was revived after its incarnation died owing background work (in-flight obligations lost to an eviction). Appended by the platform's recovery keepalive, never emitted by a processor; the payload's processorSlug names which processor was revived (the type string is shared by every recovery-wired processor). Consumption is optional and only needed when the processor reacts to the fact itself; an unconsumed tail still receives the runner's eventless at-head turn so open obligations are not stranded.",
       // Loose ON PURPOSE: the payload is authored by the shared recovery
       // adapter (durableObjectRecovery.appendRevived), and future fields it
       // grows must not turn historical revivals into parse failures.
