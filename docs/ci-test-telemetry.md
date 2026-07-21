@@ -1,9 +1,10 @@
 # CI And Test Telemetry
 
-PostHog is the historical source for test performance, failures, retries, CI
-queueing, Depot utilization, and automated review outcomes. It uses one test
-data model: Vitest unit tests, Vitest e2e tests, Playwright specs, Node unit
-tests, and standalone smoke tests are rows in the same event family.
+PostHog is the historical source for test performance, preview deployment
+performance, failures, retries, CI queueing, Depot utilization, and automated
+review outcomes. It uses one test data model: Vitest unit tests, Vitest e2e
+tests, Playwright specs, Node unit tests, and standalone smoke tests are rows
+in the same event family.
 
 ## Dashboards
 
@@ -153,6 +154,25 @@ then `ci test module finished` for its module. Interpret the remainder:
 Every ad-hoc query must bound `timestamp` (normally 7 or 30 days) or select an
 exact `head_sha` / workflow run. Inspect the schema before assuming a property
 exists; Depot workflow outcome is `status`, while GitHub uses `conclusion`.
+
+## Preview deployment model
+
+Preview deployment events use the same source and run identity dimensions as
+test events, plus `deployment_kind = 'cloudflare-preview'`, `app`,
+`preview_slot`, and exact Worker identity when it is available.
+
+| Event                            | Grain                            | Important properties                                                                                    |
+| -------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `ci deploy run started/finished` | one preview deployment operation | status, wall duration, slot, error                                                                      |
+| `ci deploy lane finished`        | one app deployment               | status, total/config/command/readiness/reuse-proof durations, Worker name/version                       |
+| `ci deploy phase finished`       | one attributable app phase       | `phase_name` (`config`, `command`, `readiness`, or `reuse proof`), duration, app, slot, Worker identity |
+
+The `command` phase contains the app-owned build, Cloudflare mutations, and
+app-level smoke checks. The `readiness` phase starts only after the command has
+returned an exact Worker version and includes the OS/Streams Durable Object
+convergence proof. A reuse proof is recorded instead of command/readiness when
+a content-identical deployment is skipped after verifying that it still
+serves.
 
 ## Analyse through the PostHog MCP server
 

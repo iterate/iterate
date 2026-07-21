@@ -56,12 +56,12 @@ export type PreviewE2eModuleRecord = {
 type RunContext = {
   environment: NodeJS.ProcessEnv;
   headSha: string;
-  operation: "test" | "run";
+  operation: "deploy" | "test" | "run";
   pullRequestNumber: number;
   runUrl: string | null;
 };
 
-/** Schema-v2 event writer for complete preview e2e timing diagnostics. */
+/** Schema-v2 event writer for complete preview deploy and e2e timing diagnostics. */
 export class PreviewE2ePostHog {
   private readonly apiKey: string | null;
   private readonly common: Record<string, unknown>;
@@ -106,6 +106,76 @@ export class PreviewE2ePostHog {
       test_kind: "e2e",
       lane: "preview",
       status: "running",
+    });
+  }
+
+  deployRunStarted() {
+    this.capture("ci deploy run started", {
+      deployment_kind: "cloudflare-preview",
+      lane: "preview",
+      status: "running",
+    });
+  }
+
+  deployAppFinished(input: {
+    app: string;
+    slot?: string;
+    status: "passed" | "failed";
+    durationMs: number;
+    configDurationMs?: number | null;
+    commandDurationMs?: number | null;
+    readinessDurationMs?: number | null;
+    reuseProofDurationMs?: number | null;
+    workerName?: string | null;
+    workerVersion?: string | null;
+  }) {
+    const common = {
+      deployment_kind: "cloudflare-preview",
+      scope: "app",
+      app: input.app,
+      preview_slot: input.slot,
+      status: input.status,
+      worker_name: input.workerName,
+      worker_version: input.workerVersion,
+    };
+    this.capture("ci deploy lane finished", {
+      ...common,
+      duration_ms: input.durationMs,
+      config_duration_ms: input.configDurationMs,
+      command_duration_ms: input.commandDurationMs,
+      readiness_duration_ms: input.readinessDurationMs,
+      reuse_proof_duration_ms: input.reuseProofDurationMs,
+    });
+    for (const [phaseName, durationMs] of [
+      ["config", input.configDurationMs],
+      ["command", input.commandDurationMs],
+      ["readiness", input.readinessDurationMs],
+      ["reuse proof", input.reuseProofDurationMs],
+    ] as const) {
+      if (durationMs == null) continue;
+      this.capture("ci deploy phase finished", {
+        ...common,
+        phase_name: phaseName,
+        duration_ms: durationMs,
+      });
+    }
+  }
+
+  deployRunFinished(input: {
+    status: "passed" | "failed" | "skipped";
+    durationMs: number;
+    slot?: string;
+    error?: unknown;
+  }) {
+    const error = input.error ? normalizeError(input.error) : null;
+    this.capture("ci deploy run finished", {
+      deployment_kind: "cloudflare-preview",
+      lane: "preview",
+      preview_slot: input.slot,
+      status: input.status,
+      duration_ms: input.durationMs,
+      error_name: error?.name,
+      error_message: error ? truncate(error.message, 2_000) : undefined,
     });
   }
 
