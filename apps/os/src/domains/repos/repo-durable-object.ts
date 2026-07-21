@@ -70,7 +70,6 @@ import {
   type ObservedPush,
   type RepoHeadAuthority,
 } from "./repo-head-authority.ts";
-import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
@@ -82,12 +81,6 @@ const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 // must produce the same root commit instead of racing two timestamped seeds.
 const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
-const TASK_FILE_INCLUDE_PATTERNS = [
-  "tasks/**/*.md",
-  "tasks/**/*.markdown",
-  "**/tasks/**/*.md",
-  "**/tasks/**/*.markdown",
-];
 
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
@@ -180,7 +173,6 @@ export class RepoDurableObject extends DurableObject<Env> {
           afterCommitOid: input.afterCommitOid,
           beforeCommitOid: input.beforeCommitOid,
         }),
-      taskChangesForArtifactPush: (input) => this.#taskChangesForArtifactPush(input),
     }),
     { recovery: true },
   );
@@ -438,10 +430,10 @@ export class RepoDurableObject extends DurableObject<Env> {
   // is the last pushed commit before it changes anything.
   #writeChain: Promise<unknown> = Promise.resolve();
   // Secondary repos have no root-workspace cache. Their HEAD reads otherwise
-  // clone the complete Artifact once per call; a task board opening 42 files
-  // concurrently therefore launched 42 full monorepo clones and reset this
-  // isolate for exceeding memory. Share one immutable HEAD snapshot until a
-  // write or queue-observed external push invalidates it.
+  // clone the complete Artifact once per call; concurrent multi-file reads
+  // therefore launched full monorepo clones and could reset this isolate for
+  // exceeding memory. Share one immutable HEAD snapshot until a write or
+  // queue-observed external push invalidates it.
   readonly #headFilesSnapshot = new SingleFlightValue<{
     commitOid: string;
     files: Record<string, string>;
@@ -450,12 +442,12 @@ export class RepoDurableObject extends DurableObject<Env> {
   // The durable HEAD-tree cache: main's checkout materialized into THIS
   // object's own SQLite (files past the inline threshold spill to R2),
   // refreshed only when the durable head cursor moves. HEAD reads
-  // (readFile / listFiles / listTaskFiles) serve from it with no clone and no
-  // Artifacts round trip in steady state — and unlike the in-memory snapshot
-  // above, it survives eviction, so a cold incarnation answers its first read
-  // without re-cloning. Successor of the old per-project "root workspace"
-  // cache, co-located with the head cursor so freshness is a local kv read
-  // (the cross-DO re-entrant getHead dance is gone with it).
+  // (readFile / listFiles) serve from it with no clone and no Artifacts round
+  // trip in steady state — and unlike the in-memory snapshot above, it
+  // survives eviction, so a cold incarnation answers its first read without
+  // re-cloning. Successor of the old per-project "root workspace" cache,
+  // co-located with the head cursor so freshness is a local kv read (the
+  // cross-DO re-entrant getHead dance is gone with it).
   readonly #headTreeCache = new Workspace({
     sql: this.ctx.storage.sql,
     name: () => this.ctx.id.name,
@@ -627,42 +619,6 @@ export class RepoDurableObject extends DurableObject<Env> {
       occurrenceCount: result.occurrenceCount,
       path: result.path,
     };
-  }
-
-  async #taskFilesSnapshot(branch: string, commitOid: string): Promise<Record<string, string>> {
-    return (
-      await this.getFilesSnapshot({
-        branch,
-        commitOid,
-        include: TASK_FILE_INCLUDE_PATTERNS,
-      })
-    ).files;
-  }
-
-  async #taskChangesForArtifactPush(input: {
-    afterCommitOid: string | null;
-    beforeCommitOid: string | null;
-    branch: string;
-  }): Promise<RepoCommittedFileChange[]> {
-    // This method is reached from the Cloudflare Artifacts queue for pushes
-    // made outside this DO too (for example from a developer's computer).
-    // Record the queue-observed head before pinned diff reads. Artifacts can
-    // briefly clone the previous tip even after emitting its push event; the
-    // recorded oid makes #checkout retry that stale clone instead of letting
-    // it repopulate the just-cleared unpinned HEAD snapshot.
-    this.#observeExternalPush(input.branch, {
-      afterCommitOid: input.afterCommitOid,
-      beforeCommitOid: input.beforeCommitOid,
-    });
-    const previous =
-      input.beforeCommitOid === null
-        ? {}
-        : await this.#taskFilesSnapshot(input.branch, input.beforeCommitOid);
-    const current =
-      input.afterCommitOid === null
-        ? {}
-        : await this.#taskFilesSnapshot(input.branch, input.afterCommitOid);
-    return diffRepoTaskFiles(previous, current);
   }
 
   /**
@@ -838,42 +794,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     return content === undefined ? null : { commitOid, content, path };
   }
 
-  /**
-   * Every task markdown file's contents at HEAD in ONE clone. The task board
-   * needs the CONTENT of every `tasks/**` markdown file, not the whole tree;
-   * doing that as `listFiles()` + a `readFile()` per task fans N reads at this
-   * object, and on a cold snapshot each `readFile` is its own full clone — N
-   * concurrent clones of a big repo is exactly what overloads this DO. The task include
-   * mask is applied BEFORE contents are read (see `getFilesSnapshot`), so this
-   * only ever reads the handful of task files, and its cost scales with the
-   * number of tasks, not the size of the repo.
-   */
-  async listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
-    try {
-      return await this.#withHeadTree(async (commitOid) => {
-        const paths = (await walkWorkspaceFiles(this.#headTreeCache))
-          .map((path) => path.slice(1))
-          .sort();
-        const selected = filterWorkerSnapshotPaths(paths, { include: TASK_FILE_INCLUDE_PATTERNS });
-        const files: Record<string, string> = {};
-        for (const path of selected) {
-          const bytes = await this.#readHeadTreeBytesVerified(path);
-          // A listed path with no verified content is cache corruption, never
-          // truth — fail to the clone lane instead of serving an empty task.
-          if (bytes === null) throw new Error(`head-tree cache is missing "${path}"`);
-          files[path] = new TextDecoder().decode(bytes);
-        }
-        return { commitOid, files };
-      });
-    } catch (error) {
-      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
-      console.warn(
-        `repo listTaskFiles via the head-tree cache failed; falling back to a clone: ${String(error)}`,
-      );
-    }
-    return this.getFilesSnapshot({ include: TASK_FILE_INCLUDE_PATTERNS });
-  }
-
   /** All committed file paths at HEAD (served from the durable head-tree cache). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     try {
@@ -954,8 +874,8 @@ export class RepoDurableObject extends DurableObject<Env> {
   // git push is cumulative, so a failed mirror push self-heals on the next
   // commit; `pushToGithub` repairs on demand. GitHub push webhooks ask the repo
   // processor to fast-forward Artifacts through `syncFromGithub`; the ensuing
-  // Artifacts queue event remains the sole source of commit/task facts. The
-  // public sync verb is also the explicit repair/forced-adoption lane.
+  // Artifacts queue event remains the sole source of commit facts. The public
+  // sync verb is also the explicit repair/forced-adoption lane.
   // ===========================================================================
 
   /** The current GitHub link, or null when this repo is not linked. */
@@ -1104,7 +1024,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * The history transfers in-process (checkout-free clone from GitHub +
    * force-push to the Artifacts remote). `depth` is a requested lower bound;
    * a fast-forward always retains the previous Artifacts head as well so its
-   * queue event can compare before/after task trees. GitHub retains the full
+   * queue event can compare before/after trees. GitHub retains the full
    * history, so a later deeper sync can widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
@@ -1143,10 +1063,9 @@ export class RepoDurableObject extends DurableObject<Env> {
           `syncFromGithub is not a fast-forward (GitHub says "${comparison.status}" relative to this repo's head ${previousCommitOid ?? "(none)"}). Pass force: true to discard local-only history and adopt GitHub's head.`,
         );
       }
-      // The Artifacts queue projects task changes by checking out BOTH push
-      // oids. Preserve the old head even when the caller requested depth 1;
+      // Preserve the old head even when the caller requested depth 1;
       // otherwise the force-moved shallow branch makes `before` unreachable
-      // and the queue-derived task projection wedges on its pinned read.
+      // for queue-derived before/after comparisons.
       transferDepth = githubFastForwardTransferDepth({
         aheadBy: comparison.aheadBy,
         requestedDepth: input.depth,

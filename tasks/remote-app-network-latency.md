@@ -27,7 +27,7 @@ Reference numbers (all measured, not estimated):
 | Same-connection GET (reused, warm isolate) | 100–165ms |
 | Asset direct from vessel (Workers Assets) | ~75ms TTFB |
 | Asset through proxy | 150–450ms, one 1.5s cold spike observed |
-| `listTaskFiles` on warm repo DO | 40–50ms (cold ~1s) |
+| `listFiles` on warm repo DO | 40–50ms (cold ~1s) |
 
 Root cause of the big stalls: the os worker bundle is huge (`dist/server`
 60MB; 2MB entry + chunks + wasm) so a **cold isolate costs ~1–2s**, and every
@@ -83,7 +83,7 @@ immutable alone removes the recurring cost.
 Today every browser connection constructs a BoardSession that dials os
 `/api` fresh (fresh TCP → cold-isolate roulette, ~1s twice out of three
 measured). Keep ONE authenticated dial per board DO for reads
-(`listTaskFiles` + the 30s poll), opened once and reused across
+(`listFiles` + the 30s poll), opened once and reused across
 connections/reconnects; open per-user sessions lazily only when a user
 commits (attribution must stick to the committing user). First-paint data
 then rides an already-warm socket: ~50ms instead of up to ~1.5s.
@@ -98,7 +98,7 @@ three: **~400–600ms warm, ~1s cold** to board data (from 2.0s / 4.8s today).
   chain traversal for what is effectively a static shell (the board arrives
   over the WS). Client-only render or a cacheable shell would shave the
   first paint; modest next to items 1–3.
-- **Repo DO cold read** (~1s on first `listTaskFiles`): mostly amortized by
+- **Repo DO cold read** (~1s on first `listFiles`): mostly amortized by
   item 3's shared session + the board's existing 30s poll keeping it warm
   while anyone is connected. Revisit only if cold first-paint still hurts
   after 1–3.
@@ -120,7 +120,7 @@ waiting for it.
 - `env.ITX.get()` session open: 0ms. `itx.kv.get`: ~5ms.
 - Egress approval gate + 5s-stale rules catch-up: 10–30ms.
 - Egress project-DO hop for the vessel fetch: within the ~50ms upstream.
-- Capnweb pipelining: authenticate→projects.get→repos.get→listTaskFiles is
+- Capnweb pipelining: authenticate→projects.get→repos.get→listFiles is
   already one network flight (~60ms warm after ws-open).
 
 ## Instrumentation / probes (keep until this lands)

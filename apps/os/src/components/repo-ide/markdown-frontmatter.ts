@@ -1,6 +1,6 @@
 import { parseDocument, type Document } from "yaml";
 
-export function parseMarkdownFrontmatter(content: string): {
+function parseMarkdownFrontmatter(content: string): {
   body: string;
   document: Document;
   exists: boolean;
@@ -14,7 +14,7 @@ export function parseMarkdownFrontmatter(content: string): {
   };
 }
 
-export function markdownFrontmatterRecord(document: Document): Record<string, unknown> {
+function markdownFrontmatterRecord(document: Document): Record<string, unknown> {
   try {
     const value: unknown = document.toJS();
     return typeof value === "object" && value !== null && !Array.isArray(value)

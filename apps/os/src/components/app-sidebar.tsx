@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useMatches, useMatchRoute, useSearch } from "@tanstack/react-router";
+import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -13,7 +13,6 @@ import {
   ExternalLink,
   GitBranch,
   KeyRound,
-  ListTodo,
   LogOut,
   Plug,
   Plus,
@@ -517,7 +516,6 @@ function ProjectSidebarGroup({
 }) {
   const matchRoute = useMatchRoute();
   const { isMobile, openMobile, state: sidebarState } = useSidebar();
-  const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
@@ -528,13 +526,6 @@ function ProjectSidebarGroup({
   const agentAttentionCount = Object.values(agents).filter(
     (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
   ).length;
-  const isConfigTasksActive = Boolean(
-    matchRoute({
-      to: "/projects/$projectSlug/repos/$",
-      params: { projectSlug, _splat: "config" },
-      fuzzy: false,
-    }) && routeSearch.tasks === true,
-  );
   // A registered custom domain (garple.com) is the project's real address —
   // the Homepage link prefers it over the platform host (<slug>.<base>).
   const customHostnames = useQuery({
@@ -587,18 +578,6 @@ function ProjectSidebarGroup({
                   fuzzy: false,
                 }),
               )}
-            />
-            <ProjectSidebarMenuItem
-              icon={ListTodo}
-              label="Tasks"
-              render={
-                <Link
-                  to="/projects/$projectSlug/repos/$"
-                  params={{ projectSlug, _splat: "config" }}
-                  search={{ tasks: true }}
-                />
-              }
-              isActive={isConfigTasksActive}
             />
             <ProjectSidebarMenuItem
               icon={SquareTerminal}
