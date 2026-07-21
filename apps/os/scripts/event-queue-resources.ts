@@ -36,7 +36,7 @@ async function ensureArtifactEventSubscriptions(
   ctx: QueueResourceContext,
   input: { queueId: string; workerName: string },
 ): Promise<void> {
-  const existing = await listArtifactEventSubscriptions(ctx.cf);
+  const existing = await listArtifactEventSubscriptions(ctx.cf, input.queueId);
   const legacyWildcard = existing.find(
     (subscription) => subscription.name === `${input.workerName}-artifact-repo-events`,
   );

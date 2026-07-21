@@ -40,14 +40,15 @@ export async function ensureArtifactRepoEventSubscriptionForWorker(
   api: CloudflareAccountApi,
   input: { repoName: string; workerName: string },
 ): Promise<"created" | "recreated" | "unchanged"> {
-  const [queue, existing, desired] = await Promise.all([
-    ensureWorkerEventQueue(api, input.workerName),
-    listArtifactEventSubscriptions(api),
-    desiredArtifactRepoEventSubscription(input),
-  ]);
+  const queue = await ensureWorkerEventQueue(api, input.workerName);
+  const desired = await desiredArtifactRepoEventSubscription(input);
+  const current = await findArtifactEventSubscription(api, {
+    name: desired.name,
+    queueId: queue.queue_id,
+  });
   return await ensureArtifactEventSubscription(api, {
     desired,
-    existing,
+    existing: current === undefined ? [] : [current],
     queueId: queue.queue_id,
   });
 }
@@ -62,11 +63,68 @@ export async function listArtifactRepos(
   );
 }
 
-export async function listArtifactEventSubscriptions(api: CloudflareAccountApi) {
+export async function listArtifactEventSubscriptions(api: CloudflareAccountApi, queueId: string) {
   return await listCloudflarePages<ArtifactEventSubscription>(
     api,
-    `/event_subscriptions/subscriptions`,
+    `/event_subscriptions/subscriptions?queue_id=${encodeURIComponent(queueId)}`,
   );
+}
+
+/**
+ * Cloudflare exposes queue filtering and name ordering, but no name filter.
+ * Probe sorted pages exponentially, then binary-search the bracket: runtime
+ * repo creation must not scan tens of thousands of another slot's subscriptions.
+ */
+async function findArtifactEventSubscription(
+  api: CloudflareAccountApi,
+  input: { name: string; queueId: string },
+): Promise<ArtifactEventSubscription | undefined> {
+  const pageSize = 100;
+  const pages = new Map<number, ArtifactEventSubscription[]>();
+  const readPage = async (page: number) => {
+    const cached = pages.get(page);
+    if (cached !== undefined) return cached;
+    const path =
+      `/event_subscriptions/subscriptions?queue_id=${encodeURIComponent(input.queueId)}` +
+      `&order=name&direction=asc&page=${page}&per_page=${pageSize}`;
+    const items = await api<ArtifactEventSubscription[]>(path);
+    pages.set(page, items);
+    return items;
+  };
+  const match = (items: ArtifactEventSubscription[]) =>
+    items.find((candidate) => candidate.name === input.name);
+
+  let lowerPage = 0;
+  let page = 1;
+  let upperPage: number;
+  for (;;) {
+    const items = await readPage(page);
+    const current = match(items);
+    if (current !== undefined) return current;
+    if (items.length === 0) {
+      upperPage = page - 1;
+      break;
+    }
+    const lastName = items.at(-1)?.name || "";
+    if (input.name <= lastName || items.length < pageSize) return undefined;
+    lowerPage = page;
+    page *= 2;
+  }
+
+  while (lowerPage < upperPage) {
+    const middlePage = Math.floor((lowerPage + upperPage + 1) / 2);
+    const items = await readPage(middlePage);
+    const current = match(items);
+    if (current !== undefined) return current;
+    if (items.length === 0 || input.name < (items[0]?.name || "")) {
+      upperPage = middlePage - 1;
+      continue;
+    }
+    const lastName = items.at(-1)?.name || "";
+    if (input.name <= lastName || items.length < pageSize) return undefined;
+    lowerPage = middlePage;
+  }
+  return undefined;
 }
 
 export async function ensureArtifactEventSubscription(

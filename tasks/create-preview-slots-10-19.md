@@ -29,7 +29,8 @@ fails hard. Interrupted exact-slot moves also resume from the requested lease
 and release the old recorded slot instead of self-blocking; a failed exact-slot
 request releases any unrelated adopted lease. Markdown examples and comments
 cannot activate the PR-body selector. Local OS tests and typecheck are green;
-fresh CI and Bugbot review remain before merge.
+the latest preview run exposed and now has a regression for an unbounded
+cross-slot subscription scan. Fresh CI and Bugbot review remain before merge.
 Production deployment and Semaphore lease publication remain later, separate
 approval boundaries. The strict PR-body slot selector makes it possible to
 canary one expanded slot without exposing all ten to old clients.
@@ -439,3 +440,13 @@ the recorded projection.
   preserves the PR's recorded working lease; only an unrelated lease adopted
   during the attempt is released. All 191 scripts tests, scripts typecheck, and
   changed-file lint/format checks pass locally.
+- 2026-07-21: Preview e2e exposed an exact-subscription scalability defect.
+  Preview-6 project creation timed out because each fresh repo scanned all
+  29,018 account subscriptions (291 API pages, overwhelmingly preview-5)
+  before its first push. Runtime lookup now filters by the worker's queue and
+  exponentially probes then binary-searches name-sorted pages; deploy-time
+  reconciliation also filters by queue. The two failed smoke calls were
+  `log_6c4dd43707fb4342afd3904b1d576133` and
+  `log_7994cc2aba7046429a3ffcecd52522de`; the latter traces to
+  `cd8ed0b43cce8ac8988f2b5d3247f74f`. All 2,116 OS unit tests, OS typecheck,
+  and changed-file lint/format checks pass locally.
