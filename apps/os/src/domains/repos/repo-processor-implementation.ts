@@ -234,10 +234,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       state.birthCertificate === null &&
       createRequest.type === "empty"
     ) {
-      blockProcessorWhile(
-        "empty repo creation is the short birth obligation; acknowledging this frame before it settles could permanently strand a quiet config repo",
-        async () => append(await this.#createRepoTerminal(createRequest)),
-      );
+      blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
     } else if (
       createRequest !== null &&
       state.birthCertificate === null &&
