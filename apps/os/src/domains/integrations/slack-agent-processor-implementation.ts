@@ -112,6 +112,11 @@ export class SlackAgentProcessor extends StreamProcessor<
   /** The title this incarnation painted, so repeated repaints of an unchanged
    * title cost no Slack calls. */
   #paintedTitle: string | undefined;
+  /** Serializes background repaint attempts: without it, a slow setTitle from
+   * an earlier at-head pass could finish AFTER a newer paint and leave Slack
+   * (and the memos) wearing the stale value. Ordering lives here, not in the
+   * durable pipeline — a hanging paint delays later paints, never delivery. */
+  #presenceRepaintChain = Promise.resolve();
 
   // ------------------------------------------------------------ processEvent
   // One flat switch. Early exits inside the webhook case `break` (never
@@ -351,7 +356,13 @@ export class SlackAgentProcessor extends StreamProcessor<
     // pass; a lost revival clear re-arms because dying while owing this
     // keepalive-backed work produces another revival fact.
     if (delivery.caughtUp) {
-      runInBackground(() => this.#repaintPresence(args));
+      runInBackground(() => {
+        const attempt = this.#presenceRepaintChain.then(() => this.#repaintPresence(args));
+        // The chain survives a failed attempt (the failure still surfaces
+        // through runInBackground's own logging on `attempt`).
+        this.#presenceRepaintChain = attempt.catch(() => {});
+        return attempt;
+      });
     }
   }
 
