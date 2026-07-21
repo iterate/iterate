@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
@@ -532,7 +533,7 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("worker-capability-matrix").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("worker-capability-matrix")).create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);

@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -111,7 +112,7 @@ test("Agent scripts update their summary through the typed append door", async (
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("agent-update-summary").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("agent-update-summary")).create({});
   const agentPath = `/agents/update-summary-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -165,7 +166,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("agent-project-tool").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("agent-project-tool")).create({});
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -370,7 +371,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("agent-only-tools").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("agent-only-tools")).create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -511,7 +512,9 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("dynamic-worker-scope-cache").create({});
+  using project = await itx.projects
+    .get(uniqueFixtureSlug("dynamic-worker-scope-cache"))
+    .create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -570,7 +573,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("cross-scope-provide").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("cross-scope-provide")).create({});
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -618,7 +621,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("worker-births-agents").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("worker-births-agents")).create({});
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
@@ -701,7 +704,9 @@ test("Project worker processEventBatch receives events from every project stream
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("project-worker-process-event").create({});
+  using project = await itx.projects
+    .get(uniqueFixtureSlug("project-worker-process-event"))
+    .create({});
   const marker = `cross-post-${crypto.randomUUID()}`;
   // NOT the root stream: every project stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must

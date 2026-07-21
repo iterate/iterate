@@ -20,6 +20,7 @@ import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
+  compactRetryFailure,
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
@@ -1490,18 +1491,6 @@ function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null 
     )
     .join(" · ");
   return `${summary.retried.length} retried: ${details}`;
-}
-
-function compactRetryFailure(error: unknown): string | undefined {
-  let value: unknown = error;
-  if (typeof error === "object" && error !== null) {
-    const record = error as Record<string, unknown>;
-    value = record.message ?? record.stack ?? record.name;
-  }
-  if (typeof value !== "string") return undefined;
-  const compact = value.replace(/\s+/gu, " ").trim();
-  if (!compact) return undefined;
-  return compact.length > 300 ? `${compact.slice(0, 297)}...` : compact;
 }
 
 /**

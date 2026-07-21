@@ -68,7 +68,7 @@ export class RetryTelemetryReporter {
             continue;
           }
           const result = test.result();
-          const firstFailure = compactFailure(result.errors?.[0]);
+          const firstFailure = compactRetryFailure(result.errors?.[0]);
           retried.push({
             fullName: test.fullName,
             moduleId: testModule.moduleId,
@@ -102,7 +102,7 @@ export class RetryTelemetryReporter {
 }
 
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
-function compactFailure(error: unknown): string | undefined {
+export function compactRetryFailure(error: unknown): string | undefined {
   let value: unknown = error;
   if (typeof error === "object" && error !== null) {
     const record = error as Record<string, unknown>;

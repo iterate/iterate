@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession } from "capnweb";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -262,7 +263,7 @@ test("Project describe exposes self-describing builtin capabilities", async () =
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("ai-builtin").create({});
+  using project = await itx.projects.get(uniqueFixtureSlug("ai-builtin")).create({});
   const description = await project.__describe();
 
   // Built-ins live in the children map (capabilities holds dynamic mounts
