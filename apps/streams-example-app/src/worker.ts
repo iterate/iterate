@@ -11,6 +11,7 @@ import {
   deploymentReadinessProbeIndexes,
   deploymentReadinessProbeQueryParam,
   deploymentReadinessProbeWave,
+  deploymentReadinessRequestAuthorized,
   deploymentReadinessResponse,
 } from "~/deployment-readiness.ts";
 import { DurableObjectNameCodec } from "~/domains/durable-object-names.ts";
@@ -85,10 +86,21 @@ export default createServerEntry({
         });
       }
 
-      const probes = deploymentReadinessProbeIndexes(
-        deploymentReadinessProbeWave(probeSequence),
-      ).map((probe) =>
-        workerEnv.STREAM.getByName(
+      const expectedToken = parseConfig(workerEnv).iterateAuth?.clientSecret.exposeSecret();
+      if (!deploymentReadinessRequestAuthorized(request, expectedToken)) {
+        return deploymentProbeErrorResponse({ error: "unauthorized", status: 401, version });
+      }
+      const probeWave = deploymentReadinessProbeWave(probeSequence);
+      if (probeWave === null) {
+        return deploymentProbeErrorResponse({
+          error: "invalid-probe-wave",
+          status: 400,
+          version,
+        });
+      }
+
+      const probes = deploymentReadinessProbeIndexes(probeWave).map((probe) => {
+        const stub = workerEnv.STREAM.getByName(
           DurableObjectNameCodec.stringify(
             {
               path: "/deployment-readiness",
@@ -97,13 +109,14 @@ export default createServerEntry({
             },
             { allowNullProjectId: true },
           ),
-        ),
-      );
-      return deploymentReadinessResponse({
+        );
+        return { name: `STREAM:${probe}`, readVersion: () => stub.deploymentVersion() };
+      });
+      return await deploymentReadinessResponse({
         app: "streams-example-app",
-        readDurableObjectVersions: () =>
-          Promise.all(probes.map((probe) => probe.deploymentVersion())),
+        probes,
         version,
+        wave: probeWave,
       });
     }
 
@@ -186,3 +199,16 @@ export default createServerEntry({
     return withAuthHeaders(response);
   },
 });
+
+function deploymentProbeErrorResponse(input: { error: string; status: number; version: string }) {
+  return Response.json(
+    { ok: false, app: "streams-example-app", error: input.error, version: input.version },
+    {
+      status: input.status,
+      headers: {
+        "cache-control": "no-store",
+        "x-iterate-worker-version": input.version,
+      },
+    },
+  );
+}

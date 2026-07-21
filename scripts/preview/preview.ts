@@ -8,6 +8,10 @@ import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import {
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWaveCount,
+} from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { dummyPetshopEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
@@ -1261,6 +1265,18 @@ export const CloudflarePreviewAppSlug = z.enum([
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
 
+type PreviewReadyWorkerVersion =
+  | {
+      probeQueryParam?: undefined;
+      probeWaveCount?: undefined;
+      stableForMs: number;
+    }
+  | {
+      probeQueryParam: string;
+      probeWaveCount: number;
+      stableForMs: number;
+    };
+
 export type CloudflarePreviewApp = {
   slug: CloudflarePreviewAppSlug;
   displayName: string;
@@ -1294,17 +1310,15 @@ export type CloudflarePreviewApp = {
   previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
+  /** Doppler env var sent as a bearer only to the app's active rollout probe. */
+  previewReadyBearerTokenEnvVar?: string;
   /**
    * Require the readiness route to report wrangler's newly deployed Worker
    * version before tests start. Apps with Durable Objects expose a finite set
    * of probe waves: the orchestrator checks every wave in parallel, waits the
    * stability interval, then revalidates the complete set.
    */
-  previewReadyWorkerVersion?: {
-    probeQueryParam?: string;
-    probeWaveCount?: number;
-    stableForMs: number;
-  };
+  previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
@@ -1557,12 +1571,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
+    previewReadyBearerTokenEnvVar: "APP_CONFIG_ADMIN_API_SECRET",
     // Cloudflare rolls Durable Object namespaces independently from the edge.
     // Exercise every namespace's bounded placement waves, then revalidate the
     // exact version after a quiet interval before any project burst begins.
     previewReadyWorkerVersion: {
-      probeQueryParam: "deployment-probe",
-      probeWaveCount: 10,
+      probeQueryParam: deploymentReadinessProbeQueryParam,
+      probeWaveCount: deploymentReadinessProbeWaveCount,
       stableForMs: 10_000,
     },
     paths: [
@@ -1730,9 +1745,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
+    previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
     previewReadyWorkerVersion: {
-      probeQueryParam: "deployment-probe",
-      probeWaveCount: 10,
+      probeQueryParam: deploymentReadinessProbeQueryParam,
+      probeWaveCount: deploymentReadinessProbeWaveCount,
       stableForMs: 10_000,
     },
     previewTestBaseUrlEnvVar: "WORKER_URL",
@@ -3456,15 +3472,14 @@ async function deployPreviewApp(input: {
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
+    readinessBearerToken: appConfig.readinessBearerToken,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
     workerVersion:
       deployedWorkerVersion && input.app.previewReadyWorkerVersion
         ? {
             expected: deployedWorkerVersion,
-            probeQueryParam: input.app.previewReadyWorkerVersion.probeQueryParam,
-            probeWaveCount: input.app.previewReadyWorkerVersion.probeWaveCount,
-            stableForMs: input.app.previewReadyWorkerVersion.stableForMs,
+            ...input.app.previewReadyWorkerVersion,
           }
         : undefined,
   });
@@ -3494,12 +3509,25 @@ async function readPreviewAppConfig(input: {
   const PreviewAppConfig = z.object({
     baseUrl: z.string().trim().url(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+    readinessBearerToken: z.string().trim().min(1).optional(),
   });
+  const parsePreviewAppConfig = (value: unknown) => {
+    const parsed = PreviewAppConfig.parse(value);
+    if (input.app.previewReadyBearerTokenEnvVar && !parsed.readinessBearerToken) {
+      throw new Error(
+        `Preview readiness requires Doppler secret ${input.app.previewReadyBearerTokenEnvVar}.`,
+      );
+    }
+    return parsed;
+  };
   const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
   if (repoConfig) {
-    return PreviewAppConfig.parse(repoConfig);
+    return parsePreviewAppConfig(repoConfig);
   }
 
+  const readinessBearerTokenEnvVar = JSON.stringify(
+    input.app.previewReadyBearerTokenEnvVar ?? null,
+  );
   const script = [
     "function parseStringArrayEnv(value) {",
     "  if (!value?.trim()) return [];",
@@ -3512,9 +3540,12 @@ async function readPreviewAppConfig(input: {
     "}",
     "const appConfig = parseAppConfig();",
     "const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
+    `const readinessBearerTokenEnvVar = ${readinessBearerTokenEnvVar};`,
+    "const readinessBearerToken = readinessBearerTokenEnvVar ? process.env[readinessBearerTokenEnvVar]?.trim() : undefined;",
     "const config = {",
     "  baseUrl: process.env.APP_CONFIG_BASE_URL || appConfig.baseUrl || null,",
     "  projectHostnameBases: envBases.length > 0 ? envBases : Array.isArray(appConfig.projectHostnameBases) ? appConfig.projectHostnameBases.filter((entry) => typeof entry === 'string') : [],",
+    "  ...(readinessBearerToken ? { readinessBearerToken } : {}),",
     "};",
     "console.log(JSON.stringify(config));",
   ].join("\n");
@@ -3537,10 +3568,11 @@ async function readPreviewAppConfig(input: {
     workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
   if (result.exitCode !== 0) {
-    throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
+    // stdout may contain the readiness bearer; never include command output.
+    throw new Error("Failed to read preview app config.");
   }
 
-  return PreviewAppConfig.parse(JSON.parse(result.stdout));
+  return parsePreviewAppConfig(JSON.parse(result.stdout));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -4585,10 +4617,10 @@ const previewServingProbeTimeoutMs = 15_000;
 /** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
 async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
   try {
-    const { status } = await fetchReadinessResponse(
-      url,
-      AbortSignal.timeout(previewServingProbeTimeoutMs),
-    );
+    const { status } = await fetchReadinessResponse(url, {
+      signal: AbortSignal.timeout(previewServingProbeTimeoutMs),
+      timeoutMs: previewServingProbeTimeoutMs,
+    });
     return { ok: status >= 200 && status < 300, detail: `HTTP ${status}` };
   } catch (error) {
     return { ok: false, detail: formatPreviewErrorMessage(error) };
@@ -4820,14 +4852,10 @@ async function mapWithConcurrency<T, Result>(
 async function waitForPreviewAppReadiness(params: {
   publicUrl: string;
   readyUrlPath?: string;
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
-  workerVersion?: {
-    expected: string;
-    probeQueryParam?: string;
-    probeWaveCount?: number;
-    stableForMs: number;
-  };
+  workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -4836,6 +4864,7 @@ async function waitForPreviewAppReadiness(params: {
 
   for (const url of urls) {
     const readiness = await waitForHttpReadiness({
+      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
       url,
@@ -4871,29 +4900,38 @@ function parseLastDeployedWorkerVersionId(output: string): string | null {
 }
 
 async function waitForHttpReadiness(params: {
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
-  workerVersion?: {
-    expected: string;
-    probeQueryParam?: string;
-    probeWaveCount?: number;
-    stableForMs: number;
-  };
+  workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
 }) {
   const startedAt = Date.now();
   const deadline = Date.now() + params.timeoutMs;
+  const hasProbeQueryParam = params.workerVersion?.probeQueryParam !== undefined;
+  const hasProbeWaveCount = params.workerVersion?.probeWaveCount !== undefined;
 
-  if (params.workerVersion?.probeQueryParam && params.workerVersion.probeWaveCount !== undefined) {
+  if (hasProbeQueryParam !== hasProbeWaveCount) {
+    throw new Error(
+      "Worker-version readiness must configure probeQueryParam and probeWaveCount together.",
+    );
+  }
+
+  if (hasProbeQueryParam && hasProbeWaveCount && params.workerVersion) {
+    const { probeQueryParam, probeWaveCount } = params.workerVersion;
+    if (probeQueryParam === undefined || probeWaveCount === undefined) {
+      throw new Error("Worker-version readiness probe configuration is incomplete.");
+    }
     return await waitForWorkerVersionProbeWaves({
       deadline,
+      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       startedAt,
       url: params.url,
       workerVersion: {
         expected: params.workerVersion.expected,
-        probeQueryParam: params.workerVersion.probeQueryParam,
-        probeWaveCount: params.workerVersion.probeWaveCount,
+        probeQueryParam,
+        probeWaveCount,
         stableForMs: params.workerVersion.stableForMs,
       },
     });
@@ -4904,8 +4942,14 @@ async function waitForHttpReadiness(params: {
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetchReadinessResponse(params.url, params.signal);
+      const response = await fetchReadinessResponse(params.url, {
+        readinessBearerToken: params.readinessBearerToken,
+        signal: params.signal,
+        timeoutMs: readinessRequestTimeoutMs(deadline),
+      });
       if (response.status >= 200 && response.status < 300) {
+        params.signal?.throwIfAborted();
+        if (Date.now() >= deadline) break;
         if (!params.workerVersion) {
           return { ok: true as const };
         }
@@ -4929,14 +4973,16 @@ async function waitForHttpReadiness(params: {
         }
       } else {
         matchingWorkerVersionSince = null;
-        lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+        lastFailure =
+          `Readiness check returned ${response.status} for ${params.url.toString()}` +
+          formatReadinessResponseDetail(response);
       }
     } catch (error) {
       matchingWorkerVersionSince = null;
       lastFailure = formatPreviewErrorMessage(error);
     }
 
-    await sleep(1_000, params.signal);
+    await sleep(Math.min(1_000, Math.max(0, deadline - Date.now())), params.signal);
   }
 
   return {
@@ -4947,6 +4993,7 @@ async function waitForHttpReadiness(params: {
 
 type WorkerVersionProbeResult = {
   failure: string | null;
+  terminal: boolean;
   wave: number;
 };
 
@@ -4959,6 +5006,7 @@ type WorkerVersionProbeResult = {
  */
 async function waitForWorkerVersionProbeWaves(params: {
   deadline: number;
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   startedAt: number;
   url: URL;
@@ -4982,12 +5030,22 @@ async function waitForWorkerVersionProbeWaves(params: {
 
   while (Date.now() < params.deadline) {
     const results = await probeWorkerVersionWaves({
+      deadline: params.deadline,
       expectedWorkerVersion: params.workerVersion.expected,
       probeQueryParam: params.workerVersion.probeQueryParam,
+      probeWaveCount,
+      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       url: params.url,
       waves: [...pendingWaves],
     });
+    const terminalFailure = results.find((result) => result.terminal);
+    if (terminalFailure?.failure) {
+      return {
+        message: `Preview readiness failed at ${params.url.toString()}. ${terminalFailure.failure}`,
+        ok: false as const,
+      };
+    }
     for (const result of results) {
       if (result.failure === null) pendingWaves.delete(result.wave);
     }
@@ -5004,29 +5062,57 @@ async function waitForWorkerVersionProbeWaves(params: {
         lastProgress = progress;
         lastProgressAt = now;
       }
-      await sleep(1_000, params.signal);
+      await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
       continue;
     }
 
+    const remainingStabilityBudgetMs = params.deadline - Date.now();
+    if (remainingStabilityBudgetMs < params.workerVersion.stableForMs) {
+      lastFailure =
+        `All waves served the expected version, but only ${Math.max(0, remainingStabilityBudgetMs)}ms ` +
+        `remained for the required ${params.workerVersion.stableForMs}ms stability interval.`;
+      break;
+    }
     console.error(
       `[preview] readiness ${params.url.origin}: all ${probeWaveCount} Durable Object probe waves served ${params.workerVersion.expected}; revalidating after ${formatDurationMs(params.workerVersion.stableForMs)}`,
     );
     await sleep(params.workerVersion.stableForMs, params.signal);
-    if (Date.now() >= params.deadline) break;
+    params.signal?.throwIfAborted();
+    if (Date.now() >= params.deadline) {
+      lastFailure = "The readiness deadline expired before complete-set revalidation began.";
+      break;
+    }
 
     const validationResults = await probeWorkerVersionWaves({
+      deadline: params.deadline,
       expectedWorkerVersion: params.workerVersion.expected,
       probeQueryParam: params.workerVersion.probeQueryParam,
+      probeWaveCount,
+      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       url: params.url,
       waves: allWaves,
     });
+    params.signal?.throwIfAborted();
+    const terminalValidationFailure = validationResults.find((result) => result.terminal);
+    if (terminalValidationFailure?.failure) {
+      return {
+        message:
+          `Preview readiness failed at ${params.url.toString()}. ` +
+          terminalValidationFailure.failure,
+        ok: false as const,
+      };
+    }
     const validationFailures = validationResults.filter((result) => result.failure !== null);
-    if (validationFailures.length === 0) {
+    if (validationFailures.length === 0 && Date.now() < params.deadline) {
       console.error(
         `[preview] readiness ${params.url.origin}: all ${probeWaveCount} waves remained exact; ready after ${formatDurationMs(Date.now() - params.startedAt)}`,
       );
       return { ok: true as const };
+    }
+    if (Date.now() >= params.deadline) {
+      lastFailure = "The readiness deadline expired during complete-set revalidation.";
+      break;
     }
 
     pendingWaves = new Set(validationFailures.map((result) => result.wave));
@@ -5035,7 +5121,7 @@ async function waitForWorkerVersionProbeWaves(params: {
       `[preview] readiness ${params.url.origin}: complete-set revalidation found ${lastFailure}; retrying only those waves`,
     );
     lastProgress = "";
-    await sleep(1_000, params.signal);
+    await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
   }
 
   return {
@@ -5045,8 +5131,11 @@ async function waitForWorkerVersionProbeWaves(params: {
 }
 
 async function probeWorkerVersionWaves(params: {
+  deadline: number;
   expectedWorkerVersion: string;
   probeQueryParam: string;
+  probeWaveCount: number;
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   url: URL;
   waves: readonly number[];
@@ -5056,19 +5145,55 @@ async function probeWorkerVersionWaves(params: {
       const requestUrl = new URL(params.url);
       requestUrl.searchParams.set(params.probeQueryParam, String(wave));
       try {
-        const response = await fetchReadinessResponse(requestUrl, params.signal);
+        const response = await fetchReadinessResponse(requestUrl, {
+          readinessBearerToken: params.readinessBearerToken,
+          signal: params.signal,
+          timeoutMs: readinessRequestTimeoutMs(params.deadline),
+        });
         if (response.status < 200 || response.status >= 300) {
-          return { failure: `wave ${wave} returned HTTP ${response.status}`, wave };
+          const recognizedSettlingResponse =
+            response.settlingReason === "durable-object-lifecycle" ||
+            response.settlingReason === "probe-timeout" ||
+            response.settlingReason === "version-mismatch";
+          const terminal =
+            [400, 401, 403].includes(response.status) ||
+            (response.status >= 500 && !recognizedSettlingResponse);
+          return {
+            failure:
+              `wave ${wave} returned HTTP ${response.status}` +
+              formatReadinessResponseDetail(response),
+            terminal,
+            wave,
+          };
         }
         if (response.workerVersion !== params.expectedWorkerVersion) {
           return {
             failure: `wave ${wave} served Worker version ${response.workerVersion ?? "<missing>"}`,
+            terminal: false,
             wave,
           };
         }
-        return { failure: null, wave };
+        if (
+          response.deploymentProbeWave !== wave ||
+          response.deploymentProbeWaveCount !== params.probeWaveCount
+        ) {
+          return {
+            failure:
+              `wave ${wave} returned probe identity ` +
+              `${response.deploymentProbeWave ?? "<missing>"}/` +
+              `${response.deploymentProbeWaveCount ?? "<missing>"}; ` +
+              `expected ${wave}/${params.probeWaveCount}`,
+            terminal: true,
+            wave,
+          };
+        }
+        return { failure: null, terminal: false, wave };
       } catch (error) {
-        return { failure: `wave ${wave} failed: ${formatPreviewErrorMessage(error)}`, wave };
+        return {
+          failure: `wave ${wave} failed: ${formatPreviewErrorMessage(error)}`,
+          terminal: false,
+          wave,
+        };
       }
     }),
   );
@@ -5083,38 +5208,142 @@ function describeWorkerVersionProbeFailures(results: readonly WorkerVersionProbe
 
 async function fetchReadinessResponse(
   url: URL,
-  signal: AbortSignal | undefined,
-): Promise<{ status: number; workerVersion: string | null }> {
-  const requestTimeoutSignal = AbortSignal.timeout(previewReadinessRequestTimeoutMs);
-  const requestSignal = signal
-    ? AbortSignal.any([signal, requestTimeoutSignal])
+  options: {
+    readinessBearerToken?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
+): Promise<ReadinessResponse> {
+  const requestTimeoutSignal = AbortSignal.timeout(
+    Math.max(1, options.timeoutMs ?? previewReadinessRequestTimeoutMs),
+  );
+  const requestSignal = options.signal
+    ? AbortSignal.any([options.signal, requestTimeoutSignal])
     : requestTimeoutSignal;
+  const headers = options.readinessBearerToken
+    ? { authorization: `Bearer ${options.readinessBearerToken}` }
+    : undefined;
   try {
     const response = await fetch(url, {
       cache: "no-store",
+      headers,
       method: "GET",
       redirect: "follow",
       signal: requestSignal,
     });
-    return {
+    return parseReadinessResponse({
+      body: await readBoundedResponseBody(response),
       status: response.status,
       workerVersion: response.headers.get(workerVersionReadinessHeader),
-    };
+    });
   } catch (error) {
     if (!isDnsLookupError(error)) {
       throw error;
     }
 
-    return await requestReadinessWithDnsResolve(url, requestSignal);
+    return await requestReadinessWithDnsResolve({
+      readinessBearerToken: options.readinessBearerToken,
+      signal: requestSignal,
+      url,
+    });
   }
 }
 
-async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
+type ReadinessResponse = {
+  body: string;
+  deploymentProbeWave: number | null;
+  deploymentProbeWaveCount: number | null;
+  settlingReason: string | null;
+  status: number;
+  workerVersion: string | null;
+};
+
+const readinessResponseBodyLimit = 4_096;
+
+async function readBoundedResponseBody(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+  let truncated = false;
+  while (bytesRead < readinessResponseBodyLimit) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const remaining = readinessResponseBodyLimit - bytesRead;
+    chunks.push(value.subarray(0, remaining));
+    bytesRead += Math.min(value.byteLength, remaining);
+    if (value.byteLength > remaining) {
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+  }
+
+  if (bytesRead >= readinessResponseBodyLimit && !truncated) {
+    const { done } = await reader.read();
+    truncated = !done;
+    if (truncated) await reader.cancel();
+  }
+  const body = new TextDecoder().decode(concatenateBytes(chunks, bytesRead));
+  return truncated ? `${body}…` : body;
+}
+
+function concatenateBytes(chunks: readonly Uint8Array[], length: number): Uint8Array {
+  const combined = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return combined;
+}
+
+function parseReadinessResponse(input: {
+  body: string;
+  status: number;
+  workerVersion: string | null;
+}): ReadinessResponse {
+  let parsed: unknown = null;
+  try {
+    parsed = input.body ? JSON.parse(input.body) : null;
+  } catch {
+    // Non-JSON proxy and platform errors remain useful as bounded diagnostics.
+  }
+  const record =
+    typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
+  return {
+    ...input,
+    deploymentProbeWave: readSafeInteger(record?.deploymentProbeWave),
+    deploymentProbeWaveCount: readSafeInteger(record?.deploymentProbeWaveCount),
+    settlingReason: typeof record?.settlingReason === "string" ? record.settlingReason : null,
+  };
+}
+
+function readSafeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) ? (value as number) : null;
+}
+
+function formatReadinessResponseDetail(response: ReadinessResponse): string {
+  const detail = response.body.trim().replace(/\s+/g, " ");
+  return detail ? `: ${detail}` : "";
+}
+
+function readinessRequestTimeoutMs(deadline: number): number {
+  return Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now()));
+}
+
+async function requestReadinessWithDnsResolve(input: {
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  url: URL;
+}) {
+  const { signal, url } = input;
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
   }
 
-  const addresses = await dns.resolve4(url.hostname);
+  const addresses = await awaitWithAbort(dns.resolve4(url.hostname), signal);
   const address = addresses[0];
   if (!address) {
     throw new Error(`No A record found for ${url.hostname}`);
@@ -5124,11 +5353,15 @@ async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | un
   const resolvedUrl = new URL(url);
   resolvedUrl.hostname = address;
 
-  return await new Promise<{ status: number; workerVersion: string | null }>((resolve, reject) => {
+  return await new Promise<ReadinessResponse>((resolve, reject) => {
+    const headers: Record<string, string> = { Host: url.host };
+    if (input.readinessBearerToken) {
+      headers.authorization = `Bearer ${input.readinessBearerToken}`;
+    }
     const req = request(
       resolvedUrl,
       {
-        headers: { Host: url.host },
+        headers,
         method: "GET",
         servername: url.hostname,
         signal,
@@ -5139,12 +5372,52 @@ async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | un
         const workerVersion = Array.isArray(rawWorkerVersion)
           ? (rawWorkerVersion[0] ?? null)
           : (rawWorkerVersion ?? null);
-        response.resume();
-        response.on("end", () => resolve({ status: statusCode, workerVersion }));
+        let body = "";
+        let truncated = false;
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          const remaining = readinessResponseBodyLimit - body.length;
+          if (remaining > 0) body += chunk.slice(0, remaining);
+          if (chunk.length > remaining) truncated = true;
+        });
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve(
+            parseReadinessResponse({
+              body: truncated ? `${body}…` : body,
+              status: statusCode,
+              workerVersion,
+            }),
+          ),
+        );
       },
     );
     req.on("error", reject);
     req.end();
+  });
+}
+
+async function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await promise;
+  signal.throwIfAborted();
+
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error("Aborted"));
+    };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
   });
 }
 
@@ -5273,15 +5546,21 @@ function canRunPreviewTests(entry: z.infer<typeof CloudflarePreviewAppEntry> | u
 
 async function sleep(ms: number, signal?: AbortSignal) {
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(resolve, ms);
+    let timeout: ReturnType<typeof setTimeout>;
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const onDone = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      clearTimeout(timeout);
+      cleanup();
+      reject(signal?.reason ?? new Error("Aborted"));
+    };
+    timeout = setTimeout(onDone, ms);
     if (!signal) {
       return;
     }
-
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason ?? new Error("Aborted"));
-    };
 
     if (signal.aborted) {
       onAbort();

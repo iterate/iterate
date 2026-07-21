@@ -71,7 +71,14 @@ serially because they intentionally share one warm container.
   other deployed OS Durable Object namespace. The streams example checks ten
   waves of eight fixed `StreamDurableObject` incarnations. Once every wave
   reports the exact deployed version, the complete set is revalidated after a
-  10-second quiet interval. Failed waves alone stay in the hot retry set.
+  10-second quiet interval. Failed waves alone stay in the hot retry set. The
+  fan-out route requires the app's existing Doppler-backed bearer, and the
+  client rejects malformed wave identities instead of accepting a partial
+  proof.
+- **Only classified rollout states retry.** Version skew, flagged Durable
+  Object lifecycle resets, and the probe's own bounded timeout are settling
+  states. Authentication/configuration failures and unclassified 5xx responses
+  fail the deployment immediately with a bounded response diagnostic.
 - **The proof does not exercise product work.** Its RPC only returns the
   incarnation's version. In particular, probing a sandbox Durable Object does
   not create or start a container. Ordinary health requests remain cheap and

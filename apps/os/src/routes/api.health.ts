@@ -1,8 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { parseConfig } from "../config.ts";
 import {
   deploymentReadinessProbeIndexes,
+  deploymentReadinessProjectProbes,
   deploymentReadinessProbeQueryParam,
   deploymentReadinessProbeWave,
+  deploymentReadinessRequestAuthorized,
   deploymentReadinessResponse,
 } from "../deployment-readiness.ts";
 import { DurableObjectNameCodec } from "../domains/durable-object-names.ts";
@@ -18,13 +21,21 @@ const workerVersionHeader = "x-iterate-worker-version";
 export const Route = createFileRoute("/api/health")({
   server: {
     handlers: {
-      GET: ({ request }) => {
+      GET: async ({ request }) => {
         const version = workerVersion(itxEnv);
         const probeSequence = new URL(request.url).searchParams.get(
           deploymentReadinessProbeQueryParam,
         );
         if (probeSequence !== null) {
+          const expectedToken = parseConfig(itxEnv).adminApiSecret?.exposeSecret();
+          if (!deploymentReadinessRequestAuthorized(request, expectedToken)) {
+            return probeErrorResponse({ error: "unauthorized", status: 401, version });
+          }
+
           const probeWave = deploymentReadinessProbeWave(probeSequence);
+          if (probeWave === null) {
+            return probeErrorResponse({ error: "invalid-probe-wave", status: 400, version });
+          }
           const probeIndexes = deploymentReadinessProbeIndexes(probeWave);
 
           // CapabilityHost gets broad, version-specific placement coverage.
@@ -47,46 +58,34 @@ export const Route = createFileRoute("/api/health")({
             { allowNullProjectId: true },
           );
           const probes = [
-            ...probeIndexes.map((probe) =>
-              itxEnv.CAPABILITY_HOST.getByName(
+            ...probeIndexes.map((probe) => {
+              const stub = itxEnv.CAPABILITY_HOST.getByName(
                 DurableObjectNameCodec.stringify({
                   path: "/",
                   projectId: "prj_deployment_readiness",
                   props: { probe: String(probe), version },
                 }),
-              ),
-            ),
-            itxEnv.AGENT.getByName(projectProbeName("/agents/deployment-readiness")),
-            itxEnv.AGENT_COLLECTION.getByName(projectProbeName("/agents")),
-            itxEnv.DEVICE.getByName(projectProbeName("/devices/deployment-readiness")),
-            itxEnv.PROJECT.getByName(projectProbeName("/")),
-            itxEnv.REPO.getByName(projectProbeName("/repos/deployment-readiness")),
-            itxEnv.SCHEDULER.getByName(projectProbeName("/scheduler/deployment-readiness")),
-            itxEnv.SECRET.getByName(projectProbeName("/secrets/deployment-readiness")),
-            itxEnv.STREAM.getByName(streamProbeName),
-            itxEnv.WORKER.getByName(projectProbeName("/workers/deployment-readiness")),
-            itxEnv.WORKSPACE_V2.getByName(projectProbeName("/workspaces/deployment-readiness")),
-            itxEnv.SANDBOX_LITE.getByName(projectProbeName("/sandboxes/deployment-readiness")),
-            itxEnv.SANDBOX_BASIC.getByName(projectProbeName("/sandboxes/deployment-readiness")),
-            itxEnv.SANDBOX_STANDARD_1.getByName(
-              projectProbeName("/sandboxes/deployment-readiness"),
-            ),
-            itxEnv.SANDBOX_STANDARD_2.getByName(
-              projectProbeName("/sandboxes/deployment-readiness"),
-            ),
-            itxEnv.SANDBOX_STANDARD_3.getByName(
-              projectProbeName("/sandboxes/deployment-readiness"),
-            ),
-            itxEnv.SANDBOX_STANDARD_4.getByName(
-              projectProbeName("/sandboxes/deployment-readiness"),
-            ),
+              );
+              return {
+                name: `CAPABILITY_HOST:${probe}`,
+                readVersion: () => stub.deploymentVersion(),
+              };
+            }),
+            ...deploymentReadinessProjectProbes.map(([binding, path]) => {
+              const stub = itxEnv[binding].getByName(projectProbeName(path));
+              return { name: binding, readVersion: () => stub.deploymentVersion() };
+            }),
+            {
+              name: "STREAM",
+              readVersion: () => itxEnv.STREAM.getByName(streamProbeName).deploymentVersion(),
+            },
           ];
 
-          return deploymentReadinessResponse({
+          return await deploymentReadinessResponse({
             app: "os",
-            readDurableObjectVersions: () =>
-              Promise.all(probes.map((probe) => probe.deploymentVersion())),
+            probes,
             version,
+            wave: probeWave,
           });
         }
 
@@ -103,3 +102,16 @@ export const Route = createFileRoute("/api/health")({
     },
   },
 });
+
+function probeErrorResponse(input: { error: string; status: number; version: string }) {
+  return Response.json(
+    { ok: false, app: "os", error: input.error, version: input.version },
+    {
+      status: input.status,
+      headers: {
+        "cache-control": "no-store",
+        [workerVersionHeader]: input.version,
+      },
+    },
+  );
+}
