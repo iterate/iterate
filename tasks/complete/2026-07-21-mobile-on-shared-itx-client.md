@@ -120,3 +120,7 @@ description, `docs/frontend-development.md`.
   servers and passed. Metro consistently waits 60 seconds for this worktree's
   unhealthy Watchman before its successful node-crawler fallback; that
   pre-existing tooling issue is unrelated to the migration.
+- The first pushed implementation passed `tsgo --noEmit` but package declaration
+  generation used stricter closure narrowing for the credential-provider union.
+  Capturing the narrowed provider fixed the publish build without changing
+  runtime behavior; the exact `packages/iterate` build now passes locally.

@@ -427,10 +427,11 @@ function dial(): Generation {
           // cast bridges capnweb's Awaited-type nesting (`Stubify<Session>`
           // re-wraps every member in promise types) back to the nominal handle.
           // This is the module's ONE cast, at the identity boundary.
-          if (typeof target.credentials === "function") {
+          const credentialProvider = target.credentials;
+          if (typeof credentialProvider === "function") {
             const authenticate = async (forceRefresh: boolean) =>
               (await unauthenticated.authenticate(
-                await target.credentials({ forceRefresh }),
+                await credentialProvider({ forceRefresh }),
               )) as unknown as SessionStub;
             try {
               root = await authenticate(false);
@@ -445,7 +446,7 @@ function dial(): Generation {
             }
           } else {
             root = (await unauthenticated.authenticate(
-              target.credentials,
+              credentialProvider,
             )) as unknown as SessionStub;
           }
         } catch (error) {
