@@ -3,25 +3,28 @@ import {
   agentCommandValue,
   buildStreamForest,
   defaultPaletteTab,
+  expandableStreamPaths,
   flattenStreamRows,
+  formatEventCount,
   hasPathDescendant,
   initialPaletteDialogState,
   normalizeDestination,
   paletteKeyboardAction,
   paletteKeyboardTarget,
   reducePaletteDialogState,
+  streamTreeLabel,
 } from "./command-palette-model.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 
 const createdAt = "2026-07-17T10:00:00.000Z";
 
-function stream(path: string): StreamIndexRow {
+function stream(path: string, eventCount = 1): StreamIndexRow {
   return {
     path,
     createdAt,
     lastActivityAt: createdAt,
     lastType: "events.iterate.com/test",
-    eventCount: 1,
+    eventCount,
   };
 }
 
@@ -30,7 +33,6 @@ describe("command palette models", () => {
     const opened = reducePaletteDialogState(initialPaletteDialogState(), {
       type: "opened",
       tab: "recent",
-      expandedStreamPaths: new Set(["/", "/agents"]),
     });
     const queried = reducePaletteDialogState(opened, {
       type: "query_changed",
@@ -45,13 +47,36 @@ describe("command palette models", () => {
       tab: "agents",
     });
 
-    expect(opened.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
+    expect(opened.expandStreamsOnLoad).toBe(true);
     expect(queried.query).toBe("cattle");
     expect(changedTab).toMatchObject({
       tab: "agents",
       query: "cattle",
       selectedValue: "",
     });
+  });
+
+  test("fully expands the stream tree once index data arrives after open", () => {
+    const opened = reducePaletteDialogState(initialPaletteDialogState(), {
+      type: "opened",
+      tab: "tree",
+    });
+    const expanded = reducePaletteDialogState(opened, {
+      type: "streams_available",
+      expandablePaths: expandableStreamPaths({
+        "/": stream("/"),
+        "/agents": stream("/agents"),
+        "/agents/cows": stream("/agents/cows"),
+      }),
+    });
+    const again = reducePaletteDialogState(expanded, {
+      type: "streams_available",
+      expandablePaths: new Set(["/"]),
+    });
+
+    expect(expanded.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
+    expect(expanded.expandStreamsOnLoad).toBe(false);
+    expect(again.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
   });
 
   test("prefixes agent cmdk identities so they cannot collide with stream paths", () => {
@@ -139,5 +164,12 @@ describe("command palette models", () => {
       "/agents",
       "/agents/cows",
     ]);
+  });
+
+  test("labels tree rows with the leaf segment and formats event counts", () => {
+    expect(streamTreeLabel("/")).toBe("/");
+    expect(streamTreeLabel("/agents/repos/config")).toBe("config");
+    expect(formatEventCount(1)).toBe("1 event");
+    expect(formatEventCount(827)).toBe("827 events");
   });
 });
