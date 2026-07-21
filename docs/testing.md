@@ -6,6 +6,19 @@ policy](#retries-and-timeouts) every lane follows. For unit-test style (fake
 timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
+> [!CAUTION]
+> **🔥 CLOUDFARE ARTIFACTS EVENT DELIVERY IS QUARANTINED.** The former bridge
+> synchronously created/reconciled an account-level event subscription for
+> every repository. That made every otherwise-independent project bootstrap
+> contend on one rate-limited Cloudflare control plane and caused fleet-wide
+> `429`, `500`, and correlated timeout bursts. Project and repository creation
+> must never call Cloudflare queue or event-subscription control-plane APIs.
+> The queue consumer and all subscription reconciliation have been removed.
+> Repository reads, writes, builds, and readiness remain active; automatic
+> Artifact-push → `repo/commit-completed` / `repo/task-*` delivery does not.
+> Its live e2e is explicitly skipped and restoration is owned by
+> [`tasks/quarantined-cloudflare-artifacts-event-delivery.md`](../tasks/quarantined-cloudflare-artifacts-event-delivery.md).
+
 ## Philosophy
 
 Six principles carry this system. They are conscious design — most trace

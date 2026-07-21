@@ -54,7 +54,6 @@ import {
   RETIRED_WORKER_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
-import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
@@ -229,12 +228,6 @@ export default async function deploy(
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
-
-      // Wrangler validates queue consumers during deploy, so the queue itself
-      // has to exist before uploading a version that binds it. Artifact event
-      // subscriptions are reconciled by ensure-resources because they are
-      // account-level producer wiring, not a code deploy prerequisite.
-      await ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName);
 
       // Same rationale for R2: wrangler validates bucket bindings at upload,
       // and the files bucket is new — existing envs (previews, prd) get it

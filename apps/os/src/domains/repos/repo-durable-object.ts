@@ -15,10 +15,6 @@ import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { parseConfig } from "../../config.ts";
 import {
-  createCloudflareAccountApi,
-  ensureArtifactRepoEventSubscriptionForWorker,
-} from "../events/cloudflare-event-subscriptions.ts";
-import {
   assertGithubInstallationTokenMintAuthorized,
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
@@ -1246,7 +1242,6 @@ export class RepoDurableObject extends DurableObject<Env> {
         this.#invalidateArtifactState(branch);
       },
     });
-    await this.ensureArtifactRepoEventSubscription(artifactName);
     // Reads are not serialized with writes: one can refill the token or head
     // caches from the old Artifact while deletion is being polled. Discard
     // every possible refill after recreation, immediately before this write
@@ -1485,7 +1480,6 @@ export class RepoDurableObject extends DurableObject<Env> {
         },
         {
           append: (event) => this.#stream.append(event),
-          ensureEventSubscription: () => this.ensureArtifactRepoEventSubscription(artifactName),
           namespace: this.env.ARTIFACTS_NAMESPACE,
         },
       );
@@ -1573,26 +1567,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     name: string,
   ): Promise<{ created: boolean; lastPushAt: string | null }> {
     return await getOrCreateArtifact(this.requireArtifacts(), name, {
-      beforeFirstPush: () => this.ensureArtifactRepoEventSubscription(name),
       defaultBranch: REPO_DEFAULT_BRANCH,
-    });
-  }
-
-  private async ensureArtifactRepoEventSubscription(repoName: string): Promise<void> {
-    if (this.env.DEPLOYMENT_ENV === undefined) return;
-    const apiToken = this.env.APP_CONFIG_CLOUDFLARE__API_TOKEN?.trim();
-    if (!apiToken) {
-      throw new Error(
-        `Deployment ${this.env.DEPLOYMENT_ENV} cannot subscribe Artifacts repo events without APP_CONFIG_CLOUDFLARE__API_TOKEN`,
-      );
-    }
-    const api = createCloudflareAccountApi({
-      accountId: this.env.ARTIFACTS_ACCOUNT_ID,
-      apiToken,
-    });
-    await ensureArtifactRepoEventSubscriptionForWorker(api, {
-      repoName,
-      workerName: this.env.WORKER_SELF,
     });
   }
 

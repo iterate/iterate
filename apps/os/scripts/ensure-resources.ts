@@ -7,10 +7,8 @@
  * resource (the project-directory KV, the auth D1 database, proxied DNS
  * records for every routed hostname) it creates whatever is missing, then
  * compares reality against the env's `resources` entry in envs.ts and prints
- * the exact snippet to paste when they differ. Event-subscription wiring may
- * be recreated to repair destination/source drift; it carries no app data. IDs
- * live in git, so the last step of bringing up a new env is always a reviewed
- * commit.
+ * the exact snippet to paste when they differ. IDs live in git, so the last
+ * step of bringing up a new env is always a reviewed commit.
  *
  * CI never runs this: a deploy with a missing/mismatched ID fails loudly and
  * tells you to run it yourself.
@@ -29,7 +27,6 @@ import {
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { reconcileResources } from "../../../scripts/lib/wrangler-config.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
-import { ensureWorkerEventQueueResources } from "./event-queue-resources.ts";
 
 /**
  * Create-if-missing for one R2 bucket. Exported for deploy.ts prepare():
@@ -121,12 +118,6 @@ export default async function ensureResources(
       PREVIEW_FILES_OBJECT_EXPIRY,
     );
   }
-
-  // ---- Queues: deployment event queue + Cloudflare Artifacts subscriptions -
-  // One general-purpose queue per OS worker. Artifacts event subscriptions are
-  // today's producer; future account-level event sources can share the same
-  // consumer and dispatch by message shape in src/domains/events.
-  await ensureWorkerEventQueueResources(ctx, env.osWorkerName);
 
   // ---- D1: auth database ------------------------------------------------------
   // apps/auth's ensure-resources also creates this database; both are

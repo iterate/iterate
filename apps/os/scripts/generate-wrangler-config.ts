@@ -29,7 +29,6 @@ import {
   SANDBOX_INSTANCE_TYPES,
   type SandboxInstanceType,
 } from "../src/domains/sandboxes/instance-types.ts";
-import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -336,17 +335,6 @@ function workerBindings(input: {
     version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
-    queues: {
-      consumers: [
-        {
-          queue: workerEventsQueueName(input.workerName),
-          max_batch_size: 10,
-          max_batch_timeout: 5,
-          max_retries: 3,
-          retry_delay: 30,
-        },
-      ],
-    },
     // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
     // sandbox DO snapshots /workspace here on idle and restores on start).
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
