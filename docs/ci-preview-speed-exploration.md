@@ -123,11 +123,26 @@ OS runtime/build code plus workspace dependencies and generated-config inputs,
 an opaque hash of the complete Doppler config, a prior fully green entry, and
 a live health response from that entry's exact immutable Worker version. An
 e2e, root-spec, or mobile-only change still runs all selected deployed tests,
-but no longer needs to create a byte-identical OS version and wait for another
-global Durable Object rollout. Any missing or mismatched proof falls through
-to the ordinary deploy. OS normally derives a head-pinned pkg.pr.new SDK URL;
-reuse deliberately retains its prior immutable URL only when the fingerprint
-also proves every SDK package and publishing input is unchanged.
+but no longer needs to create another behavior-equivalent OS version and wait
+for another global Durable Object rollout. Any missing or mismatched proof
+falls through to the ordinary deploy. OS normally derives a head-pinned
+pkg.pr.new SDK URL; reuse deliberately retains its prior immutable URL only
+when the fingerprint also proves every SDK package and publishing input is
+unchanged.
+
+The first recording run, Depot job
+[`hsvlw7vbq9`](https://depot.dev/orgs/0p91s0lz49/workflows/t8bx7lfm3d?job=hsvlw7vbq9),
+passed in 4m45s wall clock and 4m34s inside the preview command. Its deploy
+barrier was 94s and its test barrier was 175s. OS took 61.64s to deploy and
+30.61s to pass readiness, then its 174.61s test lane needed six retries. Two
+were explicit post-readiness code-update resets; the others were a stream wait
+timeout, two correlated internal errors, and a 120-second test timeout. A
+targeted settled-deployment follow-up then ran the affected Project
+stream-subscribe test 10 times without deploying or erasing: 10/10 passed,
+zero retries, 11.96–19.14s (15.54s median). This does not prove every retry has
+the same cause, but it supports the prediction that avoiding a behavior-
+equivalent rollout removes both the convergence delay and its correctness
+hazard.
 
 ### Fresh-slot correctness baseline
 
@@ -247,19 +262,21 @@ clock improves.
 This branch fetches and merges `origin/main` at least every 10 minutes while
 the exploration is active.
 
-| UTC              | Result                                     | Benefit inherited                                                                                                                                                                     |
-| ---------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-07-21 21:44 | Fast-forwarded `e8e4a33c8` to `767baafc3`. | PR #2227 made all OS Vitest files eligible to run in parallel; PR #2226 added unified CI/test telemetry.                                                                              |
-| 2026-07-21 21:47 | Already current at `767baafc3`.            | No additional changes.                                                                                                                                                                |
-| 2026-07-21 21:53 | Already current at `767baafc3`.            | No additional changes.                                                                                                                                                                |
-| 2026-07-21 22:02 | Already current at `767baafc3`.            | No additional changes.                                                                                                                                                                |
-| 2026-07-21 22:08 | Merged `23d0ae822` from `origin/main`.     | PR #2234 enlarged preview favicon markers; no pipeline speedup.                                                                                                                       |
-| 2026-07-21 22:12 | Already current at `23d0ae822`.            | No additional changes.                                                                                                                                                                |
-| 2026-07-21 22:19 | Merged `2de2b7eeb` from `origin/main`.     | PR #2232 independently confirms rollout/readiness variance dominates the job tail and the eight Playwright queues are balanced; no direct pipeline speedup. PR #2230 is product-only. |
-| 2026-07-21 22:26 | Merged `9ac198982` from `origin/main`.     | PR #2235 replaces a racy post-settlement snapshot assertion with an awaited event, reducing OS e2e flake risk without adding sleeps or runtime.                                       |
-| 2026-07-21 22:35 | Merged `ed36ba327` from `origin/main`.     | PR #2223 materially changes the deployed OS template/SDK and its e2e coverage, so it correctly forces a new OS deployment; no direct pipeline speedup is expected.                    |
-| 2026-07-21 22:42 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                |
-| 2026-07-21 22:45 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                |
+| UTC              | Result                                     | Benefit inherited                                                                                                                                                                                                                      |
+| ---------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-21 21:44 | Fast-forwarded `e8e4a33c8` to `767baafc3`. | PR #2227 made all OS Vitest files eligible to run in parallel; PR #2226 added unified CI/test telemetry.                                                                                                                               |
+| 2026-07-21 21:47 | Already current at `767baafc3`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 21:53 | Already current at `767baafc3`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 22:02 | Already current at `767baafc3`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 22:08 | Merged `23d0ae822` from `origin/main`.     | PR #2234 enlarged preview favicon markers; no pipeline speedup.                                                                                                                                                                        |
+| 2026-07-21 22:12 | Already current at `23d0ae822`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 22:19 | Merged `2de2b7eeb` from `origin/main`.     | PR #2232 independently confirms rollout/readiness variance dominates the job tail and the eight Playwright queues are balanced; no direct pipeline speedup. PR #2230 is product-only.                                                  |
+| 2026-07-21 22:26 | Merged `9ac198982` from `origin/main`.     | PR #2235 replaces a racy post-settlement snapshot assertion with an awaited event, reducing OS e2e flake risk without adding sleeps or runtime.                                                                                        |
+| 2026-07-21 22:35 | Merged `ed36ba327` from `origin/main`.     | PR #2223 materially changes the deployed OS template/SDK and its e2e coverage, so it correctly forces a new OS deployment; no direct pipeline speedup is expected.                                                                     |
+| 2026-07-21 22:42 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 22:45 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 22:52 | Merged `775f90d52` from `origin/main`.     | PR #2236 added exact-deployment focused test reuse. This immediately supplied the repeatable diagnostic loop; because the preview orchestrator is conservatively fingerprinted, the merge itself still requires one new OS deployment. |
+| 2026-07-21 23:57 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 
 ## Decision log
 
@@ -286,3 +303,5 @@ the exploration is active.
 | 2026-07-21 | Isolate retry identities per test attempt.   | A module-scoped suffix made Vitest retry against durable state left by the failed first attempt while Captun supplied a different egress URL.                                                               | Generate the suffix inside each test attempt so transient recovery cannot deterministically poison its retry.                        |
 | 2026-07-21 | Validate retry isolation on the warm slot.   | Depot job `q3kwz26lqm` passed the formerly poisoned integration file. OS deploy was 149.3s (38.6s command + 110.3s readiness); a different stream-subscribe timeout made OS tests 154.4s and the job 5m23s. | Keep the isolation fix; separately diagnose the visible unrelated retry and remove byte-identical OS rollouts from test-only pushes. |
 | 2026-07-21 | Add fail-closed OS deployment reuse.         | Implemented source, full-Doppler-config, same-slot/name, prior-green, and live exact-version proofs. The first run records the new identity; a subsequent e2e-only revision is the A/B arm.                 | Measure before generalizing to other apps; any absent proof retains the full deploy.                                                 |
+| 2026-07-21 | Record the deployment-reuse control.         | Depot job `hsvlw7vbq9` passed in 4m45s, but OS deployment/readiness took 92.69s and the OS lane took 174.61s with six retries, including two code-update resets after readiness.                            | The readiness sample is not a convergence proof; use this exact slot and recorded version for the no-deploy arm.                     |
+| 2026-07-21 | Repeat the failed stream test after rollout. | The exact-deployment target runner passed 10/10 attempts with zero retries in 11.96–19.14s (15.54s median), without deploy or erase.                                                                        | Rollout contamination is the leading explanation; retain full-suite A/B and telemetry as the stronger acceptance test.               |
