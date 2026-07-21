@@ -45,6 +45,7 @@ const QUARANTINED_MATRIX_EXAMPLES = new Set([
   "append-and-read-stream",
   "repo-edit-file",
   "run-script",
+  "secrets-lifecycle",
   "workspace-edit-and-push",
 ]);
 

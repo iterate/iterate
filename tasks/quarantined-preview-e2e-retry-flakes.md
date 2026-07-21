@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after live failures
 
-Fourteen live preview tests were quarantined on 2026-07-21 while landing PR
+Fifteen live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 a failed first attempt made the preview proof red instead of silently treating
 the retry as success. A separate retry-disabled test exhausted its bounded
@@ -87,12 +87,27 @@ has no branch diff, and neither the catalogue case nor its source example has
 a branch diff. They are quarantined here under the same explicit policy rather
 than allowing an unrelated timeout or a passed retry to certify this PR.
 
+The fourth exact-head run was
+[Depot job mgb6ptgx4w](https://depot.dev/orgs/0p91s0lz49/workflows/s2snr7dwxq?job=mgb6ptgx4w)
+at commit `8fa3c8dcd96d110f3a2a39394555a03dd1080865`. OS deployed in 43.7s
+and all ordinary checks passed, but the 160.97s OS Vitest lane recorded one
+more passed-on-retry failure:
+
+- catalogue example `secrets-lifecycle` failed in the CLI runtime because its
+  Cap'n Web WebSocket connection failed at `websocket.ts:90:27`. The retry
+  passed; both attempts consumed 28.284s, while the Playwright version of the
+  same example passed in 13.3s.
+
+The catalogue case and source example are unchanged from `main`. This was the
+only failure in the run; CI correctly rejected the absorbed retry and the case
+is quarantined rather than rerun until green.
+
 ## Quarantined coverage
 
 - The seven Playwright tests above use narrow `test.skip` markers.
 - The repo-history, AI Gateway, and project fast-path Vitest tests use narrow
   `test.skip` markers.
-- The four generated catalogue cases remain discoverable but are registered
+- The five generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 
@@ -113,6 +128,8 @@ than allowing an unrelated timeout or a passed retry to certify this PR.
   within 60s even though its recovery path re-armed the event wait.
 - Trace the `workspace-edit-and-push` `run-script` deadline independently of
   its fast browser execution and remove the long-tail server-side stall.
+- Correlate the `secrets-lifecycle` CLI WebSocket dial failure with OS request
+  traces and determine why the same deployed example succeeded in Playwright.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 
