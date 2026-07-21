@@ -182,7 +182,7 @@ export interface Project {
   mcp: McpClientCollection;
   /** Ad-hoc OpenAPI clients: connect(spec). */
   openapi: OpenApiCollection;
-  /** Parallel API, preconfigured with Iterate's platform API key. */
+  /** Parallel API, preconfigured with iterate's platform API key. */
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
@@ -779,7 +779,7 @@ export interface ProjectIntegrations {
   telegram: IntegrationFamily<TelegramConnection>;
   /** Waitrose account connections. */
   waitrose: IntegrationFamily<WaitroseConnection>;
-  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   parallel: OpenApiRpc;
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
    * Transformations. Like `parallel`, these ride the deployment's own
@@ -1021,13 +1021,6 @@ export interface Repo {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
   /**
-   * Every task markdown file's contents at HEAD, keyed by path, in a single
-   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a
-   * `readFile()` per task: the task include mask is applied before contents
-   * are read, so cost scales with the number of tasks, not the repo size.
-   */
-  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }>;
-  /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
    * stats (those cost tree checkouts per commit); fetch them lazily per
@@ -1078,7 +1071,7 @@ export interface Repo {
    *
    * The history transfers in-process. `depth` requests a bounded history
    * window, but fast-forward syncs always retain the previous Artifacts head
-   * as well so queue-derived task diffs can read both sides. GitHub retains
+   * as well so queue-derived commit diffs can read both sides. GitHub retains
    * the full history, and a later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
@@ -2564,7 +2557,7 @@ export type GmailConnection = {
   }>;
 };
 
-/** The normal all-in-one Octokit package with Iterate supplying GitHub App
+/** The normal all-in-one Octokit package with iterate supplying GitHub App
  * installation auth and transport. Both REST and GraphQL are available. */
 export type GithubConnection = { octokit: import("octokit").Octokit };
 
@@ -2581,7 +2574,7 @@ export type TelegramConnection = {
   sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;
 };
 
-/** Iterate's small, connection-scoped Waitrose client. */
+/** iterate's small, connection-scoped Waitrose client. */
 export type WaitroseConnection = {
   addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;
   removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;

@@ -237,7 +237,7 @@ export function workingTreeGitStatus(
 }
 
 /** One working-tree entry as the wire shape `repo.commitFiles` takes. */
-export function fileChangeForEntry(path: string, entry: FileEntry): RepoFileChange {
+function fileChangeForEntry(path: string, entry: FileEntry): RepoFileChange {
   if (entry.type === "delete") return { path, delete: true };
   if (entry.type === "write-base64") return { path, contentBase64: entry.contentBase64 };
   return { path, content: entry.content };

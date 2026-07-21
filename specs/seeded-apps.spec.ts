@@ -79,7 +79,7 @@ test("the seeded todo app authenticates a real project member", async ({ baseURL
   // The app's first use may still need its own cold worker start. The
   // platform's building page is visible progress; 120s mirrors the ingress
   // e2e's cold-build budget.
-  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
+  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 120_000 });
   await page.getByText("This app is available to project members.").waitFor();
   const signInResponse = await signInResponsePromise;
   const overlay = page.locator("iterate-worker-status[data-iterate-worker-overlay]");
@@ -99,6 +99,7 @@ test("the seeded todo app authenticates a real project member", async ({ baseURL
   // preserve the real cold-build deadline instead of letting spinner-waiter
   // collapse the wait to its no-spinner fast-fail.
   await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 });
+
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     await page.getByRole("heading", { name: "Todo" }).waitFor({ timeout: 120_000 });
   });

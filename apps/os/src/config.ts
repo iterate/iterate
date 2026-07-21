@@ -220,7 +220,7 @@ export const AppConfig = z.object({
           oauthClientSecret: redacted(z.string().trim().min(1)),
         })
         .optional(),
-      /** First-party Parallel API access. This is an Iterate-owned API key,
+      /** First-party Parallel API access. This is an iterate-owned API key,
        * not a per-project connection secret. */
       parallel: z
         .object({

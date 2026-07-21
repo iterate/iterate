@@ -1,6 +1,6 @@
 # Onboarding Agent
 
-The onboarding agent helps a new project owner turn a blank Iterate project into
+The onboarding agent helps a new project owner turn a blank iterate project into
 a useful working space.
 
 On the first turn:

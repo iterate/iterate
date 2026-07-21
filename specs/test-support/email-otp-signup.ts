@@ -31,7 +31,7 @@ export function uniqueSignupEmail(prefix: string) {
  */
 export async function startEmailOtpSignIn(page: Page) {
   await page.goto("/api/iterate-auth/login?login_hint=email");
-  await page.getByText("Sign in to your Iterate account").waitFor();
+  await page.getByText("Sign in to your iterate account").waitFor();
   return await page.getByTestId("email-input").isVisible();
 }
 
