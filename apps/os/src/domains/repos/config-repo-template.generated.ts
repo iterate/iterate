@@ -25,9 +25,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "the project's capabilities through `await this.env.ITX.get()`. The seeded GitHub pull-request review bot and its structural-review policy live in\n" +
       "`apps/review-bot` as a stream processor on each GitHub connection's webhook\n" +
       "stream; `worker.ts` keeps only the small bootstrap that offers the bot's\n" +
-      "wake subscription when a repo is linked to GitHub. Example HTTP apps live under\n" +
-      "`apps/` too (`hello`, `internal`, `counter`, plus the `createApp` browser pairs\n" +
-      "`todo` and `guestbook`). The worker is built by the platform's worker build\n" +
+      "wake subscription when a repo is linked to GitHub. The example browser apps\n" +
+      "are the `createApp` pairs `apps/todo` and `apps/guestbook`. The worker is built by the platform's worker build\n" +
       "pipeline: it passes the repo file map and build options to\n" +
       "`@cloudflare/worker-bundler`, which follows local imports and attempts to\n" +
       "install dependencies declared in `package.json`. The platform's capability\n" +
@@ -46,11 +45,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP\n" +
       "into sibling workers. Env defaults to `{ ITX: ItxBinding }`.\n" +
       "\n" +
-      "The example apps live under `apps/`: `apps/hello` (stateless JSON),\n" +
-      "`apps/internal` (authenticated HTML + Cap'n Web API), `apps/counter`\n" +
-      "(stateful Durable Object with live WebSocket count), `apps/todo` and\n" +
-      "`apps/guestbook` (`createApp` server/client pairs), and `apps/review-bot`.\n" +
-      "Their dynamic-worker refs are inlined at the top of `worker.ts` so the router\n" +
+      "The example apps live under `apps/`: `apps/todo` and `apps/guestbook`\n" +
+      "(`createApp` server/client pairs), and `apps/review-bot`. Their\n" +
+      "dynamic-worker refs are inlined at the top of `worker.ts` so the router\n" +
       "shows exactly what it dials. The router dispatches every app request through\n" +
       "`this.fetchDynamicWorker(req, ref)` — inherited from the base class — which\n" +
       "forwards over the platform's fetch-native worker lane (`env.ITX.fetch` with\n" +
@@ -66,8 +63,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "handler on a real worker object. A method named anything else — or a `fetch`\n" +
       "reached as a capability method call — is ordinary RPC: its arguments and\n" +
       "results are serialized copies, so it can serve data but never a socket.\n" +
-      "`CounterApp`'s `/ws` route is the seeded WebSocket proof-of-concept; copy its\n" +
-      "shape for anything real-time. Method calls on apps\n" +
+      "The todo and guestbook `/api` routes are the seeded WebSocket\n" +
+      "proof-of-concept (`newWorkersWebSocketRpcResponse` terminates the upgrade in\n" +
+      "the app's Durable Object); copy that shape for anything real-time. Method calls on apps\n" +
       "(`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP\n" +
       "rides the fetch lane. App refs use `source.createApp` directly with ordinary\n" +
       "worker-bundler `server` and `client` entry-point options; its repo-aware\n" +
@@ -84,9 +82,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
       "can inject the small Iterate status overlay in the corner.\n" +
       "\n" +
-      "`InternalApp` (`apps/internal`) is the canonical authenticated userspace-app shape: partial-fetch\n" +
-      "HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an\n" +
-      "app-defined, attenuated session. `README.md` explains the complete flow.\n" +
+      "The canonical authenticated userspace-app shape is partial-fetch HTTP auth\n" +
+      "(the router gates the todo app this way) plus an explicitly authenticated\n" +
+      "Cap'n Web `/api` that returns an app-defined, attenuated session. `README.md`\n" +
+      "explains the complete flow.\n" +
       "\n" +
       "To give agents a new capability surface, add a getter or method to the\n" +
       "default-export worker class: the platform dispatches dotted\n" +
@@ -164,8 +163,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "## Authenticated web apps\n" +
       "\n" +
-      "`InternalApp` in `apps/internal` is a complete project-member-only app. Its\n" +
-      "normal HTTP routes use auth as a partial fetch:\n" +
+      "The todo app is project-member-only: the router in `worker.ts` gates its\n" +
+      "pages with auth as a partial fetch before dispatching:\n" +
       "\n" +
       "```ts\n" +
       "using itx = await this.env.ITX.get();\n" +
@@ -206,127 +205,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "`LiveState` and its read-only `LiveStateRpcTarget` come from the same\n" +
       "`iterate/sdk/capnweb` module first-party apps use. That same entry re-exports\n" +
       "Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`, guaranteeing one\n" +
-      "class identity across app and SDK code. `InternalApp` uses them to push its event projection\n" +
-      "with the same snapshot-and-patch implementation. The explicit classes are\n" +
+      "class identity across app and SDK code. The todo and guestbook apps use them to\n" +
+      "push their live state with the same snapshot-and-patch implementation. The\n" +
+      "explicit classes are\n" +
       "intentional: there is no\n" +
       "`authenticatedApp` wrapper hiding where authentication happens or which\n" +
       "authority crosses the wire.\n",
-  },
-  {
-    path: "apps/counter/src/counter-app.ts",
-    content:
-      "import { IterateDurableObject } from \"iterate/sdk\";\n" +
-      "\n" +
-      "// A stateful app: a Durable Object hosted as a repo-backed stateful dynamic\n" +
-      "// worker. State survives across requests under its durableWorkerKey, and\n" +
-      "// every open page gets live updates over a WebSocket. The /ws upgrade's 101\n" +
-      "// response reaches this Durable Object over the platform's fetch-native\n" +
-      "// worker lane (the ProjectWorker router, via `fetchDynamicWorker`) —\n" +
-      "// an `app.fetch(req)` RPC method call could not carry a socket. Copy this\n" +
-      "// shape for anything real-time.\n" +
-      "export class CounterApp extends IterateDurableObject {\n" +
-      "  private sockets = new Set<WebSocket>();\n" +
-      "\n" +
-      "  async fetch(req: Request): Promise<Response> {\n" +
-      "    // The path lane advertises its stripped URL prefix; host lanes have none.\n" +
-      "    const prefix = req.headers.get(\"x-iterate-url-prefix\") ?? \"\";\n" +
-      "    const url = new URL(req.url);\n" +
-      "\n" +
-      "    if (url.pathname === \"/ws\") {\n" +
-      "      if (req.headers.get(\"upgrade\")?.toLowerCase() !== \"websocket\") {\n" +
-      "        return new Response(\"expected websocket\", { status: 426 });\n" +
-      "      }\n" +
-      "      const pair = new WebSocketPair();\n" +
-      "      const ws = pair[1];\n" +
-      "      ws.accept();\n" +
-      "      this.sockets.add(ws);\n" +
-      "      const drop = () => this.sockets.delete(ws);\n" +
-      "      ws.addEventListener(\"close\", drop);\n" +
-      "      ws.addEventListener(\"error\", drop);\n" +
-      "      // Greet every new socket with the current count, so a fresh tab is\n" +
-      "      // correct before anyone clicks.\n" +
-      "      ws.send(String(await this.current()));\n" +
-      "      return new Response(null, { status: 101, webSocket: pair[0] });\n" +
-      "    }\n" +
-      "\n" +
-      "    if (req.method === \"POST\" && url.pathname === \"/increment\") {\n" +
-      "      return Response.json({ count: await this.increment() });\n" +
-      "    }\n" +
-      "\n" +
-      "    // A mini client-side app: the count renders server-side, the button\n" +
-      "    // POSTs /increment, and the WebSocket pushes every new value to every\n" +
-      "    // open tab. The button stays disabled — with a visible \"connecting…\"\n" +
-      "    // state — until the socket is open, so a click always has a live update\n" +
-      "    // lane and anyone (tests included) can SEE why the button isn't ready\n" +
-      "    // yet.\n" +
-      "    return new Response(\n" +
-      "      `<!doctype html>\n" +
-      "        <html>\n" +
-      "          <body>\n" +
-      "            <main>\n" +
-      "              <p>count: <span id=\"n\">${await this.current()}</span></p>\n" +
-      "              <button id=\"b\" disabled>increment</button>\n" +
-      "              <p id=\"s\" aria-live=\"polite\">connecting…</p>\n" +
-      "            </main>\n" +
-      "            <script>\n" +
-      "              const button = document.getElementById(\"b\");\n" +
-      "              const status = document.getElementById(\"s\");\n" +
-      "              button.onclick = async () => {\n" +
-      "                button.disabled = true;\n" +
-      "                status.hidden = false;\n" +
-      "                status.textContent = \"incrementing…\";\n" +
-      "                try {\n" +
-      "                  const response = await fetch(\"${prefix}/increment\", { method: \"POST\" });\n" +
-      "                  if (!response.ok) throw new Error(\"increment failed (\" + response.status + \")\");\n" +
-      "                } catch (error) {\n" +
-      "                  status.textContent = \"increment failed\";\n" +
-      "                  button.disabled = false;\n" +
-      "                  console.error(error);\n" +
-      "                }\n" +
-      "              };\n" +
-      "              const ws = new WebSocket((location.protocol === \"https:\" ? \"wss://\" : \"ws://\") + location.host + \"${prefix}/ws\");\n" +
-      "              ws.onopen = () => { button.disabled = false; status.hidden = true; };\n" +
-      "              ws.onmessage = (event) => {\n" +
-      "                document.getElementById(\"n\").textContent = event.data;\n" +
-      "                button.disabled = false;\n" +
-      "                status.hidden = true;\n" +
-      "              };\n" +
-      "            </script>\n" +
-      "          </body>\n" +
-      "        </html>`,\n" +
-      "      { headers: { \"content-type\": \"text/html; charset=utf-8\" } },\n" +
-      "    );\n" +
-      "  }\n" +
-      "\n" +
-      "  async increment(): Promise<number> {\n" +
-      "    const n = (this.ctx.storage.kv.get<number>(\"n\") ?? 0) + 1;\n" +
-      "    this.ctx.storage.kv.put(\"n\", n);\n" +
-      "    for (const ws of this.sockets) ws.send(String(n));\n" +
-      "    return n;\n" +
-      "  }\n" +
-      "\n" +
-      "  async current(): Promise<number> {\n" +
-      "    return this.ctx.storage.kv.get<number>(\"n\") ?? 0;\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/counter/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"lib\": [\"ES2024\", \"ESNext.Disposable\"],\n" +
-      "    \"types\": [\"@cloudflare/workers-types\"],\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"strict\": true\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\"]\n" +
-      "}\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -708,268 +592,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async sign(name: string, message: string): Promise<void> {\n" +
       "    await this.app.sign(name, message);\n" +
       "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/hello/src/hello-app.ts",
-    content:
-      "// A stateless app the root project worker routes to when ingress selects the\n" +
-      "// \"hello\" app. It gets the full project itx through env.ITX, and the same\n" +
-      "// base-class surface as the root worker — add a getter here and it is an\n" +
-      "// `itx.worker` capability on THIS app via `itx.workers.get(ref)`.\n" +
-      "import { IterateWorkerEntrypoint } from \"iterate/sdk\";\n" +
-      "\n" +
-      "export class HelloApp extends IterateWorkerEntrypoint {\n" +
-      "  async fetch(req: Request): Promise<Response> {\n" +
-      "    using itx = await this.env.ITX.get();\n" +
-      "    const description = await itx.__describe();\n" +
-      "    return Response.json({\n" +
-      "      app: \"hello\",\n" +
-      "      path: new URL(req.url).pathname,\n" +
-      "      projectId: description.projectId,\n" +
-      "    });\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/hello/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"lib\": [\"ES2024\", \"ESNext.Disposable\"],\n" +
-      "    \"types\": [\"@cloudflare/workers-types\"],\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"strict\": true\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\"]\n" +
-      "}\n",
-  },
-  {
-    path: "apps/internal/src/internal-app.ts",
-    content:
-      "// A project-member-only app. Ordinary pages use auth as a partial fetch.\n" +
-      "// /api stays an unauthenticated Cap'n Web root and authenticates explicitly\n" +
-      "// in-band, exactly like the first-party OS API.\n" +
-      "import {\n" +
-      "  IterateWorkerEntrypoint,\n" +
-      "  type ItxBinding,\n" +
-      "  type ProjectAuthActor,\n" +
-      "  type ProjectAuthCredentials,\n" +
-      "  type StreamEvent,\n" +
-      "} from \"iterate/sdk\";\n" +
-      "import {\n" +
-      "  LiveState,\n" +
-      "  LiveStateRpcTarget,\n" +
-      "  RpcTarget,\n" +
-      "  newWorkersWebSocketRpcResponse,\n" +
-      "} from \"iterate/sdk/capnweb\";\n" +
-      "\n" +
-      "type InternalAppState = { events: StreamEvent[] };\n" +
-      "\n" +
-      "// The unauthenticated capability at /api. It has one door: turn the app's\n" +
-      "// exact-origin HttpOnly cookie into an actor, then let userspace decide which\n" +
-      "// authority that actor receives. The project itx never reaches the browser.\n" +
-      "class PublicInternalApi extends RpcTarget {\n" +
-      "  constructor(\n" +
-      "    private readonly app: InternalApp,\n" +
-      "    private readonly itxBinding: ItxBinding,\n" +
-      "    private readonly request: Request,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  async authenticate(credentials: ProjectAuthCredentials): Promise<InternalAppSession> {\n" +
-      "    using itx = await this.itxBinding.get();\n" +
-      "    const actor = await itx.auth\n" +
-      "      .get({ policy: \"project-member\" })\n" +
-      "      .authenticate(this.request, credentials);\n" +
-      "    const session = new InternalAppSession(this.app, actor);\n" +
-      "    await session.refresh();\n" +
-      "    return session;\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "// This is the authority the app chooses to give an authenticated browser.\n" +
-      "// It can identify itself, refresh the event projection, and subscribe to that\n" +
-      "// projection. It cannot access arbitrary project ITX methods.\n" +
-      "class InternalAppSession extends RpcTarget {\n" +
-      "  readonly #state = new LiveState<InternalAppState>({ events: [] });\n" +
-      "  readonly #liveState = new LiveStateRpcTarget(this.#state);\n" +
-      "\n" +
-      "  constructor(\n" +
-      "    private readonly app: InternalApp,\n" +
-      "    private readonly actor: ProjectAuthActor,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "  }\n" +
-      "\n" +
-      "  get me(): ProjectAuthActor {\n" +
-      "    return this.actor;\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpcTarget<InternalAppState> {\n" +
-      "    return this.#liveState;\n" +
-      "  }\n" +
-      "\n" +
-      "  async refresh(): Promise<void> {\n" +
-      "    this.#state.setState({ events: await this.app.readLatestEvents() });\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "// A project-member-only app. Ordinary pages use auth as a partial fetch.\n" +
-      "// /api stays an unauthenticated Cap'n Web root and authenticates explicitly\n" +
-      "// in-band, exactly like the first-party OS API.\n" +
-      "export class InternalApp extends IterateWorkerEntrypoint {\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
-      "    const url = new URL(request.url);\n" +
-      "    if (url.pathname === \"/api\") {\n" +
-      "      return newWorkersWebSocketRpcResponse(\n" +
-      "        request,\n" +
-      "        new PublicInternalApi(this, this.env.ITX, request),\n" +
-      "      );\n" +
-      "    }\n" +
-      "\n" +
-      "    using itx = await this.env.ITX.get();\n" +
-      "    const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(request);\n" +
-      "    if (authResponse) return authResponse;\n" +
-      "\n" +
-      "    // A null auth result leaves the original request untouched, so normal app\n" +
-      "    // routes can still read its body. This echo route makes that contract easy\n" +
-      "    // to exercise in the seeded browser proof.\n" +
-      "    if (request.method === \"POST\" && url.pathname === \"/echo\") {\n" +
-      "      return new Response(await request.text(), {\n" +
-      "        headers: { \"cache-control\": \"no-store\", \"content-type\": \"text/plain\" },\n" +
-      "      });\n" +
-      "    }\n" +
-      "\n" +
-      "    const nonce = crypto.randomUUID().replaceAll(\"-\", \"\");\n" +
-      "    const prefix = request.headers.get(\"x-iterate-url-prefix\") ?? \"\";\n" +
-      "    const apiPath = JSON.stringify(`${prefix}/api`);\n" +
-      "    return new Response(\n" +
-      "      `<!doctype html>\n" +
-      "        <html>\n" +
-      "          <head>\n" +
-      "            <meta charset=\"utf-8\">\n" +
-      "            <meta name=\"viewport\" content=\"width=device-width\">\n" +
-      "            <title>Project events</title>\n" +
-      "          </head>\n" +
-      "          <body>\n" +
-      "            <main>\n" +
-      "              <h1>Latest project root events</h1>\n" +
-      "              <p id=\"identity\">authenticating API…</p>\n" +
-      "              <button id=\"refresh\" disabled>refresh over Cap'n Web</button>\n" +
-      "              <form action=\"${escapeHtml(`${prefix}/_iterate/auth/logout`)}\" method=\"post\"><button>Sign out</button></form>\n" +
-      "              <pre id=\"events\">loading…</pre>\n" +
-      "            </main>\n" +
-      "            <script type=\"module\" nonce=\"${nonce}\">\n" +
-      "              import { newWebSocketRpcSession } from \"https://cdn.jsdelivr.net/npm/@iterate-com/capnweb@0.10.0/dist/index.js\";\n" +
-      "\n" +
-      "              const identity = document.getElementById(\"identity\");\n" +
-      "              const refresh = document.getElementById(\"refresh\");\n" +
-      "              const events = document.getElementById(\"events\");\n" +
-      "              const endpoint = new URL(${apiPath}, location.href);\n" +
-      "              endpoint.protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
-      "              const publicApi = newWebSocketRpcSession(endpoint.toString());\n" +
-      "              addEventListener(\"pagehide\", () => publicApi[Symbol.dispose](), { once: true });\n" +
-      "\n" +
-      "              const showError = (error) => {\n" +
-      "                identity.textContent = error instanceof Error ? error.message : String(error);\n" +
-      "              };\n" +
-      "              const setRefreshing = (pending) => {\n" +
-      "                refresh.disabled = pending;\n" +
-      "                refresh.textContent = pending ? \"refreshing…\" : \"refresh over Cap'n Web\";\n" +
-      "                if (pending) refresh.dataset.spinner = \"true\";\n" +
-      "                else delete refresh.dataset.spinner;\n" +
-      "              };\n" +
-      "              try {\n" +
-      "                const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
-      "                const me = await session.me;\n" +
-      "                identity.textContent = \"authenticated as \" + me.userId;\n" +
-      "                const render = async () => {\n" +
-      "                  events.textContent = JSON.stringify(await session.liveState.get(), null, 2);\n" +
-      "                };\n" +
-      "                const subscription = await session.liveState.subscribe(() => {\n" +
-      "                  void render().then(() => setRefreshing(false), (error) => {\n" +
-      "                    setRefreshing(false);\n" +
-      "                    showError(error);\n" +
-      "                  });\n" +
-      "                });\n" +
-      "                setRefreshing(false);\n" +
-      "                refresh.onclick = () => {\n" +
-      "                  setRefreshing(true);\n" +
-      "                  void (async () => {\n" +
-      "                    try {\n" +
-      "                      await session.refresh();\n" +
-      "                      // LiveState deliberately suppresses no-op updates. Read\n" +
-      "                      // the settled snapshot explicitly so a successful no-op\n" +
-      "                      // refresh still renders and clears its pending state.\n" +
-      "                      await render();\n" +
-      "                    } catch (error) {\n" +
-      "                      showError(error);\n" +
-      "                    } finally {\n" +
-      "                      setRefreshing(false);\n" +
-      "                    }\n" +
-      "                  })();\n" +
-      "                };\n" +
-      "                addEventListener(\"pagehide\", () => {\n" +
-      "                  subscription[Symbol.dispose]();\n" +
-      "                  session[Symbol.dispose]();\n" +
-      "                }, { once: true });\n" +
-      "              } catch (error) { showError(error); }\n" +
-      "            </script>\n" +
-      "          </body>\n" +
-      "        </html>`,\n" +
-      "      {\n" +
-      "        headers: {\n" +
-      "          \"cache-control\": \"no-store\",\n" +
-      "          \"content-security-policy\": `default-src 'none'; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,\n" +
-      "          \"content-type\": \"text/html; charset=utf-8\",\n" +
-      "          \"x-content-type-options\": \"nosniff\",\n" +
-      "        },\n" +
-      "      },\n" +
-      "    );\n" +
-      "  }\n" +
-      "\n" +
-      "  async readLatestEvents(): Promise<StreamEvent[]> {\n" +
-      "    using itx = await this.env.ITX.get();\n" +
-      "    const snapshot = await itx.processor.snapshot();\n" +
-      "    const events = await itx.streams.get(\"/\").getEvents({\n" +
-      "      afterOffset: Math.max(0, snapshot.offset - 25),\n" +
-      "      limit: 500,\n" +
-      "    });\n" +
-      "    return events.slice(-25).reverse();\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "function escapeHtml(value: string): string {\n" +
-      "  return value\n" +
-      "    .replaceAll(\"&\", \"&amp;\")\n" +
-      "    .replaceAll('\"', \"&quot;\")\n" +
-      "    .replaceAll(\"<\", \"&lt;\")\n" +
-      "    .replaceAll(\">\", \"&gt;\");\n" +
-      "}\n",
-  },
-  {
-    path: "apps/internal/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"lib\": [\"ES2024\", \"ESNext.Disposable\"],\n" +
-      "    \"types\": [\"@cloudflare/workers-types\"],\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"strict\": true\n" +
-      "  },\n" +
-      "  \"include\": [\"src/**/*.ts\"]\n" +
       "}\n",
   },
   {
@@ -1864,34 +1486,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "\n" +
-      "/** Stateless hello JSON app (`apps/hello`). */\n" +
-      "export const helloAppRef = {\n" +
-      "  type: \"stateless\" as const,\n" +
-      "  path: \"/\",\n" +
-      "  entrypoint: \"HelloApp\",\n" +
-      "  source: {\n" +
-      "    createWorker: {\n" +
-      "      entryPoint: \"apps/hello/src/hello-app.ts\",\n" +
-      "      files: repoFiles,\n" +
-      "      minify: true,\n" +
-      "    },\n" +
-      "  },\n" +
-      "};\n" +
-      "\n" +
-      "/** Project-member-only Cap'n Web + HTML app (`apps/internal`). */\n" +
-      "export const internalAppRef = {\n" +
-      "  type: \"stateless\" as const,\n" +
-      "  path: \"/\",\n" +
-      "  entrypoint: \"InternalApp\",\n" +
-      "  source: {\n" +
-      "    createWorker: {\n" +
-      "      entryPoint: \"apps/internal/src/internal-app.ts\",\n" +
-      "      files: repoFiles,\n" +
-      "      minify: true,\n" +
-      "    },\n" +
-      "  },\n" +
-      "};\n" +
-      "\n" +
       "/** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */\n" +
       "export const todoAppRef = {\n" +
       "  className: \"TodoApp\",\n" +
@@ -1906,21 +1500,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  },\n" +
       "  type: \"stateful\",\n" +
       "} satisfies StatefulDynamicWorkerRef;\n" +
-      "\n" +
-      "/** Stateful counter Durable Object (`apps/counter`). */\n" +
-      "export const counterAppRef = {\n" +
-      "  type: \"stateful\" as const,\n" +
-      "  path: \"/\",\n" +
-      "  className: \"CounterApp\",\n" +
-      "  durableWorkerKey: \"app-counter\",\n" +
-      "  source: {\n" +
-      "    createWorker: {\n" +
-      "      entryPoint: \"apps/counter/src/counter-app.ts\",\n" +
-      "      files: repoFiles,\n" +
-      "      minify: true,\n" +
-      "    },\n" +
-      "  },\n" +
-      "};\n" +
       "\n" +
       "/** Stream-processor guestbook: reduce on /guestbook (`apps/guestbook`). */\n" +
       "export const guestbookAppRef = {\n" +
@@ -1970,20 +1549,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +
       "    const app = req.headers.get(\"x-iterate-app\");\n" +
-      "    if (app === \"hello\") {\n" +
-      "      return this.fetchDynamicWorker(req, helloAppRef);\n" +
-      "    }\n" +
-      "    if (app === \"internal\") {\n" +
-      "      return this.fetchDynamicWorker(req, internalAppRef);\n" +
-      "    }\n" +
       "    if (app === \"todo\") {\n" +
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
       "      return this.fetchDynamicWorker(req, todoAppRef);\n" +
-      "    }\n" +
-      "    if (app === \"counter\") {\n" +
-      "      return this.fetchDynamicWorker(req, counterAppRef);\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
       "      // The guestbook's domain history lives on the project stream at\n" +
@@ -2067,10 +1637,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "            <main>\n" +
       "              <p>Hello from your iterate project worker.</p>\n" +
       "              <ul>\n" +
-      "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
-      "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (LiveState + Cap'n Web, project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"counter\")}\">counter</a> (stateful)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor reduce on /guestbook, public)</li>\n" +
       "                <li><a href=\"${appUrl(\"tasks\")}\">tasks</a> (collaborative task board over tasks/, project members only)</li>\n" +
       "              </ul>\n" +

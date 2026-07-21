@@ -6,17 +6,8 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
-import {
-  counterAppRef,
-  guestbookAppRef,
-  helloAppRef,
-  internalAppRef,
-  todoAppRef,
-} from "../../../config-repo-template/worker.ts";
-import { CounterApp } from "../../../config-repo-template/apps/counter/src/counter-app.ts";
+import { guestbookAppRef, todoAppRef } from "../../../config-repo-template/worker.ts";
 import { GuestbookApp } from "../../../config-repo-template/apps/guestbook/server.tsx";
-import { HelloApp } from "../../../config-repo-template/apps/hello/src/hello-app.ts";
-import { InternalApp } from "../../../config-repo-template/apps/internal/src/internal-app.ts";
 import { ReviewBotApp } from "../../../config-repo-template/apps/review-bot/src/review-bot-app.ts";
 import {
   reviewBotAppRef,
@@ -47,9 +38,6 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
   expect(
     appPaths.every(
       (path) =>
-        path.startsWith("apps/hello/") ||
-        path.startsWith("apps/internal/") ||
-        path.startsWith("apps/counter/") ||
         path.startsWith("apps/todo/") ||
         path.startsWith("apps/guestbook/") ||
         path.startsWith("apps/review-bot/"),
@@ -57,9 +45,6 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
   ).toBe(true);
   expect(paths).toEqual(
     expect.arrayContaining([
-      "apps/hello/src/hello-app.ts",
-      "apps/internal/src/internal-app.ts",
-      "apps/counter/src/counter-app.ts",
       "apps/review-bot/src/review-bot-app.ts",
       "apps/todo/client.tsx",
       "apps/todo/server.tsx",
@@ -95,9 +80,6 @@ test("browser pairs stay two-file createApp apps behind the thin router", () => 
 });
 
 test("modular createWorker refs point at apps/ entrypoints, not the root worker file", () => {
-  expect(helloAppRef.source.createWorker.entryPoint).toBe("apps/hello/src/hello-app.ts");
-  expect(internalAppRef.source.createWorker.entryPoint).toBe("apps/internal/src/internal-app.ts");
-  expect(counterAppRef.source.createWorker.entryPoint).toBe("apps/counter/src/counter-app.ts");
   expect(reviewBotAppRef("install-789").source.createWorker.entryPoint).toBe(
     "apps/review-bot/src/review-bot-app.ts",
   );
@@ -111,9 +93,6 @@ test("app modules load and export the classes their refs name", () => {
   // ref's entrypoint/className string to the class the entry module actually
   // exports — a rename can never strand a persisted ref or wake expression
   // pointing at a class the build no longer exports.
-  expect(helloAppRef.entrypoint).toBe(HelloApp.name);
-  expect(internalAppRef.entrypoint).toBe(InternalApp.name);
-  expect(counterAppRef.className).toBe(CounterApp.name);
   expect(reviewBotAppRef("install-789").className).toBe(ReviewBotApp.name);
   expect(todoAppRef.className).toBe(TodoApp.name);
   expect(guestbookAppRef.className).toBe(GuestbookApp.name);

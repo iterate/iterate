@@ -23,8 +23,8 @@ and client entry points from the complete `files` map passed to the bundler.
 
 ## Authenticated web apps
 
-`InternalApp` in `apps/internal` is a complete project-member-only app. Its
-normal HTTP routes use auth as a partial fetch:
+The todo app is project-member-only: the router in `worker.ts` gates its
+pages with auth as a partial fetch before dispatching:
 
 ```ts
 using itx = await this.env.ITX.get();
@@ -65,8 +65,9 @@ methods and getters to `AppSession` to define exactly what the browser may do.
 `LiveState` and its read-only `LiveStateRpcTarget` come from the same
 `iterate/sdk/capnweb` module first-party apps use. That same entry re-exports
 Cap'n Web's `RpcTarget` and `newWorkersWebSocketRpcResponse`, guaranteeing one
-class identity across app and SDK code. `InternalApp` uses them to push its event projection
-with the same snapshot-and-patch implementation. The explicit classes are
+class identity across app and SDK code. The todo and guestbook apps use them to
+push their live state with the same snapshot-and-patch implementation. The
+explicit classes are
 intentional: there is no
 `authenticatedApp` wrapper hiding where authentication happens or which
 authority crosses the wire.

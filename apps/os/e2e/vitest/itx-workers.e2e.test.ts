@@ -18,23 +18,24 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     .create({});
   const description = await project.__describe();
 
-  // The seeded root worker now routes via x-iterate-app (static homepage
-  // otherwise); the hello app keeps the path-echo this assertion relies on.
+  // The seeded root worker routes via x-iterate-app (static homepage
+  // otherwise); an unknown selection echoes back in the 404 body, giving the
+  // script a request-specific probe through the fetch lane with no app cold
+  // build.
   const scriptResult = await itxScript(project.capabilityHost).execute(async (itx) => {
     const response = await itx.worker.fetch(
-      new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
+      new Request("https://example.com/script", { headers: { "x-iterate-app": "script-probe" } }),
     );
-    const body = (await response.json()) as { app: string; path: string };
     return {
       repo: await itx.repo.whoami(),
       sandboxCreate: typeof itx.sandboxes.get("/sandboxes/surface-probe").create,
-      worker: `${body.app} fetched ${body.path}`,
+      worker: `${response.status} ${await response.text()}`,
     };
   });
   expect(scriptResult.success()).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
     sandboxCreate: "function",
-    worker: "hello fetched /script",
+    worker: "404 unknown app: script-probe",
   });
 
   const commit = await project.repo.commitFiles({

@@ -415,17 +415,27 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       [
         "get",
         {
-          // The seeded stateful app under apps/counter.
-          className: "CounterApp",
+          // A test-authored stateful worker: the proof is about agent-scope
+          // capability provisioning, not any seeded app.
+          className: "CounterDo",
           durableWorkerKey,
           path: agentPath,
-          source: {
-            createWorker: {
-              entryPoint: "apps/counter/src/counter-app.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
-              minify: true,
-            },
-          },
+          source: inlineJsSource("counter-do.js", {
+            "counter-do.js": `
+                import { DurableObject } from "cloudflare:workers";
+
+                export class CounterDo extends DurableObject {
+                  async increment() {
+                    const next = ((await this.ctx.storage.get("n")) ?? 0) + 1;
+                    await this.ctx.storage.put("n", next);
+                    return next;
+                  }
+                  async current() {
+                    return (await this.ctx.storage.get("n")) ?? 0;
+                  }
+                }
+              `,
+          }),
           type: "stateful",
         },
       ],

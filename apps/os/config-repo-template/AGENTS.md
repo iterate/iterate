@@ -15,9 +15,8 @@ at-least-once, per-stream order — `event.path` says which stream), and reaches
 the project's capabilities through `await this.env.ITX.get()`. The seeded GitHub pull-request review bot and its structural-review policy live in
 `apps/review-bot` as a stream processor on each GitHub connection's webhook
 stream; `worker.ts` keeps only the small bootstrap that offers the bot's
-wake subscription when a repo is linked to GitHub. Example HTTP apps live under
-`apps/` too (`hello`, `internal`, `counter`, plus the `createApp` browser pairs
-`todo` and `guestbook`). The worker is built by the platform's worker build
+wake subscription when a repo is linked to GitHub. The example browser apps
+are the `createApp` pairs `apps/todo` and `apps/guestbook`. The worker is built by the platform's worker build
 pipeline: it passes the repo file map and build options to
 `@cloudflare/worker-bundler`, which follows local imports and attempts to
 install dependencies declared in `package.json`. The platform's capability
@@ -36,11 +35,9 @@ the two SDK base classes: `IterateWorkerEntrypoint` (stateless) or
 `itx.worker.<path>` calls (see below), and `fetchDynamicWorker` forwards HTTP
 into sibling workers. Env defaults to `{ ITX: ItxBinding }`.
 
-The example apps live under `apps/`: `apps/hello` (stateless JSON),
-`apps/internal` (authenticated HTML + Cap'n Web API), `apps/counter`
-(stateful Durable Object with live WebSocket count), `apps/todo` and
-`apps/guestbook` (`createApp` server/client pairs), and `apps/review-bot`.
-Their dynamic-worker refs are inlined at the top of `worker.ts` so the router
+The example apps live under `apps/`: `apps/todo` and `apps/guestbook`
+(`createApp` server/client pairs), and `apps/review-bot`. Their
+dynamic-worker refs are inlined at the top of `worker.ts` so the router
 shows exactly what it dials. The router dispatches every app request through
 `this.fetchDynamicWorker(req, ref)` — inherited from the base class — which
 forwards over the platform's fetch-native worker lane (`env.ITX.fetch` with
@@ -56,8 +53,9 @@ protocol work, WebSocket upgrades included, through that distinguished
 handler on a real worker object. A method named anything else — or a `fetch`
 reached as a capability method call — is ordinary RPC: its arguments and
 results are serialized copies, so it can serve data but never a socket.
-`CounterApp`'s `/ws` route is the seeded WebSocket proof-of-concept; copy its
-shape for anything real-time. Method calls on apps
+The todo and guestbook `/api` routes are the seeded WebSocket
+proof-of-concept (`newWorkersWebSocketRpcResponse` terminates the upgrade in
+the app's Durable Object); copy that shape for anything real-time. Method calls on apps
 (`project.workers.get(ref).someMethod()`) still use RPC dispatch — only HTTP
 rides the fetch lane. App refs use `source.createApp` directly with ordinary
 worker-bundler `server` and `client` entry-point options; its repo-aware
@@ -74,9 +72,10 @@ This is an example, not a platform file-layout rule. The apps deliberately
 avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform
 can inject the small Iterate status overlay in the corner.
 
-`InternalApp` (`apps/internal`) is the canonical authenticated userspace-app shape: partial-fetch
-HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an
-app-defined, attenuated session. `README.md` explains the complete flow.
+The canonical authenticated userspace-app shape is partial-fetch HTTP auth
+(the router gates the todo app this way) plus an explicitly authenticated
+Cap'n Web `/api` that returns an app-defined, attenuated session. `README.md`
+explains the complete flow.
 
 To give agents a new capability surface, add a getter or method to the
 default-export worker class: the platform dispatches dotted

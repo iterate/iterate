@@ -20,34 +20,6 @@ import {
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 
-/** Stateless hello JSON app (`apps/hello`). */
-export const helloAppRef = {
-  type: "stateless" as const,
-  path: "/",
-  entrypoint: "HelloApp",
-  source: {
-    createWorker: {
-      entryPoint: "apps/hello/src/hello-app.ts",
-      files: repoFiles,
-      minify: true,
-    },
-  },
-};
-
-/** Project-member-only Cap'n Web + HTML app (`apps/internal`). */
-export const internalAppRef = {
-  type: "stateless" as const,
-  path: "/",
-  entrypoint: "InternalApp",
-  source: {
-    createWorker: {
-      entryPoint: "apps/internal/src/internal-app.ts",
-      files: repoFiles,
-      minify: true,
-    },
-  },
-};
-
 /** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */
 export const todoAppRef = {
   className: "TodoApp",
@@ -62,21 +34,6 @@ export const todoAppRef = {
   },
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
-
-/** Stateful counter Durable Object (`apps/counter`). */
-export const counterAppRef = {
-  type: "stateful" as const,
-  path: "/",
-  className: "CounterApp",
-  durableWorkerKey: "app-counter",
-  source: {
-    createWorker: {
-      entryPoint: "apps/counter/src/counter-app.ts",
-      files: repoFiles,
-      minify: true,
-    },
-  },
-};
 
 /** Stream-processor guestbook: reduce on /guestbook (`apps/guestbook`). */
 export const guestbookAppRef = {
@@ -126,20 +83,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
   async fetch(req: Request): Promise<Response> {
     const app = req.headers.get("x-iterate-app");
-    if (app === "hello") {
-      return this.fetchDynamicWorker(req, helloAppRef);
-    }
-    if (app === "internal") {
-      return this.fetchDynamicWorker(req, internalAppRef);
-    }
     if (app === "todo") {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
       return this.fetchDynamicWorker(req, todoAppRef);
-    }
-    if (app === "counter") {
-      return this.fetchDynamicWorker(req, counterAppRef);
     }
     if (app === "guestbook") {
       // The guestbook's domain history lives on the project stream at
@@ -223,10 +171,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
             <main>
               <p>Hello from your iterate project worker.</p>
               <ul>
-                <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
-                <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>
                 <li><a href="${appUrl("todo")}">todo</a> (LiveState + Cap'n Web, project members only)</li>
-                <li><a href="${appUrl("counter")}">counter</a> (stateful)</li>
                 <li><a href="${appUrl("guestbook")}">guestbook</a> (stream processor reduce on /guestbook, public)</li>
                 <li><a href="${appUrl("tasks")}">tasks</a> (collaborative task board over tasks/, project members only)</li>
               </ul>

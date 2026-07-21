@@ -41,14 +41,13 @@ test("project ingress serves the static seeded homepage at the root", async () =
   // The homepage links to each seeded app on its own host: the current host
   // prefixed with "<app>--".
   const requestHost = new URL(buildUrl({ path: "/" })).host;
-  expect(homepage).toContain(`hello--${requestHost}`);
-  expect(homepage).toContain(`counter--${requestHost}`);
+  expect(homepage).toContain(`todo--${requestHost}`);
+  expect(homepage).toContain(`guestbook--${requestHost}`);
 });
 
 // Multi-app routing: the seeded root worker.ts is a router over the project's
-// apps (repo-backed dynamic workers), selected by ingress from the host —
-// hello--<slug>.<base> (stateless WorkerEntrypoint) and counter.<slug>.<base>
-// (stateful Durable Object whose state survives across requests). Locally the
+// apps (repo-backed dynamic workers), selected by ingress from the host
+// (guestbook--<slug>.<base>, a stateful createApp Durable Object). Locally the
 // app host rides on the HTTP Host header via node:http (see
 // fetchWithHostHeader); against a deployed preview the real wildcard
 // hostnames are used.
@@ -143,40 +142,15 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     }
   };
 
-  // Stateless app via the `--` single-label form; a spoofed x-iterate-app
-  // must not override the host's selection.
-  const hello = await fetchAppReady(`hello--${slug}`, {
-    headers: { "x-iterate-app": "counter" },
-  });
-  expect(hello).toMatchObject({ status: 200 });
-  expect(await hello.json()).toMatchObject({ app: "hello", projectId });
-
-  // Stateful app: a mini client-side counter page — the count renders
-  // server-side, the button POSTs /increment (JSON), and live updates ride
-  // the /ws WebSocket (proven in the websocket test below) — with Durable
-  // Object state surviving across requests. (The single-label `--` form is
-  // the one platform wildcard certs can serve — dotted `<app>.<slug>.<base>`
-  // needs a second wildcard level and is exercised in the unit tests +
-  // reserved for custom hostnames.)
-  const page = await fetchAppReady(`counter--${slug}`);
-  expect(page).toMatchObject({ status: 200 });
-  expect(await page.text()).toContain('count: <span id="n">0</span>');
-
-  const increment = await fetchApp(`counter--${slug}`, {
-    method: "POST",
-    path: "/increment",
-  });
-  expect(increment).toMatchObject({ status: 200 });
-  expect(await increment.json()).toEqual({ count: 1 });
-
-  await fetchApp(`counter--${slug}`, { method: "POST", path: "/increment" });
-  const read = await fetchApp(`counter--${slug}`);
-  expect(await read.text()).toContain('count: <span id="n">2</span>');
-
   // createApp compiles the browser entry at its unchanged repo path, resolves
   // ordinary package.json dependencies (including iterate/sdk/capnweb/react),
-  // and lets worker-bundler's asset handler serve the result.
-  const guestbook = await fetchAppReady(`guestbook--${slug}`);
+  // and lets worker-bundler's asset handler serve the result. The app rides
+  // the `--` single-label host form (the one platform wildcard certs can
+  // serve), and a spoofed x-iterate-app header must not override the host's
+  // selection.
+  const guestbook = await fetchAppReady(`guestbook--${slug}`, {
+    headers: { "x-iterate-app": "todo" },
+  });
   expect(guestbook).toMatchObject({ status: 200 });
   const guestbookHtml = await guestbook.text();
   expect(guestbookHtml).toContain("<title>Guestbook</title>");
@@ -201,11 +175,8 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(tree).toMatchObject({
     paths: expect.arrayContaining([
       "AGENTS.md",
-      "apps/counter/src/counter-app.ts",
       "apps/guestbook/client.tsx",
       "apps/guestbook/server.tsx",
-      "apps/hello/src/hello-app.ts",
-      "apps/internal/src/internal-app.ts",
       "apps/review-bot/src/review-bot.ts",
       "apps/todo/client.tsx",
       "apps/todo/server.tsx",
@@ -213,8 +184,6 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       "worker.ts",
     ]),
   });
-  // Hello/counter/internal/review-bot live under apps/; the basic browser
-  // apps each have one server and one client entry.
   expect(tree.paths).not.toContain("sdk.ts");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
@@ -224,15 +193,17 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(await unknown.text()).toContain("unknown app");
 });
 
-// WebSocket upgrades through project ingress into the seeded counter app.
-// This is the regression proof for the fetch-native dispatch lane: an
-// upgrade's 101 response cannot cross RPC method calls (workerd
+// WebSocket upgrades through project ingress into the seeded guestbook app's
+// Cap'n Web /api. This is the regression proof for the fetch-native dispatch
+// lane: an upgrade's 101 response cannot cross RPC method calls (workerd
 // DataCloneError on the socket), so ingress, the userspace router
-// (env.ITX.fetch + x-iterate-worker-dispatch), the stateful worker DO, and
-// the facet must all forward it over real fetch hops. Locally the app host
-// rides on the HTTP Host header (Node cannot resolve *.localhost); against a
-// deployed preview the real wildcard hostname is dialed directly.
-test("counter websockets: upgrade flows through ingress and increments broadcast live", async () => {
+// (env.ITX.fetch + x-iterate-worker-dispatch), the createApp DO, and the
+// facet must all forward it over real fetch hops. (The live snapshot/patch
+// traffic that rides this socket is proven browser-side in
+// specs/seeded-apps.spec.ts.) Locally the app host rides on the HTTP Host
+// header (Node cannot resolve *.localhost); against a deployed preview the
+// real wildcard hostname is dialed directly.
+test("guestbook websocket: the /api upgrade flows through ingress into the app DO", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   const slug = `ws-app-${marker}`;
 
@@ -250,22 +221,15 @@ test("counter websockets: upgrade flows through ingress and increments broadcast
   const configuredBase = raw ? String((JSON.parse(raw) as string[])[0]) : undefined;
   const previewMatch = /^os\.(iterate-preview-\d+)\.com$/.exec(base.hostname);
   const projectBase = configuredBase || (previewMatch ? `${previewMatch[1]}.app` : base.hostname);
-  const appHost = `counter--${slug}`;
+  const appHost = `guestbook--${slug}`;
   const localHostHeader = `${appHost}.localhost${base.port ? `:${base.port}` : ""}`;
 
   const connect = () =>
     isLocal
-      ? new WebSocket(`ws://${base.host}/ws`, {
+      ? new WebSocket(`ws://${base.host}/api`, {
           headers: { host: localHostHeader },
         })
-      : new WebSocket(`wss://${appHost}.${projectBase}/ws`);
-
-  const postIncrement = () =>
-    isLocal
-      ? fetchWithHostHeader(new URL(buildUrl({ path: "/increment" })), localHostHeader, {
-          method: "POST",
-        })
-      : fetch(`${base.protocol}//${appHost}.${projectBase}/increment`, { method: "POST" });
+      : new WebSocket(`wss://${appHost}.${projectBase}/api`);
 
   const openSocket = (ws: WebSocket) =>
     new Promise<WebSocket>((resolve, reject) => {
@@ -273,52 +237,20 @@ test("counter websockets: upgrade flows through ingress and increments broadcast
       ws.once("error", reject);
     });
 
-  const nextMessage = (ws: WebSocket) =>
-    new Promise<string>((resolve, reject) => {
-      ws.once("message", (data) => resolve(String(data)));
-      ws.once("error", reject);
-      ws.once("close", (code) => reject(new Error(`socket closed (${code})`)));
-    });
-
   // The app's first use is a cold build; the router answers upgrades with a
   // retryable 503 until the artifact lands, so "the socket opens" means
   // "eventually opens through the building responses" — the same reconnect
   // loop a browser client runs.
-  const openSocketReady = async () => {
-    const deadline = Date.now() + 120_000;
-    for (;;) {
-      try {
-        return await openSocket(connect());
-      } catch (error) {
-        if (Date.now() > deadline) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
-      }
-    }
-  };
-
-  // Every new socket is greeted with the current count, so a fresh tab is
-  // correct before anyone clicks.
-  const first = await openSocketReady();
-  try {
-    expect(await nextMessage(first)).toBe("0");
-    const second = await openSocketReady();
+  const deadline = Date.now() + 120_000;
+  for (;;) {
     try {
-      expect(await nextMessage(second)).toBe("0");
-
-      // One HTTP increment broadcasts to BOTH sockets — the live-update lane
-      // and the proof both sockets terminate in the SAME Durable Object
-      // instance (shared live state).
-      const firstSaw = nextMessage(first);
-      const secondSaw = nextMessage(second);
-      const incremented = await postIncrement();
-      expect(incremented).toMatchObject({ status: 200 });
-      expect(await firstSaw).toBe("1");
-      expect(await secondSaw).toBe("1");
-    } finally {
-      second.close();
+      const socket = await openSocket(connect());
+      socket.close();
+      break;
+    } catch (error) {
+      if (Date.now() > deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
-  } finally {
-    first.close();
   }
 });
 
