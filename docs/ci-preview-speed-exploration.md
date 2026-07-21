@@ -23,13 +23,31 @@ green preview means.
   dependency. Experiments should remove calls from the critical path or make
   them independently observable rather than retrying them more aggressively.
 
+## Result
+
+For a change that selects and tests the whole fleet without changing any
+deployed artifact, exact-deployment reuse reduced the same-slot preview from
+4m35s to 2m46s (40%). The deployment barrier fell from OS's 116.82s upload and
+rollout path to an 8.07s live exact-version proof. All five apps retained their
+recorded immutable Worker versions, all five suites passed, and neither arm
+used a test retry. OS test time was unchanged at 139.25s in both arms, so the
+109-second deployment saving was not shifted elsewhere.
+
+This gets the fully selected warm-slot case below three minutes without
+weakening isolation or version certainty. It does not make a change that
+actually alters OS runtime code a one-minute operation: such a change still
+owns Cloudflare rollout variance, and the independent OS test floor is roughly
+139 seconds. Those are now the two explicit remaining workstreams.
+
 ## Current critical path
 
 The preview workflow currently runs as one 16-core Depot job:
 
 1. Check out the pull request, install Node, pnpm, dependencies, and Doppler.
 2. Claim or renew one of 19 preview slots.
-3. Deploy every affected app concurrently (up to five at a time).
+3. Prove a prior content-identical deployment still serves its exact recorded
+   Worker version, or deploy the affected app normally; run apps concurrently
+   (up to five at a time).
 4. Wait for the entire selected fleet to pass readiness.
 5. Run all selected app suites concurrently.
 
@@ -201,6 +219,16 @@ and Streams versions are `6576eba2-1478-4e11-9c46-62604411b7fe` and
 `05fa1b80-0982-4b53-9e97-e8e94ef72632`. An orchestrator-test-only change is
 the corresponding no-upload arm.
 
+That no-upload arm, Depot job
+[`rdrq8dphsc`](https://depot.dev/orgs/0p91s0lz49/workflows/8xm4jm2cc4?job=rdrq8dphsc),
+passed in 2m46s with zero retries. It retained all five recorded Worker
+versions. OS's complete double-wave live proof took 7.64s (8.07s including
+config) instead of 116.82s, and Streams took 5.73s (6.34s including config)
+instead of 47.25s. Semaphore, Auth, and Dummy Petshop completed in
+0.28–0.70s. OS tests took 139.25s in both control and treatment. This is a
+clean causal A/B: the same slot, version set, fleet selection, and tests, with
+only the content-identical uploads and rollout waits removed.
+
 ### Fresh-slot correctness baseline
 
 Depot run [`jfq7cp9kfk`](https://depot.dev/orgs/0p91s0lz49/workflows/p5bl4dpj76?job=qr4sf7mn3h&attempt=hld2q92zdj)
@@ -342,6 +370,7 @@ the exploration is active.
 | 2026-07-21 23:34 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:40 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:47 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:52 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 
 ## Decision log
 
@@ -354,24 +383,30 @@ the exploration is active.
   version a test invokes.
 - Prefer removing a deployment from the critical path over making an
   inherently variable global rollout poll more aggressively.
+- Keep exact-deployment reuse as the warm-slot fast path. Its measured 2m46s
+  fleet result is below the three-minute target, and every missing or stale
+  proof still falls through to the full deploy.
+- Treat OS test execution as the next common-path floor; reducing Cloudflare
+  rollout cannot lower the 139-second test barrier.
 
 ## Experiment log
 
-| Date       | Experiment                                   | Result                                                                                                                                                                                                                    | Decision                                                                                                                                |
-| ---------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-07-21 | Merge latest `main` during exploration.      | Inherited a 57% OS Vitest improvement and unified telemetry before duplicating that work.                                                                                                                                 | Continue the 10-minute merge cadence.                                                                                                   |
-| 2026-07-21 | Query seven days of preview phase telemetry. | OS deploy p50/p90 is 143.6s/183.7s; non-OS deploys are at most 16.2s p50. OS tests are independently 165.9s p50.                                                                                                          | Treat deployment and test execution as separate workstreams.                                                                            |
-| 2026-07-21 | Restore and split deployment telemetry.      | Added deploy run/lane events plus config, command, readiness, and reuse-proof phase events.                                                                                                                               | Use the next preview run as the attributable baseline.                                                                                  |
-| 2026-07-21 | Instrumented warm-slot all-app baseline.     | 4m38s green; deploy run 111.61s. OS was 46.43s command + 55.48s readiness; Streams was 13.10s command + 94.16s readiness.                                                                                                 | Cloudflare readiness, not local setup, dominates; preserve this head as the control for later comparisons.                              |
-| 2026-07-21 | Fresh-slot all-app baseline on `preview-6`.  | The readiness gate passed, then real OS Durable Objects emitted 20 explicit code-update-reset logs (30 broader reset events) and one test failed after a non-atomic retry.                                                | Treat the current gate as a finite sample, not global convergence; prioritize immutable/state-host splits.                              |
-| 2026-07-21 | Start preview CI from the baked workspace.   | Startup fell 9.96s → 5.60s and Playwright launch delay fell 6.86s → 0.68s; remote variance limited the end-to-end sample to 4m38s → 4m35s.                                                                                | Keep the baked runner, but do not mistake its deterministic setup win for a Cloudflare-tail fix.                                        |
-| 2026-07-21 | Isolate retry identities per test attempt.   | A module-scoped suffix made Vitest retry against durable state left by the failed first attempt while Captun supplied a different egress URL.                                                                             | Generate the suffix inside each test attempt so transient recovery cannot deterministically poison its retry.                           |
-| 2026-07-21 | Validate retry isolation on the warm slot.   | Depot job `q3kwz26lqm` passed the formerly poisoned integration file. OS deploy was 149.3s (38.6s command + 110.3s readiness); a different stream-subscribe timeout made OS tests 154.4s and the job 5m23s.               | Keep the isolation fix; separately diagnose the visible unrelated retry and remove byte-identical OS rollouts from test-only pushes.    |
-| 2026-07-21 | Add fail-closed OS deployment reuse.         | Implemented source, full-Doppler-config, same-slot/name, prior-green, and live exact-version proofs. The first run records the new identity; a subsequent e2e-only revision is the A/B arm.                               | Measure before generalizing to other apps; any absent proof retains the full deploy.                                                    |
-| 2026-07-21 | Record the deployment-reuse control.         | Depot job `hsvlw7vbq9` passed in 4m45s, but OS deployment/readiness took 92.69s and the OS lane took 174.61s with six retries, including two code-update resets after readiness.                                          | The readiness sample is not a convergence proof; use this exact slot and recorded version for the no-deploy arm.                        |
-| 2026-07-21 | Repeat the failed stream test after rollout. | The exact-deployment target runner passed 10/10 attempts with zero retries in 11.96–19.14s (15.54s median), without deploy or erase.                                                                                      | Rollout contamination is the leading explanation; retain full-suite A/B and telemetry as the stronger acceptance test.                  |
-| 2026-07-21 | Re-record after merging the latest main.     | Depot job `w6f1rkx69x` passed in 4m28s. OS deployment/readiness took 93.67s; OS tests took 153.99s with zero retries. It recorded version `92e30c6d-c9de-4afd-868e-723a4f196f73`.                                         | Use this run as the same-slot control for an e2e-documentation-only revision that must reuse this exact OS version.                     |
-| 2026-07-21 | Reuse the proven OS deployment.              | Depot job `zcrrj5v518` passed in 3m12s. Exact-version and same-input proof took 0.82s versus the control's 93.67s deploy; OS tests took 156.88s with zero retries.                                                        | Generalize fail-closed reuse to every app, then run an all-app test-only head to measure the full-fleet ceiling.                        |
-| 2026-07-21 | Record generalized all-app identities.       | Depot job `vfx607kt7h` passed in 4m02s with zero retries. OS was the 83.19s deploy barrier and 139.91s test barrier; Streams spent 39.19s of its 52.25s deploy waiting for exact-version rollout.                         | Use this exact slot and five-version set as the control for an orchestrator-test-only full-fleet reuse arm.                             |
-| 2026-07-21 | Reuse the recorded full fleet.               | Depot job `zl0r7x77kp` passed in 5m00s with zero retries. Four apps reused; OS reached all ten exact waves near 15s but its 15s deadline expired during mandatory revalidation, so it failed closed into a 122.6s deploy. | Give the multi-wave reuse proof a separate 60s maximum; retain the 15s single-serving probe and fail-closed exact-version double check. |
-| 2026-07-21 | Record identities with the longer proof.     | Depot job `1jhc5qm0d0` passed in 4m35s with zero retries. OS took 116.82s to deploy (73.01s readiness) and 139.25s to test; Streams took 47.25s to deploy.                                                                | Use these exact five identities as the control for the orchestrator-test-only full-fleet reuse arm.                                     |
+| Date       | Experiment                                   | Result                                                                                                                                                                                                                    | Decision                                                                                                                                 |
+| ---------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-21 | Merge latest `main` during exploration.      | Inherited a 57% OS Vitest improvement and unified telemetry before duplicating that work.                                                                                                                                 | Continue the 10-minute merge cadence.                                                                                                    |
+| 2026-07-21 | Query seven days of preview phase telemetry. | OS deploy p50/p90 is 143.6s/183.7s; non-OS deploys are at most 16.2s p50. OS tests are independently 165.9s p50.                                                                                                          | Treat deployment and test execution as separate workstreams.                                                                             |
+| 2026-07-21 | Restore and split deployment telemetry.      | Added deploy run/lane events plus config, command, readiness, and reuse-proof phase events.                                                                                                                               | Use the next preview run as the attributable baseline.                                                                                   |
+| 2026-07-21 | Instrumented warm-slot all-app baseline.     | 4m38s green; deploy run 111.61s. OS was 46.43s command + 55.48s readiness; Streams was 13.10s command + 94.16s readiness.                                                                                                 | Cloudflare readiness, not local setup, dominates; preserve this head as the control for later comparisons.                               |
+| 2026-07-21 | Fresh-slot all-app baseline on `preview-6`.  | The readiness gate passed, then real OS Durable Objects emitted 20 explicit code-update-reset logs (30 broader reset events) and one test failed after a non-atomic retry.                                                | Treat the current gate as a finite sample, not global convergence; prioritize immutable/state-host splits.                               |
+| 2026-07-21 | Start preview CI from the baked workspace.   | Startup fell 9.96s → 5.60s and Playwright launch delay fell 6.86s → 0.68s; remote variance limited the end-to-end sample to 4m38s → 4m35s.                                                                                | Keep the baked runner, but do not mistake its deterministic setup win for a Cloudflare-tail fix.                                         |
+| 2026-07-21 | Isolate retry identities per test attempt.   | A module-scoped suffix made Vitest retry against durable state left by the failed first attempt while Captun supplied a different egress URL.                                                                             | Generate the suffix inside each test attempt so transient recovery cannot deterministically poison its retry.                            |
+| 2026-07-21 | Validate retry isolation on the warm slot.   | Depot job `q3kwz26lqm` passed the formerly poisoned integration file. OS deploy was 149.3s (38.6s command + 110.3s readiness); a different stream-subscribe timeout made OS tests 154.4s and the job 5m23s.               | Keep the isolation fix; separately diagnose the visible unrelated retry and remove byte-identical OS rollouts from test-only pushes.     |
+| 2026-07-21 | Add fail-closed OS deployment reuse.         | Implemented source, full-Doppler-config, same-slot/name, prior-green, and live exact-version proofs. The first run records the new identity; a subsequent e2e-only revision is the A/B arm.                               | Measure before generalizing to other apps; any absent proof retains the full deploy.                                                     |
+| 2026-07-21 | Record the deployment-reuse control.         | Depot job `hsvlw7vbq9` passed in 4m45s, but OS deployment/readiness took 92.69s and the OS lane took 174.61s with six retries, including two code-update resets after readiness.                                          | The readiness sample is not a convergence proof; use this exact slot and recorded version for the no-deploy arm.                         |
+| 2026-07-21 | Repeat the failed stream test after rollout. | The exact-deployment target runner passed 10/10 attempts with zero retries in 11.96–19.14s (15.54s median), without deploy or erase.                                                                                      | Rollout contamination is the leading explanation; retain full-suite A/B and telemetry as the stronger acceptance test.                   |
+| 2026-07-21 | Re-record after merging the latest main.     | Depot job `w6f1rkx69x` passed in 4m28s. OS deployment/readiness took 93.67s; OS tests took 153.99s with zero retries. It recorded version `92e30c6d-c9de-4afd-868e-723a4f196f73`.                                         | Use this run as the same-slot control for an e2e-documentation-only revision that must reuse this exact OS version.                      |
+| 2026-07-21 | Reuse the proven OS deployment.              | Depot job `zcrrj5v518` passed in 3m12s. Exact-version and same-input proof took 0.82s versus the control's 93.67s deploy; OS tests took 156.88s with zero retries.                                                        | Generalize fail-closed reuse to every app, then run an all-app test-only head to measure the full-fleet ceiling.                         |
+| 2026-07-21 | Record generalized all-app identities.       | Depot job `vfx607kt7h` passed in 4m02s with zero retries. OS was the 83.19s deploy barrier and 139.91s test barrier; Streams spent 39.19s of its 52.25s deploy waiting for exact-version rollout.                         | Use this exact slot and five-version set as the control for an orchestrator-test-only full-fleet reuse arm.                              |
+| 2026-07-21 | Reuse the recorded full fleet.               | Depot job `zl0r7x77kp` passed in 5m00s with zero retries. Four apps reused; OS reached all ten exact waves near 15s but its 15s deadline expired during mandatory revalidation, so it failed closed into a 122.6s deploy. | Give the multi-wave reuse proof a separate 60s maximum; retain the 15s single-serving probe and fail-closed exact-version double check.  |
+| 2026-07-21 | Record identities with the longer proof.     | Depot job `1jhc5qm0d0` passed in 4m35s with zero retries. OS took 116.82s to deploy (73.01s readiness) and 139.25s to test; Streams took 47.25s to deploy.                                                                | Use these exact five identities as the control for the orchestrator-test-only full-fleet reuse arm.                                      |
+| 2026-07-21 | Reuse all five recorded deployments.         | Depot job `rdrq8dphsc` passed in 2m46s with zero retries. All versions were retained; OS proof took 7.64s versus 116.82s deploy, while OS tests were unchanged at 139.25s.                                                | Keep the fail-closed warm-slot fast path; it cuts the full-fleet control by 109s/40% and makes OS tests the remaining common-path floor. |
