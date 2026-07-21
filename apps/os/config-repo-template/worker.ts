@@ -9,9 +9,9 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
-import projectPackage from "./package.json";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import projectPackage from "./package.json";
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 const todoAppRef = {
