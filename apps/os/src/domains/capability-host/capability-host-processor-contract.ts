@@ -22,7 +22,6 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { ItxExpression, ItxExpressionStep } from "../../itx/expression.ts";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -34,10 +33,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   version: "0.4.0",
   description: "A tiny dynamic capability table and script execution stream.",
-  // Brings the core `stream/*` lifecycle events into scope. This contract
-  // currently consumes `stream/processor-revived`; the eventless at-head pass
-  // means consumption is not required for its script-obligation pass.
-  processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
     birthCertificate: capabilityHostBirthCertificateSchema()
       .nullable()
@@ -353,14 +348,8 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     // delivery reaches head without a consumed event carrying it — so any
     // append that wakes the stream, those two included, already produces the
     // turn that retries a transiently failed settlement.
-    // The platform revival fact (core-owned, ONE type for every
-    // recovery-wired processor; the payload's processorSlug names which).
-    // This contract currently consumes it, but reduce and processEvent do not
-    // react to the fact itself; an unconsumed tail would receive the same
-    // eventless at-head turn that re-drives open script obligations. It is
-    // absent from `emits`: the recovery adapter appends it raw, as the runtime
-    // speaking.
-    "events.iterate.com/stream/processor-revived",
+    // Recovery relies on the eventless at-head pass, not consumption of the
+    // platform revival fact, to re-drive open script obligations.
   ],
   emits: [
     "events.iterate.com/capability-host/created",

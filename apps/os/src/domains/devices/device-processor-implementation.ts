@@ -55,9 +55,9 @@ import {
  *
  * Recovery is the standard shape: the DO registers this processor with
  * recovery, so an incarnation that dies owing background work gets a
- * `stream/processor-revived` fact whose ordinary at-head delivery re-runs the
- * state-derived pass — orphaned attempts settle, still-runnable requests
- * start, the receipt alarm re-arms.
+ * `stream/processor-revived` fact whose wake produces the eventless at-head
+ * pass — orphaned attempts settle, still-runnable requests start, the receipt
+ * alarm re-arms.
  */
 export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, DeviceProcessorDeps> {
   readonly contract = DeviceProcessorContract;
@@ -123,8 +123,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         );
         break;
       // notification-requested / attempt-started / ticket-observed / settled /
-      // opened / processor-revived: no per-event effect — they matter through
-      // the reduced state below.
+      // opened: no per-event effect — they matter through the reduced state
+      // below.
     }
 
     // ---------------------------------------- state-derived side effects
@@ -320,7 +320,6 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       case "events.iterate.com/device/notification-opened":
         return { ...state, lastNotificationOpenedAt: event.payload.openedAt };
       default:
-        // stream/processor-revived: consumed only for its delivery turn.
         return state;
     }
   }

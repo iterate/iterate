@@ -2394,10 +2394,6 @@ export type AgentEventInput =
             }
           | undefined;
       }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/stream/processor-revived",
-      { [x: string]: unknown; processorSlug: string; revivals: number; version: string }
     >;
 
 /** One committed event on a durable stream: type, JSON payload, offset,
