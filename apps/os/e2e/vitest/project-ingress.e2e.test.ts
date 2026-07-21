@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
+import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 /** The Response surface these tests read — what both lanes of fetchApp
@@ -52,6 +53,33 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   });
   using project = await itx.projects.get(slug).create({});
   const { projectId } = await project.__describe();
+
+  // The app owns its birth invariant even when called directly, before the
+  // userspace root route has had an opportunity to initialize the stream.
+  const guestbookAppRef = {
+    className: "GuestbookApp",
+    durableWorkerKey: "app-guestbook-stream",
+    path: "/",
+    source: {
+      createApp: {
+        client: "apps/guestbook/client.tsx",
+        files: { repoPath: "/repos/config", type: "repo" },
+        server: "apps/guestbook/server.tsx",
+      },
+    },
+    type: "stateful",
+  } satisfies StatefulDynamicWorkerRef;
+  using directGuestbook = project.workers.get(guestbookAppRef) as unknown as {
+    sign(name: string, message: string): Promise<void>;
+  } & Disposable;
+  await expect(
+    directGuestbook.sign("Direct caller", "Born before routing"),
+  ).resolves.toBeUndefined();
+  using guestbookStream = project.streams.get("/guestbook");
+  expect((await guestbookStream.getEvents()).map(({ type }) => type)).toEqual([
+    "events.iterate.com/guestbook/created",
+    "events.iterate.com/guestbook/entry-signed",
+  ]);
 
   const fetchApp = (
     appHostPrefix: string,
