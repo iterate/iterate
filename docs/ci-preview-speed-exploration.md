@@ -191,6 +191,16 @@ deadline failed. Reuse now has a separate bounded 60-second budget, while the
 cheap single-serving probe remains 15 seconds and the exact-version double
 sample remains mandatory.
 
+The longer-proof recording run, Depot job
+[`1jhc5qm0d0`](https://depot.dev/orgs/0p91s0lz49/workflows/39sv5lxndt?job=1jhc5qm0d0),
+passed in 4m35s with zero retries and established a fresh exact-version control
+for all five apps. OS again exposed the avoided cost: 43.28s in its deploy
+command plus 73.01s in readiness, for 116.82s total; its tests took 139.25s.
+Streams took 47.25s to deploy, including 33.03s of readiness. The recorded OS
+and Streams versions are `6576eba2-1478-4e11-9c46-62604411b7fe` and
+`05fa1b80-0982-4b53-9e97-e8e94ef72632`. An orchestrator-test-only change is
+the corresponding no-upload arm.
+
 ### Fresh-slot correctness baseline
 
 Depot run [`jfq7cp9kfk`](https://depot.dev/orgs/0p91s0lz49/workflows/p5bl4dpj76?job=qr4sf7mn3h&attempt=hld2q92zdj)
@@ -331,6 +341,7 @@ the exploration is active.
 | 2026-07-21 23:27 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:34 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:40 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:47 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 
 ## Decision log
 
@@ -363,3 +374,4 @@ the exploration is active.
 | 2026-07-21 | Reuse the proven OS deployment.              | Depot job `zcrrj5v518` passed in 3m12s. Exact-version and same-input proof took 0.82s versus the control's 93.67s deploy; OS tests took 156.88s with zero retries.                                                        | Generalize fail-closed reuse to every app, then run an all-app test-only head to measure the full-fleet ceiling.                        |
 | 2026-07-21 | Record generalized all-app identities.       | Depot job `vfx607kt7h` passed in 4m02s with zero retries. OS was the 83.19s deploy barrier and 139.91s test barrier; Streams spent 39.19s of its 52.25s deploy waiting for exact-version rollout.                         | Use this exact slot and five-version set as the control for an orchestrator-test-only full-fleet reuse arm.                             |
 | 2026-07-21 | Reuse the recorded full fleet.               | Depot job `zl0r7x77kp` passed in 5m00s with zero retries. Four apps reused; OS reached all ten exact waves near 15s but its 15s deadline expired during mandatory revalidation, so it failed closed into a 122.6s deploy. | Give the multi-wave reuse proof a separate 60s maximum; retain the 15s single-serving probe and fail-closed exact-version double check. |
+| 2026-07-21 | Record identities with the longer proof.     | Depot job `1jhc5qm0d0` passed in 4m35s with zero retries. OS took 116.82s to deploy (73.01s readiness) and 139.25s to test; Streams took 47.25s to deploy.                                                                | Use these exact five identities as the control for the orchestrator-test-only full-fleet reuse arm.                                     |

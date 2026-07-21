@@ -396,6 +396,13 @@ describe("preview workflow scope", () => {
     }
   });
 
+  test("selects orchestrator tests without invalidating any recorded deployment", () => {
+    for (const [slug, app] of Object.entries(cloudflarePreviewApps)) {
+      expect(app.contentFingerprintPaths, slug).toContain("scripts/preview/preview.ts");
+      expect(app.contentFingerprintPaths, slug).not.toContain("scripts/preview/preview.test.ts");
+    }
+  });
+
   test("reuses OS only when source, Doppler config, slot, and recorded deployment match", () => {
     const os = cloudflarePreviewApps.os;
     const fingerprint = previewAppContentFingerprint(os, repoRoot);
