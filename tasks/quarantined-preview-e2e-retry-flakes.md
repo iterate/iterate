@@ -5,12 +5,13 @@ size: medium
 tags: [ci, e2e, playwright, vitest, quarantine, flake]
 ---
 
-# Restore preview tests quarantined after first-attempt failures
+# Restore preview tests quarantined after live failures
 
-Twelve live preview tests were quarantined on 2026-07-21 while landing PR
+Fourteen live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
-although every test eventually passed, a failed first attempt made the preview
-proof red instead of silently treating the retry as success.
+a failed first attempt made the preview proof red instead of silently treating
+the retry as success. A separate retry-disabled test exhausted its bounded
+deadline and made the same exact-head proof red.
 
 ## Evidence
 
@@ -68,11 +69,30 @@ are unchanged from `main`, the catalogue body is unchanged, and the AI Gateway
 case failed with a server-internal reference before its changed assertions
 could run. Those failures also passed on a fresh attempt.
 
+The third exact-head run was
+[Depot job 9kl1jghks9](https://depot.dev/orgs/0p91s0lz49/workflows/lw5z3dx99g?job=9kl1jghks9)
+at commit `09447b651037c4d6d21af022286dc1c5014e574a`. All five deployments
+completed without a rate-limit failure, then the 195.74s OS Vitest lane exposed
+two more unrelated failures:
+
+- `fast-path create is self-driving: nobody waits, the saga still lands
+  project/ready` exhausted its explicit 60s event deadline after recovery
+  re-armed one-shot waits. The retry-disabled test failed after 63.684s.
+- catalogue example `workspace-edit-and-push` exceeded the `run-script`
+  runtime's 120s deadline. Its retry passed, consuming 160.137s across both
+  attempts, while the Playwright version of the same example passed in 13.9s.
+
+Both test bodies are byte-for-byte unchanged from `main`: the fast-path file
+has no branch diff, and neither the catalogue case nor its source example has
+a branch diff. They are quarantined here under the same explicit policy rather
+than allowing an unrelated timeout or a passed retry to certify this PR.
+
 ## Quarantined coverage
 
 - The seven Playwright tests above use narrow `test.skip` markers.
-- The repo-history and AI Gateway Vitest tests use narrow `test.skip` markers.
-- The three generated catalogue cases remain discoverable but are registered
+- The repo-history, AI Gateway, and project fast-path Vitest tests use narrow
+  `test.skip` markers.
+- The four generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 
@@ -89,6 +109,10 @@ could run. Those failures also passed on a fresh attempt.
   server-side failures behind the catalogue cases.
 - Explain why a Durable Object was still reset for a code update after the
   deploy phase had completed; do not classify or absorb that reset as normal.
+- Determine why self-driving project creation failed to emit `project/ready`
+  within 60s even though its recovery path re-armed the event wait.
+- Trace the `workspace-edit-and-push` `run-script` deadline independently of
+  its fast browser execution and remove the long-tail server-side stall.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 

@@ -45,6 +45,7 @@ const QUARANTINED_MATRIX_EXAMPLES = new Set([
   "append-and-read-stream",
   "repo-edit-file",
   "run-script",
+  "workspace-edit-and-push",
 ]);
 
 // Fixed capability mounts, the config repo, and the repo-sourced project
