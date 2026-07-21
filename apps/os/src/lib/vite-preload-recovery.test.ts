@@ -12,7 +12,7 @@ const GUARD_KEY = "iterate:vite-preload-recovery";
 const install = () => {
   const script = document.createElement("script");
   script.textContent = vitePreloadRecoveryScript;
-  document.head.append(script);
+  document.head.appendChild(script);
   script.remove();
 };
 
