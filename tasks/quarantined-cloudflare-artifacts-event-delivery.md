@@ -40,10 +40,14 @@ shared Cloudflare account control plane before it could become ready.
 
 - Define a delivery interface independent of Cloudflare's subscription and
   queue products.
+- The next OS deploy for each environment detaches only that Worker's retained
+  legacy Queue consumer. Cloudflare otherwise rejects the first handler-less
+  upload. This idempotent rollout guard is a read-only no-op after migration;
+  remove it when every environment has crossed the boundary.
 - After every deployment has shipped without the consumer, perform a one-off
   audited deletion of the retired subscriptions and queues; verify there is no
-  producer traffic or retained-message backlog. Do not put that cleanup back
-  into project creation or normal deploys.
+  producer traffic or retained-message backlog. Do not put subscription/queue
+  enumeration or cleanup back into project creation or steady-state deploys.
 - Emit commit facts directly for OS-owned writes and imports so they do not
   depend on eventual account-level events.
 - Choose a bounded, deployment-global mechanism for genuinely external

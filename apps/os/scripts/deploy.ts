@@ -30,6 +30,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { z } from "zod";
 import { envs, type DeployedEnv } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
@@ -58,6 +59,59 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
+const RETIRED_ARTIFACT_EVENTS_QUEUE_SUFFIX = "-events";
+
+const RetiredQueue = z.object({
+  queue_id: z.string(),
+  queue_name: z.string(),
+});
+const RetiredQueueConsumer = z.object({
+  consumer_id: z.string(),
+  script_name: z.string().optional(),
+  type: z.string().optional(),
+});
+
+/**
+ * Cloudflare refuses a handler-less Worker upload while the previous Queue
+ * consumer still targets that script. Detach only that exact retired
+ * consumer before the first post-quarantine deploy; later deploys are a
+ * read-only no-op. The queue and its producer subscriptions are deliberately
+ * left for the audited one-off cleanup tracked by the quarantine task.
+ */
+export async function detachRetiredArtifactEventQueueConsumer(input: {
+  cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
+  workerName: string;
+}): Promise<"absent" | "detached"> {
+  const queueName = `${input.workerName}${RETIRED_ARTIFACT_EVENTS_QUEUE_SUFFIX}`;
+  // One account has far fewer than 100 deployment queues. Keep this to one
+  // bounded read; EnvContext rejects a truncated result via result_info.
+  const queues = z.array(RetiredQueue).parse(await input.cf("/queues?per_page=100"));
+  const queue = queues.find((candidate) => candidate.queue_name === queueName);
+  if (!queue) {
+    console.log(`retired Artifact event Queue absent: ${queueName}`);
+    return "absent";
+  }
+
+  const consumers = z
+    .array(RetiredQueueConsumer)
+    .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
+  const consumer = consumers.find(
+    (candidate) => candidate.type === "worker" && candidate.script_name === input.workerName,
+  );
+  if (!consumer) {
+    console.log(`retired Artifact event Queue consumer absent: ${queueName}`);
+    return "absent";
+  }
+
+  await input.cf(
+    `/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`,
+    { method: "DELETE" },
+  );
+  console.log(
+    `detached retired Artifact event Queue consumer: ${queueName} -> ${input.workerName}`,
+  );
+  return "detached";
+}
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -228,6 +282,15 @@ export default async function deploy(
       // Parse the exact env the worker will see (secrets + generated vars) with
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
+
+      // Removing the queue binding and handler from source is insufficient for
+      // an existing deployment: Cloudflare retains its consumer and rejects
+      // the handler-less upload. This exact, idempotent detach is the rollout
+      // migration; it never creates or reconciles subscriptions.
+      await detachRetiredArtifactEventQueueConsumer({
+        cf: ctx.cf,
+        workerName: ctx.env.osWorkerName,
+      });
 
       // Same rationale for R2: wrangler validates bucket bindings at upload,
       // and the files bucket is new — existing envs (previews, prd) get it

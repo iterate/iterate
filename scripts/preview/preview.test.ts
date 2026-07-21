@@ -233,14 +233,27 @@ describe("preview workflow scope", () => {
         ]),
       ),
     ).toEqual({
-      auth: { baseUrl: "https://auth.iterate-preview-3.com" },
-      "dummy-petshop": { baseUrl: "https://dummy-petshop.iterate-preview-3.com" },
+      auth: {
+        baseUrl: "https://auth.iterate-preview-3.com",
+        workerName: "auth-preview-3",
+      },
+      "dummy-petshop": {
+        baseUrl: "https://dummy-petshop.iterate-preview-3.com",
+        workerName: "dummy-petshop-preview-3",
+      },
       os: {
         baseUrl: "https://os.iterate-preview-3.com",
         projectHostnameBases: ["iterate-preview-3.app"],
+        workerName: "os-preview-3",
       },
-      semaphore: { baseUrl: "https://semaphore.iterate-preview-3.com" },
-      "streams-example-app": { baseUrl: "https://streams.iterate-preview-3.com" },
+      semaphore: {
+        baseUrl: "https://semaphore.iterate-preview-3.com",
+        workerName: "semaphore-preview-3",
+      },
+      "streams-example-app": {
+        baseUrl: "https://streams.iterate-preview-3.com",
+        workerName: "streams-example-app-preview-3",
+      },
     });
   });
 
