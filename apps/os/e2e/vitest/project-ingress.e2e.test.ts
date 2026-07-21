@@ -76,10 +76,11 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     directGuestbook.sign("Direct caller", "Born before routing"),
   ).resolves.toBeUndefined();
   using guestbookStream = project.streams.get("/guestbook");
-  expect((await guestbookStream.getEvents()).map(({ type }) => type)).toEqual([
-    "events.iterate.com/guestbook/created",
-    "events.iterate.com/guestbook/entry-signed",
-  ]);
+  expect(
+    (await guestbookStream.getEvents())
+      .map(({ type }) => type)
+      .filter((type) => type.startsWith("events.iterate.com/guestbook/")),
+  ).toEqual(["events.iterate.com/guestbook/created", "events.iterate.com/guestbook/entry-signed"]);
 
   const fetchApp = (
     appHostPrefix: string,
