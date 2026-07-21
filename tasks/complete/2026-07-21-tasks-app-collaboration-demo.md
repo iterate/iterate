@@ -1,11 +1,11 @@
 ---
-state: in-progress
+state: complete
 size: small
 ---
 
 # Tasks app collaboration demo
 
-Status: 90% complete. The opt-in spec passes against production and the final annotated recording reaches the public GitHub commit. Only PR attachment and verification remain.
+Status: Complete. The production demo passes, its annotated recording reaches the public GitHub commit, and GitHub renders the clip inline in draft PR #2220.
 
 Build a deliberately throwaway Playwright spec for `https://tasks--task-demo.iterate.app` that records the tasks app's checkout, collaboration, and commit flow.
 
@@ -29,7 +29,7 @@ Build a deliberately throwaway Playwright spec for `https://tasks--task-demo.ite
 - [x] Commit the checkout. *The spec enters “Dig two holes together” and invokes the app's manual Commit action.*
 - [x] Navigate to and show the resulting GitHub commit when the app provides an accessible destination. *The spec polls the public mirror head, then opens and verifies its commit page.*
 - [x] Run the spec against the deployed app and capture the annotated video. *The final `VIDEO_MODE=1` run passed in 33.1s and rendered a 32.5s VP9 WebM.*
-- [ ] Update the draft PR with the verified behavior and review media.
+- [x] Update the draft PR with the verified behavior and review media. *PR #2220 contains the external-review summary and GitHub-hosted inline WebM player; rendered HTML was verified to contain `<video>`.*
 
 ## Implementation log
 
@@ -41,3 +41,4 @@ Build a deliberately throwaway Playwright spec for `https://tasks--task-demo.ite
 - 2026-07-21: The production auth-start response remained open during automation, so the pre-video setup now signs the normal project-app cookie directly using the production session secret and verified real admin IDs.
 - 2026-07-21: A first `resetFromGithub` call twice failed after destroying the disposable Artifacts repo; a repeat recovered it. The final clean reset used `syncFromGithub({ force: true })`, which succeeded without destructive recreation.
 - 2026-07-21: Final recording passed and ends on public commit `0904d05`, containing both task files under the “Dig two holes together” commit.
+- 2026-07-21: Uploaded the rendered WebM through GitHub's attachment editor, added its permanent `user-attachments` URL to PR #2220, and verified GitHub rendered an inline video player. The draft remains unlabelled because no preview deployment is needed.
