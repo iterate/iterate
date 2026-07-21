@@ -4980,13 +4980,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * `project/ready` — the right shape for scripts that use the project
    * immediately. `waitUntilReady: false` resolves as soon as the project
    * EXISTS (identity registered, directory primed, birth events appended):
-   * the caller renders bootstrap progress itself, so nobody is left waiting —
-   * and create therefore stays the guaranteed birth driver by nudging both
-   * root processors AFTER this response instead of parking the caller behind
-   * them. A failed nudge is telemetry, not a create failure: durable delivery
-   * retries, and the checklist's stall detector covers the rest. Either lane
-   * returns this same handle, and addressing an unknown slug is side-effect
-   * free.
+   * the caller renders bootstrap progress itself, so nobody is left waiting.
+   * The durable-delivery subscriptions committed in the birth batch are what
+   * guarantee the saga runs; create also nudges both root processors AFTER
+   * this response, and a failed nudge is telemetry, not a create failure —
+   * the checklist's stall detector covers the rest. Either lane returns this
+   * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
     args: { organizationSlug?: string; projectId?: string } = {},
@@ -5121,11 +5120,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       );
     // Fast path: identity + directory + committed birth events are enough for
     // callers that watch the saga as live state. The seed and the birth drive
-    // run behind the response — create remains the guaranteed driver, the
-    // caller just no longer pays for it.
+    // run behind the response: the durable-delivery subscriptions committed in
+    // the birth batch are what guarantee the saga runs; these nudges only
+    // accelerate it, so the caller no longer pays for either.
     if (options?.waitUntilReady === false) {
       const ctx = this.#props.ctx;
-      ctx.waitUntil(seedProjectApiKey());
+      ctx.waitUntil(timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey));
       ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
       return this;
     }
