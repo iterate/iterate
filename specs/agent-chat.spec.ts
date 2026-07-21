@@ -55,7 +55,7 @@ test("agent replies to a browser chat message in the feed", async ({ helpers, pa
     // interacting with the deliberately tight default action budget.
     await composer.waitFor({ timeout: 30_000 });
     await composer.fill(message);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send message" }).click({ timeout: 30_000 });
 
     await page.locator(userMessage).getByText(marker).waitFor({ timeout: 30_000 });
 
