@@ -127,7 +127,7 @@ export function StreamViewHeader({
                 <button
                   key={entry.subscriptionKey}
                   type="button"
-                  title={`${presenceLabel(entry)} — open processor`}
+                  aria-label={`${presenceLabel(entry)} — open processor`}
                   onClick={() => focusProcessor(entry.subscriptionKey)}
                   className={cn("-ml-1.5 rounded-full", selected && "relative z-10")}
                 >

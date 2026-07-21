@@ -178,6 +178,7 @@ function MirroredProjectStreamView({
     const name = authSession.user.name?.trim();
     const picture = authSession.user.picture?.trim();
     return {
+      id: authSession.user.id,
       email: authSession.user.email,
       ...(name === undefined || name === "" ? {} : { name }),
       ...(picture === undefined || picture === "" ? {} : { picture }),

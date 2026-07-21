@@ -2351,7 +2351,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriberDescriptor",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  user?: { email: string; name?: string | undefined; picture?: string | undefined } | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
+      "/** Serializable subscriber identity carried on presence facts and the runtime connection table. */\nexport type StreamSubscriberDescriptor = {\n  description?: string | undefined;\n  user?:\n    | {\n        id?: string | undefined;\n        email: string;\n        name?: string | undefined;\n        picture?: string | undefined;\n      }\n    | undefined;\n  processor?:\n    | {\n        announcement: {\n          slug: string;\n          version: string;\n          description: string;\n          consumes: string[];\n          emits: string[];\n          ownedEvents: { type: string; description?: string | undefined }[];\n        };\n      }\n    | undefined;\n};",
     summary:
       "Serializable subscriber identity carried on presence facts and the runtime connection table.",
     memberSummaries: {},
