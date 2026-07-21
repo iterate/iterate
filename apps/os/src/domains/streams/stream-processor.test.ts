@@ -241,9 +241,7 @@ describe("StreamProcessor provenance stamping", () => {
       args.blockProcessorWhile(() =>
         args.append({
           type: "events.iterate.com/test/echoed",
-          idempotencyKey: this.idempotencyKey(
-            `at-head-summary:${args.delivery.observedHeadOffset}`,
-          ),
+          idempotencyKey: this.idempotencyKey("at-head-summary"),
           payload: { id: "at-head" },
         }),
       );
@@ -324,14 +322,14 @@ describe("StreamProcessor provenance stamping", () => {
     const { deliver } = drive(new CaughtUpEchoProcessor({ stream, ...HOME }), stream);
 
     // A consumed event at head carries `caughtUp`: the reconcile runs over the
-    // whole fold. Its idempotency key is derived from the FOLD (the observed
-    // head offset), not the event — that is what keeps an obligation stable
-    // across redelivery; the `whileProcessing` stamp just records the consumed
-    // event the reconcile rode in on.
+    // whole fold. Its idempotency key names the FOLD-DERIVED obligation, not
+    // the event — that is what keeps it stable across redelivery; the
+    // `whileProcessing` stamp just records the consumed event the reconcile
+    // rode in on.
     await deliver({ events: [triggeredEvent(7)], streamMaxOffset: 7 });
 
     const summary = appends.find(({ event }) => event.idempotencyKey?.includes("at-head-summary"));
-    expect(summary?.event.idempotencyKey).toBe("test-echo/at-head-summary:7");
+    expect(summary?.event.idempotencyKey).toBe("test-echo/at-head-summary");
     expect(summary?.event.source?.processor).toMatchObject({
       ...STAMP,
       whileProcessing: { offset: 7, type: "events.iterate.com/test/triggered" },

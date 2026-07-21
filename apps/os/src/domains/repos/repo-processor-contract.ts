@@ -617,14 +617,6 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/github/webhook-received",
     // The stream's own birth fact (core-owned): reduces `initialized`.
     "events.iterate.com/stream/created",
-    // Core lifecycle RE-CHECK signals: neither reduces into state, but their
-    // at-head delivery gives the state-derived pass a guaranteed
-    // consumed-at-head turn — `stream/woken` on a stream (re)start,
-    // `subscriber-connected` on a runner (re)attach. That extra turn is what
-    // retries an obligation whose background append failed transiently while
-    // the cursor already sat at head.
-    "events.iterate.com/stream/woken",
-    "events.iterate.com/stream/subscriber-connected",
     // The platform revival fact (core-owned). MUST be consumed (the runner
     // throws at construction otherwise): its ordinary delivery is the
     // guaranteed at-head turn where `processEvent` under `delivery.caughtUp`

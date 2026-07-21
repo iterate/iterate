@@ -5,7 +5,7 @@
 // no side-effect lanes, no crash steps, and the stream never grows beyond
 // what the tests append.
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
@@ -158,17 +158,55 @@ describe("AgentCollectionStreamProcessor", () => {
     expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
   });
 
-  test("rejects malformed ordering but ignores duplicate creation facts", async () => {
-    // Each rejection fails its frame with the cursor held (the runner
-    // redelivers, never skips), so every scenario gets a fresh harness.
-    await expect(
-      makeCollectionHarness().play([
-        "append",
-        COLLECTION_CREATED,
-        { type: "events.iterate.com/agent/created", payload: {} },
-      ]),
-    ).rejects.toThrow("without cross-post provenance");
+  test("skips an agent copy without provenance and continues reducing later facts", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const h = makeCollectionHarness();
+      await h.play(["append", COLLECTION_CREATED]);
+      const beforeMalformedCopy = h.state();
 
+      await h.play(["append", { type: "events.iterate.com/agent/created", payload: {} }]);
+      expect(h.state()).toEqual(beforeMalformedCopy);
+      expect(consoleError).toHaveBeenCalledWith(
+        "agent collection skipped events.iterate.com/agent/created: missing cross-post provenance",
+      );
+
+      await h.play([
+        "append",
+        agentCreatedCopy({ sourceOffset: 2 }),
+        summaryUpdatedCopy({ pinned: true }, { sourceOffset: 3 }),
+      ]);
+      expect(h.state().agents["/agents/researcher"]?.summary.pinned).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("skips a summary before agent creation and continues reducing later facts", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const h = makeCollectionHarness();
+      await h.play(["append", COLLECTION_CREATED]);
+      const beforeOutOfOrderSummary = h.state();
+
+      await h.play(["append", summaryUpdatedCopy({ pinned: true }, { sourceOffset: 2 })]);
+      expect(h.state()).toEqual(beforeOutOfOrderSummary);
+      expect(consoleError).toHaveBeenCalledWith(
+        "agent collection skipped events.iterate.com/agent/summary-updated for /agents/researcher: agent/created has not been reduced",
+      );
+
+      await h.play([
+        "append",
+        agentCreatedCopy({ sourceOffset: 3 }),
+        summaryUpdatedCopy({ pinned: true }, { sourceOffset: 4 }),
+      ]);
+      expect(h.state().agents["/agents/researcher"]?.summary.pinned).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  test("ignores duplicate collection and agent creation facts", async () => {
     const duplicateCollection = makeCollectionHarness();
     await duplicateCollection.play(["append", COLLECTION_CREATED, COLLECTION_CREATED]);
     expect(duplicateCollection.state().birthCertificate).toEqual(COLLECTION_CREATED.payload);
@@ -181,14 +219,6 @@ describe("AgentCollectionStreamProcessor", () => {
       agentCreatedCopy({ sourceOffset: 5 }),
     ]);
     expect(Object.keys(duplicateAgent.state().agents)).toEqual(["/agents/researcher"]);
-
-    await expect(
-      makeCollectionHarness().play([
-        "append",
-        COLLECTION_CREATED,
-        summaryUpdatedCopy({ pinned: true }, { sourceOffset: 2 }),
-      ]),
-    ).rejects.toThrow("before agent/created");
   });
 
   test("the contract consumes only collection birth, agent creation, and summary facts", () => {

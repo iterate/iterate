@@ -438,10 +438,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       case "events.iterate.com/stream/created":
         return { ...state, initialized: true };
       default:
-        // commit-completed, task facts, webhook deliveries, stream/woken,
-        // subscriber-connected, processor-revived: consumed for their
-        // delivery turn (per-event facts or a guaranteed at-head pass), no
-        // state change.
+        // commit-completed, task facts, webhook deliveries, and
+        // processor-revived: consumed for their delivery turn (per-event
+        // facts or a guaranteed at-head pass), no state change.
         return state;
     }
   }

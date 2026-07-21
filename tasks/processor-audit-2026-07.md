@@ -148,7 +148,7 @@ read + full re-reduce to fetch one config field.
 
 ### B3. `DeliveryContext.phase` / `observedHeadOffset` / `cursorRevision` have zero readers
 
-**Status:** open.
+**Status:** in-pr.
 
 Defined at `stream-processor-runner.ts:171` (`DeliveryPhase`) and `:182-197`,
 computed per event at `:637-642` and `:694-699`. Grep across every
@@ -364,7 +364,7 @@ undocumented. **Fix:** move the block to its method.
 
 ### D1. Three coexisting at-head retry strategies; repos keeps a deleted workaround
 
-**Status:** needs decision (recommendation below), then mechanical.
+**Status:** in-pr. Wake-event consumption deleted (code half); doc rule shipped in #2188.
 
 Fleet answers to "what retries a transiently failed at-head append":
 
@@ -411,7 +411,7 @@ justification. (c) doc note legitimizing durable-state paints blocking.
 
 ### D3. agent-collection's reducer throws on committed facts
 
-**Status:** open.
+**Status:** in-pr.
 
 `agent-collection-processor-implementation.ts:68-71` and `:124` — the only
 reducer in the fleet that can wedge its cursor on a committed event, against
