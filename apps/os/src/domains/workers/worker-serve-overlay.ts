@@ -215,9 +215,26 @@ function standInPageHtml(input: {
 </html>`;
 }
 
-/** Poll this URL until the building marker clears, then reload. */
-function reloadWhenHeaderClearsScript(headerName: string, intervalMs: number): string {
-  return `const poll = async () => {
+/**
+ * Poll this URL until the marker header clears, then reload. A poll's fetch
+ * tends to reuse the page's HTTP connection, which pins every retry to one
+ * server isolate — observed live (2026-07-21): an error page re-polled one
+ * poisoned isolate pair for 45 minutes while fresh connections served fine.
+ * `hardReloadEveryMs` tears the page (and its connection) down on a cadence
+ * so a retrying page eventually reaches a healthy path by itself.
+ */
+function reloadWhenHeaderClearsScript(
+  headerName: string,
+  intervalMs: number,
+  options: { hardReloadEveryMs?: number } = {},
+): string {
+  const hardReloadNth = options.hardReloadEveryMs
+    ? Math.max(2, Math.round(options.hardReloadEveryMs / intervalMs))
+    : 0;
+  return `let polls = 0;
+      const poll = async () => {
+        polls += 1;
+        ${hardReloadNth ? `if (polls % ${hardReloadNth} === 0) { location.reload(); return; }` : ""}
         try {
           const res = await fetch(location.href, { cache: "no-store" });
           if (!res.headers.get(${JSON.stringify(headerName)})) { location.reload(); return; }
@@ -278,7 +295,7 @@ export function workerServeErrorResponse(urlPrefix = ""): Response {
   return new Response(
     standInPageHtml({
       head: `<noscript><meta http-equiv="refresh" content="5" /></noscript>`,
-      script: `<script>${reloadWhenHeaderClearsScript(WORKER_SERVE_ERROR_HEADER, 3_000)}</script>`,
+      script: `<script>${reloadWhenHeaderClearsScript(WORKER_SERVE_ERROR_HEADER, 3_000, { hardReloadEveryMs: 45_000 })}</script>`,
       state: { kind: "serveError" },
       title: "Something went wrong",
       urlPrefix,
