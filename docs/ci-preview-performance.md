@@ -38,18 +38,19 @@ raise the budget automatically.
   or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
-- OS Vitest uses seven file workers and at most two concurrent tests per file
-  in CI. Eight workers is healthy in isolation, but seven keeps the combined
-  Vitest-plus-Playwright burst below the preview's shared Durable Object/RPC
-  contention point. Its sequencer starts historically slow files first; the
-  examples matrix then overlaps its isolated runtimes inside each case.
+- OS Vitest gives every current file a worker immediately and permits at most
+  two concurrent tests per file in CI. Every case owns isolated deployed state,
+  so there is no file queue or historical-duration scheduler on the critical
+  path; the examples matrix also overlaps its isolated runtimes inside each
+  case.
 - Root Playwright uses eight fully parallel workers in CI. Preview runs queue the
   long reconnect/resume specs first so their fixed probe windows overlap the
   ordinary catalogue.
-- The job uses a 16-core Depot runner. A complete 32-core run peaked below ten
-  cores while its allocation wait dominated setup, so the larger shape added
-  queue tail without removing remote latency. The deployed Worker and Durable
-  Objects remain the integration boundary.
+- The job uses a 64-core Depot runner so the fully fanned-out Vitest catalogue,
+  eight Playwright workers, two TUI processes, deploy builds, and packaging do
+  not create a local CPU queue. The deployed Worker and Durable Objects remain
+  the integration boundary; the marathon is the capacity and tail-latency
+  proof for the resulting remote burst.
 
 Tests make this safe by owning isolated state. Test clients give every project
 create a collision-resistant caller-owned `prj_…` identifier, avoiding an
@@ -97,9 +98,9 @@ serially because they intentionally share one warm container.
   entire duration to the critical path.
 - Start fixed-duration or historically slow work first. Once the phase is
   parallel, late scheduling of the longest item is the usual avoidable tail.
-- Raise workers only with repeated preview evidence. More local concurrency
-  cannot shorten one composite test and may create retry work at the deployed
-  slot.
+- Keep isolated files fully fanned out. If the resulting remote burst exposes
+  a real shared-capacity defect, diagnose that defect rather than serializing
+  the suite around it.
 - Split composite tests when their internal serial work becomes the phase
   floor. This improves both scheduling and retry granularity.
 

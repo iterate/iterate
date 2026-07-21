@@ -87,9 +87,9 @@ jobs:
       (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
-    # The overlapping test pools peaked below ten cores on the 32-core runner;
-    # use the supported 16-core shape and keep allocation out of the long tail.
-    runs-on: depot-ubuntu-24.04-16
+    # OS gives every isolated Vitest file a worker at once. Keep that fan-out,
+    # Playwright, TUI, deploys, and packaging off one another's local CPU tail.
+    runs-on: depot-ubuntu-24.04-64
     # Hard backstop on one attempt. Each parallel sub-lane retains its own
     # tighter watchdog; this outer bound catches setup, deploy, and reporting
     # runaways while leaving enough time to preserve failure artifacts.

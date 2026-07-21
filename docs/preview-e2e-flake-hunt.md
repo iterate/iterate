@@ -30,7 +30,7 @@ sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
 launched with `depot ci dispatch --workflow preview-e2e-marathon.yml --ref
 <branch> --input pull-request-number=<pr>`.
 Local runs are for fast iteration while fixing a flake; the consecutive-green
-bar is measured on Depot's same 16-core runner shape as the normal preview job.
+bar is measured on Depot's same 64-core runner shape as the normal preview job.
 
 ## Round 5 (2026-07-21)
 
@@ -44,6 +44,14 @@ visible in the ledger and investigated.
 
 Progress and failure diagnoses live in the active PR's comments; this section
 is updated with the final run IDs and outcome once the proof completes.
+
+The first exact-head normal preview after the TUI fix was green but took 5m01s.
+Its OS Vitest lane was the critical path at 187s: the suite still capped 48
+isolated files at seven workers, and a stale 8s scheduling estimate started the
+`admin-project` file late when it actually took 83s. The cap and estimated-time
+sequencer are now gone. CI gives every file a worker immediately on a 64-core
+runner, so the intended bound is the slowest individual file (plus its one
+allowed retry), not several scheduling waves.
 
 The first marathon attempt (`wzg4nbj1j7`) stopped on run 1 after both TUI
 workflows hit their 45s watchdog. TUI Test 0.0.4 then reported an immediate

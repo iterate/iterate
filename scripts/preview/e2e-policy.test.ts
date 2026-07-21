@@ -151,14 +151,22 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain('MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-300}"');
     expect(source).toContain("pnpm preview deploy --all-apps --allow-draft");
 
-    const workflow = readFileSync(
+    const normalWorkflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
+      "utf8",
+    );
+    const marathonWorkflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
       "utf8",
     );
-    expect(workflow).toContain("runs-on: depot-ubuntu-24.04-16");
-    expect(workflow).toContain('default: "25"');
-    expect(workflow).toContain('default: "300"');
-    expect(workflow).not.toContain("warmup-runs");
+    const osVitestConfig = readFileSync(resolve(repoRoot, "apps/os/e2e/vitest.config.ts"), "utf8");
+    expect(normalWorkflow).toContain("runs-on: depot-ubuntu-24.04-64");
+    expect(marathonWorkflow).toContain("runs-on: depot-ubuntu-24.04-64");
+    expect(osVitestConfig).toContain("maxWorkers: ci ? 64 : 1");
+    expect(osVitestConfig).not.toContain("sequencer:");
+    expect(marathonWorkflow).toContain('default: "25"');
+    expect(marathonWorkflow).toContain('default: "300"');
+    expect(marathonWorkflow).not.toContain("warmup-runs");
   });
 });
 
