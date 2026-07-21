@@ -52,9 +52,12 @@ export function CreateProjectForm({
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
       const session = await connectIterateSession();
-      // The project page renders bootstrap progress, so wait through the
-      // atomic birth and both root processors but not project/ready.
-      const project = await session.projects.get(input.slug).create(
+      // ONE pipelined round trip: identity() rides the create call. Create
+      // resolves once the project EXISTS (identity registered, directory
+      // primed, birth events appended — `waitUntilReady: false`); the
+      // bootstrap saga runs behind the handle, driven by create's own
+      // server-side nudge, and the project home plays it from live pushes.
+      const project = session.projects.get(input.slug).create(
         {
           ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
         },

@@ -81,11 +81,18 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
-   * Register (for a prospective slug), append the complete root birth batch,
-   * and drive both armed processors through it. By default, also wait for
-   * `project/ready`; pass `waitUntilReady: false` when the caller renders
-   * bootstrap progress itself. Either lane returns this same handle, and
-   * addressing an unknown slug is side-effect free.
+   * Register (for a prospective slug) and append the complete root birth
+   * batch. By default this resolves once the bootstrap saga has committed
+   * `project/ready` — the right shape for scripts that use the project
+   * immediately. `waitUntilReady: false` resolves as soon as the project
+   * EXISTS (identity registered, directory primed, birth events appended):
+   * the caller renders bootstrap progress itself, so nobody is left waiting —
+   * and create therefore stays the guaranteed birth driver by nudging both
+   * root processors AFTER this response instead of parking the caller behind
+   * them. A failed nudge is telemetry, not a create failure: durable delivery
+   * retries, and the checklist's stall detector covers the rest. Either lane
+   * returns this same handle, and addressing an unknown slug is side-effect
+   * free.
    */
   create(
     args: { organizationSlug?: string; projectId?: string },
