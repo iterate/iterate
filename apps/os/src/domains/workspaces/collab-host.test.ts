@@ -467,3 +467,28 @@ describe("collab host regressions", () => {
     for (const span of changes.deleted) expect(typeof span.createdAt).toBe("number");
   });
 });
+
+describe("flush dirtiness", () => {
+  test("an unedited session never writes its seed over a moved mount HEAD", async () => {
+    const { store } = fakeSessionStore();
+    const { files, fs, state } = fakeFs({ [PATH]: "seed text" });
+    const host = new CollabHost({ fs, store });
+    await host.open(PATH);
+    // Upstream moves (a commit on another workspace, a mount re-point): the
+    // settled truth changes while the session sits unedited.
+    files.set(PATH, "moved HEAD text");
+    await host.reconcile();
+    expect(files.get(PATH)).toBe("moved HEAD text");
+    expect(state.writes).toBe(0);
+  });
+
+  test("a dirty session still settles its head", async () => {
+    const { store } = fakeSessionStore();
+    const { files, fs } = fakeFs({ [PATH]: SEED });
+    const host = new CollabHost({ fs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "hi ", SEED.length);
+    await host.reconcile();
+    expect(files.get(PATH)).toBe(`hi ${SEED}`);
+  });
+});

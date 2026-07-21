@@ -337,8 +337,11 @@ export class CollabHost {
   }
 
   async #settleAll(): Promise<SettledFile[]> {
+    // DIRTY sessions only: an unedited session's head equals its seed, and
+    // writing that over a mount HEAD that moved since the seed would pin
+    // outdated text into the overlay (and a commit could revert upstream).
     const settled: SettledFile[] = [];
-    for (const path of this.#store.livePaths()) {
+    for (const path of this.#store.dirtySessions()) {
       const file = await this.#flush(path);
       if (file !== null) settled.push(file);
     }
@@ -482,6 +485,9 @@ export class CollabHost {
     this.#clearFlush(path);
     const generation = this.#destroyed.get(path) ?? 0;
     if (!this.isLive(path)) return null;
+    // Same dirtiness guard for the debounce lane: only unflushed work may
+    // touch the overlay (see #settleAll on why a clean write is harmful).
+    if (!this.#store.dirtySessions().includes(path)) return null;
     const head = await this.#opened(path);
     const settled = await this.#fs.readFile(path);
     if ((this.#destroyed.get(path) ?? 0) !== generation || !this.isLive(path)) return null;
