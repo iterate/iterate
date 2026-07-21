@@ -5,23 +5,33 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 const LLM_REQUEST_SETTLED_TYPE = "events.iterate.com/agent/llm-request-settled";
 const WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 
-test("a second project's onboarding turn replays the first one's answer from the AI Gateway cache", async () => {
+test("a second project's onboarding turn is served from the AI Gateway cache", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
 
   // First turn seeds the cache (HIT if an earlier run already did).
   const first = await runOnboardingBirthTurn(`aig-cache-a-${marker}`);
   // This env runs the BYOK lane with the response cache on (envs.ts /
   // local-dev vars); evidence missing means the lane regressed.
-  expect(first.cacheStatus).toMatch(/^(HIT|MISS)$/);
+  expect(first).toMatchObject({
+    cacheStatus: expect.stringMatching(/^(HIT|MISS)$/),
+    greeting: expect.stringMatching(/\S/),
+  });
 
   // The second project differs ONLY in minted identity (project id, agent
   // path) — exactly what cloudflareAiGatewayResponseCacheKey masks — so its
-  // birth turn must replay the first one's response without touching OpenAI.
+  // birth turn must be served from the cache without touching OpenAI.
   const second = await runOnboardingBirthTurn(`aig-cache-b-${marker}`);
-  expect(second).toMatchObject({ cacheStatus: "HIT" });
+  expect(second).toMatchObject({ cacheStatus: "HIT", greeting: expect.stringMatching(/\S/) });
 
-  // A replay is byte-identical: same greeting, deterministic e2e for free.
-  expect(second).toMatchObject({ greeting: first.greeting });
+  // A cache HIT's contract is a replay of a stored body, so when THIS test
+  // seeded the entry (first turn MISS) the second greeting is byte-identical.
+  // When the first turn already HIT, the seed belongs to some earlier or
+  // concurrent lane — the key is deliberately identity-masked and global — and
+  // a TTL-boundary reseed between the two turns can legally change the text,
+  // so equality would assert another lane's timing, not the cache contract.
+  if (first.cacheStatus === "MISS") {
+    expect(second).toMatchObject({ greeting: first.greeting });
+  }
 }, 300_000);
 
 type LlmCompletionEvidence = {

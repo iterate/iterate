@@ -620,16 +620,21 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  );\n" +
       "  const [title, setTitle] = useState(\"\");\n" +
       "  const [actionError, setActionError] = useState(\"\");\n" +
+      "  const [pendingMutations, setPendingMutations] = useState(0);\n" +
+      "  const mutating = pendingMutations > 0;\n" +
       "\n" +
       "  const error = liveError ?? (actionError.length > 0 ? actionError : undefined);\n" +
       "  const todos = state?.todos ?? [];\n" +
       "\n" +
       "  const run = async (action: () => Promise<void>) => {\n" +
       "    setActionError(\"\");\n" +
+      "    setPendingMutations((current) => current + 1);\n" +
       "    try {\n" +
       "      await action();\n" +
       "    } catch (cause) {\n" +
       "      setActionError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "    } finally {\n" +
+      "      setPendingMutations((current) => current - 1);\n" +
       "    }\n" +
       "  };\n" +
       "\n" +
@@ -655,10 +660,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          type=\"text\"\n" +
       "          value={title}\n" +
       "        />\n" +
-      "        <button disabled={api == null} type=\"submit\">\n" +
+      "        <button disabled={api == null || mutating} type=\"submit\">\n" +
       "          Add\n" +
       "        </button>\n" +
       "      </form>\n" +
+      "      {mutating && (\n" +
+      "        <p aria-live=\"polite\" data-spinner=\"true\" role=\"status\">\n" +
+      "          Saving…\n" +
+      "        </p>\n" +
+      "      )}\n" +
       "      {error !== undefined && <p role=\"alert\">{error}</p>}\n" +
       "      {state === undefined ? (\n" +
       "        <p>Loading…</p>\n" +
@@ -671,6 +681,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <input\n" +
       "                aria-label={`Mark ${todo.title} ${todo.done ? \"not done\" : \"done\"}`}\n" +
       "                checked={todo.done}\n" +
+      "                disabled={mutating}\n" +
       "                onChange={(event) => {\n" +
       "                  const done = event.currentTarget.checked;\n" +
       "                  if (api == null) return;\n" +
@@ -680,6 +691,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              />\n" +
       "              <span className={todo.done ? \"done\" : \"\"}>{todo.title}</span>\n" +
       "              <button\n" +
+      "                disabled={mutating}\n" +
       "                onClick={() => {\n" +
       "                  if (api == null) return;\n" +
       "                  void run(() => api.remove(todo.id));\n" +

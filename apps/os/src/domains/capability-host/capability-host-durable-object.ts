@@ -11,6 +11,7 @@ import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/v
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
+  type RunScriptCommand,
   type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
@@ -154,8 +155,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return this.#capabilityHostProcessor.revokeCapability(input);
   }
 
-  runScript(code: string): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(code);
+  runScript(input: RunScriptCommand): Promise<RunScriptResult> {
+    return this.#capabilityHostProcessor.runScript(input);
   }
 
   describeCapabilities(): Promise<CapabilityDescription[]> {

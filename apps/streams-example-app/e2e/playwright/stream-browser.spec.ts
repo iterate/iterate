@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
+import { expect, test } from "./test.ts";
 import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
 import {
   mirrorLockVersionVector,

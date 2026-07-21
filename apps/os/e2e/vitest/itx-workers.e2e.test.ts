@@ -5,7 +5,6 @@ import { itxScript } from "../test-support/itx-script-builder.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// These are hand written tests - they MUST pass
 test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
   using session = withItxSession();
   using itx = session.authenticate({

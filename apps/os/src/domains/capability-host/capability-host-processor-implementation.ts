@@ -12,10 +12,7 @@ import type {
   RevokeCapabilityInput,
 } from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import {
-  CapabilityHostProcessorContract,
-  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-} from "./capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
   SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
@@ -495,10 +492,9 @@ export class CapabilityHostProcessor extends StreamProcessor<
     );
   }
 
-  async runScript(code: string): Promise<RunScriptResult> {
+  async runScript(input: RunScriptCommand): Promise<RunScriptResult> {
     await this.#assertCreated();
-    const executionId = crypto.randomUUID();
-    const expiresAt = this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
+    const { code, executionId, expiresAt } = input;
     const settlementAbort = new AbortController();
     // Register before the request append so a very fast settlement cannot
     // pass the waiter. Observe the rejection immediately: if the request
@@ -514,9 +510,29 @@ export class CapabilityHostProcessor extends StreamProcessor<
       (error: unknown) => ({ status: "rejected" as const, error }),
     );
     try {
+      // A replay either finds the previous incarnation's durable settlement
+      // here or observes it through the waiter registered above.
+      const existingEvent = await this.stream.getEvent({
+        idempotencyKey: this.idempotencyKey(`script-run-settled@${executionId}`),
+      });
+      if (existingEvent !== undefined) {
+        const existingSettlement = settlementFromSettledEvent(existingEvent, executionId);
+        if (existingSettlement === undefined) {
+          throw new Error(`Script execution "${executionId}" has a malformed settlement event.`);
+        }
+        settlementAbort.abort("durable settlement already exists");
+        void observedSettlement;
+        return scriptRunResult({
+          event: existingEvent,
+          executionId,
+          settlement: existingSettlement,
+        });
+      }
+
       await this.#awaitAppendWithin(
         this.append({
           type: "events.iterate.com/capability-host/script-run-requested",
+          idempotencyKey: this.idempotencyKey(`script-run-requested@${executionId}`),
           payload: { code, executionId, expiresAt },
         }),
         expiresAt,
@@ -534,12 +550,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       );
     }
     const { event, settlement: outcome } = settlement.event;
-    if (outcome.status === "failed") throw new Error(outcome.error);
-    return {
-      completedEvent: event,
-      executionId,
-      result: outcome.result ?? null,
-    };
+    return scriptRunResult({ event, executionId, settlement: outcome });
   }
 
   // ------------------------------------------------------- private machinery
@@ -993,6 +1004,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
 
 export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
 
+/** Stable identity minted outside the hosting Durable Object so a caller can
+ * rejoin the same journaled execution after losing an RPC acknowledgement. */
+export type RunScriptCommand = {
+  code: string;
+  executionId: string;
+  expiresAt: number;
+};
+
 type ScriptExecutionEntrypoint = {
   run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
 };
@@ -1160,6 +1179,19 @@ function settlementFromSettledEvent(
   }
   const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
   return parsed.success ? parsed.data : undefined;
+}
+
+function scriptRunResult(input: {
+  event: StreamEvent;
+  executionId: string;
+  settlement: ScriptExecutionSettlementValue;
+}): RunScriptResult {
+  if (input.settlement.status === "failed") throw new Error(input.settlement.error);
+  return {
+    completedEvent: input.event,
+    executionId: input.executionId,
+    result: input.settlement.result ?? null,
+  };
 }
 
 function assertExpressionDoesNotReferenceOwnMount(

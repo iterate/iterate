@@ -148,10 +148,8 @@ export type RegisteredProcessorReads<State> = Omit<ProcessorReads<State>, "waitU
   /** Whether `currentState` is a real fold — gate live publishing on it. */
   readonly isLoaded: boolean;
   /**
-   * STRICT catch-up: fold through the durable stream tail or THROW — unlike
-   * the registry's swallowing `catchUp(name)`, which serves the last
-   * committed state on failure. Use this where stale configuration must fail
-   * an operation rather than silently misroute it.
+   * Fold through the durable stream tail or throw. The registry and this
+   * processor-specific door have the same strict contract.
    */
   catchUp(): Promise<void>;
 };
@@ -170,9 +168,9 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * engine. Call it after mutating any non-runner live-state input (the
    * streams index, the demo counter); a runner's own committed-state change
    * calls it automatically via `observeStateChanges`. On a cold DO (a
-   * runner's progress not yet loaded) it defers to an async
-   * load-then-assemble instead of publishing the schema default over real
-   * facts.
+   * runner's progress not yet loaded) it does nothing instead of publishing
+   * the schema default over real facts; `loadAndRefreshLive` is the explicit
+   * asynchronous loading door.
    */
   refreshLive(): void;
   /**
@@ -224,9 +222,9 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * drive them now. Call before serving a read that must reflect a write the
    * caller just made (read-your-writes): push delivery is asynchronous. The
    * pull is serialized with live frames on the runner's chain, so racing a
-   * sink is safe. Failures are logged and swallowed — the read then serves
-   * the last successfully committed state, exactly as it would have without
-   * the pull.
+   * sink is safe. A direct Durable Object lifecycle loss gets one replay on
+   * the runner's durable cursor; all application failures and a second
+   * availability failure throw. Stale state is never presented as success.
    */
   catchUp(name: string): Promise<void>;
   /**
@@ -369,18 +367,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     );
   }
 
-  async function catchUp(name: string): Promise<void> {
-    const entry = requireEntry(name);
-    try {
-      await entry.runner.catchUp();
-    } catch (error) {
-      console.error(
-        `stream processor "${name}" catch-up failed; serving last committed state`,
-        error,
-      );
-    }
-  }
-
   // The node's live-state engine. Seeded empty; assembled from runner state
   // on the first `loadAndRefreshLive`
   // and kept fresh by each runner's committed-state observer. The empty seed
@@ -392,33 +378,21 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     // An unloaded runner reports the schema DEFAULT as currentState —
     // assembling from that would push patches that wipe real facts to live
     // subscribers (e.g. a cold DO whose first wake is a touchStreamActivity).
-    // Load first, then this reassembly re-runs with the real fold.
+    // Only loadAndRefreshLive may cross storage; once it completes this
+    // reassembly runs with every real fold.
     if ([...entries.values()].some((entry) => !entry.runner.isLoaded)) {
-      void loadThenAssemble();
       return;
     }
     const primary = [...entries.values()][0]?.runner.currentState as Live | undefined;
     live.setState(options.getLiveState?.() ?? primary ?? ({} as Live));
   }
   async function loadThenAssemble(): Promise<void> {
-    await Promise.all(
-      [...entries.values()].map((entry) => entry.runner.snapshot().catch(() => undefined)),
-    );
-    // Still-unloaded after the snapshot read = the load itself failed (the
-    // runner's load performs any pending refold, so there is no
-    // loaded-but-stale middle state). Catch up exactly those
-    // runners — the pull retries the load and folds the journal — so one
-    // failing runner never blocks the peer slices assembled in getLiveState.
-    await Promise.all(
-      [...entries.entries()]
-        .filter(([, entry]) => !entry.runner.isLoaded)
-        .map(([name]) => catchUp(name)),
-    );
-    // A runner that STILL isn't loaded (storage/read failures all the way
-    // down): KEEP the last assembled state rather than publishing defaults as
-    // facts — the failed loads cleared their memos, so the next refresh (or
-    // the storage-failure DO restart) retries.
-    if ([...entries.values()].some((entry) => !entry.runner.isLoaded)) return;
+    // Loading is all-or-nothing: publishing a projection assembled from only
+    // the processors whose storage happened to respond would turn an
+    // availability failure into false domain state. snapshot() performs any
+    // required refold and throws on failure; the caller sees that failure and
+    // may retry the read against a fresh incarnation.
+    await Promise.all([...entries.values()].map((entry) => entry.runner.snapshot()));
     assembleLive();
   }
 
@@ -528,7 +502,13 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       );
     },
 
-    catchUp,
+    // Catch-up failures — availability and application alike — propagate to
+    // the caller unretried: the door that called into this DO owns the one
+    // idempotent replay, and a swallowed failure here would serve stale
+    // state as success.
+    async catchUp(name: string): Promise<void> {
+      await requireEntry(name).runner.catchUp();
+    },
 
     handleAlarm(alarmInfo) {
       return tracing.enterSpan("alarm processor keepalive", async (span) => {

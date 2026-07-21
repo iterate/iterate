@@ -35,4 +35,7 @@ jobs:
       - name: Run Tests
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          TEST_TELEMETRY_ENABLED: "1"
+          TEST_TELEMETRY_KIND: unit
+          TEST_TELEMETRY_LANE: unit
         run: doppler run -- pnpm test

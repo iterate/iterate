@@ -19,6 +19,11 @@ import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-c
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf" | "cfV4">;
 
 const SecretBindings = z.array(z.object({ name: z.string(), type: z.string() }));
+// Wrangler does not expose Retry-After, but a direct API call in the same live
+// incident returned 120s. The final attempt therefore lands just beyond that
+// observed window instead of exhausting the budget at 110s.
+const CLOUDFLARE_COMMAND_429_BACKOFF_MS = [5_000, 15_000, 30_000, 75_000] as const;
+const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
 /**
  * Spawn a command with inherited stdio and throw on a nonzero exit — the
@@ -69,6 +74,79 @@ export function runAsync(
         );
       }
     });
+  });
+}
+
+/**
+ * Run one Cloudflare CLI command with a bounded retry for an explicit HTTP
+ * 429. Wrangler retries some API calls itself, but not the Worker service and
+ * version lookups performed by `wrangler deploy`; a shared-account rate-limit
+ * window otherwise makes parallel preview deploys fail at random.
+ *
+ * Output remains live and only a bounded tail is retained for classification.
+ * Every non-429 failure surfaces immediately, and the final 429 still fails
+ * after the same 5-attempt schedule used by our direct Cloudflare fetches.
+ */
+export async function runCloudflareCommandWith429Retry(
+  command: string,
+  args: string[],
+  opts: { cwd: string; env?: Record<string, string> },
+  retryOpts: {
+    backoffMs?: readonly number[];
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const backoffMs = retryOpts.backoffMs ?? CLOUDFLARE_COMMAND_429_BACKOFF_MS;
+  const sleep =
+    retryOpts.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+
+  for (let attempt = 1; attempt <= backoffMs.length + 1; attempt++) {
+    const result = await runStreamingCaptured(command, args, opts);
+    if (result.code === 0) {
+      return;
+    }
+
+    const failure = new Error(
+      `${command} ${args.join(" ")} exited with ${result.code ?? `signal ${result.signal ?? "unknown"}`}`,
+    );
+    const rateLimitIndex = result.output.lastIndexOf("429 Too Many Requests");
+    const terminalErrorIndex = result.output.lastIndexOf("ERROR");
+    const isRateLimited =
+      rateLimitIndex >= 0 && (terminalErrorIndex < 0 || rateLimitIndex > terminalErrorIndex);
+    if (!isRateLimited || attempt > backoffMs.length) {
+      throw failure;
+    }
+
+    const delayMs = backoffMs[attempt - 1];
+    console.warn(
+      `Cloudflare API rate limited (429) during ${command} ${args.join(" ")} ` +
+        `(attempt ${attempt}/${backoffMs.length + 1}); retrying command in ${Math.round(delayMs / 1000)}s...`,
+    );
+    await sleep(delayMs);
+  }
+}
+
+async function runStreamingCaptured(
+  command: string,
+  args: string[],
+  opts: { cwd: string; env?: Record<string, string> },
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }> {
+  console.log(`$ ${command} ${args.join(" ")}`);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      stdio: ["inherit", "pipe", "pipe"],
+      env: { ...process.env, ...opts.env },
+    });
+    let output = "";
+    const relay = (destination: NodeJS.WriteStream) => (chunk: Buffer) => {
+      destination.write(chunk);
+      output = `${output}${chunk.toString("utf8")}`.slice(-CAPTURED_COMMAND_OUTPUT_LIMIT);
+    };
+    child.stdout.on("data", relay(process.stdout));
+    child.stderr.on("data", relay(process.stderr));
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve({ code, signal, output }));
   });
 }
 
@@ -150,7 +228,7 @@ export async function deployWithSecrets(input: {
   try {
     const secretsFile = join(secretsDir, "secrets.json");
     writeFileSync(secretsFile, JSON.stringify(input.secretValues), { mode: 0o600 });
-    run("pnpm", [...deployArgs, "--secrets-file", secretsFile], {
+    await runCloudflareCommandWith429Retry("pnpm", [...deployArgs, "--secrets-file", secretsFile], {
       cwd: input.cwd,
       env: input.credentials,
     });

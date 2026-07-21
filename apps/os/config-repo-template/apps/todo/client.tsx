@@ -21,16 +21,21 @@ export function TodoClient() {
   );
   const [title, setTitle] = useState("");
   const [actionError, setActionError] = useState("");
+  const [pendingMutations, setPendingMutations] = useState(0);
+  const mutating = pendingMutations > 0;
 
   const error = liveError ?? (actionError.length > 0 ? actionError : undefined);
   const todos = state?.todos ?? [];
 
   const run = async (action: () => Promise<void>) => {
     setActionError("");
+    setPendingMutations((current) => current + 1);
     try {
       await action();
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setPendingMutations((current) => current - 1);
     }
   };
 
@@ -56,10 +61,15 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button disabled={api == null} type="submit">
+        <button disabled={api == null || mutating} type="submit">
           Add
         </button>
       </form>
+      {mutating && (
+        <p aria-live="polite" data-spinner="true" role="status">
+          Saving…
+        </p>
+      )}
       {error !== undefined && <p role="alert">{error}</p>}
       {state === undefined ? (
         <p>Loading…</p>
@@ -72,6 +82,7 @@ export function TodoClient() {
               <input
                 aria-label={`Mark ${todo.title} ${todo.done ? "not done" : "done"}`}
                 checked={todo.done}
+                disabled={mutating}
                 onChange={(event) => {
                   const done = event.currentTarget.checked;
                   if (api == null) return;
@@ -81,6 +92,7 @@ export function TodoClient() {
               />
               <span className={todo.done ? "done" : ""}>{todo.title}</span>
               <button
+                disabled={mutating}
                 onClick={() => {
                   if (api == null) return;
                   void run(() => api.remove(todo.id));

@@ -40,22 +40,19 @@ export async function importGithubArtifact(
 }
 
 /**
- * Import a public repo, then close the event-subscription race inherent in
- * Cloudflare's atomic server-side import. The import's initial push happens
- * before an exact-repo subscription can exist, so read the authoritative
- * Artifacts head after subscribing and capture an equivalent push fact.
+ * Import a public repo, then capture its initial push directly. Cloudflare's
+ * server-side import completes before the Worker can observe that first push,
+ * so read the authoritative Artifacts head and append the equivalent fact.
  */
 export async function importGithubArtifactWithInitialPushCapture(
   artifacts: Pick<Artifacts, "get" | "import">,
   input: { branch: string; depth?: number; name: string; owner: string; repo: string },
   effects: {
     append(event: StreamEventInput): Promise<unknown>;
-    ensureEventSubscription(): Promise<void>;
     namespace: string;
   },
 ): Promise<void> {
   const repo = await importGithubArtifactRepo(artifacts, input);
-  await effects.ensureEventSubscription();
 
   // log() is deployed and documented, but the pinned workers-types release
   // has not yet published the three Artifacts content-read methods.
