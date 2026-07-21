@@ -40,7 +40,6 @@ import { normalizeWorkspaceMountKeys } from "./utils.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
-import { resolveAbsolutePath } from "./paths.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 // Configuration appends assert their exact stream offset (no interleaved
@@ -268,15 +267,18 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       // A session bound to a removed or re-pointed mount would keep serving
       // the OLD repo's text as the live truth for the path. The barrier just
       // settled everything, so ending them here loses nothing committed.
-      const stalePrefixes = Object.entries(before)
-        .filter(([key, mount]) => applied.mounts[key]?.repoPath !== mount.repoPath)
-        .map(([key]) => resolveAbsolutePath(key));
-      if (stalePrefixes.length > 0) {
-        const doomed = this.#collab
-          .livePaths()
-          .filter((path) =>
-            stalePrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`)),
-          );
+      // Ownership is routeMount's longest-prefix rule — hand-rolled prefix
+      // string checks get the root mount ("//") and nested mounts wrong.
+      const changedMounts = new Set(
+        Object.entries(before)
+          .filter(([key, mount]) => applied.mounts[key]?.repoPath !== mount.repoPath)
+          .map(([key]) => key),
+      );
+      if (changedMounts.size > 0) {
+        const doomed = this.#collab.livePaths().filter((path) => {
+          const owner = routeMount(before, path);
+          return owner !== null && changedMounts.has(owner.mountPath);
+        });
         if (doomed.length > 0) this.#collab.endSessions(doomed);
       }
       return applied;
