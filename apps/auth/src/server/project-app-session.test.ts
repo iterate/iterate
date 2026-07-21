@@ -76,4 +76,39 @@ describe("project app sessions", () => {
       null,
     );
   });
+
+  it("bakes optional display identity into the claims and still validates", async () => {
+    const userCanAccessProject = async () => true;
+    const issued = await mintProjectAppSession(
+      { audience, projectId, userId: "usr_one", email: "one@example.com", name: "One Person" },
+      { secret, userCanAccessProject },
+    );
+    assert.ok(issued);
+
+    const payload = JSON.parse(
+      Buffer.from(issued.token.split(".")[1]!, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    assert.equal(payload.email, "one@example.com");
+    assert.equal(payload.name, "One Person");
+    assert.equal(payload.userId, "usr_one");
+
+    // The strict claims schema accepts the enriched token…
+    const valid = await validateProjectAppSession(
+      { audience, projectId, token: issued.token },
+      { secret, userCanAccessProject },
+    );
+    assert.equal(valid?.userId, "usr_one");
+
+    // …and blank display fields stay out of the claims entirely.
+    const bare = await mintProjectAppSession(
+      { audience, projectId, userId: "usr_one", email: "", name: "  " },
+      { secret, userCanAccessProject },
+    );
+    assert.ok(bare);
+    const bareClaims = JSON.parse(
+      Buffer.from(bare.token.split(".")[1]!, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    assert.equal("email" in bareClaims, false);
+    assert.equal("name" in bareClaims, false);
+  });
 });
