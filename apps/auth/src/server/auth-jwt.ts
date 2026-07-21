@@ -6,9 +6,9 @@ export function authJwt(privateJwkJson: string | undefined) {
   // Schema generation needs the plugin's schema but has no runtime secrets.
   if (!privateJwkJson) return jwt();
 
-  const { d, kid, ...publicJwk } = parseAuthSigningPrivateJwk(privateJwkJson);
+  const { d, ...publicJwk } = parseAuthSigningPrivateJwk(privateJwkJson);
   const key = {
-    id: kid,
+    id: publicJwk.kid,
     alg: "EdDSA" as const,
     crv: "Ed25519" as const,
     publicKey: JSON.stringify(publicJwk),

@@ -19,6 +19,7 @@ test("signs and publishes the same Doppler-owned key", async () => {
 
   assert.equal(jwks.keys.length, 1);
   assert.equal(Object.hasOwn(jwks.keys[0]!, "d"), false);
+  assert.equal(jwks.keys[0]!.kid, "from-doppler");
   assert.equal(verified.protectedHeader.kid, "from-doppler");
   assert.equal(verified.payload.sub, "usr_test");
 });
