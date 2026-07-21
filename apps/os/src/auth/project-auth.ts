@@ -159,7 +159,7 @@ export async function handleProjectAuthStart(input: {
   mintSession(input: MintProjectAppSessionInput): Promise<{ token: string } | null>;
   request: Request;
   resolveProjectId(targetUrl: string): Promise<string | null>;
-  session: { userId: string } | null;
+  session: { userId: string; email?: string; name?: string } | null;
 }): Promise<Response> {
   if (input.request.method !== "GET") return methodNotAllowed("GET");
   const requestUrl = new URL(input.request.url);
@@ -190,6 +190,8 @@ export async function handleProjectAuthStart(input: {
   try {
     issued = await input.mintSession({
       audience: target.origin,
+      email: input.session.email,
+      name: input.session.name,
       projectId,
       userId: input.session.userId,
     });
