@@ -282,6 +282,10 @@ describe("preview workflow scope", () => {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
     });
+    expect(os.resolvePreviewAppConfig?.("preview_3")).toEqual({
+      baseUrl: "https://os.iterate-preview-3.com",
+      projectHostnameBases: ["iterate-preview-3.app"],
+    });
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- packages/iterate/**");

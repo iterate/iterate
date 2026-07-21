@@ -13,7 +13,7 @@ import {
   deploymentReadinessProbeWaveCount,
 } from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
-import { dummyPetshopEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
+import { dummyPetshopEnvs, envs as osEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -1616,6 +1616,16 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = osEnvs[dopplerConfig as keyof typeof osEnvs];
+      if (!env) {
+        throw new Error(`Unknown OS environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return {
+        baseUrl: env.baseUrl,
+        projectHostnameBases: env.projectHostnameBases,
+      };
+    },
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
@@ -3628,7 +3638,7 @@ async function readPreviewAppConfig(input: {
     return parsed;
   };
   const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
-  if (repoConfig) {
+  if (repoConfig && !input.app.previewReadyBearerTokenEnvVar) {
     return parsePreviewAppConfig(repoConfig);
   }
 
@@ -3679,7 +3689,20 @@ async function readPreviewAppConfig(input: {
     throw new Error("Failed to read preview app config.");
   }
 
-  return parsePreviewAppConfig(JSON.parse(result.stdout));
+  const dopplerConfig: unknown = JSON.parse(result.stdout);
+  return parsePreviewAppConfig(
+    repoConfig && typeof dopplerConfig === "object" && dopplerConfig !== null
+      ? {
+          ...dopplerConfig,
+          baseUrl: repoConfig.baseUrl,
+          projectHostnameBases:
+            repoConfig.projectHostnameBases ??
+            ("projectHostnameBases" in dopplerConfig
+              ? dopplerConfig.projectHostnameBases
+              : undefined),
+        }
+      : dopplerConfig,
+  );
 }
 
 async function runPreviewDeployCommand(input: {
