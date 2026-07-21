@@ -94,7 +94,10 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       // Fetch responses can't carry a named error across the hop the way RPC
       // does; a budget-expired cold build becomes the retryable building
       // page, a failed first-ever build the build-failed page.
-      const buildStatus = workerBuildStatus(error);
+      const buildStatus = workerBuildStatus(
+        error,
+        taken.request.headers.get("x-iterate-url-prefix") ?? "",
+      );
       if (buildStatus !== null) return buildStatus.response;
       throw error;
     }

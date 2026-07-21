@@ -171,6 +171,12 @@ it("emits the AI response-cache key for every deployment while keeping productio
   });
 });
 
+it("exposes the selected environment name to browser-facing config", () => {
+  expect(config.vars.APP_CONFIG_ENVIRONMENT_NAME).toBe(process.env.DOPPLER_CONFIG?.trim() || "dev");
+  expect(envShapedVars(envs.prd).APP_CONFIG_ENVIRONMENT_NAME).toBe("prd");
+  expect(envShapedVars(envs.preview_6).APP_CONFIG_ENVIRONMENT_NAME).toBe("preview_6");
+});
+
 it("does not retain a reconciled Durable Object tombstone", () => {
   expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });

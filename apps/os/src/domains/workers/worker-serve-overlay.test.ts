@@ -7,6 +7,10 @@ import {
   withWorkerCommit,
 } from "./worker-serve-info.ts";
 import {
+  relIncludesIcon,
+  WORKER_DEFAULT_FAVICON_PATH,
+  workerDefaultFaviconHtml,
+  workerDefaultFaviconResponse,
   workerBuildFailedResponse,
   workerOverlayDecision,
   workerOverlayHtml,
@@ -93,6 +97,36 @@ describe("workerOverlayDecision", () => {
   });
 });
 
+describe("user-space favicon", () => {
+  test("recognizes icon as a case-insensitive rel token", () => {
+    expect(relIncludesIcon("icon")).toBe(true);
+    expect(relIncludesIcon("shortcut ICON")).toBe(true);
+    expect(relIncludesIcon("apple-touch-icon")).toBe(false);
+    expect(relIncludesIcon(null)).toBe(false);
+  });
+
+  test("uses an inverted Iterate mark", async () => {
+    const html = workerDefaultFaviconHtml();
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain("data-iterate-default-favicon");
+    expect(html).toContain(`href="${WORKER_DEFAULT_FAVICON_PATH}"`);
+    const response = workerDefaultFaviconResponse(
+      new Request(`https://app.example.com${WORKER_DEFAULT_FAVICON_PATH}`),
+    );
+    expect(response).not.toBeNull();
+    expect(response!.headers.get("content-type")).toContain("image/svg+xml");
+    const svg = await response!.text();
+    expect(svg).toContain('<rect width="500" height="500" fill="white"');
+    expect(svg.match(/fill="black"/g)).toHaveLength(2);
+  });
+
+  test("includes the browser-visible project prefix on the path lane", () => {
+    expect(workerDefaultFaviconHtml("/prj_test")).toContain(
+      `href="/prj_test${WORKER_DEFAULT_FAVICON_PATH}"`,
+    );
+  });
+});
+
 describe("workerOverlayHtml", () => {
   test("carries the iterate mark and the serve info", () => {
     const html = workerOverlayHtml({ commitOid, kind: "live" });
@@ -130,7 +164,7 @@ describe("workerOverlayHtml", () => {
 
 describe("workerServeErrorResponse", () => {
   test("marked, self-retrying, overlay-exempt 500 that keeps internals in the logs", async () => {
-    const response = workerServeErrorResponse();
+    const response = workerServeErrorResponse("/prj_test");
     expect(response.status).toBe(500);
     expect(response.headers.get(WORKER_SERVE_ERROR_HEADER)).toBe("1");
     expect(response.headers.get(OVERLAY_OPT_OUT_HEADER)).toBe("1");
@@ -143,12 +177,17 @@ describe("workerServeErrorResponse", () => {
     // An error pops its details open immediately; nothing spins on it.
     expect(body).toContain('<div id="panel">');
     expect(body).toContain('[data-kind="serveError"] #ring rect { stroke-dasharray: none');
+    expect(body).toContain("data-iterate-default-favicon");
+    expect(body).toContain(`href="/prj_test${WORKER_DEFAULT_FAVICON_PATH}"`);
   });
 });
 
 describe("workerBuildFailedResponse", () => {
   test("marked 500 with the bundler's error, script-inert, overlay-exempt", async () => {
-    const response = workerBuildFailedResponse(new Error('Could not resolve "<b>zod</b>"'));
+    const response = workerBuildFailedResponse(
+      new Error('Could not resolve "<b>zod</b>"'),
+      "/prj_test",
+    );
     expect(response.status).toBe(500);
     expect(response.headers.get(WORKER_BUILD_FAILED_HEADER)).toBe("1");
     expect(response.headers.get(OVERLAY_OPT_OUT_HEADER)).toBe("1");
@@ -159,5 +198,7 @@ describe("workerBuildFailedResponse", () => {
     expect(body).not.toContain("<b>zod</b>");
     expect(body).toContain("then reload this page");
     expect(body).not.toContain("const poll = async");
+    expect(body).toContain("data-iterate-default-favicon");
+    expect(body).toContain(`href="/prj_test${WORKER_DEFAULT_FAVICON_PATH}"`);
   });
 });

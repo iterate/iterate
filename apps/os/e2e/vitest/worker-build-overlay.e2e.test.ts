@@ -49,6 +49,25 @@ test(
     const original = await project.repo.readFile({ path: "worker.ts" });
     expect(original?.content).toContain("export default class ProjectWorker");
 
+    const customIconSource = original!.content.replace(
+      "        <html>\n          <body>",
+      '        <html>\n          <body>\n            <link rel="shortcut ICON" href="/my-icon.svg">',
+    );
+    expect(customIconSource).not.toBe(original!.content);
+    const customized = await project.repo.commitFiles({
+      changes: [{ path: "worker.ts", content: customIconSource }],
+      message: "set a custom favicon",
+    });
+    const customIcon = await pollHome(
+      ({ commitOid, response }) => response.status === 200 && commitOid === customized.commitOid,
+      "the worker with its own favicon",
+    );
+    const customIconHomepage = await customIcon.response.text();
+    // A body icon is valid HTML and can appear after the transform has seen
+    // </head>; the app's icon must still suppress the fallback.
+    expect(customIconHomepage).toContain('rel="shortcut ICON" href="/my-icon.svg"');
+    expect(customIconHomepage).not.toContain("data-iterate-default-favicon");
+
     await project.repo.commitFiles({
       changes: [{ path: "worker.ts", content: "this is not valid typescript ((((" }],
       message: "break the worker build",
@@ -59,7 +78,9 @@ test(
       "worker-bundler's build failure",
     );
     expect(failed.commitOid).toBeNull();
-    expect(await failed.response.text()).toContain("Worker build failed");
+    const failedHomepage = await failed.response.text();
+    expect(failedHomepage).toContain("Worker build failed");
+    expect(failedHomepage).toContain(`href="/${projectId}/.iterate/favicon.svg"`);
 
     const fixed = await project.repo.commitFiles({
       changes: [{ path: "worker.ts", content: original!.content }],

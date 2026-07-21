@@ -1406,7 +1406,7 @@ export type CloudflarePreviewApp = {
   /**
    * Resolve the public URL and Worker script from the repo's typed envs.ts.
    * Deploy scripts consume that same map, so orchestration never forks the
-   * deployment identity through a second Doppler config read.
+   * deployment identity through a second config read.
    */
   resolvePreviewAppConfig: (dopplerConfig: string) => {
     baseUrl: string;
@@ -1744,7 +1744,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // interval. Tests then pin that immutable version explicitly.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
-    previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestBaseUrlEnvVar: "APP_CONFIG_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
     },

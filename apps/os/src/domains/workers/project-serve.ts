@@ -4,7 +4,11 @@ import {
   workerBuildStatus,
 } from "./worker-fetch-dispatch.ts";
 import { WORKER_BUILD_FAILED_HEADER } from "./worker-serve-info.ts";
-import { applyProjectWorkerOverlay, workerServeErrorResponse } from "./worker-serve-overlay.ts";
+import {
+  applyProjectWorkerOverlay,
+  workerDefaultFaviconResponse,
+  workerServeErrorResponse,
+} from "./worker-serve-overlay.ts";
 
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
@@ -20,7 +24,8 @@ type ProjectServeOutcome = "worker_build_failed" | "worker_building" | "worker_s
  * - classification of build-lifecycle errors into their stand-in pages
  *   (workerBuildStatus) and of pages bubbling back from inner hops into
  *   their observability outcomes,
- * - the @iterate overlay on served HTML documents,
+ * - the @iterate overlay and app-override-aware default favicon on served
+ *   HTML documents,
  * - and the catch-all: any other serve failure answers the branded retrying
  *   page instead of escaping as a naked 500/1101 — a project host always
  *   shows platform chrome, however broken the build machinery is. The error
@@ -37,6 +42,9 @@ export async function serveProjectResponse({
   onError: (error: unknown) => void;
   request: Request;
 }): Promise<{ outcome: ProjectServeOutcome | null; response: Response }> {
+  const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
+  const favicon = workerDefaultFaviconResponse(request);
+  if (favicon !== null) return { outcome: null, response: favicon };
   try {
     const response = await fetchWorker(
       buildBudgetForRequest(request, PROJECT_HOST_BUILD_BUDGET_MS),
@@ -50,9 +58,9 @@ export async function serveProjectResponse({
         : null;
     return { outcome, response: applyProjectWorkerOverlay(request, response) };
   } catch (error) {
-    const buildStatus = workerBuildStatus(error);
+    const buildStatus = workerBuildStatus(error, urlPrefix);
     if (buildStatus !== null) return buildStatus;
     onError(error);
-    return { outcome: "worker_serve_error", response: workerServeErrorResponse() };
+    return { outcome: "worker_serve_error", response: workerServeErrorResponse(urlPrefix) };
   }
 }
