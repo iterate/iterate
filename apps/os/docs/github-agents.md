@@ -2,21 +2,29 @@
 
 Pull-request agents are project policy. The platform verifies and records
 GitHub webhooks, stores a linked-repository fact, and exposes authenticated
-Octokit. The project's `worker.ts` decides whether a webhook creates or wakes
-an agent and what the agent should do.
+Octokit. The project's seeded review bot (`config-repo-template/apps/review-bot`)
+decides whether a webhook creates or wakes an agent and what the agent should
+do.
 
 ```text
 GitHub App webhook
   -> /integrations/github/<connection>       verified original fact
        |-> /repos/<project path>              default-branch pushes only
-       `-> worker.ts processEvent
-            -> match itx.repos.list() links
-                 -> /agents/repos/<project path>/pr/<n>
+       `-> ReviewBotApp (userspace DO, wake subscription per connection)
+            -> ReviewBotProcessor -> handleGithubPullRequestWebhook
+                 -> match itx.repos.list() links
+                      -> /agents/repos/<project path>/pr/<n>
                                                 PR history and agent loop
 ```
 
-There is no pull-request processor or pull-request Durable Object. The agent
-stream is the durable journal and execution loop for its pull request.
+The review bot is a USERSPACE stream processor: `ReviewBotProcessor` (the
+same `iterate/processors` machinery as the seeded guestbook) hosted by a
+`ReviewBotApp` Durable Object, one instance per GitHub connection, attached
+to that connection's webhook stream through a durable wake subscription. The
+platform still has no pull-request processor of its own. The agent stream
+remains the durable journal and execution loop for its pull request; the
+bot's processor folds no state — every durable fact it produces lives on
+agent streams, under stable idempotency keys.
 
 ## The webhook fact
 
@@ -69,26 +77,32 @@ consumes the original connection event and rejects every cross-posted copy.
 
 ## The userspace router
 
-The seeded [`worker.ts`](../config-repo-template/worker.ts) contains the whole
-proof of concept:
+The whole proof of concept lives in the seeded
+[`apps/review-bot`](../config-repo-template/apps/review-bot/src/review-bot.ts):
+the policy, the `ReviewBotProcessorContract` (consuming
+`events.iterate.com/github/webhook-received`), the processor, and the
+`handleGithubPullRequestWebhook` router it runs per delivered webhook inside
+`blockProcessorWhile` — short must-happen work, so the cursor is held, a crash
+redelivers the frame, and the router's stable idempotency keys collapse the
+re-run.
 
-```ts
-protected override async processEvent(event: StreamEvent): Promise<void> {
-  switch (event.type) {
-    case "events.iterate.com/github/webhook-received": {
-      if (event.source?.crossPostedFrom === undefined) {
-        using itx = await this.env.ITX.get();
-        await handleGithubPullRequestWebhook(itx, event);
-      }
-      break;
-    }
-    default:
-      break;
-  }
-}
-```
+Delivery is the guestbook's wake lane, with one difference: webhook streams
+are per connection and no user action touches them directly, so nothing can
+configure the subscription at creation time. Instead the seeded `worker.ts`
+keeps a small bootstrap lane — on a `repo/github-link-configured` event
+(whose payload names the connection) it idempotently appends the bot's
+`stream/subscription-configured` event (from `review-bot-ref.ts`) to that
+connection's webhook stream, once per (re-)link rather than once per
+webhook. The stream spine pokes the new wake subscriber immediately, and a
+fresh subscription replays from offset zero, so pull requests opened shortly
+before the link are still delivered. Because that replay covers the stream's
+whole history, the processor drops webhooks older than a freshness horizon
+(`reviewBotFreshnessHorizonMs`) — attaching to an old stream must not review
+long-dead pull requests. A project that already had linked repos before
+adopting this template picks the bot up by re-running `linkGithub` (re-links
+replace subscriptions by key and repair by design).
 
-The handler lists the project's repos, reads their current links, and accepts
+The router lists the project's repos, reads their current links, and accepts
 the event only when one link's stream path, installation, and stable repository
 ID all match. This lets one connection drive agents for every linked repo
 without hard-coding a single path. Agent identity mirrors the matching
@@ -128,7 +142,8 @@ directly rather than spending an agent turn fetching the same webhook again.
 
 ## Structural reviews
 
-Rules are ordinary typed policy in `worker.ts`. Record keys are stable rule
+Rules are ordinary typed policy in `apps/review-bot/src/review-bot.ts`.
+Record keys are stable rule
 IDs used in suppressions, comments, idempotency, and future analytics:
 
 ```ts
