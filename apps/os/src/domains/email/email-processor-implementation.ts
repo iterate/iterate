@@ -96,36 +96,30 @@ export class EmailProcessor extends StreamProcessor<EmailProcessorContract> {
                 : { subject: event.payload.message.subject }),
             },
           };
-          blockProcessorWhile(
-            "this forward is the only copy of the email on its way to the agent; a failed append must hold the checkpoint for replay",
-            async () => {
-              await append(routeEvent);
-              if (this.projectId === null) {
-                throw new Error("Email router cannot create a project agent without a project id");
-              }
-              await appendTo(
-                resolution.streamPath,
-                ...emailAgentCreationEvents({
-                  counterpart: counterpart ?? undefined,
-                  path: resolution.streamPath,
-                  projectId: this.projectId,
-                  subject: event.payload.message.subject,
-                  threadId: resolution.threadId,
-                }),
-                routeEvent,
-                forwardedEvent,
-              );
-            },
-          );
+          blockProcessorWhile(async () => {
+            await append(routeEvent);
+            if (this.projectId === null) {
+              throw new Error("Email router cannot create a project agent without a project id");
+            }
+            await appendTo(
+              resolution.streamPath,
+              ...emailAgentCreationEvents({
+                counterpart: counterpart ?? undefined,
+                path: resolution.streamPath,
+                projectId: this.projectId,
+                subject: event.payload.message.subject,
+                threadId: resolution.threadId,
+              }),
+              routeEvent,
+              forwardedEvent,
+            );
+          });
           return;
         }
 
-        blockProcessorWhile(
-          "this forward is the only copy of the email on its way to the agent; a failed append must hold the checkpoint for replay",
-          async () => {
-            await appendTo(resolution.streamPath, forwardedEvent);
-          },
-        );
+        blockProcessorWhile(async () => {
+          await appendTo(resolution.streamPath, forwardedEvent);
+        });
         return;
       }
       // email/created, email/sender-allowed, email/sent, and

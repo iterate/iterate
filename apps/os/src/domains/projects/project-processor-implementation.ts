@@ -94,10 +94,7 @@ export class ProjectProcessor extends StreamProcessor<
 
     switch (event?.type) {
       case "events.iterate.com/project/created": {
-        blockProcessorWhile(
-          "project birth is delivered once; a dropped sibling-create would leave the project permanently missing its root processors",
-          () => this.#createSiblingProcessors(args, event.payload.config),
-        );
+        blockProcessorWhile(() => this.#createSiblingProcessors(args, event.payload.config));
         break;
       }
       case "events.iterate.com/repos/created": {
@@ -114,96 +111,85 @@ export class ProjectProcessor extends StreamProcessor<
         ) {
           break;
         }
-        blockProcessorWhile(
-          "the ready fact is a per-event consequence of the config repo's created certificate; a dropped append would leave the project never marked ready",
-          async () => {
-            const timing = { projectId: this.deps.itx.projectId };
-            await timedStep("create-timing", timing, "worker-probe", () =>
-              this.#waitForDefaultProjectWorker(),
-            );
-            await timedStep("create-timing", timing, "project-ready-append", () =>
-              append({
-                type: "events.iterate.com/project/ready",
-                idempotencyKey: this.idempotencyKey("ready"),
-                payload: {},
-              }),
-            );
-          },
-        );
+        blockProcessorWhile(async () => {
+          const timing = { projectId: this.deps.itx.projectId };
+          await timedStep("create-timing", timing, "worker-probe", () =>
+            this.#waitForDefaultProjectWorker(),
+          );
+          await timedStep("create-timing", timing, "project-ready-append", () =>
+            append({
+              type: "events.iterate.com/project/ready",
+              idempotencyKey: this.idempotencyKey("ready"),
+              payload: {},
+            }),
+          );
+        });
         break;
       }
       case "events.iterate.com/project/custom-domain-add-requested":
       case "events.iterate.com/project/custom-domain-refresh-requested": {
         const { hostname } = event.payload;
-        blockProcessorWhile(
-          "the add/refresh request is delivered once; a lost provision attempt and its observation would strand the domain request",
-          async () => {
-            try {
-              const provisioner = this.#customDomainProvisioner();
-              const project =
-                (await provisioner.readProject()) ??
-                projectRecordFromState(state, this.deps.itx.projectId);
-              const snapshot =
-                event.type === "events.iterate.com/project/custom-domain-add-requested"
-                  ? await provisioner.ensure({ hostname, project })
-                  : await provisioner.refresh({
-                      cloudflareHostnameId: state.customDomains.find(
-                        (candidate) => candidate.hostname === hostname,
-                      )?.cloudflareHostnameId,
-                      hostname,
-                      project,
-                    });
-              await append({
-                type: "events.iterate.com/project/custom-domain-cloudflare-observed",
-                idempotencyKey: this.idempotencyKey("custom-domain-observed", event),
-                payload: snapshot,
-              });
-            } catch (error) {
-              await append({
-                type: "events.iterate.com/project/custom-domain-provision-failed",
-                idempotencyKey: this.idempotencyKey("custom-domain-failed", event),
-                payload: { error: errorMessage(error), hostname },
-              });
-            }
-          },
-        );
+        blockProcessorWhile(async () => {
+          try {
+            const provisioner = this.#customDomainProvisioner();
+            const project =
+              (await provisioner.readProject()) ??
+              projectRecordFromState(state, this.deps.itx.projectId);
+            const snapshot =
+              event.type === "events.iterate.com/project/custom-domain-add-requested"
+                ? await provisioner.ensure({ hostname, project })
+                : await provisioner.refresh({
+                    cloudflareHostnameId: state.customDomains.find(
+                      (candidate) => candidate.hostname === hostname,
+                    )?.cloudflareHostnameId,
+                    hostname,
+                    project,
+                  });
+            await append({
+              type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+              idempotencyKey: this.idempotencyKey("custom-domain-observed", event),
+              payload: snapshot,
+            });
+          } catch (error) {
+            await append({
+              type: "events.iterate.com/project/custom-domain-provision-failed",
+              idempotencyKey: this.idempotencyKey("custom-domain-failed", event),
+              payload: { error: errorMessage(error), hostname },
+            });
+          }
+        });
         break;
       }
       case "events.iterate.com/project/custom-domain-remove-requested": {
         const { hostname } = event.payload;
-        blockProcessorWhile(
-          "the remove request is delivered once; a lost removal or failure record would strand the domain in project state",
-          async () => {
-            try {
-              const domain = state.customDomains.find(
-                (candidate) => candidate.hostname === hostname,
-              );
-              if (!domain) {
-                throw new Error(`Custom domain "${hostname}" is not configured on this project.`);
-              }
-              const provisioner = this.#customDomainProvisioner();
-              const project =
-                (await provisioner.readProject()) ??
-                projectRecordFromState(state, this.deps.itx.projectId);
-              await provisioner.remove({
-                cloudflareHostnameId: domain.cloudflareHostnameId,
-                hostname,
-                project,
-              });
-              await append({
-                type: "events.iterate.com/project/custom-domain-removed",
-                idempotencyKey: this.idempotencyKey("custom-domain-removed", event),
-                payload: { hostname },
-              });
-            } catch (error) {
-              await append({
-                type: "events.iterate.com/project/custom-domain-provision-failed",
-                idempotencyKey: this.idempotencyKey("custom-domain-remove-failed", event),
-                payload: { error: errorMessage(error), hostname },
-              });
+        blockProcessorWhile(async () => {
+          try {
+            const domain = state.customDomains.find((candidate) => candidate.hostname === hostname);
+            if (!domain) {
+              throw new Error(`Custom domain "${hostname}" is not configured on this project.`);
             }
-          },
-        );
+            const provisioner = this.#customDomainProvisioner();
+            const project =
+              (await provisioner.readProject()) ??
+              projectRecordFromState(state, this.deps.itx.projectId);
+            await provisioner.remove({
+              cloudflareHostnameId: domain.cloudflareHostnameId,
+              hostname,
+              project,
+            });
+            await append({
+              type: "events.iterate.com/project/custom-domain-removed",
+              idempotencyKey: this.idempotencyKey("custom-domain-removed", event),
+              payload: { hostname },
+            });
+          } catch (error) {
+            await append({
+              type: "events.iterate.com/project/custom-domain-provision-failed",
+              idempotencyKey: this.idempotencyKey("custom-domain-remove-failed", event),
+              payload: { error: errorMessage(error), hostname },
+            });
+          }
+        });
         break;
       }
       // created/ready/onboarding-completed/notification/created, the catalog

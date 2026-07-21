@@ -175,20 +175,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // per-event consequence — the event is delivered once, and losing the
         // mirror would silently drop the agent's own words from its memory.
         const files = event.payload.files;
-        blockProcessorWhile(
-          "the sent message is delivered once; a lost reflection append would hide the agent's own message from its later turns",
-          () =>
-            this.#appendUnlessLostIdempotencyRace(append, [
-              {
-                type: "events.iterate.com/agents/context-added",
-                payload: {
-                  role: "assistant",
-                  content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
-                  ...(files === undefined || files.length === 0 ? {} : { files }),
-                },
-                idempotencyKey: this.idempotencyKey(`render-web-response@${event.offset}`),
+        blockProcessorWhile(() =>
+          this.#appendUnlessLostIdempotencyRace(append, [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                role: "assistant",
+                content: `The assistant sent this visible web-chat message: ${event.payload.message}`,
+                ...(files === undefined || files.length === 0 ? {} : { files }),
               },
-            ]),
+              idempotencyKey: this.idempotencyKey(`render-web-response@${event.offset}`),
+            },
+          ]),
         );
         break;
       }
@@ -202,16 +200,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // set AFTER this input raced in survives). Blocked: per-event
         // consequence, delivered once.
         if (state.summary.waitingFor !== undefined && contextClearsWaitingFor(payload)) {
-          blockProcessorWhile(
-            "the waiting-clear is a per-event consequence of this context item; a dropped append would leave the agent stuck waiting forever",
-            () =>
-              this.#appendUnlessLostIdempotencyRace(append, [
-                {
-                  type: "events.iterate.com/agent/summary-updated",
-                  payload: { waitingFor: null, clearWaitingForThroughOffset: event.offset },
-                  idempotencyKey: this.idempotencyKey(`waiting-clear@${event.offset}`),
-                },
-              ]),
+          blockProcessorWhile(() =>
+            this.#appendUnlessLostIdempotencyRace(append, [
+              {
+                type: "events.iterate.com/agent/summary-updated",
+                payload: { waitingFor: null, clearWaitingForThroughOffset: event.offset },
+                idempotencyKey: this.idempotencyKey(`waiting-clear@${event.offset}`),
+              },
+            ]),
           );
         }
         // INTERRUPT — cancellation is a property of new input, never a
@@ -266,10 +262,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           // after the cursor passed this event would leave the open request
           // uncancelled — and the next at-head pass would ADOPT and run the
           // very request the user tried to stop.
-          blockProcessorWhile(
-            "the interrupt's cancel must reduce before any later re-fire, or the re-fire wins the reduce and the cancel no-ops",
-            () => this.#appendUnlessLostIdempotencyRace(append, appends),
-          );
+          blockProcessorWhile(() => this.#appendUnlessLostIdempotencyRace(append, appends));
           // STOP: nothing below may act this frame. The at-head code would
           // otherwise re-run the very request the queued settlement is about
           // to cancel (it reads the pre-cancel reduced state — the eviction-window
@@ -293,61 +286,53 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         ) {
           const extraction = extractAsyncTypescriptSnippet(payload.content);
           if (extraction.kind === "malformed") {
-            blockProcessorWhile(
-              "the assistant output is delivered once; a lost append would silently drop its rejection notice",
-              () =>
-                this.#appendUnlessLostIdempotencyRace(append, [
-                  {
-                    type: "events.iterate.com/agents/context-added",
-                    payload: {
-                      role: "developer",
-                      content:
-                        "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
-                      llmRequestPolicy: { behaviour: "after-current-request" },
-                    },
-                    idempotencyKey: this.idempotencyKey(
-                      `malformed-snippet-rejected@${event.offset}`,
-                    ),
+            blockProcessorWhile(() =>
+              this.#appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/agents/context-added",
+                  payload: {
+                    role: "developer",
+                    content:
+                      "Your code block did NOT run. Use a ```ts fence whose content STARTS with `async` — a single `async (itx) => { ... }`, TypeScript only, no comments or statements before the function. Resend it as one such block (move any leading comments inside the function body).",
+                    llmRequestPolicy: { behaviour: "after-current-request" },
                   },
-                ]),
+                  idempotencyKey: this.idempotencyKey(`malformed-snippet-rejected@${event.offset}`),
+                },
+              ]),
             );
           } else if (extraction.kind === "multiple") {
-            blockProcessorWhile(
-              "the assistant output is delivered once; a lost append would silently drop its rejection notice",
-              () =>
-                this.#appendUnlessLostIdempotencyRace(append, [
-                  {
-                    type: "events.iterate.com/agents/context-added",
-                    payload: {
-                      role: "developer",
-                      content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
-                      llmRequestPolicy: { behaviour: "after-current-request" },
-                    },
-                    idempotencyKey: this.idempotencyKey(`multi-snippet-rejected@${event.offset}`),
+            blockProcessorWhile(() =>
+              this.#appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/agents/context-added",
+                  payload: {
+                    role: "developer",
+                    content: `Your response contained ${extraction.count} fenced code blocks, so NOTHING was executed. Respond with exactly ONE fenced code block per turn. Do not queue future steps as extra blocks — your script's return value arrives as your next input and you write the next step then. Resend just the FIRST step as a single \`\`\`ts block.`,
+                    llmRequestPolicy: { behaviour: "after-current-request" },
                   },
-                ]),
+                  idempotencyKey: this.idempotencyKey(`multi-snippet-rejected@${event.offset}`),
+                },
+              ]),
             );
           } else if (extraction.kind === "script") {
-            blockProcessorWhile(
-              "the assistant output is delivered once; a lost append would silently drop its script run",
-              () =>
-                // Deterministic body (expiresAt anchors to the assistant event,
-                // never `now`): an at-least-once redelivery of this event
-                // re-appends the identical request and dedupes on the key —
-                // a `now`-stamped expiry would make the re-append a same-key
-                // CONFLICT and wedge the frame forever. The race-tolerant
-                // append covers a config change between deliveries.
-                this.#appendUnlessLostIdempotencyRace(append, [
-                  {
-                    type: "events.iterate.com/capability-host/script-run-requested",
-                    payload: {
-                      code: extraction.code,
-                      executionId: `agent-output:${event.offset}`,
-                      expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
-                    },
-                    idempotencyKey: this.idempotencyKey(`script-run-requested@${event.offset}`),
+            blockProcessorWhile(() =>
+              // Deterministic body (expiresAt anchors to the assistant event,
+              // never `now`): an at-least-once redelivery of this event
+              // re-appends the identical request and dedupes on the key —
+              // a `now`-stamped expiry would make the re-append a same-key
+              // CONFLICT and wedge the frame forever. The race-tolerant
+              // append covers a config change between deliveries.
+              this.#appendUnlessLostIdempotencyRace(append, [
+                {
+                  type: "events.iterate.com/capability-host/script-run-requested",
+                  payload: {
+                    code: extraction.code,
+                    executionId: `agent-output:${event.offset}`,
+                    expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
                   },
-                ]),
+                  idempotencyKey: this.idempotencyKey(`script-run-requested@${event.offset}`),
+                },
+              ]),
             );
           }
         }
@@ -364,30 +349,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // inside the blocking section — the input must not land before the
         // file it references. Race-tolerant: a truncation-limit config change
         // between redeliveries alters the rendered body under the same key.
-        blockProcessorWhile(
-          "the settlement is delivered once; a lost render would silently drop the script's result from the conversation",
-          async () => {
-            const content = await renderScriptSettlement({
-              executionId,
-              settlement,
-              historyLimit: state.config.scriptResultHistoryLimit,
-              writeWorkspaceFile: this.deps.writeWorkspaceFile,
-            });
-            if (content === null) return;
-            await this.#appendUnlessLostIdempotencyRace(append, [
-              {
-                type: "events.iterate.com/agents/context-added",
-                payload: {
-                  role: "developer",
-                  content,
-                  actor: { type: "script", executionId },
-                  llmRequestPolicy: { behaviour: "after-current-request" },
-                },
-                idempotencyKey: this.idempotencyKey(`render-script-result@${event.offset}`),
+        blockProcessorWhile(async () => {
+          const content = await renderScriptSettlement({
+            executionId,
+            settlement,
+            historyLimit: state.config.scriptResultHistoryLimit,
+            writeWorkspaceFile: this.deps.writeWorkspaceFile,
+          });
+          if (content === null) return;
+          await this.#appendUnlessLostIdempotencyRace(append, [
+            {
+              type: "events.iterate.com/agents/context-added",
+              payload: {
+                role: "developer",
+                content,
+                actor: { type: "script", executionId },
+                llmRequestPolicy: { behaviour: "after-current-request" },
               },
-            ]);
-          },
-        );
+              idempotencyKey: this.idempotencyKey(`render-script-result@${event.offset}`),
+            },
+          ]);
+        });
         break;
       }
       case "events.iterate.com/stream/error-occurred": {
@@ -397,19 +379,17 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // are the reduce's job). The integration actor demotes the error text
         // to user role at prompt time: error strings are data, not
         // instructions. Per-event render (blocked): delivered once.
-        blockProcessorWhile(
-          "the error is delivered once; a lost render would silently hide it from later turns",
-          () =>
-            append({
-              type: "events.iterate.com/agents/context-added",
-              payload: {
-                role: "developer",
-                content: `Error on stream: ${event.payload.message}`,
-                actor: { type: "integration", name: "stream-error" },
-                llmRequestPolicy: { behaviour: "dont-trigger-request" },
-              },
-              idempotencyKey: this.idempotencyKey(`transcribe-error@${event.offset}`),
-            }),
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/agents/context-added",
+            payload: {
+              role: "developer",
+              content: `Error on stream: ${event.payload.message}`,
+              actor: { type: "integration", name: "stream-error" },
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+            idempotencyKey: this.idempotencyKey(`transcribe-error@${event.offset}`),
+          }),
         );
         break;
       }
@@ -431,30 +411,27 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (contextTokens < thresholdTokens) break;
         const triggerFraction = state.config.compactionTriggerFraction;
         const hasHistory = state.contextItems.some((item) => item.payload.role !== "system");
-        blockProcessorWhile(
-          "compaction stops the world: the checkpoint and later delivery must wait until the summary context item lands",
-          async () => {
-            // A later over-threshold report already in the stream supersedes
-            // this one: summarizing an older prefix now would be thrown away by
-            // the newer request's compaction, so defer to it.
-            if (
-              await this.#laterOverThresholdReportPending({
-                llmRequestOffset: usage.llmRequestOffset,
-                triggerFraction,
-              })
-            ) {
-              return;
-            }
-            await this.#queueCompaction({
-              contextTokens,
-              hasHistory,
+        blockProcessorWhile(async () => {
+          // A later over-threshold report already in the stream supersedes
+          // this one: summarizing an older prefix now would be thrown away by
+          // the newer request's compaction, so defer to it.
+          if (
+            await this.#laterOverThresholdReportPending({
               llmRequestOffset: usage.llmRequestOffset,
-              model: usage.model,
-              thresholdTokens,
-              triggerOffset: event.offset,
-            });
-          },
-        );
+              triggerFraction,
+            })
+          ) {
+            return;
+          }
+          await this.#queueCompaction({
+            contextTokens,
+            hasHistory,
+            llmRequestOffset: usage.llmRequestOffset,
+            model: usage.model,
+            thresholdTokens,
+            triggerOffset: event.offset,
+          });
+        });
         break;
       }
       // created / configured / requested / settled / paused / resumed /

@@ -54,14 +54,12 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract> {
         // Per-event consequence, so the cursor holds: secret/created is
         // delivered exactly once, and the cross-post body (the parsed payload)
         // is deterministic, so a redelivered frame dedupes on the key.
-        blockProcessorWhile(
-          "the created event is delivered once; a dropped cross-post would leave this secret permanently missing from the project root catalog",
-          () =>
-            appendTo("/", {
-              type: "events.iterate.com/secret/created",
-              idempotencyKey: this.idempotencyKey("catalog-created", event),
-              payload: event.payload,
-            }),
+        blockProcessorWhile(() =>
+          appendTo("/", {
+            type: "events.iterate.com/secret/created",
+            idempotencyKey: this.idempotencyKey("catalog-created", event),
+            payload: event.payload,
+          }),
         );
         break;
       // updated / used (and the event-less at-head pass): pure reduction, no

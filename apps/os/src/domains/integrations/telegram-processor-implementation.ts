@@ -174,29 +174,26 @@ export class TelegramProcessor extends StreamProcessor<
           target,
         });
 
-        blockProcessorWhile(
-          "this forward is the only copy of the Telegram message on its way to the agent; a failed append must hold the checkpoint for replay",
-          async () => {
-            if (this.projectId === null) {
-              throw new Error("Telegram router cannot create a project agent without a project id");
-            }
-            await appendTo(
-              streamPath,
-              ...telegramAgentCreationEvents({
-                chatId: target.chatId,
-                connection,
-                messageThreadId: target.messageThreadId,
-                path: streamPath,
-                projectId: this.projectId,
-              }),
-              {
-                type: "events.iterate.com/telegram/webhook-received",
-                idempotencyKey: `telegram:forward-webhook:${event.offset}`,
-                payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
-              },
-            );
-          },
-        );
+        blockProcessorWhile(async () => {
+          if (this.projectId === null) {
+            throw new Error("Telegram router cannot create a project agent without a project id");
+          }
+          await appendTo(
+            streamPath,
+            ...telegramAgentCreationEvents({
+              chatId: target.chatId,
+              connection,
+              messageThreadId: target.messageThreadId,
+              path: streamPath,
+              projectId: this.projectId,
+            }),
+            {
+              type: "events.iterate.com/telegram/webhook-received",
+              idempotencyKey: `telegram:forward-webhook:${event.offset}`,
+              payload: { ...event.payload, ...(replyHint === null ? {} : { replyHint }) },
+            },
+          );
+        });
         return;
       }
       // telegram/created and telegram/message-sent matter through reduce

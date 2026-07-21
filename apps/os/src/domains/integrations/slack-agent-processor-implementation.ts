@@ -143,23 +143,20 @@ export class SlackAgentProcessor extends StreamProcessor<
         // the agent/human-authored summary event.
         const channel = event.payload.channel;
         const connection = birthCertificate.config.connection;
-        blockProcessorWhile(
-          "the binding is a per-event consequence of the route event; a dropped append would leave the agent's thread binding unset",
-          async () => {
-            const name = (await this.deps.fetchSlackChannelName?.({ channel, connection })) ?? null;
-            await append({
-              type: "events.iterate.com/agent/binding-set",
-              idempotencyKey: this.idempotencyKey("binding"),
-              payload: {
-                type: "slack_thread",
-                connection,
-                channelId: channel,
-                threadTs: event.payload.threadTs,
-                ...(name === null ? {} : { channelName: name }),
-              },
-            });
-          },
-        );
+        blockProcessorWhile(async () => {
+          const name = (await this.deps.fetchSlackChannelName?.({ channel, connection })) ?? null;
+          await append({
+            type: "events.iterate.com/agent/binding-set",
+            idempotencyKey: this.idempotencyKey("binding"),
+            payload: {
+              type: "slack_thread",
+              connection,
+              channelId: channel,
+              threadTs: event.payload.threadTs,
+              ...(name === null ? {} : { channelName: name }),
+            },
+          });
+        });
         break;
       }
       case "events.iterate.com/slack/webhook-received": {
@@ -217,12 +214,9 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (!parsed.success) {
           // Interactivity payloads (block_actions, …) and other non-event
           // shapes transcribe as-is, with the default triggering policy.
-          blockProcessorWhile(
-            "the transcription is the webhook's only path into agent context; a dropped append loses the message silently",
-            async () => {
-              await appendAgentMessage();
-            },
-          );
+          blockProcessorWhile(async () => {
+            await appendAgentMessage();
+          });
           break;
         }
 
@@ -237,14 +231,11 @@ export class SlackAgentProcessor extends StreamProcessor<
         // `app_mention` is Slack's dedicated "someone mentioned this app"
         // delivery; treat it like a message for transcription + LLM wake.
         if (eventType !== "message" && eventType !== "app_mention") {
-          blockProcessorWhile(
-            "the transcription is the webhook's only path into agent context; a dropped append loses the fact silently",
-            async () => {
-              await appendAgentMessage({
-                llmRequestPolicy: { behaviour: "dont-trigger-request" },
-              });
-            },
-          );
+          blockProcessorWhile(async () => {
+            await appendAgentMessage({
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            });
+          });
           break;
         }
 
@@ -265,30 +256,27 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (bangCommand != null) {
           // Explicit !commands are directed at the bot even without an
           // @mention.
-          blockProcessorWhile(
-            "the script request must commit before the eyes reaction signals receipt; a dropped append would ack a command that never ran",
-            async () => {
-              await append({
-                type: "events.iterate.com/capability-host/script-run-requested",
-                idempotencyKey: this.idempotencyKey("bang-command", event),
-                payload: {
-                  code: bangCommand.code,
-                  executionId: `slack-bang-command-${event.offset}`,
-                  // Anchored to the webhook's createdAt, never `now`: an
-                  // at-least-once redelivery re-appends the IDENTICAL body and
-                  // dedupes on the key — a `now`-stamped expiry would make the
-                  // re-append a same-key conflict and wedge the frame forever.
-                  expiresAt: Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-                },
-              });
-              await this.#replaceEyesReactionForMessageTarget(
-                birthCertificate.config.connection,
-                target,
-                event,
-                previousState.eyesReactionMessageTs,
-              );
-            },
-          );
+          blockProcessorWhile(async () => {
+            await append({
+              type: "events.iterate.com/capability-host/script-run-requested",
+              idempotencyKey: this.idempotencyKey("bang-command", event),
+              payload: {
+                code: bangCommand.code,
+                executionId: `slack-bang-command-${event.offset}`,
+                // Anchored to the webhook's createdAt, never `now`: an
+                // at-least-once redelivery re-appends the IDENTICAL body and
+                // dedupes on the key — a `now`-stamped expiry would make the
+                // re-append a same-key conflict and wedge the frame forever.
+                expiresAt: Date.parse(event.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+              },
+            });
+            await this.#replaceEyesReactionForMessageTarget(
+              birthCertificate.config.connection,
+              target,
+              event,
+              previousState.eyesReactionMessageTs,
+            );
+          });
           break;
         }
 
@@ -308,48 +296,43 @@ export class SlackAgentProcessor extends StreamProcessor<
         // message goes through WITH an explicit loss note — never a silent
         // drop. Eyes only on mentions — follow-ups after activation wake the
         // agent without the 👀 noise.
-        blockProcessorWhile(
-          "the agent-context append must commit before the eyes reaction signals receipt; a dropped append loses the user's message",
-          async () => {
-            const sharedFiles = readSlackMessageFiles(slackEvent);
-            let files: AgentFileAttachment[] | undefined;
-            let attachmentFailureNote: string | undefined;
-            if (sharedFiles.length > 0 && this.deps.storeSlackFiles != null) {
-              try {
-                files = await this.deps.storeSlackFiles({
-                  connection: birthCertificate.config.connection,
-                  files: sharedFiles,
-                  storageKey: `slack-${event.offset}`,
-                });
-              } catch (error) {
-                console.error("[slack-agent] failed to store shared files", {
-                  count: sharedFiles.length,
-                  error,
-                });
-                attachmentFailureNote = `[${sharedFiles.length} attachment(s) could not be loaded: ${
-                  error instanceof Error ? error.message : String(error)
-                }]`;
-              }
+        blockProcessorWhile(async () => {
+          const sharedFiles = readSlackMessageFiles(slackEvent);
+          let files: AgentFileAttachment[] | undefined;
+          let attachmentFailureNote: string | undefined;
+          if (sharedFiles.length > 0 && this.deps.storeSlackFiles != null) {
+            try {
+              files = await this.deps.storeSlackFiles({
+                connection: birthCertificate.config.connection,
+                files: sharedFiles,
+                storageKey: `slack-${event.offset}`,
+              });
+            } catch (error) {
+              console.error("[slack-agent] failed to store shared files", {
+                count: sharedFiles.length,
+                error,
+              });
+              attachmentFailureNote = `[${sharedFiles.length} attachment(s) could not be loaded: ${
+                error instanceof Error ? error.message : String(error)
+              }]`;
             }
-            await appendAgentMessage({
-              ...(attachmentFailureNote === undefined
-                ? {}
-                : { contentNote: attachmentFailureNote }),
-              ...(files == null ? {} : { files }),
-              ...(shouldTriggerLlm
-                ? {}
-                : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
-            });
-            if (mentioned) {
-              await this.#replaceEyesReactionForMessageTarget(
-                birthCertificate.config.connection,
-                target,
-                event,
-                previousState.eyesReactionMessageTs,
-              );
-            }
-          },
-        );
+          }
+          await appendAgentMessage({
+            ...(attachmentFailureNote === undefined ? {} : { contentNote: attachmentFailureNote }),
+            ...(files == null ? {} : { files }),
+            ...(shouldTriggerLlm
+              ? {}
+              : { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
+          });
+          if (mentioned) {
+            await this.#replaceEyesReactionForMessageTarget(
+              birthCertificate.config.connection,
+              target,
+              event,
+              previousState.eyesReactionMessageTs,
+            );
+          }
+        });
         break;
       }
       // slack-agent/created: existence marker, reduce-only.
@@ -363,10 +346,7 @@ export class SlackAgentProcessor extends StreamProcessor<
     // unexpected cosmetic failures are reported once and settled so they
     // cannot wedge the durable agent pipeline.
     if (delivery.caughtUp) {
-      blockProcessorWhile(
-        "the at-head repaint drains presence/title memos that would be lost if this frame committed without painting",
-        () => this.#repaintPresence(args),
-      );
+      blockProcessorWhile(() => this.#repaintPresence(args));
     }
   }
 
