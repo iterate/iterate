@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-export class TodoApp extends DurableObject {
+export class TodoApp extends DurableObject<unknown> {
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env);
     this.ctx.storage.sql.exec(`

@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-export class GuestbookApp extends DurableObject {
+export class GuestbookApp extends DurableObject<unknown> {
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env);
     this.ctx.storage.sql.exec(`

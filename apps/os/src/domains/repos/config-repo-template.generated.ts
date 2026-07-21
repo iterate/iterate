@@ -231,7 +231,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// worker. State survives across requests under its durableWorkerKey, and\n" +
       "// every open page gets live updates over a WebSocket. The /ws upgrade's 101\n" +
       "// response reaches this Durable Object over the platform's fetch-native\n" +
-      "// worker lane (the ProjectWorker router above, via `fetchDynamicWorker`) —\n" +
+      "// worker lane (the ProjectWorker router, via `fetchDynamicWorker`) —\n" +
       "// an `app.fetch(req)` RPC method call could not carry a socket. Copy this\n" +
       "// shape for anything real-time.\n" +
       "export class CounterApp extends IterateDurableObject {\n" +
@@ -318,8 +318,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  async current(): Promise<number> {\n" +
       "    return this.ctx.storage.kv.get<number>(\"n\") ?? 0;\n" +
       "  }\n" +
-      "}\n" +
-      "\n",
+      "}\n",
   },
   {
     path: "apps/counter/tsconfig.json",
@@ -452,7 +451,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "import { DurableObject } from \"cloudflare:workers\";\n" +
       "\n" +
-      "export class GuestbookApp extends DurableObject {\n" +
+      "export class GuestbookApp extends DurableObject<unknown> {\n" +
       "  constructor(ctx: DurableObjectState, env: unknown) {\n" +
       "    super(ctx, env);\n" +
       "    this.ctx.storage.sql.exec(`\n" +
@@ -807,7 +806,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return events.slice(-25).reverse();\n" +
       "  }\n" +
       "}\n" +
-      "\n" +
       "\n" +
       "function escapeHtml(value: string): string {\n" +
       "  return value\n" +
@@ -1558,7 +1556,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "import { DurableObject } from \"cloudflare:workers\";\n" +
       "\n" +
-      "export class TodoApp extends DurableObject {\n" +
+      "export class TodoApp extends DurableObject<unknown> {\n" +
       "  constructor(ctx: DurableObjectState, env: unknown) {\n" +
       "    super(ctx, env);\n" +
       "    this.ctx.storage.sql.exec(`\n" +
@@ -1702,7 +1700,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
-      "import { IterateWorkerEntrypoint, type StatefulDynamicWorkerRef, type StreamEvent } from \"iterate/sdk\";\n" +
+      "import {\n" +
+      "  IterateWorkerEntrypoint,\n" +
+      "  type StatefulDynamicWorkerRef,\n" +
+      "  type StreamEvent,\n" +
+      "} from \"iterate/sdk\";\n" +
       "import {\n" +
       "  githubConnectionStreamPath,\n" +
       "  reviewBotSubscriptionEvents,\n" +
