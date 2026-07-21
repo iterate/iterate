@@ -144,8 +144,8 @@ documents (HTMLRewriter, appended before `</body>`). Injection is skipped for
 non-documents, encoded bodies, responses with CSP, and responses opting out
 through `x-iterate-overlay`; the seeded basic apps intentionally omit CSP so
 the floating corner mark remains visible. The same streaming transform adds
-an inverted Iterate favicon before `</head>` when the app has no `rel=icon`
-link of its own. Its reserved same-origin asset lives at
+an inverted Iterate favicon at document end when the app has no `rel=icon`
+link anywhere in its document. Its reserved same-origin asset lives at
 `/.iterate/favicon.svg`, so normal self-only CSPs accept it without embedding
 the full SVG in every document. On the `/prj_<id>` path lane, the link keeps
 that browser-visible prefix while dispatch serves the rewritten project path.

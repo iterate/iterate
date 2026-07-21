@@ -51,7 +51,7 @@ test(
 
     const customIconSource = original!.content.replace(
       "        <html>\n          <body>",
-      '        <html>\n          <head><link rel="shortcut ICON" href="/my-icon.svg"></head>\n          <body>',
+      '        <html>\n          <body>\n            <link rel="shortcut ICON" href="/my-icon.svg">',
     );
     expect(customIconSource).not.toBe(original!.content);
     const customized = await project.repo.commitFiles({
@@ -63,6 +63,8 @@ test(
       "the worker with its own favicon",
     );
     const customIconHomepage = await customIcon.response.text();
+    // A body icon is valid HTML and can appear after the transform has seen
+    // </head>; the app's icon must still suppress the fallback.
     expect(customIconHomepage).toContain('rel="shortcut ICON" href="/my-icon.svg"');
     expect(customIconHomepage).not.toContain("data-iterate-default-favicon");
 

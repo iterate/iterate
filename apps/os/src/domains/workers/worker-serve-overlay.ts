@@ -325,44 +325,24 @@ export function workerOverlayDecision(request: Request, response: Response): str
 
 /**
  * Ingress's one call: dress a project-worker response in the platform's
- * user-space chrome. HTML documents get the default favicon before </head>
- * unless the app supplied one, plus (when allowed) the widget before </body>.
- * HTMLRewriter keeps the transformation streaming; everything else passes
- * through untouched.
+ * user-space chrome. HTML documents get the default favicon at document end
+ * unless the app supplied one anywhere, plus (when allowed) the widget before
+ * </body>. HTMLRewriter keeps the transformation streaming; everything else
+ * passes through untouched.
  */
 export function applyProjectWorkerOverlay(request: Request, response: Response): Response {
   if (workerHtmlDocumentCommit(request, response) === null) return response;
   const commitOid = workerOverlayDecision(request, response);
   const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
   let hasFavicon = false;
-  let insertedFavicon = false;
-  let sawHead = false;
   const rewriter = new HTMLRewriter()
     .on("link", {
       element(element) {
         hasFavicon ||= relIncludesIcon(element.getAttribute("rel"));
       },
     })
-    .on("head", {
-      element(element) {
-        sawHead = true;
-        element.onEndTag((endTag) => {
-          if (!hasFavicon) {
-            endTag.before(workerDefaultFaviconHtml(urlPrefix), { html: true });
-            insertedFavicon = true;
-          }
-        });
-      },
-    })
     .on("body", {
       element(element) {
-        // A head element is optional HTML. When the app omitted it, placing
-        // the link immediately before body lets the browser put it in the
-        // implied head without buffering the document.
-        if (!sawHead && !hasFavicon) {
-          element.before(workerDefaultFaviconHtml(urlPrefix), { html: true });
-          insertedFavicon = true;
-        }
         if (commitOid !== null) {
           element.append(workerOverlayHtml({ commitOid, kind: "live" }), { html: true });
         }
@@ -370,9 +350,10 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
     })
     .onDocument({
       end(end) {
-        // Keep even malformed/minimal HTML branded when it has neither an
-        // explicit head nor body. Browsers accept rel=icon at document end.
-        if (!hasFavicon && !insertedFavicon) {
+        // Wait until every app-authored link has been observed: rel=icon is
+        // legal in the body too, and the app's icon always wins. Browsers
+        // accept the fallback link at document end even without head/body.
+        if (!hasFavicon) {
           end.append(workerDefaultFaviconHtml(urlPrefix), { html: true });
         }
       },
