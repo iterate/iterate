@@ -1,16 +1,13 @@
 import { Suspense, useEffect } from "react";
-import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { ProjectScope } from "iterate/react";
+import { ClientOnly, Outlet, createFileRoute } from "@tanstack/react-router";
+import { ProjectScope, useIterateSession } from "iterate/react";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug")({
-  // <ProjectScope> pre-warms the one itx socket, which dials a WebSocket and
-  // THROWS on the server (never SSRs). `ssr: false` here makes this match — and,
-  // in TanStack Router, every child match (load-matches.ts forces
-  // `parentMatch.ssr === false` down the tree) — client-only. The project itself
-  // is read SSR-safe through a server function (itx is client-only), not itx.
-  ssr: false,
+  // Project identity is SSR-safe through a server function. Individual leaves
+  // that require browser-only itx rendering opt out themselves; keeping that
+  // boundary off the parent lets simple project pages render immediately.
   beforeLoad: async ({ params }) => ({
     project: await getProjectBySlugServerFn({ data: { slug: params.projectSlug } }),
   }),
@@ -27,17 +24,26 @@ function ProjectLayout() {
   useEffect(() => {
     document.cookie = `iterate_recent_project=${encodeURIComponent(project.slug)}; Path=/; Max-Age=31536000; SameSite=Lax`;
   }, [project.slug]);
-  // The whole tab shares ONE itx session socket; <ProjectScope> carries this
-  // project's slug so `useItx()` / `useItxQuery()` resolve without an explicit
-  // argument (the browser passes the URL slug straight through, no slug→id hop)
-  // AND pre-warms the socket in its own boundary so pages paint immediately.
-  // Ordinary pages need no boundary of their own — the router wraps each match
-  // in <Suspense>; this labelled one is the layout's own safety net.
+  // ProjectScope is a server-safe slug context. The whole tab still shares ONE
+  // itx session socket; pre-warm that browser-only resource in an invisible,
+  // narrowly scoped boundary so it cannot force the project route tree out of
+  // SSR. The router wraps each route match in <Suspense>; this labelled outer
+  // boundary remains the layout's safety net for leaf itx consumers.
   return (
     <Suspense fallback={<ItxResourceLoading label="project" />}>
       <ProjectScope slug={project.slug}>
+        <ClientOnly fallback={null}>
+          <Suspense fallback={null}>
+            <ProjectSessionPrewarm />
+          </Suspense>
+        </ClientOnly>
         <Outlet />
       </ProjectScope>
     </Suspense>
   );
+}
+
+function ProjectSessionPrewarm() {
+  useIterateSession();
+  return null;
 }

@@ -27,7 +27,7 @@
  *   LIVE STATE  useLiveState((itx) => itx.liveState, selector)  project snapshot + diffs
  *               useIterateSessionLiveState(...)                 session snapshot + diffs
  *   SUBSCRIBE   useItxSubscription((itx) => handle, deps)   raw event stream (escape hatch)
- *   MOUNT       <ProjectScope slug>   ambient project + socket pre-warm (no provider)
+ *   MOUNT       <ProjectScope slug>   ambient project context (no socket provider)
  *
  *   ACTIONS (mutations) — imperative on the handle, no extra primitive:
  *     const itx = useItx();
@@ -53,7 +53,6 @@
 import {
   createContext,
   createElement,
-  Suspense,
   use,
   useCallback,
   useContext,
@@ -146,31 +145,20 @@ export function useItx(explicitSlug?: string): ProjectStub {
   return projectStubFor(useIterateSession(), slug);
 }
 
-function SessionPrewarm() {
-  useIterateSession();
-  return null;
-}
-
 /**
- * Set the ambient project for a subtree AND pre-warm the one shared socket. It
- * carries the URL slug so `useItx()` / `useItxQuery()` resolve without an
- * explicit argument, and dials the socket in a SIBLING null-fallback boundary so
- * children paint immediately (each component that reads through itx suspends into
- * its own nearest boundary — usually the router's per-route `<Suspense>`).
+ * Set the ambient project for a subtree. It carries the URL slug so `useItx()` /
+ * `useItxQuery()` resolve without an explicit argument, but deliberately does
+ * not dial the socket: the context is renderer-agnostic and safe to render on
+ * the server.
  *
- * It never SSRs (dialing throws on the server), so mount it under an
- * `ssr: false` route (or `<ClientOnly>`). No provider wraps it: the socket is
- * module-global and every hook dials it lazily, so a component can use itx with
- * no `<ProjectScope>` above it (the sidebar, ⌘K, admin) — the scope is only the
- * ambient-slug convenience.
+ * Browser applications that want to pre-warm the module-global socket can
+ * render `useIterateSession()` in their own client-only Suspense boundary. Every
+ * itx hook still dials lazily, so a component can use itx with no
+ * `<ProjectScope>` above it (the sidebar, ⌘K, admin) — the scope is only the
+ * ambient-slug convenience, not a connection provider.
  */
 export function ProjectScope({ slug, children }: { slug: string; children?: ReactNode }) {
-  return createElement(
-    ProjectScopeContext,
-    { value: slug },
-    createElement(Suspense, { fallback: null }, createElement(SessionPrewarm)),
-    children,
-  );
+  return createElement(ProjectScopeContext, { value: slug }, children);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
