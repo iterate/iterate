@@ -20,6 +20,7 @@ export {
   reconnectIterateSession,
   releaseItxSubscription,
   reportTransportSuspicion,
+  retryFailedIterateSession,
   watchItxSubscription,
   type Itx,
   type ItxLiveSubscriptionHandle,

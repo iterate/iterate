@@ -8,6 +8,7 @@ import {
   connectItx,
   disconnectIterateSession,
   reconnectIterateSession,
+  retryFailedIterateSession,
   type SessionStub,
 } from "iterate/react";
 import { getAccessToken } from "./auth.ts";
@@ -43,4 +44,5 @@ function configure(baseUrl: string): void {
       token: await getAccessToken(baseUrl, { forceRefresh }),
     }),
   });
+  retryFailedIterateSession();
 }

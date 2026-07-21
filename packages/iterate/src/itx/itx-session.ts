@@ -664,6 +664,16 @@ export function reconnectIterateSession(): void {
 }
 
 /**
+ * Revive only a generation parked by a terminal authentication failure. This
+ * is the imperative retry boundary for query/mutation clients: calling it
+ * before a repeated operation lets refreshed credentials dial again without
+ * disturbing a healthy or merely reconnecting session.
+ */
+export function retryFailedIterateSession(): void {
+  if (current?.failed) reconnectIterateSession();
+}
+
+/**
  * Release the current transport and authority without reconnecting. Intended
  * for process-local lifecycle boundaries such as signing out of a native app;
  * mounted consumers should be removed in the same transition. The explicit

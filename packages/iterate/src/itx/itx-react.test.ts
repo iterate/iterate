@@ -514,6 +514,21 @@ describe("itx session socket", () => {
     container.remove();
   });
 
+  test("an imperative retry revives a parked terminal auth failure", async () => {
+    const { connectIterateSession, retryFailedIterateSession } = await import("./itx-react.ts");
+    control.authError = new Error("session token expired");
+    const first = connectIterateSession();
+    FakeWebSocket.instances[0]!.fire("open");
+    await expect(first).rejects.toThrow(/token expired/);
+
+    control.authError = undefined;
+    retryFailedIterateSession();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const retried = connectIterateSession();
+    await openLatest();
+    await expect(retried).resolves.toBe(control.lastRoot);
+  });
+
   test("terminal auth on RECONNECT drops the dead session (no zombie stubs) and surfaces the error", async () => {
     // Authority loss mid-session: the live socket dies, the redial's
     // authenticate rejects terminally (claims revoked / signed out elsewhere).
@@ -712,7 +727,7 @@ describe("useItxSubscription liveness", () => {
     await harness.unmount();
   });
 
-  test("a subscribe call that never settles times out, reports suspicion, and retries", async () => {
+  test("a subscribe timeout keeps loaded consumers connecting while it retries", async () => {
     // A transport can disappear after the server accepted subscribe but before
     // the handle arrives — no handle means no watchdog, so without the timeout
     // the UI would sit "connecting" forever. The hook REPORTS the suspicion
@@ -730,7 +745,7 @@ describe("useItxSubscription liveness", () => {
 
     expect(harness.status()).toBe("connecting");
     await harness.advance(15_000); // SUBSCRIBE_TIMEOUT_MS
-    expect(harness.status()).toBe("error");
+    expect(harness.status()).toBe("connecting");
     expect(FakeWebSocket.instances).toHaveLength(1); // alive socket NOT torn down
 
     await harness.advance(10_000); // SUBSCRIBE_RETRY_MS
@@ -842,7 +857,7 @@ describe("useItxSubscription liveness", () => {
       if (attempts === 1) throw new Error("Peer closed WebSocket: 1006 ");
       return { ping: () => true, unsubscribe: vi.fn() };
     });
-    expect(harness.status()).toBe("error");
+    expect(harness.status()).toBe("connecting");
     await harness.advance(10_000); // SUBSCRIBE_RETRY_MS
     expect(harness.subscribe).toHaveBeenCalledTimes(2);
     expect(harness.status()).toBe("live");
