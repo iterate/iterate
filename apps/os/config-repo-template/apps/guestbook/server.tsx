@@ -1,3 +1,4 @@
+import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
 import {
   LiveStateRpcTarget,
   RpcTarget,
@@ -19,7 +20,7 @@ import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
 const guestbookStreamPath = "/guestbook";
 
 /** The processor property crosses Workers RPC before its wake method is called. */
-class GuestbookProcessorRpcTarget extends RpcTarget {
+class GuestbookProcessorRpcTarget extends WorkersRpcTarget {
   constructor(
     private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,
   ) {

@@ -430,6 +430,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/guestbook/server.tsx",
     content:
+      "import { RpcTarget as WorkersRpcTarget } from \"cloudflare:workers\";\n" +
       "import {\n" +
       "  LiveStateRpcTarget,\n" +
       "  RpcTarget,\n" +
@@ -451,7 +452,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "const guestbookStreamPath = \"/guestbook\";\n" +
       "\n" +
       "/** The processor property crosses Workers RPC before its wake method is called. */\n" +
-      "class GuestbookProcessorRpcTarget extends RpcTarget {\n" +
+      "class GuestbookProcessorRpcTarget extends WorkersRpcTarget {\n" +
       "  constructor(\n" +
       "    private readonly registryFor: (projectId: string) => StreamProcessorRegistry<GuestbookState>,\n" +
       "  ) {\n" +
