@@ -67,7 +67,7 @@
  *    its healthy successor. {@link reconnectIterateSession} is the separate,
  *    deliberate *semantic* reset (new claims after create/unlock).
  */
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
 import type {
   ItxAuthCredentials,
   Project,

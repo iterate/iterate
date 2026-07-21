@@ -26,7 +26,7 @@ const control = vi.hoisted(() => ({
 // session handle — the code must await it and publish the RESOLVED identity
 // (resolving a native promise with the thenable itself would assimilate).
 // Liveness calls the resolved Session's __describe(), never authenticate again.
-vi.mock("capnweb", () => ({
+vi.mock("@iterate-com/capnweb", () => ({
   newWebSocketRpcSession: (ws: { url: string }) => {
     const pendingCalls = new Set<PromiseWithResolvers<never>>();
     const disposeRpcRoot = vi.fn(() => {

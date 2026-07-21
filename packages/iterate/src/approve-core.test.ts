@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 import type { Stream, StreamEvent } from "./itx-api.generated.ts";
 import { awaitSettlement, EVENT, reconcileBacklog } from "./approve-core.ts";
 

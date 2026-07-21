@@ -5,7 +5,7 @@ import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";

@@ -111,10 +111,10 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
+    "@iterate-com/capnweb": "^0.10.0",
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@tanstack/react-query": "^5.101.2",
-    "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",

@@ -4,7 +4,7 @@
 // and pushes minimal diffs to retained RPC subscribers. No socket, no keeper
 // — a Worker or Durable Object can import it without dragging the browser
 // session machinery into its bundle.
-import { RpcTarget } from "capnweb";
+import { RpcTarget } from "@iterate-com/capnweb";
 import type { LiveState as LiveStateEngine, LiveStateSubscription } from "./engine.ts";
 import type { LiveUpdate } from "./protocol.ts";
 import { isThenable } from "./retain.ts";
