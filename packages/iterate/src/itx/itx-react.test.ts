@@ -623,6 +623,27 @@ describe("itx session socket", () => {
   });
 });
 
+describe("ProjectScope", () => {
+  test("renders on the server without trying to connect", async () => {
+    const [{ ProjectScope }, React, { renderToString }] = await Promise.all([
+      import("./itx-react.ts"),
+      import("react"),
+      import("react-dom/server"),
+    ]);
+
+    const html = renderToString(
+      React.createElement(
+        ProjectScope,
+        { slug: "acme" },
+        React.createElement("main", null, "acme"),
+      ),
+    );
+
+    expect(html).toBe("<main>acme</main>");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+});
+
 // The liveness watchdog is module-private; these tests drive it through the
 // public useItxSubscription hook with a real React tree — which also covers the
 // epoch/re-subscribe integration the bare watchdog can't show.

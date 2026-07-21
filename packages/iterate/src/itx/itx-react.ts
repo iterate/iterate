@@ -153,8 +153,10 @@ export function useItx(explicitSlug?: string): ProjectStub {
  * root. The project-specific layer is deliberately only a connection factory;
  * live-state ownership and recovery live in `iterate/live-state/react`.
  *
- * The duplicate belongs to the provider; the lower-level session keeper keeps
- * owning and reconnecting the shared socket beneath it.
+ * The provider dials in an effect, never during render, so this context remains
+ * safe to render on the server. The duplicate belongs to the provider; the
+ * lower-level session keeper keeps owning and reconnecting the shared socket
+ * beneath it.
  */
 export function ProjectScope({ slug, children }: { slug: string; children?: ReactNode }) {
   const makeConnection = useCallback(async () => (await connectItx(slug)).dup(), [slug]);
