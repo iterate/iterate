@@ -69,13 +69,13 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
-    // processor; the payload's processorSlug names which). MUST be consumed
-    // (the runner throws at construction otherwise): appended when an
-    // incarnation died owing work — a blocking inbound-mail transcription lost
-    // to a simultaneous Agent+Stream DO death — the append cold-boots the
-    // Stream DO so the unacknowledged frame redelivers and the blocking
-    // transcription re-runs. Never emitted by the processor: the recovery
-    // adapter appends it raw, as the runtime speaking.
+    // processor; the payload's processorSlug names which). This contract
+    // currently consumes it, but does not react to the fact itself; an
+    // unconsumed tail would receive the same eventless at-head turn. Its append
+    // cold-boots the Stream DO so an unacknowledged inbound-mail frame
+    // redelivers after a simultaneous Agent+Stream DO death. Never emitted by
+    // the processor: the recovery adapter appends it raw, as the runtime
+    // speaking.
     "events.iterate.com/stream/processor-revived",
   ],
   emits: ["events.iterate.com/agents/context-added", "events.iterate.com/agent/binding-set"],

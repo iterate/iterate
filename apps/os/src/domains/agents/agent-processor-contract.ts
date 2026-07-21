@@ -550,9 +550,10 @@ export const AgentProcessorContract = defineProcessorContract({
     // Every error on the stream — the processor's own emissions, the runner's
     // poison skips, anything else — is transcribed into model-visible context.
     "events.iterate.com/stream/error-occurred",
-    // The platform revival fact: its ordinary delivery at head is the
-    // guaranteed turn where processEvent finds and re-runs orphaned work after
-    // an eviction.
+    // The platform revival fact. This contract currently consumes it, but does
+    // not react to the fact itself; an unconsumed tail would receive the same
+    // eventless at-head turn that finds and re-runs orphaned work after an
+    // eviction.
     "events.iterate.com/stream/processor-revived",
   ],
   emits: [
