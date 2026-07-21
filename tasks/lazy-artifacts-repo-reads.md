@@ -48,7 +48,7 @@ unbounded for the read path.
 2. **Read-through layer in the Repo DO**: oid-keyed tree manifests in DO
    SQLite (cache forever), blob LRU with R2 spill past the inline threshold,
    `readFileAt(commitOid, path)` / `listAt(commitOid, prefix)` backing the
-   existing `readFile`/`listFiles`/`listTaskFiles` surface. The durable
+   existing `readFile`/`listFiles` surface. The durable
    head-tree cache remains as the hot tier for small repos (the task board's
    fan-out globs should not become per-file REST calls); large repos skip
    materialization entirely and go lazy.
@@ -66,7 +66,7 @@ unbounded for the read path.
 ## Acceptance
 
 - A repo larger than the isolate ceiling can be created/imported and served:
-  `readFile`/`listFiles`/`listTaskFiles` at HEAD work without any full clone
+  `readFile`/`listFiles` at HEAD work without any full clone
   or materialization.
 - Steady-state reads issue zero Artifacts requests for unchanged oids.
 - The existing head-tree cache still serves small/hot repos unchanged.

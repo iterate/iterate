@@ -45,7 +45,6 @@ function makeHarness() {
           throw new Error("must not sync a push in this scenario");
         },
         observeArtifactPush: () => {},
-        taskChangesForArtifactPush: async () => [],
       }),
   });
   return { ...harness, createEmpty };

@@ -1,18 +1,17 @@
 // The repo processor CONTRACT. Self-contained: state schema, events,
 // consumes/emits, deps — schemas are spelled INLINE in the contract; the
 // schemas it genuinely uses twice (the creation request, the birth
-// certificate, the creation failure, the GitHub link, the task-change
-// payload, the import-request coordinates) are hoisted functions defined
-// below the contract, so the contract still opens the file.
+// certificate, the creation failure, the GitHub link, the import-request
+// coordinates) are hoisted functions defined below the contract, so the
+// contract still opens the file.
 //
 // One stream per repo (`/repos/<name>`). The events tell the repo's whole
 // story: the creation saga (`repos/create-requested` → `repos/created` |
 // `repos/create-failed` — the terminal certificate carries the backing
 // Cloudflare Artifacts coordinates), Git pushes observed through the
 // Artifacts event queue (`repo/cloudflare-artifact-event-received` →
-// `repo/commit-completed` → `repo/task-*` facts), and the optional GitHub
-// mirror: link lifecycle, mirror-push outcomes, and the durable
-// default-branch import obligation
+// `repo/commit-completed`), and the optional GitHub mirror: link lifecycle,
+// mirror-push outcomes, and the durable default-branch import obligation
 // (`github-import-requested/started/completed/failed`) opened by cross-posted
 // GitHub push webhooks.
 
@@ -22,9 +21,8 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.5.0",
-  description:
-    "Projects repo lifecycle, Git activity, task changes, and linked GitHub default-branch imports.",
+  version: "0.6.0",
+  description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     createRequest: repoCreateRequestSchema().nullable().default(null).meta({
       description:
@@ -166,18 +164,6 @@ export const RepoProcessorContract = defineProcessorContract({
         branch: z.string().trim().min(1).meta({ description: "The branch that advanced." }),
         commitOid: z.string().trim().min(1).meta({ description: "The new branch head." }),
       }),
-    },
-    "events.iterate.com/repo/task-created": {
-      description: "A Markdown task file was created on the repo's default branch.",
-      payloadSchema: taskFileChangedSchema(),
-    },
-    "events.iterate.com/repo/task-updated": {
-      description: "A Markdown task file changed on the repo's default branch.",
-      payloadSchema: taskFileChangedSchema(),
-    },
-    "events.iterate.com/repo/task-deleted": {
-      description: "A Markdown task file was deleted from the repo's default branch.",
-      payloadSchema: taskFileChangedSchema(),
     },
     "events.iterate.com/repo/github-link-configured": {
       description:
@@ -358,9 +344,6 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/commit-completed",
-    "events.iterate.com/repo/task-created",
-    "events.iterate.com/repo/task-updated",
-    "events.iterate.com/repo/task-deleted",
     "events.iterate.com/repo/github-import-requested",
     "events.iterate.com/repo/github-import-started",
     "events.iterate.com/repo/github-import-completed",
@@ -509,24 +492,6 @@ function githubLinkSchema() {
           "GitHub's numeric repository id — the identity webhook deliveries are matched on " +
           "(names can be reused; ids cannot).",
       }),
-  });
-}
-
-/** One task-file change on the default branch — used by all three
- * repo/task-created|updated|deleted facts. */
-function taskFileChangedSchema() {
-  return z.object({
-    branch: z
-      .string()
-      .trim()
-      .min(1)
-      .meta({ description: "The branch the change landed on (always the default branch)." }),
-    commitOid: z
-      .string()
-      .trim()
-      .min(1)
-      .meta({ description: "The commit that made the change durable." }),
-    path: z.string().trim().min(1).meta({ description: "The task file's repo-relative path." }),
   });
 }
 
