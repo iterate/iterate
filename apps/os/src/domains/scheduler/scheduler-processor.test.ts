@@ -96,33 +96,22 @@ function makeSchedulerHarness(options?: {
     stream: new MemoryStream("/scheduler/primary"),
     progress: makeMemoryProgressStore(),
   };
-  const live = { scheduler: undefined as unknown as SchedulerProcessor };
-  const harness = makeProcessorHarness<SchedulerProcessorContract>({
-    createProcessor: (deps) => {
-      live.scheduler = new SchedulerProcessor({
+  const harness = makeProcessorHarness<SchedulerProcessorContract, SchedulerProcessor>({
+    createProcessor: (deps) =>
+      new SchedulerProcessor({
         ...deps,
         dynamicWorkers: { invokeCapability },
         readAlarm: async () => null,
         repointAlarm,
-        // Runner-backed committed reads, wired exactly as the hosting DO
-        // wires registry.reads(...) — late-bound closures so every
-        // incarnation reads the CURRENT runner (harness.runner() tracks
-        // crash()).
-        reads: {
-          snapshot: () => harness.runner().snapshot(),
-          waitUntilEvent: (input) => harness.runner().waitUntilEvent(input),
-        },
-      });
-      return live.scheduler;
-    },
+        reads: deps.reads,
+      }),
     substrate,
   });
   return {
     ...harness,
     invokeCapability,
     repointAlarm,
-    /** The CURRENT incarnation's processor — what the DO's alarm() talks to. */
-    scheduler: () => live.scheduler,
+    scheduler: harness.processor,
   };
 }
 
@@ -186,8 +175,7 @@ describe("SchedulerProcessor reduce", () => {
         },
       },
     ]);
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(2));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(2);
 
     expect(h.invokeCapability).not.toHaveBeenCalled();
     expect(h.events(COMPLETED).at(-1)!.payload).toMatchObject({
@@ -218,8 +206,7 @@ describe("SchedulerProcessor reduce", () => {
       const { event } = await h.scheduler().buildManualTriggerEvent("impossible");
       await h.stream.append(event);
     });
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.state().schedules["impossible"]).toMatchObject({ nextTriggerAt: null });
   });
 
@@ -265,10 +252,8 @@ describe("triggering", () => {
       h.scheduler().triggerDue(),
     );
 
-    await vi.waitFor(async () => {
-      await expect(h.scheduler().getRuntimeState()).resolves.toMatchObject({
-        runtime: { inflightExecutions: [expect.any(String)] },
-      });
+    await expect(h.scheduler().getRuntimeState()).resolves.toMatchObject({
+      runtime: { inflightExecutions: [expect.any(String)] },
     });
     const invocation = recordedSpans.find((span) => span.name === "scheduler action invocation");
     expect(invocation).toMatchObject({
@@ -277,8 +262,8 @@ describe("triggering", () => {
     expect(activeSpans.has(invocation!)).toBe(true);
 
     finishAction();
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
     await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(activeSpans.has(invocation!)).toBe(false);
     expect(invocation).toMatchObject({
       attributes: { "iterate.scheduler.action_outcome": "succeeded" },
@@ -319,8 +304,8 @@ describe("triggering", () => {
     // And once state advanced, the occurrence is spent for good.
     await h.scheduler().triggerDue();
     expect(h.events(REQUESTED)).toHaveLength(1);
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
     await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
   });
 
   it("a foreign event occupying an occurrence key is surfaced loudly, never passed off as the trigger", async () => {
@@ -365,15 +350,13 @@ describe("triggering", () => {
       }) satisfies SchedulerEventInput;
 
     await h.play(["append", CREATED, oneShot()], () => h.scheduler().triggerDue());
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.state().schedules).toEqual({});
 
     // Re-applying the identical schedule (declarative clients do this) must
     // trigger again, not dedupe against the spent incarnation's request.
     await h.play(["advanceTime", 10_000], ["append", oneShot()], () => h.scheduler().triggerDue());
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(2));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(2);
     expect(h.events(REQUESTED)).toHaveLength(2);
   });
 
@@ -390,8 +373,7 @@ describe("triggering", () => {
       ["advanceTime", 61_000],
       () => h.scheduler().triggerDue(),
     );
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
 
     expect(h.invokeCapability).toHaveBeenCalledTimes(1);
     const call = vi.mocked(h.invokeCapability).mock.calls[0]![0];
@@ -441,8 +423,7 @@ describe("triggering", () => {
     await h.play(["append", CREATED, setEvent("report")], ["advanceTime", 61_000], () =>
       h.scheduler().triggerDue(),
     );
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
 
     expect(h.events(COMPLETED)[0]!.payload).toMatchObject({
       error: "script exploded",
@@ -463,20 +444,17 @@ describe("triggering", () => {
     await h.play(() => h.scheduler().triggerDue());
     // The script ran, its completion append failed, and crucially nothing
     // recorded a bogus outcome=failed for a script that succeeded.
-    await vi.waitFor(() => expect(h.invokeCapability).toHaveBeenCalledTimes(1));
+    expect(h.invokeCapability).toHaveBeenCalledTimes(1);
     expect(h.events(COMPLETED)).toHaveLength(0);
-    await vi.waitFor(() => expect(Object.keys(h.state().pendingTriggers)).toHaveLength(1));
-    await vi.waitFor(async () => {
-      await expect(h.scheduler().getRuntimeState()).resolves.toMatchObject({
-        runtime: { inflightExecutions: [] },
-      });
+    expect(Object.keys(h.state().pendingTriggers)).toHaveLength(1);
+    await expect(h.scheduler().getRuntimeState()).resolves.toMatchObject({
+      runtime: { inflightExecutions: [] },
     });
 
     // Next wake: the sweep re-launches (at-least-once) and the append heals.
     h.stream.failAppendsOfType = undefined;
     await h.play(() => h.scheduler().triggerDue());
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.invokeCapability).toHaveBeenCalledTimes(2);
     expect(h.events(COMPLETED)[0]!.payload).toMatchObject({ outcome: "succeeded" });
   });
@@ -491,8 +469,7 @@ describe("triggering", () => {
     });
     // One frame: requested + cancelled commit before the execution's barrier lifts.
     await h.settle();
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
 
     expect(h.invokeCapability).not.toHaveBeenCalled();
     expect(h.events(COMPLETED)[0]!.payload).toMatchObject({ key: "report", outcome: "skipped" });
@@ -508,8 +485,7 @@ describe("triggering", () => {
     await h.scheduler().triggerDue(); // requested appended, not yet delivered
     const [reset] = await h.stream.append(setEvent("report", "async () => 'v2'"));
     await h.settle();
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
 
     const call = vi.mocked(h.invokeCapability).mock.calls[0]![0];
     expect(
@@ -543,8 +519,7 @@ describe("triggering", () => {
       ["advanceTime", 31_000],
       () => h.scheduler().triggerDue(),
     );
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.state().schedules).toEqual({});
   });
 
@@ -559,8 +534,7 @@ describe("triggering", () => {
     await h.play(async () => {
       await h.stream.append(event);
     });
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.events(COMPLETED)[0]!.payload).toMatchObject({
       executionId,
       outcome: "succeeded",
@@ -589,13 +563,12 @@ describe("recovery and alarm derivation", () => {
     await h.play(["append", CREATED, setEvent("report")], ["advanceTime", 61_000], () =>
       h.scheduler().triggerDue(),
     );
-    await vi.waitFor(() => expect(invocations).toBe(1));
+    expect(invocations).toBe(1);
     expect(Object.keys(h.state().pendingTriggers)).toHaveLength(1);
     expect(h.events(COMPLETED)).toHaveLength(0);
 
     await h.play(["crash"], ["advanceTime", 1_000], () => h.scheduler().triggerDue());
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.events(COMPLETED)[0]!.payload).toMatchObject({
       key: "report",
       outcome: "succeeded",
@@ -608,8 +581,7 @@ describe("recovery and alarm derivation", () => {
     await h.play(["append", CREATED, setEvent("report")], ["advanceTime", 61_000], () =>
       h.scheduler().triggerDue(),
     );
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
-    await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
     expect(h.invokeCapability).toHaveBeenCalledTimes(1);
 
     // …then replay it from offset 0 on a fresh progress store — a checkpoint
@@ -694,9 +666,10 @@ describe("recovery and alarm derivation", () => {
         }
       },
     });
-    await expect(h.play(["append", CREATED, setEvent("report")])).rejects.toThrow(
-      "setAlarm outage",
-    );
+    await expect(h.play(["append", CREATED, setEvent("report")])).rejects.toMatchObject({
+      message: "harness play() step 0 (append) failed",
+      cause: { message: "setAlarm outage" },
+    });
     expect(h.state().schedules).toEqual({});
 
     // The cursor did not advance, so redelivering the same events heals.
@@ -744,7 +717,7 @@ describe("recovery and alarm derivation", () => {
     await h.play(["append", CREATED, setEvent("report")], ["advanceTime", 61_000], () =>
       h.scheduler().triggerDue(),
     );
-    await vi.waitFor(() => expect(invocations).toBe(1));
+    expect(invocations).toBe(1);
 
     // Repeated wakes sweep the still-pending trigger but the in-memory
     // in-flight set dedupes: exactly one live execution per executionId.
@@ -779,7 +752,7 @@ describe("recovery and alarm derivation", () => {
     await h.settle();
     await h.scheduler().triggerDue();
     expect(h.repointAlarm).toHaveBeenLastCalledWith(now + 60_000);
-    await vi.waitFor(() => expect(h.events(COMPLETED)).toHaveLength(1));
     await h.settle();
+    expect(h.events(COMPLETED)).toHaveLength(1);
   });
 });

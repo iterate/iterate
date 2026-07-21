@@ -182,6 +182,16 @@ type EventFromType<
     : never
   : never;
 
+/** A committed event resolved from a contract's owned events or processor dependencies.
+ * Unknown event-type strings retain the untyped {@link StreamEvent} shape. */
+export type ResolvedEvent<Contract, Type extends string> = Contract extends {
+  events: EventCatalog;
+}
+  ? Type extends ResolvedEventType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>>
+    ? EventFromType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Type>
+    : StreamEvent
+  : StreamEvent;
+
 /** Union of committed-event shapes for a `consumes` tuple; `"*"` alone means any `StreamEvent`. */
 type EventFromTypes<
   Events extends EventCatalog,
