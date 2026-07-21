@@ -3,9 +3,9 @@
 // StreamProcessorRunner over the shared MemoryStream (production idempotency
 // semantics: a same-key append with a different body is REJECTED), virtual
 // time, and eviction-faithful crash(). The vendor deps (artifact seed, public
-// import, GitHub link/sync, task diff, branch-head cache) are scriptable
-// fakes wired in createProcessor — swap `impl` mid-scenario or across
-// crashes; `calls` records every dial.
+// import, GitHub link/sync, branch-head cache) are scriptable fakes wired in
+// createProcessor — swap `impl` mid-scenario or across crashes; `calls`
+// records every dial.
 //
 // The harness's real keepalive and recovery adapters drive the eviction
 // scenarios; repo-recovery.test.ts keeps the focused creation recovery proofs.
@@ -17,7 +17,6 @@ import {
   makeProcessorHarness,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
-import type { RepoCommittedFileChange } from "./repo-task-events.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 
@@ -142,14 +141,6 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     calls: [] as { afterCommitOid: string; branch: string }[],
     impl: async (): Promise<{ commitOid: string }> => ({ commitOid: "github-head" }),
   };
-  const taskDiff = {
-    calls: [] as {
-      afterCommitOid: string | null;
-      beforeCommitOid: string | null;
-      branch: string;
-    }[],
-    impl: async (): Promise<RepoCommittedFileChange[]> => [],
-  };
   const headCache = {
     observed: [] as {
       afterCommitOid: string | null;
@@ -183,10 +174,6 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
           githubSync.calls.push(input);
           return githubSync.impl();
         },
-        taskChangesForArtifactPush: (input) => {
-          taskDiff.calls.push(input);
-          return taskDiff.impl();
-        },
         observeArtifactPush: (input) => void headCache.observed.push(input),
       }),
     path: REPO_PATH,
@@ -199,7 +186,6 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     link,
     syncPrivate,
     githubSync,
-    taskDiff,
     headCache,
   };
 }
@@ -325,7 +311,6 @@ describe("RepoProcessor creation saga", () => {
     ]);
 
     expect(h.headCache.observed).toEqual([]);
-    expect(h.taskDiff.calls).toEqual([]);
     expect(h.githubSync.calls).toEqual([]);
     expect(h.events("events.iterate.com/repo/commit-completed")).toHaveLength(0);
     expect(h.events("events.iterate.com/repo/github-import-requested")).toHaveLength(0);
@@ -340,7 +325,7 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repo/commit-completed")).toMatchObject([
       { payload: { beforeCommitOid: "before123", branch: "main", commitOid: "after456" } },
     ]);
-    expect(h.taskDiff.calls).toEqual([
+    expect(h.headCache.observed).toEqual([
       { afterCommitOid: "after456", beforeCommitOid: "before123", branch: "main" },
     ]);
   });
@@ -368,59 +353,34 @@ describe("RepoProcessor creation saga", () => {
 });
 
 // =============================================================================
-// Commit facts: Artifacts queue pushes → commit-completed → task facts
+// Commit facts: Artifacts queue pushes → commit-completed
 // =============================================================================
 
 describe("RepoProcessor commit facts", () => {
-  it("projects default-branch task file changes into subscribable repo/task facts", async () => {
+  it("projects a default-branch Artifact push into a commit-completed fact", async () => {
     const h = makeRepoHarness();
-    h.taskDiff.impl = async () => [
-      { kind: "created", path: "tasks/new-task.md" },
-      { kind: "updated", path: "apps/os/tasks/board.markdown" },
-      { kind: "deleted", path: "packages/ui/tasks/old.md" },
-    ];
     await h.play(["append", CREATE_REQUESTED, CREATED], ["append", artifactPush("main")]);
 
-    expect(
-      h
-        .events()
-        .filter((event) => event.type.startsWith("events.iterate.com/repo/task-"))
-        .map((event) => ({ type: event.type, payload: event.payload })),
-    ).toEqual([
-      {
-        type: "events.iterate.com/repo/task-created",
-        payload: { branch: "main", commitOid: "after456", path: "tasks/new-task.md" },
-      },
-      {
-        type: "events.iterate.com/repo/task-updated",
-        payload: { branch: "main", commitOid: "after456", path: "apps/os/tasks/board.markdown" },
-      },
-      {
-        type: "events.iterate.com/repo/task-deleted",
-        payload: { branch: "main", commitOid: "after456", path: "packages/ui/tasks/old.md" },
-      },
-    ]);
     // ONE commit fact, keyed on the push coordinates (natural identity, no
-    // synthetic ids), derived through the tree diff exactly once.
+    // synthetic ids).
     expect(h.events("events.iterate.com/repo/commit-completed")).toMatchObject([
       {
         idempotencyKey: "repo/commit-completed:before123:after456:main",
         payload: { beforeCommitOid: "before123", branch: "main", commitOid: "after456" },
       },
     ]);
-    expect(h.taskDiff.calls).toEqual([
+    expect(h.headCache.observed).toEqual([
       { afterCommitOid: "after456", beforeCommitOid: "before123", branch: "main" },
     ]);
     // The certificate was appended manually — the seed never dialed.
     expect(h.createEmpty.calls).toBe(0);
   });
 
-  it("ignores pushes to non-default branches: no head-cache poke, no commit fact, no tree diff", async () => {
+  it("ignores pushes to non-default branches: no head-cache poke, no commit fact", async () => {
     const h = makeRepoHarness();
     await h.play(["append", CREATE_REQUESTED, CREATED], ["append", artifactPush("feature")]);
 
     expect(h.headCache.observed).toEqual([]);
-    expect(h.taskDiff.calls).toEqual([]);
     expect(h.events("events.iterate.com/repo/commit-completed")).toHaveLength(0);
   });
 
@@ -477,7 +437,6 @@ describe("RepoProcessor GitHub imports", () => {
     // The webhook itself produced NO commit facts — those only ever come from
     // the Artifacts queue event the sync will trigger.
     expect(h.events("events.iterate.com/repo/commit-completed")).toHaveLength(0);
-    expect(h.taskDiff.calls).toEqual([]);
   });
 
   it.each([
@@ -513,11 +472,8 @@ describe("RepoProcessor GitHub imports", () => {
     expect(h.state().githubImport).toBeNull();
 
     // The failed import closed instead of wedging: the next Artifacts push
-    // still produces its commit fact and tree diff.
+    // still produces its commit fact.
     await h.play(["append", artifactPush("main")]);
-    expect(h.taskDiff.calls).toEqual([
-      { afterCommitOid: "after456", beforeCommitOid: "before123", branch: "main" },
-    ]);
     expect(h.events("events.iterate.com/repo/commit-completed")).toHaveLength(1);
   });
 
@@ -675,10 +631,8 @@ describe("RepoProcessor full replay", () => {
   it("a fresh cursor over the same stream re-executes no vendor work, appends nothing new, and reaches the same state", async () => {
     // Live flow first: the creation saga (artifact seeded, certificate
     // appended), link, a webhook import that completes, then an Artifacts
-    // push whose commit carries task changes.
+    // push that produces a commit fact.
     const h = makeRepoHarness();
-    const taskChanges: RepoCommittedFileChange[] = [{ kind: "created", path: "tasks/new-task.md" }];
-    h.taskDiff.impl = async () => taskChanges;
     await h.play(
       ["append", CREATE_REQUESTED],
       ["append", GITHUB_LINK_CONFIGURED, githubPush()],
@@ -692,13 +646,11 @@ describe("RepoProcessor full replay", () => {
     const headState = h.state();
     const committedOffsets = h.events().map((row) => row.offset);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
-    expect(h.events("events.iterate.com/repo/task-created")).toHaveLength(1);
+    expect(h.events("events.iterate.com/repo/commit-completed")).toHaveLength(1);
 
     // A SECOND harness over the SAME stream and clock with a FRESH progress
     // store: replays every event from offset 0. Completed obligations must
-    // provably not re-run — the seed and sync fakes THROW if reached; the
-    // tree diff (deterministic from commit coordinates) legitimately re-runs
-    // and its re-appended facts dedupe.
+    // provably not re-run — the seed and sync fakes THROW if reached.
     const replay = makeRepoHarness({
       clock: h.clock,
       stream: h.stream,
@@ -710,12 +662,11 @@ describe("RepoProcessor full replay", () => {
     replay.githubSync.impl = () => {
       throw new Error("replay must not sync");
     };
-    replay.taskDiff.impl = async () => taskChanges;
     await replay.settle(); // a wedge or a re-run vendor dial would throw here
 
     expect(replay.events().map((row) => row.offset)).toEqual(committedOffsets);
     expect(replay.state()).toEqual(headState);
     expect(replay.events("events.iterate.com/repos/created")).toHaveLength(1);
-    expect(replay.events("events.iterate.com/repo/task-created")).toHaveLength(1);
+    expect(replay.events("events.iterate.com/repo/commit-completed")).toHaveLength(1);
   });
 });
