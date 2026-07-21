@@ -20,6 +20,7 @@ export type RootProjectRedirectDecision =
 
 export function chooseRootProjectRedirect(input: {
   preferredProjectSlug: string | null;
+  preferredProjectOnboarding: boolean;
   projects: RootRedirectProject[];
 }): RootProjectRedirectDecision {
   const readyProjects = input.projects.filter((project) => project.deploymentStatus === "ready");
@@ -28,7 +29,11 @@ export function chooseRootProjectRedirect(input: {
   );
 
   if (preferredReadyProject) {
-    return { kind: "project", project: preferredReadyProject, onboarding: false };
+    return {
+      kind: "project",
+      project: preferredReadyProject,
+      onboarding: input.preferredProjectOnboarding,
+    };
   }
 
   if (readyProjects.length === 1) {
