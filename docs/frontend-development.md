@@ -179,10 +179,9 @@ const send = useMutation({ mutationFn: (text: string) => itx.chat.sendMessage(te
 ### Mount
 
 One component. `<ProjectScope slug>` carries the ambient project slug (so
-`useItx()` resolves without an argument). It is a server-safe context, not a
-connection provider. The app layout pre-warms the one socket by rendering
-`useIterateSession()` behind `ClientOnly` + `Suspense`; individual itx consumers
-use the same boundary or an `ssr: false` leaf. The socket is module-global and
+`useItx()` resolves without an argument) AND pre-warms the one socket. Mount it
+under an `ssr: false` route — itx never SSRs (it dials a WebSocket and throws on
+the server). No provider is needed above it: the socket is module-global and
 every hook dials it lazily, so the sidebar / ⌘K / admin use itx with no
 `<ProjectScope>` at all.
 
@@ -212,7 +211,7 @@ state. A `slug` argument also accepts a `prj_…` id.
 | `useLiveState(node, selector)`               | hook      | Subscribe to a `.liveState` node; server pushes a snapshot then diffs, the stable-slice `selector` picks what you render. Never suspends. The LiveView primitive.                                                                                                                                       |
 | `useIterateSessionLiveState(node, selector)` | hook      | Session-root sibling of `useLiveState`, for deployment-wide live nodes such as admin streams.                                                                                                                                                                                                           |
 | `useItxSubscription(subscribe, deps)`        | hook      | Low-level escape hatch for raw ordered event streams (the activity tail). Most UI wants `useLiveState`.                                                                                                                                                                                                 |
-| `<ProjectScope slug>`                        | component | Sets the ambient project slug. Server-safe; connection pre-warm belongs in the browser application's narrow client-only boundary.                                                                                                                                                                       |
+| `<ProjectScope slug>`                        | component | Sets the ambient project + pre-warms the socket. The one mount.                                                                                                                                                                                                                                         |
 | `reconnectIterateSession()`                  | fn        | The deliberate **semantic reset** — drop + re-dial the socket to pick up new claims (after creating a project / unlocking admin). Distinct from the automatic, invisible transport reconnect. Pair with `invalidateQueries({ queryKey: ["itx"] })` when cached reads must refresh under the new claims. |
 | `disconnectIterateSession()`                 | fn        | Release the current socket and authority without reconnecting, for native sign-out/process lifecycle boundaries. The selected deployment remains configured for a later connection.                                                                                                                     |
 | `isItxTransportError(e)`                     | fn        | Is an error a transport-close (retryable), vs auth/validation/app (not)?                                                                                                                                                                                                                                |
