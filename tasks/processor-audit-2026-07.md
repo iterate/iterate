@@ -239,14 +239,13 @@ message-parsing.
 
 ### B9. Contract `examples` volume (LOW priority)
 
-**Status:** open (convention only).
+**Status:** in-pr #2180.
 
 ~1,080 lines of `examples:` across the 8 largest contracts (repo 266/832
 lines = 32% of the file, project 226/767, agent 167/1,039, email 121/468).
 Single consumer: `apps/os/src/lib/event-docs.ts` (the public docs site) + a
-CI test parsing each example. These are product content — keep, but adopt
-"one example per event unless the payload is a result union" as a review
-convention and trim repo/project on next touch. No dedicated PR.
+CI test parsing each example. Maintainer call (2026-07-21): delete event
+examples wholesale rather than trim them.
 
 ---
 

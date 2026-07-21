@@ -379,113 +379,27 @@ export const CoreProcessorContract = defineProcessorContract({
         projectId: z.string().trim().min(1).nullable(),
         path: z.string().trim().min(1),
       }),
-      examples: [
-        {
-          description: "A project's agent stream is created.",
-          payload: { projectId: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha", path: "/agents/onboarding" },
-        },
-        {
-          description: "A deployment-global stream (no owning project) is created.",
-          payload: { projectId: null, path: "/repos/iterate-config-base" },
-        },
-      ],
     },
     "events.iterate.com/stream/woken": {
       description: "Records that a Durable Object incarnation has started running this stream.",
       payloadSchema: z.object({
         incarnationId: z.string().trim().min(1),
       }),
-      examples: [
-        {
-          description:
-            "A fresh Durable Object incarnation starts running the stream after hibernation.",
-          payload: { incarnationId: "b7f9d2c4-3a1e-4f68-9c05-8d2e6a41f7b3" },
-        },
-      ],
     },
     "events.iterate.com/stream/configured": {
       description: "Configures core stream runtime policy.",
       payloadSchema: StreamConfiguredPayload,
-      examples: [
-        {
-          description: "Sets an explicit append circuit-breaker budget for a capture stream.",
-          payload: {
-            config: { circuitBreaker: { burstCapacity: 100_000, refillRatePerMinute: 6_000_000 } },
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/child-stream-created": {
       description: "Records the immediate child stream segment under this stream.",
       payloadSchema: z.object({
         childPath: z.string().trim().min(1),
       }),
-      examples: [
-        {
-          description: "The project root stream learns a new agent stream was born beneath it.",
-          payload: { childPath: "/agents/onboarding" },
-        },
-        {
-          description:
-            "An ancestor stream records a newborn Slack thread agent; the reducer folds the full path down to the immediate child segment.",
-          payload: { childPath: "/agents/slack/main/C0788AB12CD/ts-1751884800-123456" },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-configured": {
       description:
         "Configures or replaces a durable subscription for this stream (wake or push delivery; latest event per subscriptionKey wins). Re-configuring keeps the existing delivery cursor unless `deliver` is set, and clears any parked state — new config is a fresh chance.",
       payloadSchema: SubscriptionConfiguredPayload,
-      examples: [
-        {
-          description:
-            "Wake delivery: the agent processor hosted on the agent's Durable Object folds this stream; the subscriber owns its own checkpoint, so no deliver/onPoison here.",
-          payload: {
-            subscriptionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
-            delivery: {
-              mode: "wake",
-              expression: [
-                "agents",
-                ["get", "/agents/onboarding"],
-                "processor",
-                "wakeStreamSubscriber",
-              ],
-              processorSlug: "agent",
-            },
-          },
-        },
-        {
-          description:
-            "Push delivery: cross-posts one repository's GitHub webhooks from a connection stream onto the repo's own stream, live-tailing from now.",
-          payload: {
-            subscriptionKey: "github-repo:/repos/root",
-            description:
-              "Copies GitHub webhooks for acme/widgets onto this repo's stream so the repo processor can react to them.",
-            selector: {
-              eventTypes: ["events.iterate.com/github/webhook-received"],
-              condition: 'payload.body.repository.full_name = "acme/widgets"',
-            },
-            delivery: {
-              mode: "push",
-              expression: ["streams", ["get", "/repos/root"], "acceptCrossPost"],
-            },
-            deliver: "new",
-          },
-        },
-        {
-          description:
-            "Webhook delivery: one HTTP POST per event to an external receiver, stepping over a poison event instead of parking the whole feed.",
-          payload: {
-            subscriptionKey: "ops-webhook",
-            delivery: {
-              mode: "webhook",
-              url: "https://hooks.example.com/iterate/stream-events",
-            },
-            deliver: "new",
-            onPoison: "skip",
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-removed": {
       description:
@@ -493,12 +407,6 @@ export const CoreProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
       }),
-      examples: [
-        {
-          description: "Unlinking a repo from GitHub revokes its webhook cross-post subscription.",
-          payload: { subscriptionKey: "github-repo:/repos/root" },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-parked": {
       description:
@@ -510,19 +418,6 @@ export const CoreProcessorContract = defineProcessorContract({
         attempts: z.number().int().positive(),
         error: z.string().trim().min(1).optional(),
       }),
-      examples: [
-        {
-          description:
-            "A webhook receiver stayed down through the whole retry ladder, so delivery gave up loudly.",
-          payload: {
-            subscriptionKey: "ops-webhook",
-            atOffset: 1874,
-            attempts: 15,
-            error:
-              "webhook POST https://hooks.example.com/iterate/stream-events failed with status 503",
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-resumed": {
       description:
@@ -530,13 +425,6 @@ export const CoreProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
       }),
-      examples: [
-        {
-          description:
-            "Un-parks a subscription after the receiver recovered; delivery resumes from the cursor where it stopped.",
-          payload: { subscriptionKey: "ops-webhook" },
-        },
-      ],
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
@@ -545,18 +433,6 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriptionKey: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),
       }),
-      examples: [
-        {
-          description:
-            "Replays the stream's full history into the project worker feed (afterOffset is exclusive; 0 replays everything).",
-          payload: { subscriptionKey: "project-worker", afterOffset: 0 },
-        },
-        {
-          description:
-            "Seeks a cross-post subscription's cursor forward: events at or below offset 512 are never delivered.",
-          payload: { subscriptionKey: "github-repo:/repos/root", afterOffset: 512 },
-        },
-      ],
     },
     "events.iterate.com/stream/subscriber-connected": {
       description:
@@ -566,50 +442,6 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriptionType: StreamSubscriptionType,
         subscriber: StreamSubscriberDescriptor.optional(),
       }),
-      examples: [
-        {
-          description:
-            "A wake subscription's poke handshake completed: the hosted agent processor connected and announced its contract (consumes/emits abridged).",
-          payload: {
-            subscriptionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
-            subscriptionType: "configured",
-            subscriber: {
-              processor: {
-                announcement: {
-                  slug: "agent",
-                  version: "5.0.0",
-                  description:
-                    "Maintains model-visible history, schedules debounced offset-identified LLM turns, and executes scripts through the capability host.",
-                  consumes: [
-                    "events.iterate.com/agents/context-added",
-                    "events.iterate.com/agent/llm-request-settled",
-                  ],
-                  emits: [
-                    "events.iterate.com/agents/context-added",
-                    "events.iterate.com/agent/llm-request-requested",
-                  ],
-                  ownedEvents: [
-                    {
-                      type: "events.iterate.com/agents/context-added",
-                      description: "A model-visible context item was added.",
-                    },
-                    { type: "events.iterate.com/agent/llm-request-requested" },
-                  ],
-                },
-              },
-            },
-          },
-        },
-        {
-          description:
-            "An anonymous ephemeral watcher: a browser stream-viewer tab live-tailing the log.",
-          payload: {
-            subscriptionKey: "d4f8a1b2-6c3e-4e9a-8b57-0f1c2d3e4a5b",
-            subscriptionType: "ephemeral",
-            subscriber: { description: "browser" },
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/subscriber-disconnected": {
       description:
@@ -618,23 +450,6 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriptionKey: z.string().trim().min(1),
         reason: StreamSubscriberDisconnectReason,
       }),
-      examples: [
-        {
-          description: "A stream-viewer tab closed and unsubscribed.",
-          payload: {
-            subscriptionKey: "d4f8a1b2-6c3e-4e9a-8b57-0f1c2d3e4a5b",
-            reason: "unsubscribed",
-          },
-        },
-        {
-          description:
-            "The stream went quiet past its idle window and dropped its configured connections so everyone can hibernate; the durable config is kept and the next append re-wakes.",
-          payload: {
-            subscriptionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
-            reason: "idle",
-          },
-        },
-      ],
     },
     [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
       description:
@@ -647,13 +462,6 @@ export const CoreProcessorContract = defineProcessorContract({
         revivals: z.number(),
         version: z.string(),
       }),
-      examples: [
-        {
-          description:
-            "The keepalive alarm revived an agent processor after a deploy took an in-flight LLM turn.",
-          payload: { processorSlug: "agent", revivals: 1, version: "2026-07-14.1" },
-        },
-      ],
     },
     "events.iterate.com/stream/error-occurred": {
       description: "Records a structured stream or processor runner error.",
@@ -668,53 +476,18 @@ export const CoreProcessorContract = defineProcessorContract({
           })
           .optional(),
       }),
-      examples: [
-        {
-          description:
-            'The delivery spine stepped over a confirmed poison event on an onPoison: "skip" subscription.',
-          payload: {
-            message:
-              'subscription "project-worker" skipped poison event at offset 812 after 3 attempts: receiver rejected payload',
-          },
-        },
-        {
-          description:
-            "A processor skipped an event that fails its contract's schema, with the structured cause attached.",
-          payload: {
-            message:
-              'stream processor "agent" skipped event at offset 42 ("events.iterate.com/agents/context-added"): it fails the contract\'s schema',
-            error: {
-              name: "ZodError",
-              message: 'Invalid input: expected string, received number at "content"',
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/stream/paused": {
       description: "Records that the stream is paused and should reject ordinary appends.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional(),
       }),
-      examples: [
-        {
-          description:
-            "The stream paused itself after its append circuit breaker tripped on a runaway producer.",
-          payload: { reason: "circuit breaker tripped: burst rate limit exceeded" },
-        },
-      ],
     },
     "events.iterate.com/stream/resumed": {
       description: "Records that the stream has resumed accepting ordinary appends.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional(),
       }),
-      examples: [
-        {
-          description: "An operator reopened the stream after investigating a tripped breaker.",
-          payload: { reason: "operator resumed after raising the circuit-breaker budget" },
-        },
-      ],
     },
   },
   consumes: [

@@ -110,29 +110,6 @@ export const SecretProcessorContract = defineProcessorContract({
         "certificate; the DO cross-posts this event to the project root stream, where the " +
         "project processor catalogs the secret.",
       payloadSchema: secretBirthCertificateSchema(),
-      examples: [
-        {
-          description: "A secret is born with an egress policy and no refresh strategy.",
-          payload: {
-            config: {
-              egress: { urls: ["https://api.example.com"] },
-              refresh: null,
-            },
-          },
-        },
-        {
-          description:
-            "The born project API key: readable material (reveal() answers it) with an empty " +
-            "egress pin — readable and substitutable are mutually exclusive.",
-          payload: {
-            config: {
-              egress: { urls: [] },
-              refresh: null,
-              visibility: "readable",
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/secret/updated": {
       description:
@@ -159,33 +136,6 @@ export const SecretProcessorContract = defineProcessorContract({
               "leaves it unchanged.",
           }),
       }),
-      examples: [
-        {
-          description:
-            "A Slack bot token is stored: encrypted-at-rest material plus the egress origins it may be substituted into.",
-          payload: {
-            encryptedMaterial: {
-              algorithm: "AES-GCM-SHA256+SECRET-CELL-V1",
-              ciphertext: "nJ2xkV8mPqvGdL5tYw3eBg==",
-              iv: "9EMTZWEeC2Iy5W5m",
-            },
-            egress: { urls: ["https://slack.com", "https://files.slack.com"] },
-          },
-        },
-        {
-          description:
-            "A GitHub connection secret gets the github-app-installation refresh strategy: the DO mints installation tokens on demand, signing with the platform-owned App key.",
-          payload: {
-            refresh: {
-              kind: "github-app-installation",
-              apiBase: "https://api.github.com",
-              appId: "312345",
-              installationId: "45678901",
-              privateKey: { platform: "integrations.github" },
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/secret/used": {
       description:
@@ -204,17 +154,6 @@ export const SecretProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "The pinned egress URL the request targeted." }),
       }),
-      examples: [
-        {
-          description:
-            "The secret's material was substituted into a Slack Web API call at the egress door.",
-          payload: {
-            usedAt: "2026-07-08T14:31:09.412Z",
-            usedBy: "prj_b9f2c81d4e6a4f0a9c3d7e5b1a8f2c4d",
-            url: "https://slack.com/api/chat.postMessage",
-          },
-        },
-      ],
     },
   },
   consumes: [

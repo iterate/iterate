@@ -93,20 +93,6 @@ export const NotificationIntentContract = defineProcessorContract({
           }),
         title: z.string().trim().min(1).max(200).meta({ description: "Notification title line." }),
       }),
-      examples: [
-        {
-          description:
-            "A held Stripe transfer wants a human decision; every channel points its " +
-            "recipients at the approvals screen for that one held request.",
-          payload: {
-            audience: { kind: "project" },
-            title: "Approval needed",
-            body: "POST api.stripe.com is waiting for approval.",
-            destination: { kind: "approvals", approvalRequestEventOffset: 42 },
-            expiresAt: 1784448300000,
-          },
-        },
-      ],
     },
   },
   consumes: [],

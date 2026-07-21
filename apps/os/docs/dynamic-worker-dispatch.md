@@ -111,14 +111,30 @@ request":
 
 ## The serve-side status surface and overlay
 
-A cold browser request waits only for its configured build budget. If the
-build is still running it receives `workerBuildingResponse()`: a 503 that
-polls itself and is marked `x-iterate-worker-building`. A build
-failure receives a terminal build-failed page; it is not cached, so a reload or
-later request tries the build again without turning a transient bundler outage
-into a persisted source failure. RPC calls wait for the build and receive the
-named error instead. There is no stale artifact, last-good pointer, distributed
-build lock, or background refresh policy.
+A cold request waits only for its build budget, and the budget depends on who
+is waiting (`buildBudgetForRequest`): a document navigation
+(`sec-fetch-dest: document`) races only briefly — a person watching a blank
+tab should see the branded building page almost immediately, and the page
+polls its way into the app — while other clients (API calls, the building
+page's own polls, WebSocket dials) keep the caller's budget, since a stand-in
+HTML page does nothing for them. Ingress applies this to the root project
+worker's build and `ItxEntrypoint.fetch` clamps the dispatch header's budget
+the same way, so an app-level first build behind the seeded router shows the
+page just as fast. If the build is still running past the budget the request
+receives `workerBuildingResponse()`: a 503 that polls itself and is marked
+`x-iterate-worker-building`. A build failure receives a terminal build-failed
+page; it is not cached, so a reload or later request tries the build again
+without turning a transient bundler outage into a persisted source failure.
+RPC calls wait for the build and receive the named error instead. There is no
+stale artifact, last-good pointer, distributed build lock, or background
+refresh policy.
+
+Ingress itself answers through one serve envelope
+(`serveProjectResponse`, domains/workers/project-serve.ts): budget, the
+stand-in pages, the overlay, and a catch-all — any serve failure that is not
+a modeled build state answers a branded self-retrying error page (marked
+`x-iterate-worker-serve-error`, details only in logs) instead of escaping as
+a naked 500/1101, so a project host always shows platform chrome.
 
 Successful repo-backed fetches carry platform-authored
 `x-iterate-worker-serve: <commit oid>`. The platform
