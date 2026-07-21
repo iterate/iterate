@@ -494,20 +494,25 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
   }
 
   /**
-   * Append a batch whose idempotency keys may race concurrent writers: every
-   * writer of `notification-settled@<offset>` (expiry sweep, send rejection,
-   * receipt check) races every other. The stream rejects a same-key append
-   * with a different body; the FIRST writer's settlement stands, and losing
-   * the race is success — the obligation is settled either way.
+   * Append settlements whose idempotency keys may race concurrent writers:
+   * every writer of `notification-settled@<offset>` (expiry sweep, send
+   * rejection, receipt check) races every other. The stream rejects a
+   * same-key append with a different body; the FIRST writer's settlement
+   * stands, and losing the race is success — the obligation is settled
+   * either way. One event per append, NOT one batch: each requestOffset
+   * races independently, and a batch is atomic — one lost race would
+   * silently drop every sibling settlement in it.
    */
   async #appendUnlessLostIdempotencyRace(
     append: ProcessEventArgs<DeviceProcessorContract>["append"],
     events: EmittedInput<DeviceProcessorContract>[],
   ): Promise<void> {
-    try {
-      await append(...events);
-    } catch (error) {
-      if (!isIdempotencyConflict(error)) throw error;
+    for (const event of events) {
+      try {
+        await append(event);
+      } catch (error) {
+        if (!isIdempotencyConflict(error)) throw error;
+      }
     }
   }
 }

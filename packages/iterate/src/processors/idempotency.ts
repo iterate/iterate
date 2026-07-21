@@ -16,11 +16,11 @@ type EventBody = {
 // predicate — never spell the wording anywhere else.
 const IDEMPOTENCY_CONFLICT_FRAGMENT = " already names a different event at offset ";
 
-export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
+export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number) {
   return `idempotency key "${idempotencyKey}"${IDEMPOTENCY_CONFLICT_FRAGMENT}${existingOffset}`;
 }
 
-export function isIdempotencyConflict(error: unknown): boolean {
+export function isIdempotencyConflict(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes(IDEMPOTENCY_CONFLICT_FRAGMENT);
 }

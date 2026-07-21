@@ -527,6 +527,57 @@ describe("DeviceProcessor receipts", () => {
     expect(h.state().notifications).toEqual({});
   });
 
+  it("one lost settle race does not drop a sibling obligation's settlement from the same check", async () => {
+    const h = makeDeviceHarness();
+    await h.play(
+      [
+        "append",
+        DEVICE_CREATED,
+        notificationRequested({ expiresAt: Date.parse("2026-07-18T09:00:00Z") }),
+        notificationRequested({
+          idempotencyKey: "device/notification-requested-2",
+          expiresAt: Date.parse("2026-07-18T09:00:00Z"),
+        }),
+      ],
+      ["advanceTime", 15 * 60_000],
+    );
+    // Receipts are polled sequentially, so gate on the FIRST lookup (offset
+    // 2's), let the sibling settle that offset meanwhile, then release both.
+    const firstReceiptRequested = Promise.withResolvers<void>();
+    const receipt = Promise.withResolvers<ReceiptAnswer>();
+    let receiptCalls = 0;
+    h.gateway.getReceipt = async () => {
+      receiptCalls += 1;
+      if (receiptCalls > 1) return { status: "accepted-by-push-service" };
+      firstReceiptRequested.resolve();
+      return receipt.promise;
+    };
+
+    const checking = h.checkReceipts();
+    await firstReceiptRequested.promise;
+    await h.stream.append({
+      type: SETTLED,
+      idempotencyKey: "device/notification-settled@2",
+      payload: {
+        requestOffset: 2,
+        outcome: {
+          kind: "uncertain",
+          phase: "receipt",
+          reason: "A sibling incarnation settled the request first.",
+        },
+      },
+    });
+    receipt.resolve({ status: "accepted-by-push-service" });
+
+    await expect(checking).resolves.toBeUndefined();
+    await h.settle();
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 2, outcome: { kind: "uncertain", phase: "receipt" } } },
+      { payload: { requestOffset: 3, outcome: { kind: "accepted-by-push-service" } } },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
   it("a DeviceNotRegistered receipt revokes the token before settling the request", async () => {
     const h = makeDeviceHarness();
     h.gateway.send = async () => ({ status: "ok", ticketId: "ticket-invalid" });
