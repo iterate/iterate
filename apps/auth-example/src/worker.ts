@@ -9,6 +9,7 @@ function authFromEnv(env: Cloudflare.Env) {
     clientSecret: env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET,
     redirectURI: env.APP_CONFIG_ITERATE_AUTH__REDIRECT_URI,
     issuer: env.APP_CONFIG_ITERATE_AUTH__ISSUER,
+    jwks: JSON.parse(env.APP_CONFIG_ITERATE_AUTH__JWKS),
   }));
 }
 

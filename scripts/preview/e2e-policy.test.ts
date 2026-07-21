@@ -90,8 +90,11 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
-  it("the os preview lane wraps all three sub-lanes in plain watchdogs — no lane retry", () => {
+  it("the os preview lane wraps all four sub-lanes in plain watchdogs — no lane retry", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
+    expect(script).toContain(
+      `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts`,
+    );
     expect(script).toContain(
       `timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts`,
     );
@@ -101,6 +104,7 @@ describe("retries live in exactly one layer", () => {
     expect(script.split("pnpm exec tsx e2e/tui-test/run.ts")).toHaveLength(2);
     expect(script.split("pnpm e2e --project node")).toHaveLength(2);
     expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
+    expect(script.split("pnpm exec tsx e2e/vitest/onboarding-smoke.ts")).toHaveLength(2);
   });
 
   it("the onboarding smoke gets one retry, like every other test", () => {
@@ -111,11 +115,12 @@ describe("retries live in exactly one layer", () => {
     expect(source).toContain("const ATTEMPTS = 2;");
   });
 
-  it("bounds the onboarding smoke and streams its progress before the suites start", () => {
+  it("bounds the onboarding smoke as a joined background lane", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
-      `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
+      `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
     );
+    expect(script).toContain('wait "$SMOKE_PID"');
   });
 });
 
@@ -142,12 +147,19 @@ describe("retry telemetry parsers", () => {
             passedAfterRetry: true,
             state: "passed",
             durationMs: 5200,
+            firstFailure: "Network connection lost",
           },
         ],
       }),
     );
     await expect(previewInternals.readVitestRetryTelemetry(file)).resolves.toEqual([
-      { lane: "vitest", name: "sandbox > executes", retryCount: 1, passedAfterRetry: true },
+      {
+        lane: "vitest",
+        name: "sandbox > executes",
+        retryCount: 1,
+        passedAfterRetry: true,
+        firstFailure: "Network connection lost",
+      },
     ]);
     rmSync(file);
   });
@@ -170,7 +182,11 @@ describe("retry telemetry parsers", () => {
                       {
                         status: "flaky",
                         results: [
-                          { retry: 0, status: "failed" },
+                          {
+                            retry: 0,
+                            status: "failed",
+                            error: { message: "Network connection\n lost" },
+                          },
                           { retry: 1, status: "passed" },
                         ],
                       },
@@ -188,7 +204,13 @@ describe("retry telemetry parsers", () => {
       }),
     );
     await expect(previewInternals.readPlaywrightRetryTelemetry(file)).resolves.toEqual([
-      { lane: "specs", name: "runs a script", retryCount: 1, passedAfterRetry: true },
+      {
+        lane: "specs",
+        name: "runs a script",
+        retryCount: 1,
+        passedAfterRetry: true,
+        firstFailure: "Network connection lost",
+      },
     ]);
     rmSync(file);
   });
@@ -197,11 +219,17 @@ describe("retry telemetry parsers", () => {
     expect(
       previewInternals.renderPreviewRetrySummary({
         retried: [
-          { lane: "vitest", name: "a", retryCount: 1, passedAfterRetry: true },
+          {
+            lane: "vitest",
+            name: "a",
+            retryCount: 1,
+            passedAfterRetry: true,
+            firstFailure: "Network connection lost",
+          },
           { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
         ],
       }),
-    ).toBe("2 retried: a (vitest x1) · b (specs x1, still failed)");
+    ).toBe("2 retried: a (vitest x1) — Network connection lost · b (specs x1, still failed)");
     expect(previewInternals.renderPreviewRetrySummary({ retried: [] })).toBeNull();
   });
 });

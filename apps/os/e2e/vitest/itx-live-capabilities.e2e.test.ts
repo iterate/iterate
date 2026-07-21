@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
 import { WebClient } from "@slack/web-api";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { PathFunctionTarget, startMockSlack } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -372,7 +373,7 @@ test("Authenticated project can provide the Slack SDK as nested dotted functions
       secret: adminSecret(),
     });
 
-    using project = await itx.projects.get("slack-project").create({});
+    using project = await itx.projects.get(uniqueFixtureSlug("slack-project")).create({});
     const description = await project.__describe();
 
     const slack = new WebClient("xoxb-not-a-real-token", {

@@ -108,11 +108,11 @@ test("ephemeral subscriptions cannot reuse a configured subscription key", async
   using project = await itx.projects.get(`lifecycle-key-reserved-${marker}`).create({});
   using stream = project.streams.get("/");
 
-  const { keys } = await waitForConfiguredProcessorConnections(stream);
-  const [subscriptionKey] = keys;
-  if (subscriptionKey === undefined) {
-    throw new Error("expected project bootstrap to configure at least one subscriber");
-  }
+  // The subscribe guard is keyed by durable desired state, not by whether a
+  // wake subscriber happens to have a live delivery connection right now.
+  // Requiring the latter made this policy test race ordinary wake/redial work
+  // during the full parallel preview burst.
+  const subscriptionKey = await waitForConfiguredSubscriptionKey(stream);
 
   await expect(async () => {
     const handle = await stream.subscribe({
@@ -651,6 +651,19 @@ async function waitForConfiguredProcessorConnections(
       opts.expectedKeys === undefined ? configuredSubscriptionKeys(state) : [...opts.expectedKeys],
     state,
   };
+}
+
+async function waitForConfiguredSubscriptionKey(stream: Stream): Promise<string> {
+  let subscriptionKey: string | undefined;
+  await waitForCondition(
+    async () => {
+      const state = asStreamRuntimeState(await stream.runtimeState());
+      [subscriptionKey] = Object.keys(state.coreProcessorState.configuredSubscribersByKey ?? {});
+      return subscriptionKey !== undefined;
+    },
+    { description: "project bootstrap to durably configure a subscriber" },
+  );
+  return subscriptionKey!;
 }
 
 async function waitForRuntimeConnection(

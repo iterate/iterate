@@ -165,8 +165,10 @@ The resource-free maps and consumers derive from `envs.ts`:
 - Auth audiences and per-slot OAuth client targets;
 - mobile server presets.
 
-Streams must keep `previewDependencies: ["auth"]`: its deploy fetches Auth's
-JWKS. Do not add another numeric slot list or an exact-range test.
+Streams keeps `previewDependencies: ["auth"]` so the orchestrator selects and
+tests one coherent Auth + relying-party revision. This is selection, not deploy
+ordering: both derive the same signing key from Doppler and deploy concurrently.
+Do not add another numeric slot list or an exact-range test.
 
 Search for operational prose and hidden ranges before moving on:
 
@@ -350,10 +352,11 @@ for n in $(seq 10 19); do
 done
 ```
 
-Auth must precede Streams, which fetches Auth's JWKS. Dummy Petshop must
-precede OS e2e. Do not replace a failed deploy with a curl-only health check;
-the deploy command validates secrets, resources, migrations, routes, and smoke
-probes.
+Auth, OS, Semaphore, and Streams may deploy concurrently; they derive the same
+public signing key from Doppler and do not fetch one another's JWKS. Dummy
+Petshop must precede OS e2e. Do not replace a failed deploy with a curl-only
+health check; the deploy command validates secrets, resources, migrations,
+routes, and smoke probes.
 
 Now update Slack from bootstrap to full manifests, complete Slack installation
 through OS, and verify each GitHub App's `/app` identity and webhook URL.

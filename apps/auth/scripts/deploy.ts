@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs } from "../../../envs.ts";
+import { authSigningPrivateJwkForEnvironment } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { run } from "../../../scripts/lib/deploy-helpers.ts";
 import { DEFAULT_ADMIN_ALLOWLIST } from "../src/config.ts";
@@ -60,6 +61,14 @@ export default async function deploy(
     resources: (env) => ({ authDbId: env.resources.authDbId }),
     requiredSecrets: REQUIRED_SECRETS,
     prepare: (ctx, secretValues, credentials) => {
+      // Validate the fixed signing key and the production-key opt-in
+      // before migrations or any other deployed state can change.
+      authSigningPrivateJwkForEnvironment({
+        dopplerConfig: ctx.env.dopplerConfig,
+        envName: ctx.name,
+        secrets: ctx.secrets,
+      });
+
       // ---- Derived runtime values ------------------------------------------
       // Derived: an explicit Doppler value wins; otherwise the platform default.
       // Email OTP defaults on in every env, prd included; setting the Doppler

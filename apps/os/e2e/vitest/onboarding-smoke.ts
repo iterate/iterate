@@ -1,8 +1,7 @@
 /**
  * Smoke: create a project as admin and watch the onboarding agent greet.
- * Runs manually and as the preview test lane's sequential entry gate
- * (scripts/preview/preview.ts), where it pays the create-saga cold-start
- * costs before the concurrent suites begin.
+ * Runs manually and as an independent preview sub-lane alongside the other
+ * isolated suites.
  *
  *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
  *

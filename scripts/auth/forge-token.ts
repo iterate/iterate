@@ -11,10 +11,9 @@ import {
  * `pnpm auth:mint` (scripts/auth/mint-session.ts), shared with every CLI that
  * must authenticate against a relying-party worker (os, semaphore).
  *
- * Relying parties trust JWTs signed by any key in their deploy-baked JWKS,
- * which includes the forge public key (scripts/lib/bake-auth-jwks.ts). This
- * signs tokens with the private half from Doppler (AUTH_FORGE_PRIVATE_JWK) —
- * fully offline, no auth worker involved.
+ * Auth signs JWTs with the private half from Doppler
+ * (AUTH_FORGE_PRIVATE_JWK), and relying-party deploys trust its derived public
+ * half. This signs with that same key fully offline, with no auth worker call.
  */
 
 /** Inputs for one forge-signed access token (the bearer credential relying parties verify). */

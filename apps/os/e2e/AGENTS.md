@@ -10,14 +10,14 @@ REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC 
 
 - `vitest.config.ts` owns run-level config, artifact roots, and console capture. `pnpm e2e` runs
   `e2e/vitest/**/*.test.ts` plus the cross-runtime examples matrix in
-  `e2e/examples/*.e2e.test.ts` through it (those are the two `include` globs; nothing filters
-  on any other filename shape).
+  `e2e/examples/*.e2e.test.ts` and unit tests for its support machinery in
+  `e2e/test-support/*.test.ts` through it. Nothing filters on any other filename shape.
 - `test-support/os-client.ts` exposes the admin itx handle (`createAdminOsItx`) plus base-URL /
   bearer-token resolution.
 - `test-support/create-test-project.ts` creates a disposable OS project via itx
   (`createTestProject` → `{ project, itx(), agent(path), [Symbol.asyncDispose] }`; removal is a
-  no-op until itx grows `projects.remove`). `handle.itx()` returns a fresh admin itx
-  handle narrowed to the project; reach streams and agents through it
+  no-op until itx grows `projects.remove`). `handle.itx()` returns a fresh admin itx handle
+  narrowed to the project; reach streams and agents through it
   (`itx.streams.get(path).{append,getEvents,waitForEvent,subscribe}`,
   `itx.agents.get(path).{sendMessage,ask}`).
 

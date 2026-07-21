@@ -3,7 +3,6 @@ import {
   bearer,
   deviceAuthorization,
   emailOTP,
-  jwt,
   multiSession,
   oneTimeToken,
 } from "better-auth/plugins";
@@ -47,6 +46,7 @@ import {
   sendOrganizationInvitationEmail,
   shouldUseTestOtp,
 } from "./email.ts";
+import type { AuthJwtPlugin } from "./auth-jwt.ts";
 
 // Custom claims go out on three surfaces, configured further down in
 // oauthProvider():
@@ -94,6 +94,7 @@ function normalizeSingleOrganizationRole(role: string) {
  * build the same plugin set without real secrets. */
 export type AuthPluginOptions = {
   authAppOrigin: string;
+  jwtPlugin: AuthJwtPlugin;
   emailOtpEnabled: boolean;
   fixedTestOtpEnabled: boolean;
   emailBinding: CloudflareEmailBinding | undefined;
@@ -110,7 +111,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
   ];
 
   return [
-    jwt(),
+    options.jwtPlugin,
     bearer(),
     admin(),
     organization({

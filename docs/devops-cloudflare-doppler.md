@@ -100,8 +100,11 @@ cover only the shared Cloudflare resource/deploy skeleton.
 2. `pnpm ensure-resources --env <name>` per app — creates missing D1/KV/DNS
    and prints the IDs to paste into envs.ts.
 3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
-4. Deploy auth first (`pnpm --dir apps/auth run deploy --env <name>`), then
-   os (its deploy bakes auth's JWKS and fails fast if auth isn't serving).
+4. After Doppler and resources are ready, deploy auth and os concurrently.
+   Both consume one Doppler-owned signing key; os derives only its public half
+   and never waits for auth's JWKS endpoint. A brand-new environment still
+   needs the auth service to exist before Cloudflare can resolve os's service
+   binding, but subsequent revisions have no JWT-driven deployment order.
 
 ## Cloudflare accounts
 

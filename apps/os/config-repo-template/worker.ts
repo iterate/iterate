@@ -591,6 +591,12 @@ export class InternalApp extends IterateWorkerEntrypoint {
               const showError = (error) => {
                 identity.textContent = error instanceof Error ? error.message : String(error);
               };
+              const setRefreshing = (pending) => {
+                refresh.disabled = pending;
+                refresh.textContent = pending ? "refreshing…" : "refresh over Cap'n Web";
+                if (pending) refresh.dataset.spinner = "true";
+                else delete refresh.dataset.spinner;
+              };
               try {
                 const session = await publicApi.authenticate({ type: "from-server-cookie" });
                 const me = await session.me;
@@ -599,11 +605,27 @@ export class InternalApp extends IterateWorkerEntrypoint {
                   events.textContent = JSON.stringify(await session.liveState.get(), null, 2);
                 };
                 const subscription = await session.liveState.subscribe(() => {
-                  void render().catch(showError);
+                  void render().then(() => setRefreshing(false), (error) => {
+                    setRefreshing(false);
+                    showError(error);
+                  });
                 });
-                refresh.disabled = false;
+                setRefreshing(false);
                 refresh.onclick = () => {
-                  void session.refresh().catch(showError);
+                  setRefreshing(true);
+                  void (async () => {
+                    try {
+                      await session.refresh();
+                      // LiveState deliberately suppresses no-op updates. Read
+                      // the settled snapshot explicitly so a successful no-op
+                      // refresh still renders and clears its pending state.
+                      await render();
+                    } catch (error) {
+                      showError(error);
+                    } finally {
+                      setRefreshing(false);
+                    }
+                  })();
                 };
                 addEventListener("pagehide", () => {
                   subscription[Symbol.dispose]();

@@ -9,6 +9,11 @@ import {
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
+// Preview is the latency-sensitive full suite. Queue the deliberately long
+// reconnect/resume proofs first so their fixed probe windows overlap the rest
+// of the catalogue. Keep the public web/mobile project interface elsewhere.
+const previewSlowFirst = process.env.PLAYWRIGHT_PREVIEW_SLOW_FIRST === "1";
+const resumeAfterSuspendSpec = "**/stream-resume-after-suspend.spec.ts";
 // CI retry artifacts already include screenshots/traces; retaining videos can
 // leave ffmpeg workers alive after a retry and keep the job open.
 const videoArtifactsEnabled = videoMode || !process.env.CI;
@@ -23,23 +28,27 @@ const mobileWebPort = Number(
 );
 process.env.PLAYWRIGHT_MOBILE_WEB_PORT = String(mobileWebPort);
 const mobileWebUrl = `http://127.0.0.1:${mobileWebPort}`;
+const desktopWebUse = {
+  ...devices["Desktop Chrome"],
+  viewport: { width: 1280, height: 900 },
+};
 
 export default defineConfig({
   testDir: "specs",
   testMatch: "**/*.spec.ts",
-  // Every spec provisions its own fixture project, so specs are independent.
-  // Parallel in CI against a deployed slot; sequential locally so a single
-  // dev server isn't hammered.
+  // Stateful specs provision isolated fixture projects; local-only helper
+  // specs share no remote state. Parallel in CI against a deployed slot;
+  // sequential locally so a single dev server isn't hammered.
   fullyParallel: !!process.env.CI,
   forbidOnly: !!process.env.CI,
   // One retry in CI — the only retry layer, per the fleet-wide policy
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Eight is also the deployed-slot concurrency ceiling for this suite. The
-  // OS preview runner executes its remote suites sequentially: allowing this
-  // suite's eight workers to overlap vitest's eight in-flight tests caused
-  // project-processor timeouts even though each suite was clean in isolation.
+  // Eight workers start the isolated catalogue promptly while keeping total
+  // preview pressure bounded as Vitest and the other OS lanes overlap it.
+  // Higher combined lane pressure did not shorten the measured preview and
+  // caused transient canceled ITX/Durable Object RPCs under full-fleet load.
   workers: process.env.CI ? 8 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
@@ -59,10 +68,19 @@ export default defineConfig({
     video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   projects: [
+    ...(previewSlowFirst
+      ? [
+          {
+            name: "preview-resilience",
+            testMatch: resumeAfterSuspendSpec,
+            use: desktopWebUse,
+          },
+        ]
+      : []),
     {
       name: "web",
-      testIgnore: "**/mobile/**",
-      use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } },
+      testIgnore: previewSlowFirst ? ["**/mobile/**", resumeAfterSuspendSpec] : "**/mobile/**",
+      use: desktopWebUse,
     },
     {
       name: "mobile",

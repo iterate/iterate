@@ -360,8 +360,8 @@ second, and every mechanism above the test layer either never fired or fired
 only on genuine infra wedges).
 
 1. **Retries live in exactly one layer: the individual test.** The test is
-   the smallest unit that owns its state — every test (and every
-   onboarding-smoke attempt) provisions its own project — so it is the
+   the smallest unit that owns its state — independently scheduled tests (and
+   every onboarding-smoke attempt) provision isolated projects — so it is the
    cheapest genuinely independent trial. `E2E_CI_RETRIES = 1` in CI, zero
    locally, everywhere: retrying anything larger re-runs minutes of healthy
    work to re-roll one six-second dice.
@@ -398,7 +398,7 @@ only on genuine infra wedges).
 | One vitest e2e test/hook    | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`                                                      | 120s                                              | retry once (CI)                                             |
 | The built-package TUI lane  | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_TUI_LANE_TIMEOUT_SECS`                                                   | 180s                                              | **fail — never retry**                                      |
 | A container-cold-boot test  | per-test `{ timeout }`                | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`                                                     | ≤ 240s                                            | retry once (CI)                                             |
-| The onboarding smoke gate   | attempt loop + `timeout N <command>`  | `apps/os/e2e/vitest/onboarding-smoke.ts`; `scripts/preview/preview.ts` ← `OS_ONBOARDING_SMOKE_TIMEOUT_SECS` | 90s greeting wait per attempt; 240s gate watchdog | one more attempt, then fail; watchdog expiry fails the lane |
+| The onboarding smoke lane   | attempt loop + `timeout N <command>`  | `apps/os/e2e/vitest/onboarding-smoke.ts`; `scripts/preview/preview.ts` ← `OS_ONBOARDING_SMOKE_TIMEOUT_SECS` | 90s greeting wait per attempt; 240s lane watchdog | one more attempt, then fail; watchdog expiry fails the lane |
 | Each Vitest/Playwright lane | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`                                               | 480s                                              | **fail — never retry**                                      |
 | One whole preview run       | `RUN_TIMEOUT_SECS` kill-tree watchdog | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                          | 600s                                              | **kill — never retry**                                      |
 | The Depot CI job            | `timeout-minutes`                     | `.depot/workflows/*.yml`                                                                                    | 10–45 (mainline/preview) / 300 (marathon)         | outer edge: re-run button                                   |
@@ -416,8 +416,9 @@ visible:
 - **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
 retries: ...` (the Vitest `RetryTelemetryReporter` lives in
   `packages/shared/src/test-support/e2e-policy/`); the onboarding smoke
-  prints the same marker when it needed attempt 2. Grep any run log for
-  `retry-telemetry`.
+  prints the same marker when it needed attempt 2. Vitest and Playwright
+  records retain the first failed attempt's compact error even when the retry
+  passes. Grep any run log for `retry-telemetry`.
 - **Preview CI**: the OS lane writes TUI and Vitest telemetry JSON (via
   `E2E_RETRY_TELEMETRY_FILE`) plus Playwright's `playwright-results.json`;
   `scripts/preview/preview.ts` folds all three into a `retries` column in the
