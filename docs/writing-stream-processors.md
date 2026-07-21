@@ -402,6 +402,14 @@ durability adapter, and processors over an in-memory stream, fake
 `capability-host-recovery.test.ts`; the registry's own isolation harness is
 `stream-processor-registry.test.ts`.
 
+With `makeProcessorHarness`, step tuples are the scenario spine; use
+`h.append(...)` and `h.advanceTime(...)` for single actions. Raw
+`h.stream.append(...)` is the committed-but-undelivered door: it commits to
+the stream without driving delivery, so reserve it for premises that need
+that distinction. When timing arithmetic depends on a config default such as
+a debounce or expiry, read it from `h.state().config...` instead of repeating
+the default as a magic number.
+
 The rules that keep these tests honest:
 
 - **Runtime state comes from lifecycle, never field injection.** An empty

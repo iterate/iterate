@@ -97,7 +97,6 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
   const sent: Parameters<DevicePushSender>[0][] = [];
   const clearedTokens: { pushTokenSecretPath: string; pushTokenSecretUpdatedOffset: number }[] = [];
   const receiptAlarms: (number | null)[] = [];
-  let processor!: DeviceProcessor;
   const base =
     substrate ??
     (() => {
@@ -105,9 +104,9 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
       const network = new MemoryStreamNetwork(() => clock.now);
       return { clock, stream: network.get("/devices/phone"), progress: makeMemoryProgressStore() };
     })();
-  const harness = makeProcessorHarness<DeviceProcessorContract>({
-    createProcessor: (deps) => {
-      processor = new DeviceProcessor({
+  const harness = makeProcessorHarness<DeviceProcessorContract, DeviceProcessor>({
+    createProcessor: (deps) =>
+      new DeviceProcessor({
         ...deps,
         projectId: "prj_test",
         send: async (input) => {
@@ -122,9 +121,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
         repointReceiptAlarm: async (atMs) => {
           receiptAlarms.push(atMs);
         },
-      });
-      return processor;
-    },
+      }),
     substrate: base,
   });
   return {
@@ -134,7 +131,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
     clearedTokens,
     receiptAlarms,
     rootEvents: () => harness.stream.network!.eventsAt("/"),
-    checkReceipts: () => processor.checkReceipts(harness.state()),
+    checkReceipts: () => harness.processor().checkReceipts(harness.state()),
   };
 }
 

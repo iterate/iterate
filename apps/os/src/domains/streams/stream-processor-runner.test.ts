@@ -15,7 +15,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
-import { defineProcessorContract } from "iterate/processors";
+import {
+  defineProcessorContract,
+  idempotencyConflictMessage,
+  sameIdempotentEvent,
+} from "iterate/processors";
 import { StreamProcessor } from "iterate/processors";
 import { ProcessorKeepalive, type KeepaliveRecord } from "iterate/processors";
 import {
@@ -165,6 +169,9 @@ function makeJournal(homePath = HOME) {
     if (event.idempotencyKey !== undefined) {
       const existing = rows.find((row) => row.idempotencyKey === event.idempotencyKey);
       if (existing !== undefined) {
+        if (!sameIdempotentEvent(existing, event)) {
+          throw new Error(idempotencyConflictMessage(event.idempotencyKey, existing.offset));
+        }
         attempts.push({ path, event, deduped: true });
         return existing;
       }
