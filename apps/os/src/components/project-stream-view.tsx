@@ -176,9 +176,11 @@ function MirroredProjectStreamView({
   const subscriberUser = useMemo<BrowserStreamSubscriberUser | undefined>(() => {
     if (!authSession?.authenticated) return undefined;
     const name = authSession.user.name?.trim();
+    const picture = authSession.user.picture?.trim();
     return {
       email: authSession.user.email,
       ...(name === undefined || name === "" ? {} : { name }),
+      ...(picture === undefined || picture === "" ? {} : { picture }),
     };
   }, [authSession]);
   const { resolvedStreamSource, store, snapshot } = useProjectStreamMirror({

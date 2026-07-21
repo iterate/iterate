@@ -3818,7 +3818,7 @@ export type LatencyStats = {
 /** Serializable subscriber identity carried on presence facts and the runtime connection table. */
 export type StreamSubscriberDescriptor = {
   description?: string | undefined;
-  user?: { email: string; name?: string | undefined } | undefined;
+  user?: { email: string; name?: string | undefined; picture?: string | undefined } | undefined;
   processor?:
     | {
         announcement: {

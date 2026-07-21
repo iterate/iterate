@@ -255,6 +255,7 @@ export const StreamSubscriberDescriptor = z.object({
     .object({
       email: z.string().trim().min(1),
       name: z.string().trim().min(1).optional(),
+      picture: z.string().trim().min(1).optional(),
     })
     .optional(),
   /** Present when the subscriber is a stream processor. */
