@@ -587,6 +587,33 @@ describe("ProjectProcessor direct custom domains", () => {
     expect(h.events("events.iterate.com/project/custom-domain-provision-failed")).toEqual([]);
   });
 
+  it("keeps a direct entry when a stray Cloudflare snapshot names the same hostname", async () => {
+    const h = makeProjectHarness();
+    await h.play(
+      ["append", PROJECT_CREATED],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/custom-domain-direct-observed",
+          payload: { hostname: "iterate.com" },
+        },
+      ],
+    );
+    const before = h.state().customDomains;
+
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/project/custom-domain-cloudflare-observed",
+        payload: customDomainSnapshot({ hostname: "iterate.com" }),
+      },
+    ]);
+
+    // Direct outranks any snapshot: lifecycle fields (and the UI's
+    // refresh/remove affordances) must not resurrect.
+    expect(h.state().customDomains).toEqual(before);
+  });
+
   it("keeps add/refresh/remove requests for a direct hostname away from the provisioner and the routing registration", async () => {
     // The trap this guards: ensure() for an already-live direct registration
     // creates a pending Cloudflare-for-SaaS hostname, and the non-active

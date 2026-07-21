@@ -506,15 +506,21 @@ export class ProjectProcessor extends StreamProcessor<
           wildcard: true,
         });
       }
-      case "events.iterate.com/project/custom-domain-cloudflare-observed":
+      case "events.iterate.com/project/custom-domain-cloudflare-observed": {
+        const observedDomain = state.customDomains.find(
+          (domain) => domain.hostname === event.payload.hostname,
+        );
+        // A direct registration outranks any Cloudflare snapshot — a stray
+        // observed fact (e.g. a pre-direct obligation settling late) must not
+        // resurrect lifecycle fields and their refresh/remove affordances.
+        if (observedDomain?.kind === "direct") return state;
         return upsertCustomDomain(state, {
           ...event.payload,
           kind: "cloudflare",
-          createdAt:
-            state.customDomains.find((domain) => domain.hostname === event.payload.hostname)
-              ?.createdAt ?? event.createdAt,
+          createdAt: observedDomain?.createdAt ?? event.createdAt,
           updatedAt: event.createdAt,
         });
+      }
       case "events.iterate.com/project/custom-domain-direct-observed": {
         // An operator's statement of routing truth: the hostname is live on
         // worker routes + a primed hostname-directory registration. Active by
