@@ -9,6 +9,11 @@ The old TypeScript workflow generator is gone. Edit the YAML directly, and put
 runtime logic in normal scripts under `scripts/ci` instead of embedding large
 `actions/github-script` blocks.
 
+Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
+failure-rate analysis lives in PostHog; see
+[CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
+scheduled backfill, required read-only Depot token, and CLI/MCP queries.
+
 ## Quick Links
 
 - [Depot CI dashboard](https://depot.dev/orgs/0p91s0lz49/workflows)

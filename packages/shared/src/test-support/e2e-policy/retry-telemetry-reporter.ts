@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { relative } from "node:path";
 
 /** A JSON-safe diagnostic retained from a test attempt. */
 export interface TestTelemetryError {
@@ -137,7 +138,7 @@ export class RetryTelemetryReporter {
     this.hookDurations.set(hook.entity, durations);
   }
 
-  onTestRunEnd(testModules: ReadonlyArray<ReportedTestModule>): void {
+  async onTestRunEnd(testModules: ReadonlyArray<ReportedTestModule>): Promise<void> {
     try {
       const tests: TestTelemetryRecord[] = [];
       const modules: ModuleTelemetryRecord[] = [];
@@ -219,6 +220,9 @@ export class RetryTelemetryReporter {
         const payload: RetryTelemetryFile = { tests, modules, retried };
         writeFileSync(outputFile, JSON.stringify(payload, null, 2));
       }
+      if (process.env.TEST_TELEMETRY_ENABLED === "1") {
+        await captureVitestTelemetry({ modules, tests });
+      }
       if (retried.length > 0) {
         const details = retried
           .map(
@@ -230,6 +234,9 @@ export class RetryTelemetryReporter {
       }
     } catch (error) {
       console.error("[retry-telemetry] failed to record test telemetry:", error);
+      // CI must never go green after silently losing the telemetry used to
+      // explain its own failures and latency. Local runs remain best-effort.
+      if (process.env.TEST_TELEMETRY_ENABLED === "1") throw error;
     }
   }
 
@@ -245,6 +252,145 @@ export class RetryTelemetryReporter {
     this.moduleTimes.set(testModule, created);
     return created;
   }
+}
+
+export default RetryTelemetryReporter;
+
+async function captureVitestTelemetry(input: {
+  tests: TestTelemetryRecord[];
+  modules: ModuleTelemetryRecord[];
+}) {
+  const rawConfig = process.env.APP_CONFIG_POSTHOG?.trim();
+  if (!rawConfig) throw new Error("APP_CONFIG_POSTHOG is required when TEST_TELEMETRY_ENABLED=1");
+  const parsed = JSON.parse(rawConfig) as { apiKey?: unknown; host?: unknown };
+  if (typeof parsed.apiKey !== "string" || parsed.apiKey.length === 0) {
+    throw new Error("APP_CONFIG_POSTHOG.apiKey is required when TEST_TELEMETRY_ENABLED=1");
+  }
+  const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
+  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
+  const workspace =
+    process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? process.cwd();
+  const normalizeModuleId = (moduleId: string) => {
+    const repositoryRoot = process.env.GITHUB_WORKSPACE;
+    if (!repositoryRoot || !moduleId.startsWith(repositoryRoot)) return moduleId;
+    return relative(repositoryRoot, moduleId);
+  };
+  const distinctId = `ci-test:${runId}:${runAttempt}:${workspace}:${process.pid}`;
+  const common = {
+    schema_version: 2,
+    framework: "vitest",
+    test_kind: process.env.TEST_TELEMETRY_KIND ?? "unit",
+    lane: process.env.TEST_TELEMETRY_LANE ?? "unit",
+    workspace,
+    repository: process.env.GITHUB_REPOSITORY ?? "iterate/iterate",
+    head_sha: process.env.GITHUB_SHA,
+    branch: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME,
+    workflow_name: process.env.GITHUB_WORKFLOW,
+    workflow_run_id: runId,
+    workflow_run_attempt: runAttempt,
+    pull_request_number: pullRequestNumber(process.env.GITHUB_REF),
+    workflow_run_url:
+      process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+        ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+        : undefined,
+    runner_provider: process.env.DEPOT_JOB_URL ? "depot" : "github-actions",
+    execution_context: process.env.GITHUB_RUN_ID ? "ci" : "local",
+    depot_job_url: process.env.DEPOT_JOB_URL,
+    $process_person_profile: false,
+  };
+  let sequence = 0;
+  const event = (name: string, properties: Record<string, unknown>) => ({
+    event: name,
+    properties: {
+      distinct_id: distinctId,
+      ...common,
+      ...properties,
+      $insert_id: `${distinctId}:${++sequence}`,
+    },
+  });
+  const batch = [
+    ...input.tests.map((test) =>
+      event("ci test finished", {
+        test_name: test.fullName,
+        test_module: normalizeModuleId(test.moduleId),
+        test_state: test.state,
+        duration_ms: test.durationMs,
+        retry_count: test.retryCount,
+        passed_after_retry: test.passedAfterRetry,
+        schedule_delay_ms: test.scheduleDelayMs,
+        before_each_duration_ms: test.beforeEachDurationMs,
+        after_each_duration_ms: test.afterEachDurationMs,
+        body_duration_ms: test.bodyDurationMs,
+        error_count: test.errors.length,
+        error_name: test.errors[0]?.name,
+        error_message: test.errors[0]?.message.slice(0, 2_000),
+      }),
+    ),
+    ...input.tests.flatMap((test) =>
+      test.phases.map((phase) =>
+        event("ci test phase finished", {
+          test_name: test.fullName,
+          test_module: normalizeModuleId(test.moduleId),
+          phase_name: phase.name,
+          phase_category: phase.category,
+          duration_ms: phase.durationMs,
+        }),
+      ),
+    ),
+    ...input.modules.map((module) =>
+      event("ci test module finished", {
+        test_module: normalizeModuleId(module.moduleId),
+        environment_setup_duration_ms: module.environmentSetupDurationMs,
+        prepare_duration_ms: module.prepareDurationMs,
+        collect_duration_ms: module.collectDurationMs,
+        setup_duration_ms: module.setupDurationMs,
+        test_and_hook_duration_ms: module.testAndHookDurationMs,
+        import_duration_ms: module.importDurationMs,
+        queue_duration_ms: module.queueDurationMs,
+        execution_wall_duration_ms: module.executionWallDurationMs,
+      }),
+    ),
+    event("ci test run finished", {
+      status: input.tests.some((test) => test.state === "failed") ? "failed" : "passed",
+      test_count: input.tests.length,
+      failed_test_count: input.tests.filter((test) => test.state === "failed").length,
+      retried_test_count: input.tests.filter((test) => test.retryCount > 0).length,
+      module_count: input.modules.length,
+    }),
+  ];
+  const host = typeof parsed.host === "string" ? parsed.host : "https://eu.i.posthog.com";
+  for (let offset = 0; offset < batch.length; offset += 100) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(`${host.replace(/\/$/, "")}/batch/`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            api_key: parsed.apiKey,
+            batch: batch.slice(offset, offset + 100),
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          throw new Error(
+            `PostHog test telemetry returned ${response.status}: ${await response.text()}`,
+          );
+        }
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+    if (lastError) throw new Error("PostHog test telemetry delivery failed", { cause: lastError });
+  }
+}
+
+function pullRequestNumber(githubRef: string | undefined): number | undefined {
+  const match = githubRef?.match(/^refs\/pull\/(\d+)\/(?:merge|head)$/u);
+  return match ? Number(match[1]) : undefined;
 }
 
 function roundedOptionalTime<Key extends string>(key: Key, value: number | undefined) {
