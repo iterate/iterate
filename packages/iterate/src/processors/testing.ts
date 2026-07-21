@@ -288,9 +288,15 @@ const progressSubstrates = new WeakMap<object, HarnessDurabilitySubstrate>();
 
 function makeDurabilitySubstrate(): HarnessDurabilitySubstrate {
   const kv = new Map<string, unknown>();
+  // `null as number | null` widens the literal so later `alarm.at = 123`
+  // assignments typecheck — an annotated `let` can't live in an object field.
   const alarm = { at: null as number | null };
   const storage = {
     kv: {
+      // The map stores whatever the caller `put` under the key; `get<T>`
+      // mirrors the platform API's caller-asserted typing (the real
+      // DurableObjectStorage.kv.get is exactly this trust), so the cast
+      // restates the platform contract, not a new claim.
       get: <T = unknown>(key: string): T | undefined =>
         kv.has(key) ? (structuredClone(kv.get(key)) as T) : undefined,
       put: (key: string, value: unknown) => void kv.set(key, structuredClone(value)),
@@ -302,6 +308,12 @@ function makeDurabilitySubstrate(): HarnessDurabilitySubstrate {
     deleteAlarm: async () => {
       alarm.at = null;
     },
+    // Double assertion because this implements only the members the keepalive
+    // and progress adapters touch (kv get/put, get/set/deleteAlarm) — the
+    // platform type's dozens of other members (sql, transactions, bookmarks)
+    // are structurally missing on purpose. Safe for every consumer HERE
+    // because the adapters' member usage is pinned by these suites; a new
+    // adapter dependency would throw undefined-is-not-a-function loudly.
   } as unknown as DurableObjectStorage;
   return { storage, alarm };
 }
@@ -394,6 +406,11 @@ export function makeProcessorHarness<
         progressSubstrates.get(args.substrate.progress));
   const durability = inheritedDurability ?? makeDurabilitySubstrate();
 
+  // The substrate stores progress as `<unknown>` so one substrate type serves
+  // every contract; the narrowing is safe because a substrate is only ever
+  // shared between incarnations of the SAME processor (the zombie-race
+  // setup), so the state it holds is this contract's. TypeScript cannot carry
+  // the contract through the untyped substrate hand-off.
   let progress = args.substrate?.progress as
     | ProcessorProgressStore<ProcessorState<Contract>>
     | undefined;
@@ -460,6 +477,9 @@ export function makeProcessorHarness<
   const substrate: HarnessSubstrate = {
     clock,
     stream,
+    // Inverse of the narrowing above: the substrate's public face erases the
+    // contract (stores are invariant in their state parameter, so neither
+    // direction is assignable without the assertion pair).
     progress: progress as ProcessorProgressStore<unknown>,
   };
   if (args.substrate !== undefined) durabilitySubstrates.set(args.substrate, durability);
@@ -520,6 +540,10 @@ export function makeProcessorHarness<
   };
 
   const append = async (...events: ConsumedInput<Contract>[]) => {
+    // A consumed input IS a stream event input — the contract type only
+    // narrows `type`/`payload` to the consumed vocabulary. TypeScript cannot
+    // relate the distributive contract-derived union back to the plain input
+    // shape, so the widening is asserted.
     await stream.append(...(events as StreamEventInput[]));
     deliveryEnabled = true;
     await settle();
@@ -559,6 +583,11 @@ export function makeProcessorHarness<
     crash,
     settle,
     state: () => runner.currentState,
+    // TypeScript cannot check an implementation arrow against an overload
+    // pair, so the assertion is unavoidable. Soundness is the same claim the
+    // typed read surface makes everywhere: rows filtered to `type` carry that
+    // type's contract payload — committed rows are trusted, not re-parsed,
+    // exactly like production reads.
     events: ((type?: string) =>
       type === undefined
         ? [...stream.events]
