@@ -18,12 +18,25 @@ runtime dependency graph even when it imports a narrow SDK subpath such as
 This is particularly expensive for userspace apps. The dynamic worker builder
 installs a package and all of its declared runtime dependencies before esbuild
 can tree-shake unused exports. A guestbook client that only needs LiveState
-therefore also downloads the CLI, OpenTUI, ORPC, and other unrelated dependency
-trees. Subpath exports cannot fix this because npm dependencies are declared
-for the whole package, not per export.
+therefore also downloads Clack, trpc-cli, ORPC, and other unrelated CLI
+dependency trees. OpenTUI is now optional and is not traversed by the current
+worker-bundler installer, but it still belongs on the CLI side of the eventual
+package boundary. Subpath exports cannot fix the underlying problem because npm
+dependencies are declared for the whole package, not per export.
 
-PR #2167 applies a tactical cleanup by correctly classifying optional TUI and
-type-only dependencies. The durable fix is a real package boundary.
+PR #2167 applied a tactical cleanup by correctly classifying optional TUI and
+type-only dependencies. Until this task lands, the existing worker-bundler
+patch also contains a deliberately gross workaround: when the package being
+installed is named `iterate`, the installer follows only a hard-coded SDK
+dependency allowlist (`@iterate-com/capnweb`, `@tanstack/react-query`, `react`,
+and `zod`). This avoids downloading the known CLI graph during dynamic app
+builds without pretending to provide import-aware package installation.
+
+The allowlist does not change the published manifest or solve the package
+boundary. A new SDK runtime dependency must be added to the allowlist or the
+userspace build will fail, deliberately and visibly. Remove the allowlist and
+the worker-bundler patch as part of this task once seeded apps install the real
+SDK artifact.
 
 ## Goal
 
@@ -71,12 +84,17 @@ select the exact pkg.pr.new artifact for a preview PR head.
   policy; they must not silently fall back to an unrelated moving version.
 - The package must install through conventional npm-compatible semantics. Do
   not teach worker-bundler to lazily approximate a package manager or maintain
-  an application-specific transitive-dependency allowlist.
+  an application-specific transitive-dependency allowlist. The temporary
+  `iterate` allowlist described above is explicitly technical debt to delete,
+  not part of the target design.
 
 ## Acceptance criteria
 
 - [ ] A freshly packed SDK has no dependencies on OpenTUI, Clack, ORPC,
       trpc-cli, Octokit, or CLI-only Node packages.
+- [ ] Remove the hard-coded `iterate` dependency allowlist from the
+      worker-bundler patch; installing the SDK follows its complete published
+      dependency graph normally.
 - [ ] The guestbook and todo templates consume the published SDK through their
       existing `iterate/...` imports with no virtual-module copies or CDN
       imports.
