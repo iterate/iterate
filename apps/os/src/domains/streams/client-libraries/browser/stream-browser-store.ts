@@ -62,6 +62,11 @@ import {
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
 import { catchUpDurableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
+import {
+  browserStreamSubscriberDescriptor,
+  browserStreamSubscriberUserUpdate,
+  type BrowserStreamSubscriberUser,
+} from "./browser-subscriber.ts";
 import { LiveAgentStateChannel, liveAgentStateChannelName } from "./live-agent-state-channel.ts";
 import { acquireDatabase } from "./stream-database-registry.ts";
 import {
@@ -172,6 +177,8 @@ export type BrowserProcessorConfig = {
 type BrowserStreamConnectionConfig = {
   projectId?: string;
   createStreamClient: BrowserStreamClientFactory;
+  /** Authenticated human shown in the stream's ephemeral presence roster. */
+  subscriberUser?: BrowserStreamSubscriberUser;
   streamUrl?: string | URL | ((args: { projectId: string; streamPath: string }) => string | URL);
   /**
    * Evict the transport `createStreamClient` dials through, so the NEXT call
@@ -241,6 +248,8 @@ export type StreamBrowserStore = Disposable & {
    * stale instead of waiting for the next paced probe.
    */
   nudge(): Promise<void>;
+  /** Refresh the identity announced by this browser's live subscription. */
+  setSubscriberUser(user: BrowserStreamSubscriberUser | undefined): void;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -327,6 +336,10 @@ function createStreamRuntime(
     createStreamClient: args.createStreamClient,
     resetTransport: args.resetTransport,
   };
+  // Like the transport, auth session data may refresh while this shared
+  // runtime outlives the render that acquired it. Subscription opens read the
+  // latest identity instead of pinning the creating render's snapshot.
+  let subscriberUser = args.subscriberUser;
   const members = args.processors;
   // A single label for log lines, the debug registry key, and the server
   // subscription key. Each member's OWN slug is used for its storage (tables,
@@ -633,7 +646,7 @@ function createStreamRuntime(
   // late "closed"/"error" callbacks are ignored and can't shorten an in-flight backoff. The
   // next connect() runs a fresh election that re-reads the persisted checkpoint, so the server
   // replays after the last applied offset.
-  function scheduleReconnect(connectionError: string, delayMs: number) {
+  function restartConnection(connectionError: string | undefined, delayMs: number) {
     if (disposed) return;
     connectionEpoch += 1;
     pendingIngestEvents = 0;
@@ -648,6 +661,10 @@ function createStreamRuntime(
       reconnectTimer = undefined;
       connect();
     }, delayMs);
+  }
+
+  function scheduleReconnect(connectionError: string, delayMs: number) {
+    restartConnection(connectionError, delayMs);
   }
 
   function reconnectNow() {
@@ -1471,12 +1488,10 @@ function createStreamRuntime(
         return {
           processor,
           replayAfterOffset,
-          subscriber: {
-            description: "browser",
-            processor: {
-              announcement: announceContract(processor.contract),
-            },
-          },
+          subscriber: browserStreamSubscriberDescriptor({
+            announcement: announceContract(processor.contract),
+            ...(subscriberUser === undefined ? {} : { user: subscriberUser }),
+          }),
           getRuntimeState: capabilities.getRuntimeState,
           ping: capabilities.ping,
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
@@ -2216,6 +2231,15 @@ function createStreamRuntime(
       reconnectNow();
     },
     nudge,
+    setSubscriberUser(next) {
+      const update = browserStreamSubscriberUserUpdate({
+        current: subscriberUser,
+        next,
+        started,
+      });
+      subscriberUser = update.user;
+      if (update.reconnect) restartConnection(undefined, 0);
+    },
     isDisposed: () => disposed,
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
