@@ -266,10 +266,11 @@ function MirroredProjectStreamView({
     streamPath,
   });
 
-  const streamIsConnected =
-    snapshot.connectionStatus === "connected" || snapshot.connectionStatus === "subscribed";
+  // Election starts only after createStreamClient resolves, so every non-idle
+  // role has a usable transport (including followers, which never subscribe).
+  const streamTransportReady = snapshot.subscriptionStatus !== "idle";
   const connectionLabel =
-    snapshot.connectionError ?? (streamIsConnected ? emptyLabel : snapshot.connectionStatus);
+    snapshot.connectionError ?? (streamTransportReady ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
   const presence = presentedAgentUiState?.presence ?? [];
@@ -317,7 +318,7 @@ function MirroredProjectStreamView({
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={caps.agentFeed ? agentUiState == null : !streamIsConnected}
+      isPending={caps.agentFeed ? agentUiState == null : !streamTransportReady}
       pendingLabel={caps.agentFeed ? "Initializing agent" : undefined}
     />
   );
@@ -343,7 +344,7 @@ function MirroredProjectStreamView({
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          {eventCount > 0 && !streamIsConnected ? (
+          {eventCount > 0 && !streamTransportReady ? (
             <p
               className="px-4 text-xs text-muted-foreground"
               data-testid="stream-cache-status"
@@ -363,7 +364,9 @@ function MirroredProjectStreamView({
             <QueuedMessagesPanel
               messages={queuedUserMessages}
               isInterrupting={interrupt?.isInterrupting ?? false}
-              {...(interrupt == null || !streamIsConnected ? {} : { onInterrupt: interrupt.run })}
+              {...(interrupt == null || !streamTransportReady
+                ? {}
+                : { onInterrupt: interrupt.run })}
             />
             <StreamViewComposer
               autoFocusMessage={autoFocusMessageComposer}
@@ -377,7 +380,7 @@ function MirroredProjectStreamView({
               onNudgeDeliveries={nudgeDeliveries}
               presence={presence}
               store={store}
-              disabled={!streamIsConnected}
+              disabled={!streamTransportReady}
             />
           </div>
         </div>

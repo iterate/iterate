@@ -57,6 +57,15 @@ test("a cached stream opens before its live connection", async ({ baseURL, helpe
   // like a very slow network: it opens but never returns an ITX frame.
   await page.goto(route);
   await cachedRow.waitFor({ timeout: 30_000 });
+
+  // The first tab holds the mirror lock; the follower's own ITX transport can still write.
+  const follower = await page.context().newPage();
+  await follower.goto(route);
+  await follower
+    .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
+    .waitFor({ timeout: 30_000 });
+  await follower.close();
+
   let restoreConnections = false;
   const stalledSockets: WebSocketRoute[] = [];
   await page.routeWebSocket(
