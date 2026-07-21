@@ -2621,6 +2621,58 @@ describe("assignEnvironmentConfigLease", () => {
     );
   });
 
+  test("finishes an interrupted requested-slot move when the holder owns both slots", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const acquireSpecific = vi.fn(async (input: { force?: boolean; slug: string }) => {
+      if (input.slug === "preview-2") {
+        return fakeLease({
+          slug: "preview-2",
+          leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+        });
+      }
+      return input.force
+        ? fakeLease({
+            slug: "preview-17",
+            data: { dopplerConfig: "preview_17" },
+            leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7",
+          })
+        : null;
+    });
+    const semaphore = fakeSemaphore({
+      acquireSpecific,
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-17", "pr-1600", "preview_17"),
+      ]),
+      release,
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
+      wantedSlug: "preview-17",
+    });
+
+    expect(result).toMatchObject({
+      changedFromSlug: "preview-2",
+      lease: { slug: "preview-17" },
+      outcome: "moved",
+      previousLeaseReleased: true,
+    });
+    expect(acquireSpecific).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true, slug: "preview-17" }),
+    );
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+        slug: "preview-2",
+      }),
+    );
+  });
+
   test("reports broken ownership when re-acquiring the same slug after losing it", async () => {
     // The semaphore attributes the slot to someone else, and the non-force
     // re-take fails; --force re-takes the SAME slug. Outcome must not be

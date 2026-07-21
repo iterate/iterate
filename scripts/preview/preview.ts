@@ -4408,16 +4408,16 @@ async function assignEnvironmentConfigLease(input: {
 
   let lease: EnvironmentConfigLease;
   if (input.wantedSlug) {
-    if (input.force) {
-      const currentHolder = await findEnvironmentConfigLeaseHolder(
-        input.semaphore,
-        input.wantedSlug,
+    const currentHolder = await findEnvironmentConfigLeaseHolder(input.semaphore, input.wantedSlug);
+    const resumeInterruptedMove = currentHolder === input.holder;
+    if (resumeInterruptedMove) {
+      logPreview(
+        `continuing interrupted move: ${input.holder} already holds requested slot ${input.wantedSlug}`,
       );
-      if (currentHolder && currentHolder !== input.holder) {
-        logPreview(
-          `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
-        );
-      }
+    } else if (input.force && currentHolder) {
+      logPreview(
+        `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
+      );
     }
 
     const acquired = await input.semaphore.acquireSpecific({
@@ -4426,7 +4426,10 @@ async function assignEnvironmentConfigLease(input: {
       slug: input.wantedSlug,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       holder: input.holder,
-      force: input.force,
+      // Semaphore intentionally rejects every active lease without force,
+      // including another lease held by this same holder. Re-issue that one
+      // exactly like adoption, then release the old recorded slot below.
+      force: input.force || resumeInterruptedMove,
     });
     if (!acquired) {
       const currentHolder = await findEnvironmentConfigLeaseHolder(
