@@ -6,7 +6,27 @@ import type {
   AgentUiActivity,
   AgentUiLlmStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { RichMessageResponse } from "@iterate-com/ui/components/ai-elements/message-response-rich";
 import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
+
+test("assistant responses render inline and display maths with accessible MathML", () => {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <RichMessageResponse mode="static" parseIncompleteMarkdown={false}>
+      {[
+        "The determinant is $$\\det J_F = 1$$.",
+        "",
+        "$$",
+        String.raw`F(x,y,z)=\begin{pmatrix}(1+xy)^3z\\y+3x(1+xy)^2z\\2x-3x^2y-x^3z\end{pmatrix}`,
+        "$$",
+      ].join("\n")}
+    </RichMessageResponse>,
+  );
+
+  expect(container.querySelectorAll(".katex")).toHaveLength(2);
+  expect(container.querySelectorAll(".katex-display")).toHaveLength(1);
+  expect(container.querySelectorAll("math")).toHaveLength(2);
+});
 
 afterEach(() => {
   vi.useRealTimers();

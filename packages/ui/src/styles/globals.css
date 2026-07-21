@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "katex/dist/katex.min.css";
 
 @source "../**/*.{ts,tsx}";
 @source "../../../services/*/src/ui/**/*.{ts,tsx}";
@@ -7,6 +8,7 @@
    Tailwind classes of their own; scan its dist so they exist in the output.
    https://streamdown.ai — "update your globals.css to include the following" */
 @source "../../node_modules/streamdown/dist/*.js";
+@source "../../node_modules/@streamdown/math/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 

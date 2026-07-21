@@ -361,8 +361,8 @@ function PlainMessageResponse({ children, className }: StreamdownProps) {
 const RichMessageResponse: ComponentType<StreamdownProps> = import.meta.env.SSR
   ? PlainMessageResponse
   : lazy(async (): Promise<{ default: ComponentType<StreamdownProps> }> => {
-      const { Streamdown } = await import("streamdown");
-      return { default: Streamdown as ComponentType<StreamdownProps> };
+      const { RichMessageResponse } = await import("./message-response-rich");
+      return { default: RichMessageResponse };
     });
 
 export type MessageResponseProps = StreamdownProps & {
