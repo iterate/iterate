@@ -142,6 +142,11 @@ export class CollabHost {
     return this.#store.hasSession(CollabHost.canonical(path));
   }
 
+  /** Every durable session path — for listings and mount-transition sweeps. */
+  livePaths(): string[] {
+    return this.#store.livePaths();
+  }
+
   /** The engine for a durable session, recovered lazily after eviction. */
   async #opened(path: string) {
     return this.#engine.open(path, () => {

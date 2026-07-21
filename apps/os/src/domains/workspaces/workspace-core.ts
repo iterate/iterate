@@ -821,7 +821,10 @@ type GroupedOverlay = {
  */
 /** A mount point or a strict ancestor of one: a DIRECTORY in the merged view
  * by construction — no file may appear, be written, or be deleted there. */
-function isVirtualDirectoryPath(mounts: Record<string, WorkspaceMount>, path: string): boolean {
+export function isVirtualDirectoryPath(
+  mounts: Record<string, WorkspaceMount>,
+  path: string,
+): boolean {
   const resolved = resolveAbsolutePath(path);
   return Object.keys(mounts).some((key) => {
     const mountPath = resolveAbsolutePath(key);

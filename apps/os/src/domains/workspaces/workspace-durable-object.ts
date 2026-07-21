@@ -34,7 +34,9 @@ import { normalizeWorkspaceMountKeys } from "./utils.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
-import { routeMount } from "./workspace-core.ts";
+import { minimatch } from "minimatch";
+import { resolveAbsolutePath } from "./paths.ts";
+import { isVirtualDirectoryPath, routeMount } from "./workspace-core.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 // Configuration appends assert their exact stream offset (no interleaved
@@ -236,11 +238,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // sessions settle so their dirtiness is visible to the transition-safety
     // check, and no debounce flush can interleave between that settle and the
     // transition itself — the same fence commits use.
-    return this.#collab.barrier(() =>
+    return this.#collab.barrier(async () => {
+      const before = this.#currentConfig().mounts;
       // Serialized with the core's mutations and commits: an unmount or repo
       // swap must never interleave a commit that already classified against
       // the old table.
-      this.#core.runExclusive(() =>
+      const applied = await this.#core.runExclusive(() =>
         this.#applyConfigTransition((current) => {
           // The reduce is deliberately TOLERANT (a committed event must never
           // wedge the reducer), so the door supplies the loudness — validated
@@ -257,8 +260,23 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           }
           return config;
         }),
-      ),
-    );
+      );
+      // A session bound to a removed or re-pointed mount would keep serving
+      // the OLD repo's text as the live truth for the path. The barrier just
+      // settled everything, so ending them here loses nothing committed.
+      const stalePrefixes = Object.entries(before)
+        .filter(([key, mount]) => applied.mounts[key]?.repoPath !== mount.repoPath)
+        .map(([key]) => resolveAbsolutePath(key));
+      if (stalePrefixes.length > 0) {
+        const doomed = this.#collab
+          .livePaths()
+          .filter((path) =>
+            stalePrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`)),
+          );
+        if (doomed.length > 0) this.#collab.endSessions(doomed);
+      }
+      return applied;
+    });
   }
 
   // A live collaborative session is the current truth for its path, and the
@@ -293,10 +311,10 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     if (paths.length > 10_000) throw new Error("readFiles caps at 10000 paths per call");
     const result: Record<string, string | null> = {};
     const mounts = this.#currentConfig().mounts;
-    // Live sessions and overlay copies first (local reads); what remains is
-    // mount fall-through, grouped so each mount pays ONE snapshot RPC —
-    // fanning per-file reads at a repo object is the documented overload.
-    const byMount = new Map<string, { paths: string[]; repoPath: string }>();
+    // Live sessions and overlay copies first (local, concurrent); the mount
+    // fall-through is grouped so each mount pays ONE snapshot RPC — fanning
+    // per-file reads at a repo object is the documented overload.
+    const leftover: string[] = [];
     await Promise.all(
       paths.map(async (path) => {
         const live = await this.#collab.readFile(path);
@@ -309,32 +327,40 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           result[path] = local;
           return;
         }
-        // Delete whiteouts mask mount fall-through exactly as in readFile —
-        // a deleted mount file must not resurrect in batched reads.
-        if (this.#core.isMaskedFromMount(path)) {
-          result[path] = null;
-          return;
-        }
-        const resolved = routeMount(mounts, path);
-        if (resolved === null || resolved.repoRelativePath === "") {
-          result[path] = null;
-          return;
-        }
-        const group = byMount.get(resolved.mountPath) ?? {
-          paths: [],
-          repoPath: resolved.mount.repoPath,
-        };
-        group.paths.push(path);
-        byMount.set(resolved.mountPath, group);
+        leftover.push(path);
       }),
     );
+    // Grouping is SYNCHRONOUS — an awaited get/set per path could interleave,
+    // mint two groups for one mount, and drop the first group's members. The
+    // fall-through mirrors readFile exactly: whiteouts mask, virtual
+    // directories are directories, and the ROUTED repo-relative key (not a
+    // string slice of the raw path) addresses the snapshot.
+    const byMount = new Map<
+      string,
+      { entries: { path: string; repoRelativePath: string }[]; repoPath: string }
+    >();
+    for (const path of leftover) {
+      if (this.#core.isMaskedFromMount(path) || isVirtualDirectoryPath(mounts, path)) {
+        result[path] = null;
+        continue;
+      }
+      const resolved = routeMount(mounts, path);
+      if (resolved === null || resolved.repoRelativePath === "") {
+        result[path] = null;
+        continue;
+      }
+      const group = byMount.get(resolved.mountPath) ?? {
+        entries: [],
+        repoPath: resolved.mount.repoPath,
+      };
+      group.entries.push({ path, repoRelativePath: resolved.repoRelativePath });
+      byMount.set(resolved.mountPath, group);
+    }
     await Promise.all(
-      [...byMount.entries()].map(async ([mountPath, group]) => {
+      [...byMount.values()].map(async (group) => {
         const snapshot = await this.#repoStub(group.repoPath).getFilesSnapshot();
-        const prefix = mountPath === "/" ? "/" : `${mountPath}/`;
-        for (const path of group.paths) {
-          const repoRelative = path.startsWith(prefix) ? path.slice(prefix.length) : path;
-          result[path] = snapshot.files[repoRelative] ?? null;
+        for (const entry of group.entries) {
+          result[entry.path] = snapshot.files[entry.repoRelativePath] ?? null;
         }
       }),
     );
@@ -382,12 +408,17 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async listAllFiles(): Promise<string[]> {
     await this.#assertCreated();
-    return this.#core.listAllFiles();
+    // Live-only sessions (opened on a missing path, unflushed) are readable
+    // and exist — listings must agree with readFile/exists.
+    const merged = new Set(await this.#core.listAllFiles());
+    for (const path of this.#collab.livePaths()) merged.add(path);
+    return [...merged].sort();
   }
 
   async glob(pattern: string): Promise<string[]> {
     await this.#assertCreated();
-    return this.#core.glob(pattern);
+    const all = await this.listAllFiles();
+    return all.filter((path) => minimatch(path, pattern, { dot: true }));
   }
 
   async reset(): Promise<void> {
