@@ -21,11 +21,13 @@ import {
   safeHost,
   type OpenRequest,
 } from "../../../lib/approvals.ts";
-import { approvalsQueryKey, loadAndFollowApprovals } from "../../../lib/live-approvals.ts";
-import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
+import { useLiveEvents } from "../../../lib/use-live-events.ts";
+
+const APPROVAL_EVENT_TYPES = [EVENT.requested, EVENT.granted, EVENT.rejected, EVENT.settled];
 
 export default function ApprovalsScreen() {
   const { projectId, approvalRequestEventOffset } = useLocalSearchParams<{
@@ -51,8 +53,7 @@ export default function ApprovalsScreen() {
   const enroll = useMutation({
     mutationFn: async () => {
       const info = await enrollApproverKey(projectId, "This iPhone");
-      const itx = await getItxSession(baseUrl!);
-      const project = await itx.projects.get(projectId);
+      const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get("/");
       await stream.append({
         type: EVENT.keyAdded,
@@ -63,18 +64,16 @@ export default function ApprovalsScreen() {
     onSuccess: () => key.refetch(),
   });
 
-  const events = useQuery({
-    queryKey: baseUrl ? approvalsQueryKey(baseUrl, projectId) : ["approval-events", "pending"],
-    queryFn: async () => {
-      try {
-        return await loadAndFollowApprovals(baseUrl!, projectId);
-      } catch (error) {
-        resetItxSession();
-        throw error;
-      }
+  const events = useLiveEvents({
+    queryKey: baseUrl ? ["approval-events", baseUrl, projectId] : ["approval-events", "pending"],
+    read: async () => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_EVENT_TYPES });
     },
     enabled: baseUrl !== undefined,
-    staleTime: Infinity,
+    eventTypes: APPROVAL_EVENT_TYPES,
+    projectId,
+    streamPath: "/",
   });
 
   const open = useMemo(
@@ -90,8 +89,7 @@ export default function ApprovalsScreen() {
 
   const respond = useMutation({
     mutationFn: async (input: { request: OpenRequest; decision: "grant" | "reject" }) => {
-      const itx = await getItxSession(baseUrl!);
-      const project = await itx.projects.get(projectId);
+      const project = await getProjectItx(baseUrl!, projectId);
       const stream = project.streams.get("/");
       if (input.decision === "reject") {
         await reject(stream, input.request.offset);

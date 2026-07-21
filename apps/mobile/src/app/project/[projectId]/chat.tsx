@@ -1,11 +1,10 @@
 // Chat thread — one agent stream rendered as a feed. The heart of the app.
 //
-// Data flow: loadAndFollowThread (lib/live-thread.ts) reads the stream's
-// events and keeps a live server-push subscription feeding the same query
-// cache, so this screen is a plain useQuery consumer. Sending appends to the
-// agent stream over itx (the same lane the web dashboard uses); the echo of
-// our own message and everything the agent does arrive through the
-// subscription.
+// Data flow: useLiveEvents reads the stream, then uses iterate/react's
+// useItxSubscription to feed server-pushed batches into the same query cache.
+// Sending appends to the agent stream over itx (the same lane the web dashboard
+// uses); the echo of our own message and everything the agent does arrive
+// through the subscription.
 //
 // Rendering runs the SAME reduction as the web dashboard (packages/ui
 // agent-ui-reducer via lib/feed.ts): user/assistant bubbles plus activity
@@ -41,6 +40,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
+import type { Agent, StreamEvent } from "iterate/react";
 import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
@@ -51,12 +51,11 @@ import {
   type AgentUiItem,
   type AgentUiMessageItem,
 } from "../../../lib/feed.ts";
-import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
-import { loadAndFollowThread, threadQueryKey } from "../../../lib/live-thread.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
+import { useLiveEvents } from "../../../lib/use-live-events.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { buildStreamViewerUrl } from "../../../lib/stream-url.ts";
-import type { Agent, StreamEvent } from "../../../../../os/src/itx-api.generated.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
 
 export default function ChatScreen() {
@@ -75,13 +74,13 @@ export default function ChatScreen() {
   });
   const baseUrl = server.data;
 
-  const events = useQuery({
-    queryKey: threadQueryKey(baseUrl || "", projectId, path),
-    queryFn: async () => {
+  const events = useLiveEvents({
+    queryKey: ["thread-events", baseUrl || "", projectId, path],
+    read: async () => {
       try {
-        return await loadAndFollowThread(baseUrl!, projectId, path);
+        const project = await getProjectItx(baseUrl!, projectId);
+        return await project.streams.get(path).getEvents({});
       } catch (error) {
-        resetItxSession();
         // Redirect from the async failure, not render: render-time
         // navigation re-fires on every re-render while the error persists.
         if (error instanceof SignInRequiredError) router.replace("/");
@@ -89,8 +88,9 @@ export default function ChatScreen() {
       }
     },
     enabled: baseUrl !== undefined,
-    // The live subscription owns updates after the initial load.
-    staleTime: Infinity,
+    eventTypes: undefined,
+    projectId,
+    streamPath: path,
   });
 
   const [draft, setDraft] = useState("");
@@ -104,8 +104,7 @@ export default function ChatScreen() {
   });
   const send = useMutation({
     mutationFn: async (input: { message: string; files: PickedImage[] }) => {
-      const itx = await getItxSession(baseUrl!);
-      const project = await itx.projects.get(projectId);
+      const project = await getProjectItx(baseUrl!, projectId);
       const agent = project.agents.get(path) as RpcStub<Agent>;
       // create() is idempotent (its birth events carry deterministic
       // idempotency keys), so this is safe whether `path` is a brand-new

@@ -121,7 +121,7 @@
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5",
-    "react": "^19.2.0"
+    "react": "^19.1.0"
   },
   "devDependencies": {
     "@iterate-com/ui": "workspace:*",

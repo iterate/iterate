@@ -20,7 +20,7 @@ import {
 import { TreeView, type NodeRowProps, type TreeNode } from "react-native-tree-multi-select";
 import CodeEditor from "../../../components/code-editor.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
-import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
 import {
   repoWorkingTreeStore,
   useRepoWorkingTree,
@@ -46,15 +46,10 @@ export default function RepoScreen() {
     enabled: repoPath !== undefined,
     staleTime: 0,
     queryFn: async () => {
-      try {
-        const repo = await getProjectRepo(projectId, repoPath);
-        const result = await repo.listFiles();
-        store.setHead(result.commitOid, result.paths.filter(isTextPath));
-        return { ...result, textPaths: result.paths.filter(isTextPath) };
-      } catch (error) {
-        resetItxSession();
-        throw error;
-      }
+      const repo = await getProjectRepo(projectId, repoPath);
+      const result = await repo.listFiles();
+      store.setHead(result.commitOid, result.paths.filter(isTextPath));
+      return { ...result, textPaths: result.paths.filter(isTextPath) };
     },
   });
 
@@ -66,7 +61,6 @@ export default function RepoScreen() {
     },
     onSuccess: (file) => store.open(file.path, file.content),
     onError: (error) => {
-      resetItxSession();
       Alert.alert("Could not open file", error.message);
     },
   });
@@ -104,7 +98,6 @@ export default function RepoScreen() {
       );
     },
     onError: (error) => {
-      resetItxSession();
       Alert.alert("Could not commit", error.message);
     },
   });
@@ -118,7 +111,6 @@ export default function RepoScreen() {
     },
     onSuccess: (latest) => store.replaceHead(latest.commitOid, latest.textPaths),
     onError: (error) => {
-      resetItxSession();
       Alert.alert("Could not reload repo", error.message);
     },
   });
@@ -636,8 +628,7 @@ function directoryIds(nodes: RepoTreeNode[]): string[] {
 
 async function getProjectRepo(projectId: string, repoPath: string) {
   const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-  const itx = await getItxSession(baseUrl);
-  const project = await itx.projects.get(projectId);
+  const project = await getProjectItx(baseUrl, projectId);
   return project.repos.get(repoPath);
 }
 

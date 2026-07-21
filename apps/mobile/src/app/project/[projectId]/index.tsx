@@ -10,7 +10,7 @@ import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
 import { newMobileAgentPath } from "../../../lib/chat.ts";
-import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { enrollPushDevice } from "../../../lib/push-device.ts";
@@ -23,15 +23,9 @@ export default function ChatListScreen() {
     queryKey: ["agents", projectId],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      try {
-        const itx = await getItxSession(baseUrl);
-        const project = await itx.projects.get(projectId);
-        const list = await project.agents.list();
-        return [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-      } catch (error) {
-        resetItxSession();
-        throw error;
-      }
+      const project = await getProjectItx(baseUrl, projectId);
+      const list = await project.agents.list();
+      return [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     },
   });
   const pushDevice = useQuery({

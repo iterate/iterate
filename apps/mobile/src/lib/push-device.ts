@@ -4,7 +4,7 @@ import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { Platform } from "react-native";
 import { getMobileDeviceId } from "./device-identity.ts";
-import { getItxSession } from "./itx.ts";
+import { getProjectItx } from "./itx.ts";
 import {
   notificationOpenedEvent,
   pushNotificationRoute,
@@ -35,12 +35,11 @@ export async function enrollPushDevice(baseUrl: string, projectId: string) {
     if (typeof easProjectId !== "string" || typeof appVersion !== "string") {
       throw new Error("The Iterate development build is missing its EAS project or app version.");
     }
-    const [deviceId, token, itx] = await Promise.all([
+    const [deviceId, token, project] = await Promise.all([
       getMobileDeviceId(),
       Notifications.getExpoPushTokenAsync({ projectId: easProjectId }),
-      getItxSession(baseUrl),
+      getProjectItx(baseUrl, projectId),
     ]);
-    const project = await itx.projects.get(projectId);
     const enrolled = await project.devices.get(deviceId).enroll({
       appVersion,
       expoPushToken: token.data,
@@ -61,10 +60,10 @@ export async function revokeEnrolledPushDevices(baseUrl: string): Promise<void> 
       .filter((enrollment) => enrollment.baseUrl === baseUrl)
       .map((enrollment) => enrollment.projectId);
     if (projectIds.length === 0) return;
-    const [deviceId, itx] = await Promise.all([getMobileDeviceId(), getItxSession(baseUrl)]);
+    const deviceId = await getMobileDeviceId();
     await Promise.all(
       projectIds.map(async (projectId) => {
-        const project = await itx.projects.get(projectId);
+        const project = await getProjectItx(baseUrl, projectId);
         await project.devices.get(deviceId).revoke("sign-out");
       }),
     );
@@ -89,11 +88,10 @@ async function handlePushNotificationResponse(response: Notifications.Notificati
   const route = pushNotificationRoute(data);
   if (route === null || typeof data.projectId !== "string") return;
   const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-  const itx = await getItxSession(baseUrl);
   router.push(route);
   if (typeof data.requestOffset === "number") {
     const deviceId = await getMobileDeviceId();
-    const project = await itx.projects.get(data.projectId);
+    const project = await getProjectItx(baseUrl, data.projectId);
     await project.devices
       .get(deviceId)
       .append(notificationOpenedEvent(data.requestOffset, response.notification.date));
