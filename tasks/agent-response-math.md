@@ -18,7 +18,7 @@ Add Streamdown's KaTeX-backed maths plugin to the shared UI response renderer so
 
 ## Checklist
 
-- [x] Record the intended scope in an isolated worktree. *Created `ui/agent-response-math` in `../worktrees/iterate/agent-response-math`.*
+- [x] Record the intended scope in an isolated worktree. *Created `agent-response-math-preview` in `../worktrees/iterate/agent-response-math`.*
 - [x] Add the official Streamdown maths plugin and its required KaTeX styling. *`message-response-rich.tsx` places `@streamdown/math` after Streamdown's sanitizer; shared globals include KaTeX CSS.*
 - [x] Prove inline and display maths render through the shared response component. *The agent-feed test asserts KaTeX display markup and accessible MathML for both forms.*
 - [x] Run focused tests and typechecks. *The agent-feed suite and both `@iterate-com/ui` and `@iterate-com/os` typechecks pass.*
