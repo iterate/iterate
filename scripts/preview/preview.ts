@@ -2738,6 +2738,12 @@ const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const previewReadinessRequestTimeoutMs = 10_000;
+// Reusing a stateful deployment replays the complete bounded Durable Object
+// sample twice. Cloudflare can still surface a stale sampled placement minutes
+// after the deployment's original readiness gate, so this proof needs more
+// time than one cheap serving probe. It remains bounded and returns as soon as
+// both exact-version samples pass.
+const previewDeploymentReuseProofTimeoutMs = 60_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
@@ -4483,7 +4489,7 @@ async function deployPreviewApp(input: {
       readyUrlPath: input.app.previewReadyUrlPath,
       readinessBearerToken: appConfig.readinessBearerToken,
       signal: input.signal,
-      timeoutMs: previewServingProbeTimeoutMs,
+      timeoutMs: previewDeploymentReuseProofTimeoutMs,
       workerVersion: input.app.previewReadyWorkerVersion
         ? {
             expected: recordedWorkerVersion,
@@ -6822,6 +6828,8 @@ export const previewInternals = {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  previewDeploymentReuseProofTimeoutMs,
+  previewServingProbeTimeoutMs,
   readPlaywrightTestTelemetry,
   readPreviewAppConfig,
   canReuseRecordedPreviewDeployment,

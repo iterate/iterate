@@ -46,6 +46,8 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  previewDeploymentReuseProofTimeoutMs,
+  previewServingProbeTimeoutMs,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
@@ -838,6 +840,11 @@ describe("preview test commands", () => {
 });
 
 describe("preview readiness URLs", () => {
+  test("gives exact-deployment reuse enough time to revalidate the full Durable Object sample", () => {
+    expect(previewDeploymentReuseProofTimeoutMs).toBe(60_000);
+    expect(previewDeploymentReuseProofTimeoutMs).toBeGreaterThan(previewServingProbeTimeoutMs);
+  });
+
   test("checks the deployed app URL without probing synthetic project hostnames", () => {
     expect(
       resolvePreviewReadinessUrls({
