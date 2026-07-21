@@ -412,8 +412,7 @@ test("split view can mount the same stream twice and mirror appends", async ({ p
 
 // Covers the original leadership requirement across browser tabs. Closing the elected writer
 // must release the lock, promote the follower, reconnect, and keep future appends live.
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("two browser tabs update and hand off leadership after the writer closes", async ({
+test("two browser tabs update and hand off leadership after the writer closes", async ({
   context,
   page,
 }) => {
@@ -916,8 +915,7 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
 
 // Reconnection test: killing the Durable Object should reconnect the browser subscriber and
 // append the server's woken event instead of leaving the mirror stuck on a dead WebSocket.
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("kill reconnects and appends a new woken event", async ({ page }) => {
+test("kill reconnects and appends a new woken event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
   // 3 = the standalone birth certificate + this page's own subscriber-connected.

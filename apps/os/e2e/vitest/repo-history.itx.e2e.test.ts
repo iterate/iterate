@@ -2,8 +2,7 @@ import { expect, test } from "vitest";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("log, commitDetails and pinned readFile over a few commits", async () => {
+test("log, commitDetails and pinned readFile over a few commits", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
     type: "admin-secret",

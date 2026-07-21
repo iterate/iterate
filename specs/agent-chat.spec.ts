@@ -9,12 +9,7 @@ const assistantMessage = '[data-testid="agent-feed-message"][data-kind="assistan
 const userMessage = '[data-testid="agent-feed-message"][data-kind="user"]';
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("agent replies to a browser chat message in the feed", async ({
-  helpers,
-  page,
-  baseURL,
-}) => {
+test("agent replies to a browser chat message in the feed", async ({ helpers, page, baseURL }) => {
   // One LLM turn plus UI paint. Onboarding birth and its automatic greeting
   // are independently covered; repeating that turn made this routing proof
   // the preview critical path.

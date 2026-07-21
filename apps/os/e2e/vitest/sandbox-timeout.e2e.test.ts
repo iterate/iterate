@@ -10,8 +10,7 @@ import { defineItxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, deployedBaseUrl, withItxSession } from "./test-helpers.ts";
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip(
+test(
   "a timed-out sandbox command terminates its entire process group",
   { timeout: 180_000 },
   async () => {

@@ -179,12 +179,38 @@ describe("watchdogs the shell can't import stay in sync", () => {
   });
 });
 
-describe("retry telemetry parsers", () => {
-  it("reads the vitest RetryTelemetryReporter file", async () => {
+describe("complete test telemetry parsers", () => {
+  it("reads every Vitest result plus timing phases and modules", async () => {
     const file = join(tmpdir(), `e2e-policy-test-vitest-${process.pid}.json`);
     writeFileSync(
       file,
       JSON.stringify({
+        tests: [
+          {
+            fullName: "sandbox > executes",
+            moduleId: "/repo/apps/os/e2e/vitest/sandbox.test.ts",
+            retryCount: 1,
+            passedAfterRetry: true,
+            state: "passed",
+            durationMs: 5200,
+            beforeEachDurationMs: 100,
+            afterEachDurationMs: 50,
+            bodyDurationMs: 5050,
+            phases: [{ name: "sandbox boot", category: "runtime", durationMs: 4000 }],
+            errors: [{ message: "Network connection lost" }],
+          },
+        ],
+        modules: [
+          {
+            moduleId: "/repo/apps/os/e2e/vitest/sandbox.test.ts",
+            environmentSetupDurationMs: 10,
+            prepareDurationMs: 20,
+            collectDurationMs: 30,
+            setupDurationMs: 40,
+            testAndHookDurationMs: 5200,
+            importDurationMs: 25,
+          },
+        ],
         retried: [
           {
             fullName: "sandbox > executes",
@@ -198,19 +224,25 @@ describe("retry telemetry parsers", () => {
         ],
       }),
     );
-    await expect(previewInternals.readVitestRetryTelemetry(file)).resolves.toEqual([
-      {
-        lane: "vitest",
-        name: "sandbox > executes",
-        retryCount: 1,
-        passedAfterRetry: true,
-        firstFailure: "Network connection lost",
-      },
-    ]);
+    await expect(
+      previewInternals.readVitestTestTelemetry(file, "vitest", "/repo"),
+    ).resolves.toMatchObject({
+      tests: [
+        expect.objectContaining({
+          name: "sandbox > executes",
+          moduleId: "apps/os/e2e/vitest/sandbox.test.ts",
+          durationMs: 5200,
+          bodyDurationMs: 5050,
+        }),
+      ],
+      modules: [expect.objectContaining({ collectDurationMs: 30 })],
+      retried: [expect.objectContaining({ name: "sandbox > executes", retryCount: 1 })],
+      collectionErrors: [],
+    });
     rmSync(file);
   });
 
-  it("reads Playwright's JSON report, including nested suites", async () => {
+  it("reads every Playwright attempt and named step, including nested suites", async () => {
     const file = join(tmpdir(), `e2e-policy-test-pw-${process.pid}.json`);
     writeFileSync(
       file,
@@ -231,9 +263,18 @@ describe("retry telemetry parsers", () => {
                           {
                             retry: 0,
                             status: "failed",
+                            duration: 7000,
+                            startTime: "2026-07-21T10:00:00.000Z",
+                            steps: [
+                              {
+                                title: "evict transport",
+                                category: "test.step",
+                                duration: 5000,
+                              },
+                            ],
                             error: { message: "Network connection\n lost" },
                           },
-                          { retry: 1, status: "passed" },
+                          { retry: 1, status: "passed", duration: 3000 },
                         ],
                       },
                     ],
@@ -249,15 +290,27 @@ describe("retry telemetry parsers", () => {
         ],
       }),
     );
-    await expect(previewInternals.readPlaywrightRetryTelemetry(file)).resolves.toEqual([
-      {
-        lane: "specs",
-        name: "runs a script",
-        retryCount: 1,
-        passedAfterRetry: true,
-        firstFailure: "Network connection lost",
-      },
-    ]);
+    await expect(
+      previewInternals.readPlaywrightTestTelemetry(file, "specs", "/repo"),
+    ).resolves.toMatchObject({
+      tests: expect.arrayContaining([
+        expect.objectContaining({
+          name: "repl.spec.ts › REPL › runs a script",
+          durationMs: 10000,
+          retryCount: 1,
+          attempts: [
+            expect.objectContaining({
+              attemptIndex: 0,
+              durationMs: 7000,
+              phases: [{ name: "evict transport", category: "test.step", durationMs: 5000 }],
+            }),
+            expect.objectContaining({ attemptIndex: 1, durationMs: 3000 }),
+          ],
+        }),
+      ]),
+      retried: [expect.objectContaining({ retryCount: 1, passedAfterRetry: true })],
+      collectionErrors: [],
+    });
     rmSync(file);
   });
 

@@ -5,8 +5,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 const LLM_REQUEST_SETTLED_TYPE = "events.iterate.com/agent/llm-request-settled";
 const WEB_MESSAGE_SENT_TYPE = "events.iterate.com/agents/web-message-sent";
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("a second project's onboarding turn is served from the AI Gateway cache", async () => {
+test("a second project's onboarding turn is served from the AI Gateway cache", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
 
   // First turn seeds the cache (HIT if an earlier run already did).

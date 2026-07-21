@@ -8,6 +8,10 @@ import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import {
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWaveCount,
+} from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import {
   authEnvs,
@@ -39,6 +43,12 @@ import {
   workerSizeStatusContext,
   type WorkerSizeInfo,
 } from "./worker-size.ts";
+import {
+  normalizeError,
+  PreviewE2ePostHog,
+  type PreviewE2eModuleRecord,
+  type PreviewE2eTestRecord,
+} from "./e2e-posthog.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -124,7 +134,9 @@ export async function deploy(options: DeployCommandOptions = {}) {
  */
 export async function test(options: PullRequestCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
-  return await testPreviewApps({ context, runtime });
+  return await withPreviewE2eTelemetry(context, runtime, "test", (telemetry) =>
+    testPreviewApps({ context, runtime, telemetry }),
+  );
 }
 
 /**
@@ -146,7 +158,53 @@ export async function run(options: DeployCommandOptions = {}) {
 
   // A "nothing to deploy" skip still tests: the recorded deployments ARE the
   // current head's code, and their green must be earned, not assumed.
-  return await testPreviewApps({ context, runtime, state: deployResult.state });
+  return await withPreviewE2eTelemetry(context, runtime, "run", (telemetry) =>
+    testPreviewApps({ context, runtime, state: deployResult.state, telemetry }),
+  );
+}
+
+async function withPreviewE2eTelemetry<T>(
+  context: PullRequestPreviewContext,
+  runtime: PreviewRuntime,
+  operation: "test" | "run",
+  execute: (telemetry: PreviewE2ePostHog) => Promise<T>,
+): Promise<T> {
+  const telemetry = new PreviewE2ePostHog({
+    environment: runtime.commandEnvironment,
+    headSha: context.pullRequestHeadSha,
+    operation,
+    pullRequestNumber: context.pullRequestNumber,
+    runUrl: context.workflowRunUrl,
+  });
+  const startedAt = Date.now();
+  telemetry.runStarted();
+  let result!: T;
+  let operationError: unknown;
+  try {
+    result = await execute(telemetry);
+  } catch (error) {
+    operationError = error;
+  }
+  telemetry.runFinished({
+    status: operationError ? "failed" : "passed",
+    durationMs: Date.now() - startedAt,
+    ...(operationError ? { error: operationError } : {}),
+  });
+  let telemetryError: unknown;
+  try {
+    await telemetry.shutdown();
+  } catch (error) {
+    telemetryError = error;
+  }
+  if (operationError && telemetryError) {
+    throw new AggregateError(
+      [operationError, telemetryError],
+      "Preview test command and PostHog delivery both failed",
+    );
+  }
+  if (operationError) throw operationError;
+  if (telemetryError) throw telemetryError;
+  return result;
 }
 
 async function deployPreviewApps({
@@ -498,9 +556,11 @@ async function testPreviewApps({
   context,
   runtime,
   state: knownState,
+  telemetry,
 }: {
   context: PullRequestPreviewContext;
   runtime: PreviewRuntime;
+  telemetry: PreviewE2ePostHog;
   /**
    * In-process state from a just-finished deploy (the `run` path). A fresh
    * PR-body read can lag deploy's write (GitHub read-after-write lag) and
@@ -681,22 +741,36 @@ async function testPreviewApps({
     });
     const testDurationMs = Date.now() - startedAt;
 
-    // Collected pass or fail: a passed-on-retry test is still a failed CI
-    // proof. The telemetry identifies the exact test to quarantine rather
-    // than allowing an unrelated PR to repeatedly absorb its tail latency.
-    const retrySummary = app.collectRetryTelemetry
-      ? await app
-          .collectRetryTelemetry({ repositoryRoot: runtime.repositoryRoot })
-          .catch((error): PreviewRetrySummary | null => {
-            console.error(`[preview] retry telemetry collection failed for ${app.slug}:`, error);
-            return null;
-          })
-      : null;
-    if (retrySummary) {
-      announceRetryTelemetry(app.slug, retrySummary);
+    // Collected pass or fail. A green command without a complete structured
+    // report is not a green observability proof: it would silently bias every
+    // PostHog latency query toward whichever lanes happened to report.
+    const testSummary = await app.collectTestTelemetry({
+      repositoryRoot: runtime.repositoryRoot,
+    });
+    announceRetryTelemetry(app.slug, testSummary);
+    for (const test of testSummary.tests) {
+      telemetry.testFinished({ ...test, app: app.slug, slot: environmentConfigLease.slug });
+    }
+    for (const module of testSummary.modules) {
+      telemetry.moduleFinished({ ...module, app: app.slug, slot: environmentConfigLease.slug });
     }
 
-    const testFailure = previewTestFailureMessage({ result: testResult, retrySummary });
+    const incompleteTelemetry = testSummary.collectionErrors.length
+      ? `Structured e2e telemetry was incomplete: ${testSummary.collectionErrors.join("; ")}`
+      : null;
+    const testFailure =
+      previewTestFailureMessage({ result: testResult, retrySummary: testSummary }) ??
+      incompleteTelemetry;
+    telemetry.appFinished({
+      app: app.slug,
+      slot: environmentConfigLease.slug,
+      status: testFailure ? "failed" : "passed",
+      durationMs: testDurationMs,
+      exitCode: testResult.exitCode,
+      testCount: testSummary.tests.length,
+      retryCount: testSummary.retried.reduce((total, test) => total + test.retryCount, 0),
+      collectionErrors: testSummary.collectionErrors,
+    });
     console.error(
       `[preview] test ${testFailure ? "failed" : "passed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
     );
@@ -712,7 +786,7 @@ async function testPreviewApps({
       runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
       status: testFailure ? "tests-failed" : "deployed",
       testDurationMs,
-      testRetries: retrySummary ? renderPreviewRetrySummary(retrySummary) : null,
+      testRetries: renderPreviewRetrySummary(testSummary),
       updatedAt: new Date().toISOString(),
     } satisfies CloudflarePreviewAppEntry);
   });
@@ -1388,9 +1462,17 @@ export const CloudflarePreviewAppSlug = z.enum([
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
 
-type PreviewReadyWorkerVersion = {
-  stableForMs: number;
-};
+type PreviewReadyWorkerVersion =
+  | {
+      probeQueryParam?: undefined;
+      probeWaveCount?: undefined;
+      stableForMs: number;
+    }
+  | {
+      probeQueryParam: string;
+      probeWaveCount: number;
+      stableForMs: number;
+    };
 
 export type CloudflarePreviewApp = {
   slug: CloudflarePreviewAppSlug;
@@ -1434,11 +1516,13 @@ export type CloudflarePreviewApp = {
   previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
+  /** Doppler env var sent as a bearer only to the app's active rollout probe. */
+  previewReadyBearerTokenEnvVar?: string;
   /**
    * Require the readiness route to report wrangler's newly deployed Worker
-   * version before tests start (`stableForMs: 0` = first match). Durable Object
-   * lifecycle resets are handled by each idempotent product operation instead
-   * of sampled here.
+   * version before tests start. Apps with Durable Objects expose a finite set
+   * of probe waves: the orchestrator checks every wave in parallel, waits the
+   * stability interval, then revalidates the complete set.
    */
   previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
   previewTestBaseUrlEnvVar: string;
@@ -1453,12 +1537,11 @@ export type CloudflarePreviewApp = {
   previewDeployBudgetMs?: number;
   previewTestBudgetMs?: number;
   /**
-   * Collect per-test retry telemetry after the app's preview test command
-   * finishes. Collection failure itself is logged without masking the test
-   * command's result. A passed-after-retry record makes the CI proof fail;
-   * the result also lands in the run log, an annotation, and the PR table.
+   * Collect every test/module result after the command finishes. A missing
+   * report is an explicit collection error: a green lane must not silently
+   * disappear from latency analytics.
    */
-  collectRetryTelemetry?: (params: { repositoryRoot: string }) => Promise<PreviewRetrySummary>;
+  collectTestTelemetry: (params: { repositoryRoot: string }) => Promise<PreviewTestSummary>;
 };
 
 /**
@@ -1479,6 +1562,13 @@ export type PreviewRetrySummary = {
   }[];
 };
 
+/** Complete structured timing plus any lane that failed to produce a report. */
+export type PreviewTestSummary = PreviewRetrySummary & {
+  tests: PreviewE2eTestRecord[];
+  modules: PreviewE2eModuleRecord[];
+  collectionErrors: string[];
+};
+
 /**
  * Where the os lane tells the vitest RetryTelemetryReporter (see
  * packages/shared test-support/e2e-policy) to write its JSON. The lane
@@ -1491,13 +1581,63 @@ const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
 const streamsExampleVitestRetryTelemetryFile =
   "/tmp/os-preview-streams-example-vitest-retries.json";
+const authVitestTelemetryFile = "/tmp/auth-preview-vitest-results.json";
+const semaphoreVitestTelemetryFile = "/tmp/semaphore-preview-vitest-results.json";
+const dummyPetshopVitestTelemetryFile = "/tmp/dummy-petshop-preview-vitest-results.json";
 
-/** Reads the shared retry JSON written by a Vitest or TUI sub-lane. */
-async function readVitestRetryTelemetry(
+/** Reads complete Vitest timing written by RetryTelemetryReporter. */
+async function readVitestTestTelemetry(
   filePath: string,
-  lane = "vitest",
-): Promise<PreviewRetrySummary["retried"]> {
+  lane: string,
+  repositoryRoot: string,
+): Promise<PreviewTestSummary> {
   const TelemetryFile = z.object({
+    tests: z.array(
+      z.object({
+        fullName: z.string(),
+        moduleId: z.string(),
+        retryCount: z.number().int().nonnegative(),
+        passedAfterRetry: z.boolean(),
+        state: z.string(),
+        durationMs: z.number().nonnegative(),
+        startedAtMs: z.number().optional(),
+        scheduleDelayMs: z.number().nonnegative().optional(),
+        beforeEachDurationMs: z.number().nonnegative(),
+        afterEachDurationMs: z.number().nonnegative(),
+        bodyDurationMs: z.number().nonnegative(),
+        phases: z.array(
+          z.object({
+            name: z.string(),
+            category: z.string().optional(),
+            durationMs: z.number().nonnegative(),
+          }),
+        ),
+        errors: z.array(
+          z.object({
+            message: z.string(),
+            name: z.string().optional(),
+            stack: z.string().optional(),
+          }),
+        ),
+      }),
+    ),
+    modules: z.array(
+      z.object({
+        moduleId: z.string(),
+        environmentSetupDurationMs: z.number().nonnegative(),
+        prepareDurationMs: z.number().nonnegative(),
+        collectDurationMs: z.number().nonnegative(),
+        setupDurationMs: z.number().nonnegative(),
+        testAndHookDurationMs: z.number().nonnegative(),
+        importDurationMs: z.number().nonnegative(),
+        queuedAtMs: z.number().optional(),
+        collectedAtMs: z.number().optional(),
+        startedAtMs: z.number().optional(),
+        finishedAtMs: z.number().optional(),
+        queueDurationMs: z.number().nonnegative().optional(),
+        executionWallDurationMs: z.number().nonnegative().optional(),
+      }),
+    ),
     retried: z.array(
       z.object({
         fullName: z.string(),
@@ -1508,13 +1648,63 @@ async function readVitestRetryTelemetry(
     ),
   });
   const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
-  return parsed.retried.map((record) => ({
+  if (parsed.tests.length === 0) throw new Error(`${filePath} contained no test results`);
+  const tests: PreviewE2eTestRecord[] = parsed.tests.map((record) => ({
     lane,
     name: record.fullName,
+    moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
+    state: record.state,
+    durationMs: record.durationMs,
     retryCount: record.retryCount,
     passedAfterRetry: record.passedAfterRetry,
-    ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+    ...(record.startedAtMs === undefined
+      ? {}
+      : { startedAt: new Date(record.startedAtMs).toISOString() }),
+    ...(record.scheduleDelayMs === undefined ? {} : { scheduleDelayMs: record.scheduleDelayMs }),
+    beforeEachDurationMs: record.beforeEachDurationMs,
+    afterEachDurationMs: record.afterEachDurationMs,
+    bodyDurationMs: record.bodyDurationMs,
+    attempts: [],
+    phases: record.phases,
+    errors: record.errors,
   }));
+  return {
+    tests,
+    modules: parsed.modules.map((record) => ({
+      lane,
+      moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
+      environmentSetupDurationMs: record.environmentSetupDurationMs,
+      prepareDurationMs: record.prepareDurationMs,
+      collectDurationMs: record.collectDurationMs,
+      setupDurationMs: record.setupDurationMs,
+      testAndHookDurationMs: record.testAndHookDurationMs,
+      importDurationMs: record.importDurationMs,
+      ...(record.queuedAtMs === undefined
+        ? {}
+        : { queuedAt: new Date(record.queuedAtMs).toISOString() }),
+      ...(record.collectedAtMs === undefined
+        ? {}
+        : { collectedAt: new Date(record.collectedAtMs).toISOString() }),
+      ...(record.startedAtMs === undefined
+        ? {}
+        : { startedAt: new Date(record.startedAtMs).toISOString() }),
+      ...(record.finishedAtMs === undefined
+        ? {}
+        : { finishedAt: new Date(record.finishedAtMs).toISOString() }),
+      ...(record.queueDurationMs === undefined ? {} : { queueDurationMs: record.queueDurationMs }),
+      ...(record.executionWallDurationMs === undefined
+        ? {}
+        : { executionWallDurationMs: record.executionWallDurationMs }),
+    })),
+    retried: parsed.retried.map((record) => ({
+      lane,
+      name: record.fullName,
+      retryCount: record.retryCount,
+      passedAfterRetry: record.passedAfterRetry,
+      ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+    })),
+    collectionErrors: [],
+  };
 }
 
 /**
@@ -1523,20 +1713,37 @@ async function readVitestRetryTelemetry(
  * streams example app). A retried spec has more than one result attempt;
  * Playwright reports "flaky" for passed-after-retry.
  */
-async function readPlaywrightRetryTelemetry(
+type PlaywrightTelemetryStep = {
+  title?: string;
+  category?: string;
+  duration?: number;
+  steps?: PlaywrightTelemetryStep[];
+};
+
+async function readPlaywrightTestTelemetry(
   filePath: string,
-  lane = "specs",
-): Promise<PreviewRetrySummary["retried"]> {
+  lane: string,
+  repositoryRoot: string,
+): Promise<PreviewTestSummary> {
   /** The subset of Playwright's JSON-reporter suite tree we walk. */
   type PlaywrightJsonSuite = {
+    title?: string;
+    file?: string;
     suites?: PlaywrightJsonSuite[];
     specs?: {
       title?: string;
+      file?: string;
       tests?: {
+        projectName?: string;
         status?: string;
         results?: {
           retry?: number;
           status?: string;
+          duration?: number;
+          startTime?: string;
+          workerIndex?: number;
+          parallelIndex?: number;
+          steps?: PlaywrightTelemetryStep[];
           error?: unknown;
           errors?: unknown[];
         }[];
@@ -1546,37 +1753,72 @@ async function readPlaywrightRetryTelemetry(
   const report = JSON.parse(await readFile(filePath, "utf8")) as {
     suites?: PlaywrightJsonSuite[];
   };
-  const retried: PreviewRetrySummary["retried"] = [];
-  const visit = (suite: PlaywrightJsonSuite) => {
+  const tests: PreviewE2eTestRecord[] = [];
+  const visit = (suite: PlaywrightJsonSuite, parentTitles: string[] = []) => {
+    const titles = suite.title ? [...parentTitles, suite.title] : parentTitles;
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
-        if (retryCount > 0) {
-          const failedResult = test.results?.find(
-            (result) =>
-              result.status === "failed" || result.error !== undefined || result.errors?.length,
-          );
-          const firstFailure = compactRetryFailure(
-            failedResult?.error ?? failedResult?.errors?.[0],
-          );
-          retried.push({
-            lane,
-            name: spec.title ?? "(unknown spec)",
-            retryCount,
-            passedAfterRetry: test.status === "flaky",
-            ...(firstFailure ? { firstFailure } : {}),
-          });
-        }
+        const results = test.results ?? [];
+        const finalResult = results.at(-1);
+        const errors = results.flatMap((result) => [
+          ...(result.error ? [normalizeError(result.error)] : []),
+          ...(result.errors ?? []).map(normalizeError),
+        ]);
+        tests.push({
+          lane,
+          name: [...titles, spec.title ?? "(unknown spec)", test.projectName ?? ""]
+            .filter(Boolean)
+            .join(" › "),
+          moduleId: normalizeTestModuleId(spec.file ?? suite.file ?? "playwright", repositoryRoot),
+          ...(test.projectName ? { project: test.projectName } : {}),
+          state: finalResult?.status ?? test.status ?? "unknown",
+          durationMs: results.reduce((total, result) => total + (result.duration ?? 0), 0),
+          retryCount,
+          passedAfterRetry:
+            retryCount > 0 && (test.status === "flaky" || finalResult?.status === "passed"),
+          ...(results[0]?.startTime ? { startedAt: results[0].startTime } : {}),
+          errors,
+          phases: [],
+          attempts: results.map((result) => ({
+            attemptIndex: result.retry ?? 0,
+            state: result.status ?? "unknown",
+            durationMs: result.duration ?? 0,
+            ...(result.startTime ? { startedAt: result.startTime } : {}),
+            ...(result.workerIndex === undefined ? {} : { workerIndex: result.workerIndex }),
+            ...(result.parallelIndex === undefined ? {} : { parallelIndex: result.parallelIndex }),
+            ...(result.error ? { error: normalizeError(result.error) } : {}),
+            phases: flattenPlaywrightSteps(result.steps ?? []),
+          })),
+        });
       }
     }
     for (const child of suite.suites ?? []) {
-      visit(child);
+      visit(child, titles);
     }
   };
   for (const suite of report.suites ?? []) {
     visit(suite);
   }
-  return retried;
+  if (tests.length === 0) throw new Error(`${filePath} contained no test results`);
+  return summaryFromTests(tests);
+}
+
+function flattenPlaywrightSteps(
+  steps: ReadonlyArray<PlaywrightTelemetryStep>,
+  parents: string[] = [],
+): PreviewE2eTestRecord["phases"] {
+  return steps.flatMap((step) => {
+    const path = [...parents, step.title ?? "(unnamed step)"];
+    return [
+      {
+        name: path.join(" › "),
+        ...(step.category ? { category: step.category } : {}),
+        durationMs: step.duration ?? 0,
+      },
+      ...flattenPlaywrightSteps(step.steps ?? [], path),
+    ];
+  });
 }
 
 /**
@@ -1584,18 +1826,49 @@ async function readPlaywrightRetryTelemetry(
  * (the sub-lane may have died before writing) and logging anything else —
  * telemetry must never fail the lane.
  */
-async function readRetryTelemetryLane(
+async function readTestTelemetryLane(
   label: string,
-  read: () => Promise<PreviewRetrySummary["retried"]>,
-): Promise<PreviewRetrySummary["retried"]> {
+  read: () => Promise<PreviewTestSummary>,
+): Promise<PreviewTestSummary> {
   try {
     return await read();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(`[preview] retry telemetry unreadable for ${label}:`, error);
-    }
-    return [];
+    const message = `${label}: ${error instanceof Error ? error.message : String(error)}`;
+    console.error(`[preview] test telemetry unavailable for ${message}`);
+    return { tests: [], modules: [], retried: [], collectionErrors: [message] };
   }
+}
+
+function summaryFromTests(tests: PreviewE2eTestRecord[]): PreviewTestSummary {
+  return {
+    tests,
+    modules: [],
+    retried: tests
+      .filter((test) => test.retryCount > 0)
+      .map((test) => ({
+        lane: test.lane,
+        name: test.name,
+        retryCount: test.retryCount,
+        passedAfterRetry: test.passedAfterRetry,
+        ...(test.errors[0] ? { firstFailure: compactRetryFailure(test.errors[0]) } : {}),
+      })),
+    collectionErrors: [],
+  };
+}
+
+function combineTestSummaries(summaries: PreviewTestSummary[]): PreviewTestSummary {
+  return {
+    tests: summaries.flatMap((summary) => summary.tests),
+    modules: summaries.flatMap((summary) => summary.modules),
+    retried: summaries.flatMap((summary) => summary.retried),
+    collectionErrors: summaries.flatMap((summary) => summary.collectionErrors),
+  };
+}
+
+function normalizeTestModuleId(moduleId: string, repositoryRoot: string): string {
+  return moduleId.startsWith(repositoryRoot)
+    ? moduleId.slice(repositoryRoot.length).replace(/^\//, "")
+    : moduleId;
 }
 
 /** One compact human line for the run log and the PR-body table. */
@@ -1743,11 +2016,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
-    // First matching version is enough: the signal is "health reports this
-    // exact CF_VERSION_METADATA id". A multi-second dwell was a post-flake
-    // hedge that fixed ~11s onto every OS deploy after the signal was already
-    // true; product ops still handle later DO code-update resets.
-    previewReadyWorkerVersion: { stableForMs: 0 },
+    previewReadyBearerTokenEnvVar: "APP_CONFIG_ADMIN_API_SECRET",
+    // Cloudflare rolls Durable Object namespaces independently from the edge.
+    // Exercise every namespace's bounded placement waves, then revalidate the
+    // exact version after a quiet interval before any project burst begins.
+    previewReadyWorkerVersion: {
+      probeQueryParam: deploymentReadinessProbeQueryParam,
+      probeWaveCount: deploymentReadinessProbeWaveCount,
+      stableForMs: 10_000,
+    },
     paths: [
       "apps/os/**",
       // The root Playwright suite is part of OS preview e2e. A test or
@@ -1830,21 +2107,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
-    collectRetryTelemetry: async ({ repositoryRoot }) => {
-      const [vitest, tui, specs] = await Promise.all([
-        readRetryTelemetryLane("os vitest lane", () =>
-          readVitestRetryTelemetry(osVitestRetryTelemetryFile),
+    collectTestTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, specs] = await Promise.all([
+        readTestTelemetryLane("os vitest lane", () =>
+          readVitestTestTelemetry(osVitestRetryTelemetryFile, "vitest", repositoryRoot),
         ),
-        readRetryTelemetryLane("os TUI lane", () =>
-          readVitestRetryTelemetry(osTuiRetryTelemetryFile, "tui"),
-        ),
-        readRetryTelemetryLane("os playwright specs", () =>
-          readPlaywrightRetryTelemetry(
+        readTestTelemetryLane("os playwright specs", () =>
+          readPlaywrightTestTelemetry(
             resolve(repositoryRoot, "test-results/playwright-results.json"),
+            "playwright",
+            repositoryRoot,
           ),
         ),
       ]);
-      return { retried: [...vitest, ...tui, ...specs] };
+      // TUI is currently an explicit no-op skip and produces no test report.
+      return combineTestSummaries([vitest, specs]);
     },
   },
   semaphore: {
@@ -1876,7 +2153,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // handout order — the exact semantics this preview machinery's own slot
     // leasing depends on — and was previously invoked by NOTHING
     // (docs/testing.md#lanes).
-    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      `rm -f ${semaphoreVitestTelemetryFile}; env -u SEMAPHORE_API_TOKEN E2E_RETRY_TELEMETRY_FILE=${semaphoreVitestTelemetryFile} pnpm test:e2e`,
+    ],
+    collectTestTelemetry: async ({ repositoryRoot }) =>
+      readTestTelemetryLane("semaphore vitest lane", () =>
+        readVitestTestTelemetry(semaphoreVitestTelemetryFile, "vitest", repositoryRoot),
+      ),
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1906,7 +2191,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
     // seeding procedures; preview auth bakes the fixed test OTP the suite
     // signs in with.
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      `rm -f ${authVitestTelemetryFile}; E2E_RETRY_TELEMETRY_FILE=${authVitestTelemetryFile} pnpm test:e2e`,
+    ],
+    collectTestTelemetry: async ({ repositoryRoot }) =>
+      readTestTelemetryLane("auth vitest lane", () =>
+        readVitestTestTelemetry(authVitestTelemetryFile, "vitest", repositoryRoot),
+      ),
   },
   "streams-example-app": {
     slug: "streams-example-app",
@@ -1926,7 +2219,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
-    previewReadyWorkerVersion: { stableForMs: 0 },
+    previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+    previewReadyWorkerVersion: {
+      probeQueryParam: deploymentReadinessProbeQueryParam,
+      probeWaveCount: deploymentReadinessProbeWaveCount,
+      stableForMs: 10_000,
+    },
     previewTestBaseUrlEnvVar: "WORKER_URL",
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3
@@ -1958,22 +2256,23 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
       ].join("; "),
     ],
-    collectRetryTelemetry: async ({ repositoryRoot }) => {
+    collectTestTelemetry: async ({ repositoryRoot }) => {
       const [vitest, playwright] = await Promise.all([
-        readRetryTelemetryLane("streams-example-app vitest lane", () =>
-          readVitestRetryTelemetry(streamsExampleVitestRetryTelemetryFile),
+        readTestTelemetryLane("streams-example-app vitest lane", () =>
+          readVitestTestTelemetry(streamsExampleVitestRetryTelemetryFile, "vitest", repositoryRoot),
         ),
-        readRetryTelemetryLane("streams-example-app playwright lane", () =>
-          readPlaywrightRetryTelemetry(
+        readTestTelemetryLane("streams-example-app playwright lane", () =>
+          readPlaywrightTestTelemetry(
             resolve(
               repositoryRoot,
               "apps/streams-example-app/test-results/playwright-results.json",
             ),
             "playwright",
+            repositoryRoot,
           ),
         ),
       ]);
-      return { retried: [...vitest, ...playwright] };
+      return combineTestSummaries([vitest, playwright]);
     },
   },
   "dummy-petshop": {
@@ -1999,7 +2298,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      `rm -f ${dummyPetshopVitestTelemetryFile}; E2E_RETRY_TELEMETRY_FILE=${dummyPetshopVitestTelemetryFile} pnpm test:e2e`,
+    ],
+    collectTestTelemetry: async ({ repositoryRoot }) =>
+      readTestTelemetryLane("dummy-petshop vitest lane", () =>
+        readVitestTestTelemetry(dummyPetshopVitestTelemetryFile, "vitest", repositoryRoot),
+      ),
   },
 };
 
@@ -3675,9 +3982,12 @@ async function deployPreviewApp(input: {
   runUrl: string | null;
   signal?: AbortSignal;
 }) {
-  const appConfig = readPreviewAppConfig({
+  const appConfig = await readPreviewAppConfig({
     app: input.app,
+    commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
+    repositoryRoot: input.repositoryRoot,
+    signal: input.signal,
   });
   const baseEntry = {
     appDisplayName: input.app.displayName,
@@ -3771,6 +4081,7 @@ async function deployPreviewApp(input: {
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
+    readinessBearerToken: appConfig.readinessBearerToken,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
     workerVersion:
@@ -3800,13 +4111,94 @@ async function deployPreviewApp(input: {
   });
 }
 
-function readPreviewAppConfig(input: { app: PreviewAppRuntime; dopplerConfig: string }) {
+async function readPreviewAppConfig(input: {
+  app: PreviewAppRuntime;
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  repositoryRoot: string;
+  signal?: AbortSignal;
+}) {
   const PreviewAppConfig = z.object({
     baseUrl: z.string().trim().url(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+    readinessBearerToken: z.string().trim().min(1).optional(),
     workerName: z.string().trim().min(1),
   });
-  return PreviewAppConfig.parse(input.app.resolvePreviewAppConfig(input.dopplerConfig));
+  const parsePreviewAppConfig = (value: unknown) => {
+    const parsed = PreviewAppConfig.parse(value);
+    if (input.app.previewReadyBearerTokenEnvVar && !parsed.readinessBearerToken) {
+      throw new Error(
+        `Preview readiness requires Doppler secret ${input.app.previewReadyBearerTokenEnvVar}.`,
+      );
+    }
+    return parsed;
+  };
+  const repoConfig = input.app.resolvePreviewAppConfig(input.dopplerConfig);
+  if (!input.app.previewReadyBearerTokenEnvVar) {
+    return parsePreviewAppConfig(repoConfig);
+  }
+
+  const readinessBearerTokenEnvVar = JSON.stringify(
+    input.app.previewReadyBearerTokenEnvVar ?? null,
+  );
+  const script = [
+    "function parseStringArrayEnv(value) {",
+    "  if (!value?.trim()) return [];",
+    "  const parsed = JSON.parse(value);",
+    "  return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];",
+    "}",
+    "function parseAppConfig() {",
+    "  if (!process.env.APP_CONFIG?.trim()) return {};",
+    "  return JSON.parse(process.env.APP_CONFIG);",
+    "}",
+    "const appConfig = parseAppConfig();",
+    "const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
+    `const readinessBearerTokenEnvVar = ${readinessBearerTokenEnvVar};`,
+    "const readinessBearerToken = readinessBearerTokenEnvVar ? process.env[readinessBearerTokenEnvVar]?.trim() : undefined;",
+    "const config = {",
+    "  baseUrl: process.env.APP_CONFIG_BASE_URL || appConfig.baseUrl || null,",
+    "  projectHostnameBases: envBases.length > 0 ? envBases : Array.isArray(appConfig.projectHostnameBases) ? appConfig.projectHostnameBases.filter((entry) => typeof entry === 'string') : [],",
+    "  ...(readinessBearerToken ? { readinessBearerToken } : {}),",
+    "};",
+    "console.log(JSON.stringify(config));",
+  ].join("\n");
+  const result = await runCommand({
+    args: [
+      "run",
+      "--project",
+      input.app.dopplerProject,
+      "--config",
+      input.dopplerConfig,
+      "--",
+      "node",
+      "-e",
+      script,
+    ],
+    command: "doppler",
+    echoOutput: false,
+    environment: input.commandEnvironment,
+    signal: input.signal,
+    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
+  });
+  if (result.exitCode !== 0) {
+    // stdout may contain the readiness bearer; never include command output.
+    throw new Error("Failed to read preview app config.");
+  }
+
+  const dopplerConfig: unknown = JSON.parse(result.stdout);
+  return parsePreviewAppConfig(
+    typeof dopplerConfig === "object" && dopplerConfig !== null
+      ? {
+          ...dopplerConfig,
+          ...repoConfig,
+          projectHostnameBases:
+            repoConfig.projectHostnameBases ??
+            ("projectHostnameBases" in dopplerConfig
+              ? dopplerConfig.projectHostnameBases
+              : undefined),
+        }
+      : dopplerConfig,
+  );
 }
 
 async function runPreviewDeployCommand(input: {
@@ -4883,10 +5275,9 @@ async function resolvePreviewOsContainerRollout(input: {
   }
 
   const previous = input.previousState.apps.os;
-  const currentWorkerName = readPreviewAppConfig({
-    app: cloudflarePreviewApps.os,
-    dopplerConfig: input.dopplerConfig,
-  }).workerName;
+  const currentWorkerName = cloudflarePreviewApps.os.resolvePreviewAppConfig(
+    input.dopplerConfig,
+  ).workerName;
   if (
     !previous?.headSha ||
     !previous.deployedWorkerVersion ||
@@ -5209,6 +5600,7 @@ async function mapWithConcurrency<T, Result>(
 async function waitForPreviewAppReadiness(params: {
   publicUrl: string;
   readyUrlPath?: string;
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
   workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
@@ -5220,6 +5612,7 @@ async function waitForPreviewAppReadiness(params: {
 
   for (const url of urls) {
     const readiness = await waitForHttpReadiness({
+      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
       url,
@@ -5255,20 +5648,52 @@ function parseLastDeployedWorkerVersionId(output: string): string | null {
 }
 
 async function waitForHttpReadiness(params: {
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
   workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
 }) {
+  const startedAt = Date.now();
   const deadline = Date.now() + params.timeoutMs;
+  const hasProbeQueryParam = params.workerVersion?.probeQueryParam !== undefined;
+  const hasProbeWaveCount = params.workerVersion?.probeWaveCount !== undefined;
+
+  if (hasProbeQueryParam !== hasProbeWaveCount) {
+    throw new Error(
+      "Worker-version readiness must configure probeQueryParam and probeWaveCount together.",
+    );
+  }
+
+  if (hasProbeQueryParam && hasProbeWaveCount && params.workerVersion) {
+    const { probeQueryParam, probeWaveCount } = params.workerVersion;
+    if (probeQueryParam === undefined || probeWaveCount === undefined) {
+      throw new Error("Worker-version readiness probe configuration is incomplete.");
+    }
+    return await waitForWorkerVersionProbeWaves({
+      deadline,
+      readinessBearerToken: params.readinessBearerToken,
+      signal: params.signal,
+      startedAt,
+      url: params.url,
+      workerVersion: {
+        expected: params.workerVersion.expected,
+        probeQueryParam,
+        probeWaveCount,
+        stableForMs: params.workerVersion.stableForMs,
+      },
+    });
+  }
+
   let lastFailure = "No response received yet.";
   let matchingWorkerVersionSince: number | null = null;
 
   while (Date.now() < deadline) {
     try {
       const response = await fetchReadinessResponse(params.url, {
+        readinessBearerToken: params.readinessBearerToken,
         signal: params.signal,
-        timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now())),
+        timeoutMs: readinessRequestTimeoutMs(deadline),
       });
       if (response.status >= 200 && response.status < 300) {
         params.signal?.throwIfAborted();
@@ -5314,9 +5739,231 @@ async function waitForHttpReadiness(params: {
   };
 }
 
+type WorkerVersionProbeResult = {
+  failure: string | null;
+  terminal: boolean;
+  wave: number;
+};
+
+/**
+ * Exercise every bounded Durable Object readiness wave concurrently. A wave
+ * that has already reported the exact deployment stays out of the hot retry
+ * set; once every wave has passed, one complete set is checked again after the
+ * stability interval. A slow request cannot let readiness expire without
+ * revisiting the last failed wave.
+ */
+async function waitForWorkerVersionProbeWaves(params: {
+  deadline: number;
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  startedAt: number;
+  url: URL;
+  workerVersion: {
+    expected: string;
+    probeQueryParam: string;
+    probeWaveCount: number;
+    stableForMs: number;
+  };
+}) {
+  const { probeWaveCount } = params.workerVersion;
+  if (!Number.isSafeInteger(probeWaveCount) || probeWaveCount < 1 || probeWaveCount > 64) {
+    throw new Error("Worker-version readiness probeWaveCount must be an integer from 1 to 64.");
+  }
+
+  const allWaves = Array.from({ length: probeWaveCount }, (_, wave) => wave);
+  let pendingWaves = new Set(allWaves);
+  let lastFailure = "No probe wave has completed yet.";
+  let lastProgress = "";
+  let lastProgressAt = 0;
+
+  while (Date.now() < params.deadline) {
+    const results = await probeWorkerVersionWaves({
+      deadline: params.deadline,
+      expectedWorkerVersion: params.workerVersion.expected,
+      probeQueryParam: params.workerVersion.probeQueryParam,
+      probeWaveCount,
+      readinessBearerToken: params.readinessBearerToken,
+      signal: params.signal,
+      url: params.url,
+      waves: [...pendingWaves],
+    });
+    const terminalFailure = results.find((result) => result.terminal);
+    if (terminalFailure?.failure) {
+      return {
+        message: `Preview readiness failed at ${params.url.toString()}. ${terminalFailure.failure}`,
+        ok: false as const,
+      };
+    }
+    for (const result of results) {
+      if (result.failure === null) pendingWaves.delete(result.wave);
+    }
+
+    if (pendingWaves.size > 0) {
+      const failures = results.filter((result) => result.failure !== null);
+      lastFailure = describeWorkerVersionProbeFailures(failures);
+      const progress = `${probeWaveCount - pendingWaves.size}/${probeWaveCount}`;
+      const now = Date.now();
+      if (progress !== lastProgress || now - lastProgressAt >= 10_000) {
+        console.error(
+          `[preview] readiness ${params.url.origin}: ${progress} Durable Object probe waves have served version ${params.workerVersion.expected}; ${lastFailure}`,
+        );
+        lastProgress = progress;
+        lastProgressAt = now;
+      }
+      await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
+      continue;
+    }
+
+    const remainingStabilityBudgetMs = params.deadline - Date.now();
+    if (remainingStabilityBudgetMs < params.workerVersion.stableForMs) {
+      lastFailure =
+        `All waves served the expected version, but only ${Math.max(0, remainingStabilityBudgetMs)}ms ` +
+        `remained for the required ${params.workerVersion.stableForMs}ms stability interval.`;
+      break;
+    }
+    console.error(
+      `[preview] readiness ${params.url.origin}: all ${probeWaveCount} Durable Object probe waves served ${params.workerVersion.expected}; revalidating after ${formatDurationMs(params.workerVersion.stableForMs)}`,
+    );
+    await sleep(params.workerVersion.stableForMs, params.signal);
+    params.signal?.throwIfAborted();
+    if (Date.now() >= params.deadline) {
+      lastFailure = "The readiness deadline expired before complete-set revalidation began.";
+      break;
+    }
+
+    const validationResults = await probeWorkerVersionWaves({
+      deadline: params.deadline,
+      expectedWorkerVersion: params.workerVersion.expected,
+      probeQueryParam: params.workerVersion.probeQueryParam,
+      probeWaveCount,
+      readinessBearerToken: params.readinessBearerToken,
+      signal: params.signal,
+      url: params.url,
+      waves: allWaves,
+    });
+    params.signal?.throwIfAborted();
+    const terminalValidationFailure = validationResults.find((result) => result.terminal);
+    if (terminalValidationFailure?.failure) {
+      return {
+        message:
+          `Preview readiness failed at ${params.url.toString()}. ` +
+          terminalValidationFailure.failure,
+        ok: false as const,
+      };
+    }
+    const validationFailures = validationResults.filter((result) => result.failure !== null);
+    if (validationFailures.length === 0 && Date.now() < params.deadline) {
+      console.error(
+        `[preview] readiness ${params.url.origin}: all ${probeWaveCount} waves remained exact; ready after ${formatDurationMs(Date.now() - params.startedAt)}`,
+      );
+      return { ok: true as const };
+    }
+    if (Date.now() >= params.deadline) {
+      lastFailure = "The readiness deadline expired during complete-set revalidation.";
+      break;
+    }
+
+    pendingWaves = new Set(validationFailures.map((result) => result.wave));
+    lastFailure = describeWorkerVersionProbeFailures(validationFailures);
+    console.error(
+      `[preview] readiness ${params.url.origin}: complete-set revalidation found ${lastFailure}; retrying only those waves`,
+    );
+    lastProgress = "";
+    await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
+  }
+
+  return {
+    message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
+    ok: false as const,
+  };
+}
+
+async function probeWorkerVersionWaves(params: {
+  deadline: number;
+  expectedWorkerVersion: string;
+  probeQueryParam: string;
+  probeWaveCount: number;
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  url: URL;
+  waves: readonly number[];
+}): Promise<WorkerVersionProbeResult[]> {
+  return await Promise.all(
+    params.waves.map(async (wave) => {
+      const requestUrl = new URL(params.url);
+      requestUrl.searchParams.set(params.probeQueryParam, String(wave));
+      try {
+        const response = await fetchReadinessResponse(requestUrl, {
+          readinessBearerToken: params.readinessBearerToken,
+          signal: params.signal,
+          timeoutMs: readinessRequestTimeoutMs(params.deadline),
+        });
+        if (response.status < 200 || response.status >= 300) {
+          const recognizedSettlingResponse =
+            response.settlingReason === "durable-object-lifecycle" ||
+            response.settlingReason === "probe-timeout" ||
+            response.settlingReason === "version-mismatch";
+          // During edge rollout Cloudflare can return a framework-generated 5xx
+          // without the Worker's version header. That response cannot be
+          // attributed to the deployment we are proving, so keep it inside the
+          // bounded rollout window. An unexplained 5xx explicitly served by the
+          // expected version is an application failure and remains terminal.
+          const servedByExpectedWorker = response.workerVersion === params.expectedWorkerVersion;
+          const terminal =
+            [400, 401, 403].includes(response.status) ||
+            (response.status >= 500 && !recognizedSettlingResponse && servedByExpectedWorker);
+          return {
+            failure:
+              `wave ${wave} returned HTTP ${response.status}` +
+              formatReadinessResponseDetail(response),
+            terminal,
+            wave,
+          };
+        }
+        if (response.workerVersion !== params.expectedWorkerVersion) {
+          return {
+            failure: `wave ${wave} served Worker version ${response.workerVersion ?? "<missing>"}`,
+            terminal: false,
+            wave,
+          };
+        }
+        if (
+          response.deploymentProbeWave !== wave ||
+          response.deploymentProbeWaveCount !== params.probeWaveCount
+        ) {
+          return {
+            failure:
+              `wave ${wave} returned probe identity ` +
+              `${response.deploymentProbeWave ?? "<missing>"}/` +
+              `${response.deploymentProbeWaveCount ?? "<missing>"}; ` +
+              `expected ${wave}/${params.probeWaveCount}`,
+            terminal: true,
+            wave,
+          };
+        }
+        return { failure: null, terminal: false, wave };
+      } catch (error) {
+        return {
+          failure: `wave ${wave} failed: ${formatPreviewErrorMessage(error)}`,
+          terminal: false,
+          wave,
+        };
+      }
+    }),
+  );
+}
+
+function describeWorkerVersionProbeFailures(results: readonly WorkerVersionProbeResult[]) {
+  const descriptions = results
+    .map((result) => result.failure)
+    .filter((failure): failure is string => failure !== null);
+  return descriptions.length === 0 ? "no failed waves" : descriptions.join("; ");
+}
+
 async function fetchReadinessResponse(
   url: URL,
   options: {
+    readinessBearerToken?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
   } = {},
@@ -5327,9 +5974,13 @@ async function fetchReadinessResponse(
   const requestSignal = options.signal
     ? AbortSignal.any([options.signal, requestTimeoutSignal])
     : requestTimeoutSignal;
+  const headers = options.readinessBearerToken
+    ? { authorization: `Bearer ${options.readinessBearerToken}` }
+    : undefined;
   try {
     const response = await fetch(url, {
       cache: "no-store",
+      headers,
       method: "GET",
       redirect: "follow",
       signal: requestSignal,
@@ -5345,6 +5996,7 @@ async function fetchReadinessResponse(
     }
 
     return await requestReadinessWithDnsResolve({
+      readinessBearerToken: options.readinessBearerToken,
       signal: requestSignal,
       url,
     });
@@ -5353,6 +6005,9 @@ async function fetchReadinessResponse(
 
 type ReadinessResponse = {
   body: string;
+  deploymentProbeWave: number | null;
+  deploymentProbeWaveCount: number | null;
+  settlingReason: string | null;
   status: number;
   workerVersion: string | null;
 };
@@ -5403,7 +6058,24 @@ function parseReadinessResponse(input: {
   status: number;
   workerVersion: string | null;
 }): ReadinessResponse {
-  return input;
+  let parsed: unknown = null;
+  try {
+    parsed = input.body ? JSON.parse(input.body) : null;
+  } catch {
+    // Non-JSON proxy and platform errors remain useful as bounded diagnostics.
+  }
+  const record =
+    typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
+  return {
+    ...input,
+    deploymentProbeWave: readSafeInteger(record?.deploymentProbeWave),
+    deploymentProbeWaveCount: readSafeInteger(record?.deploymentProbeWaveCount),
+    settlingReason: typeof record?.settlingReason === "string" ? record.settlingReason : null,
+  };
+}
+
+function readSafeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) ? (value as number) : null;
 }
 
 function formatReadinessResponseDetail(response: ReadinessResponse): string {
@@ -5411,7 +6083,15 @@ function formatReadinessResponseDetail(response: ReadinessResponse): string {
   return detail ? `: ${detail}` : "";
 }
 
-async function requestReadinessWithDnsResolve(input: { signal?: AbortSignal; url: URL }) {
+function readinessRequestTimeoutMs(deadline: number): number {
+  return Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now()));
+}
+
+async function requestReadinessWithDnsResolve(input: {
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  url: URL;
+}) {
   const { signal, url } = input;
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
@@ -5428,10 +6108,14 @@ async function requestReadinessWithDnsResolve(input: { signal?: AbortSignal; url
   resolvedUrl.hostname = address;
 
   return await new Promise<ReadinessResponse>((resolve, reject) => {
+    const headers: Record<string, string> = { Host: url.host };
+    if (input.readinessBearerToken) {
+      headers.authorization = `Bearer ${input.readinessBearerToken}`;
+    }
     const req = request(
       resolvedUrl,
       {
-        headers: { Host: url.host },
+        headers,
         method: "GET",
         servername: url.hostname,
         signal,
@@ -5571,9 +6255,9 @@ export const previewInternals = {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
-  readPlaywrightRetryTelemetry,
+  readPlaywrightTestTelemetry,
   readPreviewAppConfig,
-  readVitestRetryTelemetry,
+  readVitestTestTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,

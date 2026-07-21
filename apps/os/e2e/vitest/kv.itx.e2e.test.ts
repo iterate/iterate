@@ -5,8 +5,7 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 // Round-trip, delete, prefix listing, and per-project isolation — the knob
 // store a config worker reads on its next request (docs/remote-apps.md uses
 // it to flip a reverse-proxy target between prod and a dev tunnel).
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("itx.kv round-trips small values, lists by prefix, and is project-scoped", async () => {
+test("itx.kv round-trips small values, lists by prefix, and is project-scoped", async () => {
   using session = withItxSession();
   using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await admin.projects.get(`kv-${crypto.randomUUID().slice(0, 8)}`).create({});

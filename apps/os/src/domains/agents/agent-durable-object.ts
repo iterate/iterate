@@ -20,6 +20,11 @@ import { AgentProcessorContract, type AgentLiveState } from "./agent-processor-c
 import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = parseAgentDurableObjectName(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),

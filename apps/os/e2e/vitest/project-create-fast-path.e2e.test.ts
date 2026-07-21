@@ -1,8 +1,7 @@
 import { test } from "vitest";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip(
+test(
   "fast-path create is self-driving: nobody waits, the saga still lands project/ready",
   { retry: 0 },
   async ({ expect }) => {

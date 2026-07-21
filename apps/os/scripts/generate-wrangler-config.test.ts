@@ -2,6 +2,10 @@ import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
 import {
+  deploymentReadinessNamedProbes,
+  deploymentReadinessProjectProbes,
+} from "../src/deployment-readiness.ts";
+import {
   config,
   localDevAuthJwks,
   localAuthServiceBinding,
@@ -56,6 +60,18 @@ it("gives every deployed env its own worker name derived from the service name",
     expect(envBlock.name, envName).toMatch(/^os-/);
     expect(envBlock.name, envName).not.toBe(config.name);
   }
+});
+
+it("probes every configured Durable Object namespace before preview tests", () => {
+  const configuredBindings = config.durable_objects.bindings.map(({ name }) => name).toSorted();
+  const probedBindings = [
+    "CAPABILITY_HOST",
+    "STREAM",
+    ...deploymentReadinessNamedProbes.map(([binding]) => binding),
+    ...deploymentReadinessProjectProbes.map(([binding]) => binding),
+  ].toSorted();
+
+  expect(probedBindings).toEqual(configuredBindings);
 });
 
 it("binds the os worker to its own env's typechecker sidecar", () => {

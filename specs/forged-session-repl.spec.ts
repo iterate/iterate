@@ -1,9 +1,7 @@
 import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
-// Quarantined after a live preview hydration stall; see
-// tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("project REPL accepts a forged session", async ({ helpers, page }) => {
+test("project REPL accepts a forged session", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("basic-repl");
   await page.goto(`/projects/${fixture.project.slug}/repl`);
   // exact: the project slug can contain "run", which substring-matches sidebar buttons

@@ -12,8 +12,7 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 const PROOF_STREAM = "/e2e/agent-tools-proof";
 const PROOF_TYPE = "events.iterate.test/agent-tools-proof";
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip(
+test(
   "agent runs an itx script that appends a proof event, then replies",
   // Full LLM codemode loop — heavy-test ceiling (E2E_HEAVY_TEST_TIMEOUT_MS);
   // a healthy run is well under a minute.

@@ -41,19 +41,7 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
     (EXAMPLE_CASES[right.id]?.completionTimeoutMs ?? 90_000) -
     (EXAMPLE_CASES[left.id]?.completionTimeoutMs ?? 90_000),
 );
-const QUARANTINED_MATRIX_EXAMPLES = new Set([
-  "append-and-read-stream",
-  "describe-project",
-  "discover-tree",
-  "ephemeral-events",
-  "repo-edit-file",
-  "repo-read-file",
-  "run-script",
-  "sandbox-exec",
-  "secrets-lifecycle",
-  "workspace-edit-and-push",
-  "workspace-files-transfer",
-]);
+const matrixTest = baseTest;
 
 // Fixed capability mounts, the config repo, and the repo-sourced project
 // worker are project-global mutable resources. Give each runtime its own pool
@@ -126,9 +114,6 @@ for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
   const runtimeTimeoutMs = exampleCase.completionTimeoutMs ?? 90_000;
-  // Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md; keep each
-  // generated case visible in discovery while suppressing its live work.
-  const matrixTest = QUARANTINED_MATRIX_EXAMPLES.has(example.id) ? baseTest.skip : baseTest;
   // The case budget is shared wall time: parallel runtimes each get the full
   // remainder concurrently, while an explicitly serial case passes the
   // remaining aggregate budget to each successive runtime. The project-worker
@@ -142,8 +127,15 @@ for (const example of MATRIX_EXAMPLES) {
   matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
     { timeout: runtimeTimeoutMs + 30_000 },
-    async () => {
+    async ({ annotate }) => {
       expect(runtimes.length).toBeGreaterThan(0);
+
+      const recordPhase = async (name: string, category: string, startedAt: number) => {
+        await annotate(
+          JSON.stringify({ name, category, durationMs: performance.now() - startedAt }),
+          "e2e-phase",
+        );
+      };
 
       // Fresh per attempt; shared only when a case explicitly elects serial
       // runtime execution (the warm sandbox container).
@@ -153,6 +145,7 @@ for (const example of MATRIX_EXAMPLES) {
         projectLease: TestProjectLease,
         timeoutMs: number,
       ) => {
+        const runtimeStartedAt = performance.now();
         const { projectId } = projectLease;
         const runtimeDeadline = Date.now() + timeoutMs;
         const ctx = {
@@ -190,6 +183,8 @@ for (const example of MATRIX_EXAMPLES) {
             }`,
             { cause: error },
           );
+        } finally {
+          await recordPhase(`${runtime}: execute`, "runtime", runtimeStartedAt);
         }
       };
 
@@ -207,7 +202,9 @@ for (const example of MATRIX_EXAMPLES) {
 
       if (exampleCase.runtimeExecution === "serial") {
         using itx = connectGlobal();
+        const acquireStartedAt = performance.now();
         using projectLease = await serialMatrixProjectPool.acquire(itx);
+        await recordPhase("serial: acquire project", "fixture", acquireStartedAt);
         const caseDeadline = Date.now() + runtimeTimeoutMs;
         try {
           for (const runtime of runtimes) {
@@ -230,7 +227,9 @@ for (const example of MATRIX_EXAMPLES) {
       const results = await Promise.allSettled(
         runtimes.map(async (runtime) => {
           using itx = connectGlobal();
+          const acquireStartedAt = performance.now();
           using projectLease = await matrixProjectPools[runtime].acquire(itx);
+          await recordPhase(`${runtime}: acquire project`, "fixture", acquireStartedAt);
           try {
             await runRuntime(runtime, projectLease, runtimeTimeoutMs);
           } finally {

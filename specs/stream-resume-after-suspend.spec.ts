@@ -38,8 +38,7 @@ const HEALTHY_DELIVERY_MS = 30_000;
 // a real wedge (the wedge is permanent; any finite window catches it).
 const RECOVERY_DELIVERY_MS = 90_000;
 
-// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
-test.skip("control: appended event is delivered to a live stream feed", async ({
+test("control: appended event is delivered to a live stream feed", async ({
   helpers,
   page,
   baseURL,
@@ -112,12 +111,9 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-socket-death" },
   });
-  const { delivered, snapshot } = await pollDelivered(
-    page,
-    keys,
-    marker!.offset,
-    RECOVERY_DELIVERY_MS,
-  );
+  const { delivered, snapshot } =
+    await test.step("half-open: redial and deliver a new stream event", () =>
+      pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
   dumpEvidence("after socket death", snapshot, consoleLines);
   // The historical wedge: runtimes stuck in connectionStatus "reconnecting"
   // with connectionError "connect failed: Peer closed WebSocket: 1005"
@@ -217,21 +213,25 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // therefore race with the greeting and watch it turn into Stop generation
   // while the test fills its draft. First require the greeting's durable
   // response event and its painted row; only then is Send a settled control.
-  await agent.stream.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [WEB_MESSAGE_SENT],
-    timeoutMs: 120_000,
+  await test.step("half-open: wait for onboarding greeting", async () => {
+    await agent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [WEB_MESSAGE_SENT],
+      timeoutMs: 120_000,
+    });
   });
   // The durable greeting already exists; these waits only let its live browser
   // mirror paint and settle the composer. There is intentionally no spinner in
   // that push-only gap, so Middlewright's 1ms no-progress clamp must not replace
   // the explicit bounded waits.
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    await page
-      .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
-      .first()
-      .waitFor({ timeout: 30_000 });
-    await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+  await test.step("half-open: paint greeting and settle composer", async () => {
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await page
+        .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
+        .first()
+        .waitFor({ timeout: 30_000 });
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+    });
   });
 
   // Blackhole the transport WITHOUT a close event — what a suspend-killed TCP
@@ -262,8 +262,24 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     await page.getByRole("button", { name: "Send message" }).click();
   });
 
-  // Two probe intervals + two probe timeouts before the transport is evicted.
-  await page.waitForTimeout(PROBE_NOTICE_MS + 10_000);
+  // A returning tab emits visibilitychange, which asks the socket owner to
+  // verify NOW. Wait on the actual eviction invariant instead of sleeping a
+  // guessed 35s (the old fixed wait was ~15s longer than the two 10s probe
+  // windows it was trying to cover, and still supplied no evidence).
+  await test.step("half-open: evict the muted transport after two probe strikes", async () => {
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            (
+              window as unknown as { __mutedApiSocketsStillOpen: () => number }
+            ).__mutedApiSocketsStillOpen(),
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(0);
+  });
   console.log("--- after half-open probe window ---");
   console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
 
@@ -292,39 +308,33 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // a resend on the recovered transport lands. Never a forever-spinner. The
   // feed's live "Thinking…" state renders two spinner-matching elements, so
   // spinner-waiter sits this out (same per-call override as agent-chat.spec.ts).
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    const sendButton = page.getByRole("button", { name: "Send message" });
-    const sentRow = page
-      .locator('[data-testid="agent-feed-message"][data-kind="user"]')
-      .getByText(sentDuringOutage);
-    // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate half-open-repro probe: toPass() polls a compound settled-condition (row painted OR composer re-enabled) that no single locator can express.
-    await expect(async () => {
-      // Settled = the message painted (it landed) OR the button re-enabled
-      // (it rejected and the draft is back). A still-spinning composer with
-      // no row is the stranded-on-a-ghost-session wedge.
-      const landed = await sentRow.isVisible();
-      const enabled = await sendButton.isEnabled();
-      // oxlint-disable-next-line iterate/spec-restricted-syntax -- the retry trigger inside the toPass loop above; the compound boolean is the settled-condition and the message names the wedge.
-      expect(
-        landed || enabled,
-        "the mid-outage send never settled — stranded on a ghost session",
-      ).toBe(true);
-    }).toPass({ timeout: 60_000, intervals: [1_000] });
-    if (!(await sentRow.isVisible())) {
-      // The stranded call rejected; the composer kept the draft — resend on
-      // the recovered transport.
-      await sendButton.click();
-    }
-    await sentRow.waitFor({ timeout: 30_000 });
+  await test.step("half-open: settle or resend the message started during outage", async () => {
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      const sendButton = page.getByRole("button", { name: "Send message" });
+      const sentRow = page
+        .locator('[data-testid="agent-feed-message"][data-kind="user"]')
+        .getByText(sentDuringOutage);
+      // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate half-open-repro probe: toPass() polls a compound settled-condition (row painted OR composer re-enabled) that no single locator can express.
+      await expect(async () => {
+        // Settled = the message painted (it landed) OR the button re-enabled
+        // (it rejected and the draft is back). A still-spinning composer with
+        // no row is the stranded-on-a-ghost-session wedge.
+        const landed = await sentRow.isVisible();
+        const enabled = await sendButton.isEnabled();
+        // oxlint-disable-next-line iterate/spec-restricted-syntax -- the retry trigger inside the toPass loop above; the compound boolean is the settled-condition and the message names the wedge.
+        expect(
+          landed || enabled,
+          "the mid-outage send never settled — stranded on a ghost session",
+        ).toBe(true);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+      if (!(await sentRow.isVisible())) {
+        // The stranded call rejected; the composer kept the draft — resend on
+        // the recovered transport.
+        await sendButton.click();
+      }
+      await sentRow.waitFor({ timeout: 30_000 });
+    });
   });
-
-  // The real scenario delivers a visibilitychange when the user returns to
-  // the tab; the mute harness kills the network without one, so fire it —
-  // that's what triggers itx-react's resume sweep for sockets no consumer
-  // probes (the GLOBAL context's socket here: the stream runtimes recover
-  // their own project-context socket, but nothing else on this page would
-  // ever find the global corpse).
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
 
   // Leak census, two invariants: (1) every muted corpse was CLOSED — a
   // recovery that dials fresh but strands the corpse (the #1894 signature)
