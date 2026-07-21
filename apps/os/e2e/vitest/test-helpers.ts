@@ -7,7 +7,6 @@ import type {
   Session,
   UnauthenticatedOs,
 } from "../../src/itx-api.generated.ts";
-import { withTestProjectIdentifiers } from "../test-support/with-test-project-identifiers.ts";
 
 export type { ItxWebSocketMessage };
 
@@ -48,7 +47,6 @@ export function deployedBaseUrl(): string | null {
 }
 
 type ItxSessionInput = {
-  generateProjectIds?: boolean;
   onWebSocketMessage?: (message: ItxWebSocketMessage) => void;
 };
 
@@ -96,7 +94,8 @@ export function withItxSession(
     | ProjectItxSessionInput = {},
 ): RpcStub<Agent> | RpcStub<Session> | RpcStub<ProjectRpcTarget> | RpcStub<UnauthenticatedOs> {
   const baseUrl = requireAppBaseUrl();
-  const { generateProjectIds = true, ...connectionInput } = input;
-  const session = connectItx({ ...connectionInput, baseUrl });
-  return generateProjectIds ? withTestProjectIdentifiers(session) : session;
+  if (!("auth" in input)) return connectItx({ ...input, baseUrl });
+  if (!("projectId" in input)) return connectItx({ ...input, baseUrl });
+  if (!("agentPath" in input)) return connectItx({ ...input, baseUrl });
+  return connectItx({ ...input, baseUrl });
 }

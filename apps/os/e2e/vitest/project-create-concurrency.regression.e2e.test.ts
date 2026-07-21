@@ -7,7 +7,6 @@ test.fails(
   async ({ expect }) => {
     using session = withItxSession({
       auth: { type: "admin-secret", secret: adminSecret() },
-      generateProjectIds: false,
     });
     const slug = `project-create-race-${crypto.randomUUID().slice(0, 8)}`;
 

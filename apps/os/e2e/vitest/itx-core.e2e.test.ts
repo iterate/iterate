@@ -79,14 +79,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
         "out",
         ["push", ["pipeline", expect.any(Number), ["projects", "get"], [projectSlug]]],
       ],
-      [
-        expect.any(Number),
-        "out",
-        [
-          "push",
-          ["pipeline", expect.any(Number), ["create"], [{ projectId: description.projectId }]],
-        ],
-      ],
+      [expect.any(Number), "out", ["push", ["pipeline", expect.any(Number), ["create"], [{}]]]],
     ]),
   );
 

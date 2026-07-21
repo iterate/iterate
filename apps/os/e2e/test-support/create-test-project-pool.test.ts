@@ -49,16 +49,18 @@ function createSessionStub() {
   const createdProjectIds: string[] = [];
   const session = {
     projects: {
-      create: () => {
-        const projectId = `project-${createdProjectIds.length + 1}`;
-        createdProjectIds.push(projectId);
-        return {
-          async __describe() {
-            return { projectId };
-          },
-          [Symbol.dispose]() {},
-        };
-      },
+      get: () => ({
+        create: () => {
+          const projectId = `project-${createdProjectIds.length + 1}`;
+          createdProjectIds.push(projectId);
+          return {
+            async __describe() {
+              return { projectId };
+            },
+            [Symbol.dispose]() {},
+          };
+        },
+      }),
     },
   } as unknown as RpcStub<Session>;
   return { createdProjectIds, session };

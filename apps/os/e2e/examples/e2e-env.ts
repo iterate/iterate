@@ -6,7 +6,6 @@ import type { RpcStub } from "capnweb";
 import { connectItx } from "iterate/node";
 import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
-import { withTestProjectIdentifiers } from "../test-support/with-test-project-identifiers.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -28,12 +27,10 @@ export function baseUrl() {
 
 /** An admin Session on the deployment under test (the catalog that vends itxs). */
 export function connectGlobal(): RpcStub<Session> {
-  return withTestProjectIdentifiers(
-    connectItx({
-      auth: { secret: adminApiSecret(), type: "admin-secret" },
-      baseUrl: baseUrl(),
-    }),
-  );
+  return connectItx({
+    auth: { secret: adminApiSecret(), type: "admin-secret" },
+    baseUrl: baseUrl(),
+  });
 }
 
 /** A project-scoped itx on the deployment under test, via admin auth. */

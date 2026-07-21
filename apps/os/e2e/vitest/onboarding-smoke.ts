@@ -24,7 +24,6 @@ import {
   waitForOnboardingGreeting,
 } from "../../src/lib/onboarding-agent.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
-import { freshTestProjectId } from "../test-support/with-test-project-identifiers.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const baseUrl = (process.argv[2] ?? resolveBaseUrl(appRoot) ?? "http://localhost:56455").replace(
@@ -40,9 +39,7 @@ async function attemptOnboardingSmoke(): Promise<void> {
   using session = connectItx({ baseUrl });
   const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
-  using project = await root.projects
-    .get(`onboarding-smoke-${marker}`)
-    .create({ projectId: freshTestProjectId() });
+  using project = await root.projects.get(`onboarding-smoke-${marker}`).create({});
   const description = await project.__describe();
   console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
 
