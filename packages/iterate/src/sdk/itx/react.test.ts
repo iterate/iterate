@@ -77,10 +77,12 @@ vi.mock("@iterate-com/capnweb", () => ({
 /** A WebSocket we can drive: record instances, fire open/close by hand. */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
+  input: string | URL;
   url: string;
   closeEmitsEvent = true;
   private handlers: Record<string, Array<() => void>> = {};
   constructor(url: string | URL) {
+    this.input = url;
     this.url = String(url);
     FakeWebSocket.instances.push(this);
   }
@@ -275,6 +277,9 @@ describe("itx session socket", () => {
     });
     const { reportTransportSuspicion } = await import("./react.ts");
     const first = connectIterateSession();
+    // React Native's WebSocket forwards this argument into an iOS TurboModule
+    // method typed as a string; unlike browsers and Node, it rejects URL objects.
+    expect(typeof onlySocket().input).toBe("string");
     expect(onlySocket().url).toBe("wss://os.example.com/api");
     await openLatest();
     await first;

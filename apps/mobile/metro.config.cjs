@@ -4,6 +4,10 @@ const { getDefaultConfig } = require("expo/metro-config");
 const projectRoot = __dirname;
 const config = getDefaultConfig(projectRoot);
 
+// Watchman's cookie synchronization can time out for this monorepo, delaying
+// every start/export by 60 seconds before Metro falls back to its Node crawler.
+config.resolver.useWatchman = false;
+
 // Server presets come from the monorepo's canonical envs.ts. Metro otherwise
 // refuses to resolve a source file outside apps/mobile.
 config.watchFolders = [path.resolve(projectRoot, "../..")];

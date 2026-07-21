@@ -383,7 +383,7 @@ function dial(): Generation {
       reject(new Error("itx WebSocket closed before connecting"));
       return;
     }
-    const ws = new WebSocket(target.url);
+    const ws = new WebSocket(target.url.href);
     generation.ws = ws;
     let established = false;
     // The timeout spans the WHOLE dial — TCP/TLS/upgrade AND the authenticate
