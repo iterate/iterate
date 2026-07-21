@@ -69,10 +69,10 @@ import { isRepoNotSeededError } from "./utils.ts";
  *
  * RECOVERY is the same code path as normal operation: an incarnation that
  * dies owing work gets the keepalive's `stream/processor-revived` fact
- * appended, whose ordinary delivery lands at head and re-runs the at-head
- * pass — an open creation request with no live attempt is re-driven, an
- * import with no live driver (fresh incarnations have empty runtime sets) is
- * re-driven under the same request identity, so a zombie attempt racing the
+ * appended; its wake produces the eventless at-head pass — an open creation
+ * request with no live attempt is re-driven, and an import with no live driver
+ * (fresh incarnations have empty runtime sets) is re-driven under the same
+ * request identity, so a zombie attempt racing the
  * successor collapses on the shared idempotency keys.
  */
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
@@ -438,9 +438,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       case "events.iterate.com/stream/created":
         return { ...state, initialized: true };
       default:
-        // commit-completed, task facts, webhook deliveries, and
-        // processor-revived: consumed for their delivery turn (per-event
-        // facts or a guaranteed at-head pass), no state change.
+        // commit-completed, task facts, and webhook deliveries are consumed for
+        // their per-event delivery turn; no state change.
         return state;
     }
   }

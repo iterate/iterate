@@ -77,10 +77,10 @@ import {
  *
  * RECOVERY rides that same at-head pass. When an incarnation dies owing script
  * work, the keepalive alarm revives the processor and appends
- * `events.iterate.com/stream/processor-revived`; that event's ordinary
- * delivery lands at head and the pass above re-drives the open obligations —
- * fresh requested scripts start, orphaned started scripts settle. Starting
- * fresh and recovering after an eviction are the same code path. The pass is
+ * `events.iterate.com/stream/processor-revived`; its wake produces the
+ * eventless at-head pass that re-drives the open obligations — fresh requested
+ * scripts start, orphaned started scripts settle. Starting fresh and
+ * recovering after an eviction are the same code path. The pass is
  * BLOCKED (one outer `blockProcessorWhile` per at-head pass): a settle append
  * that fails keeps the frame retryable, so the transport's redelivery — not a
  * timer — is what retries a transiently failed settlement. Settle appends are
@@ -130,9 +130,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
         this.#pendingSettlements.delete(event.payload.executionId);
         break;
       // created / capability-provided / capability-revoked /
-      // script-run-requested / script-run-started / stream/processor-revived:
-      // no per-event side effect — they matter through the reduced state below
-      // (the revived fact's whole job is the guaranteed at-head turn).
+      // script-run-requested / script-run-started: no per-event side effect —
+      // they matter through the reduced state below.
     }
 
     // ---------------------------------------- state-derived side effects
@@ -309,7 +308,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return { ...state, scriptExecutions };
       }
       default:
-        // stream/processor-revived: consumed only for its delivery turn.
         return state;
     }
   }

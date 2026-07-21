@@ -7,7 +7,7 @@
 // fake, defined here).
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput, StreamEvent } from "iterate/processors";
+import type { ConsumedInput, StreamEvent, StreamEventInput } from "iterate/processors";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import {
   makeMemoryProgressStore,
@@ -34,8 +34,8 @@ type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 // -----------------------------------------------------------------------------
 // Event literals: the birth bundle and the recurring message shapes. These are
-// event BUILDERS (data), not append wrappers — every test appends through the
-// harness's typed append.
+// event BUILDERS (data), not append wrappers. Consumed inputs use the harness's
+// typed append; core recovery facts use the raw stream handle.
 // -----------------------------------------------------------------------------
 
 const NEW_AGENT_EVENTS = [
@@ -88,7 +88,7 @@ function agentLoopNote(content: string): AgentEventInput {
 const REVIVED = {
   type: "events.iterate.com/stream/processor-revived",
   payload: { processorSlug: "agent", revivals: 1, version: "test" },
-} satisfies AgentEventInput;
+} satisfies StreamEventInput;
 
 // -----------------------------------------------------------------------------
 // Scripted LLM transport: every call parks until the test settles it, and the
@@ -661,7 +661,7 @@ describe("AgentProcessor recovery", () => {
 
     // The atomic assistant+settled append hits a stream hiccup: nothing
     // commits (batches are atomic) and the incarnation's in-flight slot
-    // clears, so the request stays owed in the journal.
+    // clears, so the request stays owed in the stream.
     await h.play(
       () => {
         h.stream.failAppendsOfType = SETTLED;
@@ -671,7 +671,7 @@ describe("AgentProcessor recovery", () => {
         h.stream.failAppendsOfType = undefined;
       },
       // Any delivery at head finds the request unsettled → adoption re-dials.
-      ["append", REVIVED],
+      () => h.stream.append(REVIVED),
     );
     expect(h.events(SETTLED)).toHaveLength(0);
     expect(h.llm.calls).toHaveLength(2);
@@ -1381,13 +1381,13 @@ describe("AgentProcessor stream facts", () => {
       () => {
         h.stream.failAppendsOfType = undefined;
       },
-      ["append", REVIVED], // any delivery at head: the resume attempt now succeeds
+      () => h.stream.append(REVIVED), // any delivery at head: the resume attempt now succeeds
       ["advanceTime", 10_000], // the re-anchored trigger's window closes → fresh intent
     );
 
     expect(h.events("events.iterate.com/agent/resumed")).toHaveLength(1);
     expect(h.state().paused).toBeNull();
-    // The burned no-op intent is a journal fact; the re-anchored trigger got
+    // The burned no-op intent is a stream fact; the re-anchored trigger got
     // a FRESH key, so a second requested event committed and the turn ran.
     expect(h.events(REQUESTED)).toHaveLength(2);
     expect(h.state().openRequest).not.toBeNull();

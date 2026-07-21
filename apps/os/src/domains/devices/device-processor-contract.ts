@@ -370,16 +370,12 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/device/notification-ticket-observed",
     "events.iterate.com/device/notification-settled",
     "events.iterate.com/device/notification-opened",
-    // The platform revival fact (core-owned). This processor currently
-    // consumes it for an at-head turn where the state-derived pass settles
-    // orphaned attempts and expired requests after an eviction. Consumption
-    // is optional for processors that do not react to the fact itself because
-    // an unconsumed tail receives the runner's eventless at-head pass.
+    // The eventless at-head pass settles orphaned attempts and expired requests
+    // after recovery; the platform revival fact itself is not consumed.
     // `stream/woken` and
     // `stream/subscriber-connected` are deliberately NOT consumed any more:
     // they were only ever extra re-check-at-head signals, and the runner's
     // final at-head pass makes them redundant.
-    "events.iterate.com/stream/processor-revived",
   ],
   emits: [
     // The catalog cross-post: device/created is re-appended onto the project

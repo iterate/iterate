@@ -8,7 +8,6 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
@@ -73,13 +72,11 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     },
   },
   // TelegramProcessorContract brings the forwarded webhook, the send marker,
-  // and the facet birth certificate into scope; CoreProcessorContract brings
-  // the platform revival fact (see `consumes`).
+  // and the facet birth certificate into scope.
   processorDeps: [
     AgentProcessorContract,
     CapabilityHostProcessorContract,
     TelegramProcessorContract,
-    CoreProcessorContract,
   ],
   consumes: [
     "events.iterate.com/telegram-agent/created",
@@ -87,17 +84,10 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/telegram/send-requested",
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/capability-host/script-run-requested",
-    // The platform revival fact (core-owned, ONE type for every recovery-wired
-    // processor; the payload's processorSlug names which). This contract
-    // currently consumes it, but does not react to the fact itself; an
-    // unconsumed tail would receive the same eventless at-head turn. Its append
-    // cold-boots the Stream DO so an unacknowledged send frame redelivers after
-    // a simultaneous Agent+Stream DO death and the blocking send re-runs.
-    // At-least-once at the Telegram boundary is the accepted caveat
-    // (sendMessage has no idempotency key — the stream is exactly-once, the
-    // send is not). Never emitted by the processor: the recovery adapter
-    // appends it raw, as the runtime speaking.
-    "events.iterate.com/stream/processor-revived",
+    // The platform revival append cold-boots delivery after a simultaneous
+    // Agent+Stream DO death; the eventless at-head pass re-runs the blocking
+    // send without consuming the fact itself. Telegram delivery remains
+    // at-least-once because sendMessage has no idempotency key.
   ],
   emits: [
     "events.iterate.com/agents/context-added",
