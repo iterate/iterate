@@ -23,6 +23,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export function TodoClient() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [mutating, setMutating] = useState(false);
   const [title, setTitle] = useState("");
   const [todos, setTodos] = useState<Todo[]>([]);
 
@@ -42,11 +43,14 @@ export function TodoClient() {
   }, [load]);
 
   const mutate = async (mutation: () => Promise<unknown>) => {
+    setMutating(true);
     try {
       await mutation();
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setMutating(false);
     }
   };
 
@@ -77,8 +81,15 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button type="submit">Add</button>
+        <button disabled={mutating} type="submit">
+          Add
+        </button>
       </form>
+      {mutating && (
+        <p aria-live="polite" data-spinner="true" role="status">
+          Saving…
+        </p>
+      )}
       {error.length > 0 && <p role="alert">{error}</p>}
       {loading ? (
         <p>Loading…</p>

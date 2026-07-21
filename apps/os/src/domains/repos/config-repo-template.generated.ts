@@ -439,6 +439,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "export function TodoClient() {\n" +
       "  const [error, setError] = useState(\"\");\n" +
       "  const [loading, setLoading] = useState(true);\n" +
+      "  const [mutating, setMutating] = useState(false);\n" +
       "  const [title, setTitle] = useState(\"\");\n" +
       "  const [todos, setTodos] = useState<Todo[]>([]);\n" +
       "\n" +
@@ -458,11 +459,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }, [load]);\n" +
       "\n" +
       "  const mutate = async (mutation: () => Promise<unknown>) => {\n" +
+      "    setMutating(true);\n" +
       "    try {\n" +
       "      await mutation();\n" +
       "      await load();\n" +
       "    } catch (cause) {\n" +
       "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
+      "    } finally {\n" +
+      "      setMutating(false);\n" +
       "    }\n" +
       "  };\n" +
       "\n" +
@@ -493,8 +497,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          type=\"text\"\n" +
       "          value={title}\n" +
       "        />\n" +
-      "        <button type=\"submit\">Add</button>\n" +
+      "        <button disabled={mutating} type=\"submit\">\n" +
+      "          Add\n" +
+      "        </button>\n" +
       "      </form>\n" +
+      "      {mutating && (\n" +
+      "        <p aria-live=\"polite\" data-spinner=\"true\" role=\"status\">\n" +
+      "          Saving…\n" +
+      "        </p>\n" +
+      "      )}\n" +
       "      {error.length > 0 && <p role=\"alert\">{error}</p>}\n" +
       "      {loading ? (\n" +
       "        <p>Loading…</p>\n" +
