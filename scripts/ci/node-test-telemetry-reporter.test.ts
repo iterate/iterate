@@ -4,16 +4,19 @@ import nodeTestTelemetryReporter from "./node-test-telemetry-reporter.ts";
 
 const originalEnabled = process.env.TEST_TELEMETRY_ENABLED;
 const originalPostHog = process.env.APP_CONFIG_POSTHOG;
+const originalGithubRunId = process.env.GITHUB_RUN_ID;
 
 afterEach(() => {
   restoreEnv("TEST_TELEMETRY_ENABLED", originalEnabled);
   restoreEnv("APP_CONFIG_POSTHOG", originalPostHog);
+  restoreEnv("GITHUB_RUN_ID", originalGithubRunId);
   vi.restoreAllMocks();
 });
 
 it("keeps duplicate Node leaf identities distinct instead of inventing retries", async () => {
   process.env.TEST_TELEMETRY_ENABLED = "1";
   process.env.APP_CONFIG_POSTHOG = JSON.stringify({ apiKey: "phc_test" });
+  delete process.env.GITHUB_RUN_ID;
   const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
 
