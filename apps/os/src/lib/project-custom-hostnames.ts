@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { itxAuthFromPrincipal } from "~/auth.ts";
 import { itxEnv as env } from "~/env.ts";
 
 const Input = z.object({ projectId: z.string() });
@@ -18,9 +19,13 @@ const Input = z.object({ projectId: z.string() });
 export const getProjectCustomHostnames = createServerFn({ method: "GET" })
   .validator((input: z.input<typeof Input>) => Input.parse(input))
   .handler(async ({ context, data }): Promise<string[]> => {
-    // Hostnames are public routing facts, but only signed-in dashboard users
-    // have any business enumerating them.
-    if (!context.iterateAuthSession && !context.operatorSession) return [];
+    const principal = context.principal;
+    if (!principal) return [];
+    const auth = itxAuthFromPrincipal(principal, {
+      allowDirectoryFallback: context.operatorSession == null,
+    });
+    await auth.ensureCanAccessProject?.(data.projectId);
+    auth.assertCanAccessProject(data.projectId);
     const hostnames: string[] = [];
     let cursor: string | undefined;
     do {
