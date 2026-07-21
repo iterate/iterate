@@ -1,5 +1,5 @@
 import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/react";
+import { connectItx } from "iterate/sdk/itx/react";
 import type { AgentSummaryUpdate } from "~/domains/agents/agent-presence.ts";
 
 /**

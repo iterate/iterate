@@ -6,12 +6,9 @@
 // and re-exported here. Hand-written helpers for project code accumulate in
 // this file.
 //
-// Runtime exports here reach dynamic workers WITHOUT an npm install: the
-// platform embeds this module (compiled to plain JS) as the `iterate/sdk`
-// virtual module in every dynamic worker build — see apps/os
-// iterate-sdk-virtual-module.generated.ts. The published package is still the
-// editor/typecheck story; keep runtime code here dependency-free (only
-// `cloudflare:workers` imports) so the embed stays self-contained.
+// Dynamic workers install and bundle this published package from their normal
+// package.json dependency. Preview deployments rewrite that dependency to the
+// exact pkg.pr.new artifact produced by the pull request.
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerCapability,

@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { LiveStateRpcTarget } from "iterate/live-state";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";

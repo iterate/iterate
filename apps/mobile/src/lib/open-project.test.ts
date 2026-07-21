@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { ProjectListEntry } from "iterate/react";
+import type { ProjectListEntry } from "iterate/sdk/itx/react";
 import type { ItxSession } from "./itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "./open-project.ts";
 

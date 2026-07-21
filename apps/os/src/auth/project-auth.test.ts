@@ -17,10 +17,16 @@ describe("project auth partial fetch", () => {
       new Request(`${appOrigin}/events?kind=root`, { headers: { accept: "text/html" } }),
     );
     expect(html?.status).toBe(200);
-    expect(await html?.text()).toContain('action="/_iterate/auth/login"');
-    expect(html?.headers.get("content-security-policy")).toContain(
-      `form-action 'self' ${osOrigin}`,
-    );
+    const body = (await html?.text()) ?? "";
+    // The sign-in button is a link, never a form: Chromium applies
+    // form-action to a submission's whole redirect chain, which silently
+    // killed the logged-out hop to the iterate-auth origin.
+    expect(body).toContain('href="/_iterate/auth/login?return_to=%2Fevents%3Fkind%3Droot"');
+    expect(body).not.toContain("<form");
+    expect(body).toContain('viewBox="0 0 500 500"');
+    const csp = html?.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("form-action 'none'");
+    expect(csp).toContain("style-src 'nonce-");
     expect(await projectFetch(new Request(`${appOrigin}/api/events`))).toMatchObject({
       status: 401,
     });

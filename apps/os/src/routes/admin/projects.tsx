@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { useIterateSessionQuery } from "iterate/react";
+import { useIterateSessionQuery } from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../../project-deployment-status.ts";
 
 export const Route = createFileRoute("/admin/projects")({

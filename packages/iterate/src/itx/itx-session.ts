@@ -4,7 +4,7 @@
  * `authenticate()`d into a **Session** (the catalog that vends project itxs via
  * `session.projects.get(slug)`), and kept alive through transport gaps.
  *
- * React never appears in this module. The hooks in ./itx-react.ts are a thin
+ * React never appears in this module. The hooks in ../sdk/itx/react.ts are a thin
  * binding over the exact surface exported here (`subscribeSession` +
  * `currentSnapshot` feed `useSyncExternalStore`; everything else is shared
  * verbatim), so a non-React consumer — a node script, a future runtime —
@@ -67,7 +67,7 @@
  *    its healthy successor. {@link reconnectIterateSession} is the separate,
  *    deliberate *semantic* reset (new claims after create/unlock).
  */
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "@iterate-com/capnweb";
 import type {
   ItxAuthCredentials,
   Project,

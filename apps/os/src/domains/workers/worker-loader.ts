@@ -85,6 +85,7 @@ async function resolveThroughBuild(input: {
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
+  const iteratePackageSpec = env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined;
   const resolved = await resolveFileSource({
     files:
       "createApp" in input.source ? input.source.createApp.files : input.source.createWorker.files,
@@ -94,6 +95,7 @@ async function resolveThroughBuild(input: {
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     files: resolved,
+    iteratePackageSpec,
     source: input.source,
   });
   const artifact =
@@ -101,6 +103,7 @@ async function resolveThroughBuild(input: {
     (await resolveArtifact(buildKey, {
       projectId: input.projectId,
       resolved,
+      iteratePackageSpec,
       source: input.source,
     }));
   return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
@@ -111,6 +114,7 @@ async function resolveArtifact(
   context: {
     projectId: string;
     resolved: ResolvedWorkerFileSource;
+    iteratePackageSpec?: string;
     source: DynamicWorkerSource;
   },
 ): Promise<ResolvedWorkerSource> {
@@ -125,6 +129,7 @@ async function runBuild(
   context: {
     projectId: string;
     resolved: ResolvedWorkerFileSource;
+    iteratePackageSpec?: string;
     source: DynamicWorkerSource;
   },
   buildKey: string,
@@ -132,6 +137,7 @@ async function runBuild(
   const files = await resolvedSourceFiles(context.projectId, context.resolved);
   const built = await executeWorkerBuild({
     files,
+    iteratePackageSpec: context.iteratePackageSpec,
     source: context.source,
     workerBundler: env.WORKER_BUNDLER,
   });

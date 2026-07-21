@@ -21,7 +21,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { connectIterateSession, reconnectIterateSession } from "iterate/react";
+import { connectIterateSession, reconnectIterateSession } from "iterate/sdk/itx/react";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

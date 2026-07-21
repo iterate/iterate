@@ -13,9 +13,10 @@ export const TEMPLATE_ITERATE_PACKAGE_SPEC = "https://pkg.pr.new/iterate/iterate
  * Preview deploys pass their PR's pkg.pr.new build so projects created there
  * — e2e tests included — install the branch tip's `iterate/sdk`, not
  * whatever main last published. Deliberately a find/replace on the manifest
- * that carries the spec (the repo root's devDependency for typechecking):
+ * that carries the spec (the repo root's runtime dependency):
  * the generated file map stays canonical, and the swap happens exactly where
- * files become a repo.
+ * files become a repo. Dynamic builds repeat the substitution so existing
+ * repos also compile against the deployment's exact package.
  */
 export function projectRepoSeedFiles(
   iterateSdkPackageSpec: string | undefined,

@@ -1,8 +1,8 @@
 // Stream navigation helpers for the platform-wide admin stream explorer.
 
 import { useMemo } from "react";
-import type { ItxLiveSubscriptionHandle } from "iterate/react";
-import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/react";
+import type { ItxLiveSubscriptionHandle } from "iterate/sdk/itx/react";
+import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 import {
   parseBrowserCoreStreamTreeState,
   type BrowserCoreStreamTreeState,

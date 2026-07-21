@@ -1,5 +1,5 @@
 import type { OutboundHandler } from "@cloudflare/containers";
-import { LiveStateRpcTarget } from "iterate/live-state";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import {
   type DirectoryBackup,
   type ExecEvent,

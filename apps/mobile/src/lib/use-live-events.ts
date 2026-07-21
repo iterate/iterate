@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
-import { useItxSubscription, type StreamEvent, type StreamEventBatch } from "iterate/react";
+import { useItxSubscription, type StreamEvent, type StreamEventBatch } from "iterate/sdk/itx/react";
 import { mergeEventsByOffset } from "./chat.ts";
 
 /**

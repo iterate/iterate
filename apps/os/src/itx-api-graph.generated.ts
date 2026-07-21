@@ -178,8 +178,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LiveStateRpc",
     kind: "interface",
     sourceText:
-      "/**\n * A node's live state — a source-agnostic reactive value. `get()` reads it once;\n * `subscribe()` opens a channel that pushes a full snapshot then minimal diffs\n * (see `lib/live-state`), which the React `useLiveState` hook reassembles so\n * components pick only the slice they render. ANY RpcTarget can expose one: a\n * Durable Object over its folded state, or a stateless worker over state it\n * computes or fetches.\n *\n * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO\n * reassembles it from its fold), so writes go through the node's own verbs —\n * events appended, mutations called — never a generic `set`. A wire-level\n * `set`/`assign` would let any principal that can reach the node broadcast\n * fabricated state to every subscriber.\n */\nexport interface LiveStateRpc<State = unknown> {\n  get(): Promise<State>;\n  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;\n}",
-    summary: "A node's live state — a source-agnostic reactive value.",
+      "/** Read-only live value exposed across a Cap'n Web capability boundary. */\nexport interface LiveStateRpc<State = unknown> {\n  get(): Promise<State>;\n  subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;\n}",
+    summary: "Read-only live value exposed across a Cap'n Web capability boundary.",
     memberSummaries: {},
     referencedTypeNames: ["LiveUpdate", "LiveStateSubscriptionHandle"],
   },
@@ -1175,8 +1175,8 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "LiveStateSubscriptionHandle",
     kind: "typeAlias",
     sourceText:
-      "/**\n * Live handle for one live-state subscription. `ping()` reports liveness (and\n * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.\n */\nexport type LiveStateSubscriptionHandle = Disposable & {\n  ping(): boolean | Promise<boolean>;\n  unsubscribe(): void;\n};",
-    summary: "Live handle for one live-state subscription.",
+      "/** Owned handle for one live-state subscription. */\nexport type LiveStateSubscriptionHandle = Disposable & {\n  ping(): boolean | Promise<boolean>;\n  unsubscribe(): void;\n};",
+    summary: "Owned handle for one live-state subscription.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2440,7 +2440,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "DynamicWorkerSource",
     kind: "typeAlias",
     sourceText:
-      "/**\n * One direct worker-bundler call. The wrapper names deliberately match the\n * upstream functions; OS only resolves the repo-aware `files` value, adds its\n * platform virtual modules to `createWorker`, and caches the returned build.\n */\nexport type DynamicWorkerSource =\n  | { createApp: WorkerBundlerCreateAppOptions }\n  | { createWorker: WorkerBundlerCreateWorkerOptions };",
+      "/**\n * One direct worker-bundler call. The wrapper names deliberately match the\n * upstream functions; OS resolves the repo-aware `files` value, applies the\n * deployment-specific `iterate` package pin, and caches the returned build.\n */\nexport type DynamicWorkerSource =\n  | { createApp: WorkerBundlerCreateAppOptions }\n  | { createWorker: WorkerBundlerCreateWorkerOptions };",
     summary: "One direct worker-bundler call.",
     memberSummaries: {},
     referencedTypeNames: ["WorkerBundlerCreateAppOptions", "WorkerBundlerCreateWorkerOptions"],

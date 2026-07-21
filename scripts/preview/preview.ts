@@ -369,9 +369,9 @@ async function deployPreviewApps({
           commandEnvironment: {
             ...runtime.commandEnvironment,
             // apps/os/scripts/deploy.ts turns this into
-            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
-            // preview install this head's pkg.pr.new `iterate` build, not
-            // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so project seeds and dynamic
+            // builds install this head's pkg.pr.new `iterate` build, not @main.
+            // The sha, not @<pr>: pkg.pr.new PR refs are moving
             // targets, while the sha pins the exact build this deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
             ...(app.slug === "os" && osContainerRollout
@@ -1728,7 +1728,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "playwright.config.ts",
       // The suite also builds and exercises the mobile web app locally.
       "apps/mobile/**",
-      // OS imports iterate/react, so a CLI/package-only change still needs
+      // OS imports iterate/sdk, so a CLI/package-only change still needs
       // the OS deployment and its e2e proof.
       "packages/iterate/**",
       "apps/auth/**",

@@ -16,7 +16,7 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ProjectScope, useItx, useItxQuery } from "iterate/react";
+import { ProjectScope, useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { CollectSecretSearch } from "~/lib/collect-secret-link.ts";
 import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";

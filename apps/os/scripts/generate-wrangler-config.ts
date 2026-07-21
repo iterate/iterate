@@ -388,9 +388,10 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
- * catch-all routes. The zone is the hostname minus its first label for
- * app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, any SaaS-enabled provider-zone
+ * catch-all routes, and owned custom apexes (e.g. prod `iterate.com`). The
+ * zone is the hostname minus its first label for app/MCP/event-docs hosts;
+ * project bases and owned apexes are themselves zones.
  *
  * Project bases get three built-in project-host patterns: `base/*`,
  * `*.base/*`, and `*base/*`.
@@ -398,6 +399,10 @@ function workerBindings(input: {
  * only reliably invoked the worker for project hosts once all three existed
  * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
  * proving it.
+ *
+ * Owned custom apexes get apex/* + *.apex/* only (not a SaaS catch-all).
+ * More-specific routes on that zone (os., auth., mcp., …) stay owned by
+ * other workers and win by specificity.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
@@ -419,6 +424,10 @@ function routes(env: DeployedEnv) {
         ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
         : projectRoutes;
     }),
+    ...env.ownedProjectCustomApexes.flatMap((apex) => [
+      { pattern: `${apex}/*`, zone_name: apex },
+      { pattern: `*.${apex}/*`, zone_name: apex },
+    ]),
   ];
 }
 
@@ -510,6 +519,12 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      ...(process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim()
+        ? {
+            APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC:
+              process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.trim(),
+          }
+        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.

@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 
 import type { ItxAuthCredentials, Project, Stream, StreamEvent } from "./itx-api.generated.ts";
 import {

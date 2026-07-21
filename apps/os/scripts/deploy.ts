@@ -212,10 +212,10 @@ export default async function deploy(
       });
 
       // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
-      // so projects seeded there install that exact commit's pkg.pr.new build
-      // of `iterate` instead of the template's @main — e2e tests then
-      // exercise the branch tip's iterate/sdk, pinned (unlike @<pr>/@main,
-      // which are moving refs). The pkg-pr-new GHA workflow publishes under
+      // so project seeds and every dynamic build use that exact commit's
+      // pkg.pr.new build of `iterate` instead of the template's @main — e2e
+      // tests then exercise the branch tip, pinned (unlike @<pr>/@main, which
+      // are moving refs). The pkg-pr-new GHA workflow publishes under
       // the PR HEAD sha on every push, so the URL exists by the time anything
       // npm-installs a seeded repo. Unset everywhere else (prod, local dev,
       // direct doppler-run deploys), leaving the template untouched.

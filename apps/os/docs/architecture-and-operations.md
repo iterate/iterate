@@ -80,7 +80,7 @@ There are no organization routes; organization membership and selection live
 in the auth worker.
 
 The browser talks to itx over `/api`: one Cap'n Web WebSocket per
-context, managed by the `iterate` package's client (`iterate/react` —
+context, managed by the `iterate` package's client (`iterate/sdk/itx/react` —
 `useItx`/`useItxQuery`/`useItxSubscription`; see `docs/frontend-development.md`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_typescript`).
 `/api/operator-sessions` mints short-lived, origin-bound grants for either one

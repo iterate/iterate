@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/live-state";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";

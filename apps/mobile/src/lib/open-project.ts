@@ -10,7 +10,7 @@
 // EXISTING id/slug to finish the bootstrap, rather than failing later
 // inside whatever screen first touches the project's capability host.
 
-import type { ProjectListEntry } from "iterate/react";
+import type { ProjectListEntry } from "iterate/sdk/itx/react";
 import type { ItxSession } from "./itx.ts";
 import type { LastProject } from "./storage.ts";
 

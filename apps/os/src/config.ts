@@ -122,10 +122,10 @@ export const AppConfig = z.object({
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   /**
    * npm dependency specifier substituted for the `iterate` package when
-   * seeding project repos (the template ships the pkg.pr.new `@main` URL).
-   * Preview deploys set this to the PR's own pkg.pr.new build so projects
-   * created there — e2e tests included — get the branch tip's `iterate/sdk`,
-   * not main's. Unset (prod, local dev) keeps the template's `@main`.
+   * seeding project repos and before every dynamic build (the template ships
+   * the pkg.pr.new `@main` URL). Preview deploys set this to the PR's exact
+   * pkg.pr.new build, so new and existing projects compile against the same
+   * `iterate` revision as OS. Unset (prod, local dev) keeps each repo's spec.
    */
   iterateSdkPackageSpec: z.string().trim().min(1).optional(),
   /** First-party project email (itx.email + the inbound email() door). */

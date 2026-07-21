@@ -13,7 +13,7 @@ import type {
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { ageStreamThroughputMetrics, type ProcessorRuntimeState } from "iterate/processors";
-import { useIterateSessionLiveState, useLiveState } from "iterate/react";
+import { useIterateSessionLiveState, useLiveState } from "iterate/sdk/itx/react";
 import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";

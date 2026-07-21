@@ -116,7 +116,7 @@ export function AccountChooser({
       </div>
 
       {showLoginActions ? (
-        <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+        <div className="space-y-3 pt-2">
           {children}
           <Button
             className="w-full"
@@ -168,11 +168,7 @@ function toLoginUser(user: DeviceSession["user"]): LoginUser {
 }
 
 function AccountStateMessage({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
-      {children}
-    </div>
-  );
+  return <div className="py-2 text-sm text-muted-foreground">{children}</div>;
 }
 
 function AccountRow({
@@ -195,7 +191,7 @@ function AccountRow({
   const initials = getInitials(user.name ?? user.email);
 
   return (
-    <div className="rounded-lg border bg-muted/30 p-3 sm:flex sm:items-center sm:gap-3">
+    <div className="py-2 sm:flex sm:items-center sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         <Avatar>
           {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}

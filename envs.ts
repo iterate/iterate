@@ -79,6 +79,15 @@ export interface DeployedEnv {
    */
   cloudflareForSaasProjectHostnameBases: string[];
   /**
+   * Owned Cloudflare zones where OS serves project custom-domain traffic at the
+   * apex and single-label subdomains (`apex/*`, `*.apex/*`). More-specific
+   * routes on the same zone (`os.`, `auth.`, `mcp.`, …) stay with their workers
+   * and win by specificity. Used for the prod website: `iterate.com` → the
+   * `iterate` project worker (also requires `hostname:iterate.com` in
+   * PROJECT_DIRECTORY KV).
+   */
+  ownedProjectCustomApexes: string[];
+  /**
    * How agent LLM turns travel through the Cloudflare AI Gateway: `unified`
    * = partner models on Cloudflare's unified billing; `byok` = the gateway's
    * universal endpoint with our own OpenAI key (correct prompt-cache
@@ -123,6 +132,7 @@ function previewSlot(n: number, resources: DeployedEnv["resources"]): DeployedEn
     authBaseUrl: `https://auth.iterate-preview-${n}.com`,
     projectHostnameBases: [`iterate-preview-${n}.app`],
     cloudflareForSaasProjectHostnameBases: [],
+    ownedProjectCustomApexes: [],
     cloudflareAiGatewayTransport: "byok",
     // 7 days: long enough that overnight marathons and PR-lifetime reruns
     // replay each other, short enough that stale answers age out on their own.
@@ -143,6 +153,7 @@ export const envs = {
     authBaseUrl: "https://auth.iterate.com",
     projectHostnameBases: ["iterate.app"],
     cloudflareForSaasProjectHostnameBases: ["iterate.app"],
+    ownedProjectCustomApexes: ["iterate.com"],
     // BYOK, like every other env: unified billing meters OpenAI-prompt-cached
     // tokens at the uncached price (~6x at our hit rate), and BYOK benchmarked
     // latency-neutral-or-better. NO response cache here — that knob stays
