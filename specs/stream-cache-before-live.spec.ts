@@ -37,6 +37,39 @@ test("a new agent stream stays initializing while its connection opens", async (
   });
 });
 
+test("a cold stream stays pending until its server history catches up", async ({
+  baseURL,
+  helpers,
+  page,
+}) => {
+  await using fixture = await helpers.createFixture("stream-cold-history");
+  using admin = await connectAdminItx(baseURL!);
+  using project = admin.projects.get(fixture.project.id);
+  const streamPath = `/spec/cold-history-${crypto.randomUUID().slice(0, 8)}`;
+  using stream = project.streams.get(streamPath);
+  await stream.append({ type: "events.iterate.com/spec/cold-history", payload: {} });
+
+  await page.routeWebSocket(
+    (url) => url.pathname === "/api",
+    (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((message) => server.send(message));
+      server.onMessage((message) => setTimeout(() => socket.send(message), 1_000));
+    },
+  );
+
+  await page.goto(`/projects/${fixture.project.slug}/streams${streamPath}`);
+  await page
+    .getByRole("button", { name: "Append events (⌘↵)", disabled: false })
+    .waitFor({ timeout: 30_000 });
+  await page.getByText("Connecting to the stream", { exact: true }).waitFor();
+  await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+  await page
+    .getByTestId("stream-feed-inspect")
+    .filter({ hasText: "spec/cold-history" })
+    .waitFor({ timeout: 30_000 });
+});
+
 test("a cached stream opens before its live connection", async ({ baseURL, helpers, page }) => {
   await using fixture = await helpers.createFixture("stream-cache");
   using admin = await connectAdminItx(baseURL!);

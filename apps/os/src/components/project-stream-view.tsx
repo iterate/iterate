@@ -269,6 +269,13 @@ function MirroredProjectStreamView({
   // Election starts only after createStreamClient resolves, so every non-idle
   // role has a usable transport (including followers, which never subscribe).
   const streamTransportReady = snapshot.subscriptionStatus !== "idle";
+  // Cached rows can paint immediately. With an empty local mirror, a leader
+  // stays pending until reconcile and the atomic live subscribe have finished;
+  // a follower reads the mirror already owned by another tab.
+  const streamContentsReady =
+    eventCount > 0 ||
+    snapshot.subscriptionStatus === "follower" ||
+    snapshot.connectionStatus === "subscribed";
   const connectionLabel =
     snapshot.connectionError ?? (streamTransportReady ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
@@ -318,7 +325,7 @@ function MirroredProjectStreamView({
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={caps.agentFeed ? agentUiState == null : !streamTransportReady}
+      isPending={caps.agentFeed ? agentUiState == null : !streamContentsReady}
       pendingLabel={caps.agentFeed ? "Initializing agent" : undefined}
     />
   );
