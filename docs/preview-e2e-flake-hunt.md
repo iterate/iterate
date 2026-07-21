@@ -24,6 +24,13 @@ reliable fix, recorded below; a failure resets the consecutive-green counter.
 `scripts/preview/flake-hunt-loop.sh` drives the loop and writes a machine-readable
 per-run duration and retry ledger.
 
+Once a failing test is isolated, use `pnpm preview test-target` to run its
+Vitest file or Playwright spec repeatedly against the PR's already-deployed
+preview. It does not deploy, erase, or overwrite the full-suite result; see
+[Dev environments → Story 2](dev-environments.md#story-2-run-what-ci-runs-locally)
+for exact commands. This focused loop is diagnostic only: the accepted streak
+still consists of complete deploy-plus-e2e runs on Depot.
+
 The trustworthy count runs **in Depot CI, not on a workstation** (a laptop
 sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
 `.depot/workflows/preview-e2e-marathon.yml` runs that same loop on Depot infra,

@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import {
@@ -141,6 +141,147 @@ export async function test(options: PullRequestCommandOptions = {}) {
   return await withPreviewTelemetry(context, runtime, "test", (telemetry) =>
     measurePreviewTestRun(telemetry, () => testPreviewApps({ context, runtime, telemetry })),
   );
+}
+
+type TestTargetOptions = PullRequestCommandOptions & {
+  /** Test runner to invoke against the deployed OS preview. */
+  runner: PreviewTestTargetRunner;
+  /** Test file path, relative to the repository root for Playwright or apps/os for Vitest. */
+  target: string;
+  /** Optional test-name pattern passed to the selected runner. */
+  grep?: string;
+  /** Number of independent sequential invocations against the same deployment. Defaults to 1. */
+  repeat?: number;
+};
+
+/**
+ * Run one OS Vitest file or Playwright spec against an already-deployed PR
+ * preview. This renews the existing lease but never deploys, erases data, or
+ * marks the app's full preview suite green.
+ */
+export async function testTarget(options: TestTargetOptions) {
+  const selection = z
+    .object({
+      grep: z.string().trim().min(1).optional(),
+      repeat: z.number().int().min(1).max(100).default(1),
+      runner: z.enum(["vitest", "playwright"]),
+      target: z.string().trim().min(1),
+    })
+    .parse(options);
+  const { context, runtime } = await resolvePreviewCommandSetup(options);
+  const recorded = (await readCloudflarePreviewState(context)).state;
+  const holder = pullRequestHolder(context.pullRequestNumber);
+  const semaphore = runtime.createPreviewSemaphoreResourceClient();
+  const displaySlot = recorded.environmentConfigLease;
+  const environmentConfigLease =
+    (await adoptLeaseHeldBySemaphore({
+      holder,
+      leaseMs: defaultPreviewLeaseMs,
+      preferSlug: displaySlot?.slug ?? null,
+      semaphore,
+    })) ??
+    (await retakeRecordedSlotIfFree({
+      holder,
+      leaseMs: defaultPreviewLeaseMs,
+      recordedSlug: displaySlot?.slug ?? null,
+      semaphore,
+    }));
+  if (!environmentConfigLease) {
+    throw new Error(
+      `Cannot run a targeted preview test: PR #${context.pullRequestNumber} does not hold its recorded preview slot. Run preview deploy first.`,
+    );
+  }
+
+  const app = cloudflarePreviewApps.os;
+  const entry = recorded.apps.os;
+  if (!canRunPreviewTests(entry) || entry?.headSha !== context.pullRequestHeadSha) {
+    throw new Error(
+      `Cannot run a targeted preview test: OS is not recorded as deployed at head ${context.pullRequestHeadSha.slice(0, 7)}. Run preview deploy first.`,
+    );
+  }
+  const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
+    app,
+    apps: recorded.apps,
+    headSha: context.pullRequestHeadSha,
+  });
+  // Match the full preview lane: RPC-only dependencies such as auth need an
+  // exact version pin even though they do not contribute a public base URL.
+  const versionedAppSlugs = expandPreviewDependencies([app.slug]);
+  const workerVersionOverrides = resolvePreviewTestWorkerVersionOverrides({
+    apps: recorded.apps,
+    appSlugs: versionedAppSlugs,
+    dopplerConfig: environmentConfigLease.dopplerConfig,
+    headSha: context.pullRequestHeadSha,
+  });
+  const plan = resolvePreviewTestTargetPlan({
+    ...selection,
+    repositoryRoot: runtime.repositoryRoot,
+  });
+  await mkdir(dirname(plan.telemetryFile), { recursive: true });
+
+  let passed = 0;
+  let retries = 0;
+  const failures: string[] = [];
+  for (let iteration = 1; iteration <= selection.repeat; iteration += 1) {
+    await rm(plan.telemetryFile, { force: true });
+    logPreview(
+      `target test ${iteration}/${selection.repeat}: ${selection.runner} ${selection.target}${selection.grep ? ` matching ${JSON.stringify(selection.grep)}` : ""} against ${entry.publicUrl}`,
+    );
+    const result = await runCommand({
+      args: [
+        "run",
+        "--project",
+        app.dopplerProject,
+        "--config",
+        environmentConfigLease.dopplerConfig,
+        "--",
+        "env",
+        "CI=true",
+        `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
+        `E2E_RETRY_TELEMETRY_FILE=${plan.telemetryFile}`,
+        ...baseUrlEnvironment,
+        plan.command,
+        ...plan.args,
+      ],
+      command: "doppler",
+      environment: runtime.commandEnvironment,
+      signal: runtime.signal,
+      workingDirectory: plan.workingDirectory,
+    });
+    const summary = await readTestTelemetryLane(`targeted ${selection.runner}`, () =>
+      selection.runner === "vitest"
+        ? readVitestTestTelemetry(plan.telemetryFile, "targeted vitest", runtime.repositoryRoot)
+        : readPlaywrightTestTelemetry(
+            plan.telemetryFile,
+            "targeted playwright",
+            runtime.repositoryRoot,
+          ),
+    );
+    announceRetryTelemetry("os target", summary);
+    retries += summary.retried.reduce((total, test) => total + test.retryCount, 0);
+    const failure =
+      previewTestFailureMessage({ result, retrySummary: summary }) ??
+      (summary.collectionErrors.length
+        ? `Structured test telemetry was incomplete: ${summary.collectionErrors.join("; ")}`
+        : null);
+    if (failure) {
+      failures.push(`run ${iteration}: ${failure}`);
+      console.error(`[preview] target test failed: ${failure}`);
+    } else {
+      passed += 1;
+      console.error(`[preview] target test passed: run ${iteration}/${selection.repeat}`);
+    }
+  }
+
+  logPreview(
+    `target tests finished: ${passed}/${selection.repeat} passed, ${failures.length} failed, ${retries} retries; deployment was reused without deploy or erase`,
+  );
+  if (failures.length > 0) {
+    throw new Error(
+      `${failures.length}/${selection.repeat} targeted preview test runs failed:\n${failures.join("\n")}`,
+    );
+  }
+  return { ok: true as const, passed, repeat: selection.repeat, retries };
 }
 
 /**
@@ -604,6 +745,42 @@ function resolvePreviewTestBaseUrlEnvironment({
     }
     return `${environmentVariable}=${entry.publicUrl}`;
   });
+}
+
+type PreviewTestTargetRunner = "vitest" | "playwright";
+
+function resolvePreviewTestTargetPlan(input: {
+  grep?: string;
+  repositoryRoot: string;
+  runner: PreviewTestTargetRunner;
+  target: string;
+}) {
+  const target = input.target.trim();
+  if (!target || target.startsWith("-")) {
+    throw new Error("A test target must be a non-empty path, not a CLI option.");
+  }
+
+  if (input.runner === "vitest") {
+    return {
+      args: [
+        "e2e",
+        "--project",
+        "node",
+        target,
+        ...(input.grep ? ["--testNamePattern", input.grep] : []),
+      ],
+      command: "pnpm",
+      telemetryFile: resolve(input.repositoryRoot, "test-results/preview-target-vitest.json"),
+      workingDirectory: resolve(input.repositoryRoot, "apps/os"),
+    };
+  }
+
+  return {
+    args: ["spec", target, ...(input.grep ? ["--grep", input.grep] : [])],
+    command: "pnpm",
+    telemetryFile: resolve(input.repositoryRoot, "test-results/playwright-results.json"),
+    workingDirectory: input.repositoryRoot,
+  };
 }
 
 function resolvePreviewTestWorkerVersionOverrides(input: {
@@ -6551,6 +6728,7 @@ export const previewInternals = {
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestTargetPlan,
   resolvePreviewTestWorkerVersionOverrides,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
