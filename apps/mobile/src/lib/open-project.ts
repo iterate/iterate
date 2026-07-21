@@ -10,8 +10,8 @@
 // EXISTING id/slug to finish the bootstrap, rather than failing later
 // inside whatever screen first touches the project's capability host.
 
-import type { ProjectListEntry } from "../../../os/src/itx-api.generated.ts";
-import type { ItxSession } from "./itx-core.ts";
+import type { ProjectListEntry } from "iterate/react";
+import type { ItxSession } from "./itx.ts";
 import type { LastProject } from "./storage.ts";
 
 export function rememberedProjectInScope(

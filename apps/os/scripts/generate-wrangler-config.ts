@@ -39,6 +39,7 @@ import { workerEventsQueueName } from "../src/queue-names.ts";
  */
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_ADMIN_API_SECRET",
+  "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
   "APP_CONFIG_OPEN_AI_API_KEY",
@@ -54,7 +55,6 @@ export const REQUIRED_SECRETS = [
  * plugin loads whichever ones your Doppler config has.
  */
 export const OPTIONAL_SECRETS = [
-  "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   // Shared with the auth app: local verification of project-app-session
   // tokens (the project-host gate + the /api credential lane). Optional —
   // absent, both fall back to the auth worker's validate RPC.
@@ -423,7 +423,7 @@ function routes(env: DeployedEnv) {
   ];
 }
 
-function envBlock(env: DeployedEnv) {
+function envBlock(envName: string, env: DeployedEnv) {
   const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
@@ -438,7 +438,7 @@ function envBlock(env: DeployedEnv) {
     account_id: env.cloudflareAccountId,
     routes: routes(env),
     ...bindings,
-    vars: { ...bindings.vars, ...envShapedVars(env) },
+    vars: { ...bindings.vars, ...envShapedVars(env), DEPLOYMENT_ENV: envName },
   };
 }
 
@@ -586,7 +586,7 @@ export const config = {
       ...ENV_SHAPED_KEYS.filter((key) => !(key in LOCAL_DEV_BINDINGS.vars)),
     ],
   },
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
+  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(name, env)])),
 };
 
 /**

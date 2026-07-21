@@ -6,6 +6,7 @@ import {
 import {
   cachedEventSchema,
   getConsumedEventDefinition,
+  isIdempotencyConflict,
   mergeProcessorConfig,
   StreamProcessor,
 } from "iterate/processors";
@@ -133,22 +134,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     controller: AbortController;
     partialText: string;
   } | null = null;
-
-  /** Newest over-threshold usage report observed before this batch yields.
-   * Per-event blocking work starts concurrently, so a microtask boundary lets
-   * one batch coalesce several reports onto the newest request instead of
-   * compacting an old prefix and silently dropping the rest. */
-  #pendingCompaction:
-    | {
-        contextTokens: number;
-        hasHistory: boolean;
-        llmRequestOffset: number;
-        model: string;
-        thresholdTokens: number;
-        triggerOffset: number;
-      }
-    | undefined;
-  #compactionWork: Promise<void> | undefined;
 
   // ------------------------------------------------------------ processEvent
   // Synchronous. The two side-effect lanes are chosen HERE, at the dispatch
@@ -399,10 +384,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // WORLD and summarize the history prefix into one context item —
         // blocked (per-event: the report is delivered once, and the summary
         // must land before later context piles onto an already-too-big
-        // prompt). A catch-up reducing past SEVERAL over-threshold reports
-        // coalesces onto the NEWEST (the microtask in #queueCompaction plus
-        // the stream probe below), so an old prefix is never summarized
-        // just to be thrown away by a newer request's compaction.
+        // prompt). Blocking work is FIFO per event and settles before the
+        // next event reduces, so compactions run one at a time. The stream
+        // probe below lets a newer committed report supersede this one.
         const usage = event.payload;
         const contextTokens = usage.inputTokens + usage.outputTokens;
         const thresholdTokens = Math.floor(
@@ -423,8 +407,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           ) {
             return;
           }
-          await this.#queueCompaction({
+          await this.#compactHistory({
             contextTokens,
+            deadlineMs: state.config.llmRequestExpiryMs,
             hasHistory,
             llmRequestOffset: usage.llmRequestOffset,
             model: usage.model,
@@ -777,49 +762,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     };
   }
 
-  /** Coalesces all over-threshold reports registered synchronously by one
-   * delivered frame. Frames are serialized (the runner reduces and processes
-   * one event at a time, and `blockProcessorWhile` holds delivery until this
-   * settles), so one shared promise is sufficient across the incarnation. */
-  #queueCompaction(input: {
-    contextTokens: number;
-    hasHistory: boolean;
-    llmRequestOffset: number;
-    model: string;
-    thresholdTokens: number;
-    triggerOffset: number;
-  }): Promise<void> {
-    const pending = this.#pendingCompaction;
-    if (
-      pending === undefined ||
-      input.llmRequestOffset > pending.llmRequestOffset ||
-      (input.llmRequestOffset === pending.llmRequestOffset &&
-        input.triggerOffset > pending.triggerOffset)
-    ) {
-      this.#pendingCompaction = input;
-    }
-    if (this.#compactionWork !== undefined) return this.#compactionWork;
-
-    const work = (async () => {
-      // The runner invokes every per-event arm of a frame synchronously. Yield
-      // once so all reports in that frame can replace #pendingCompaction.
-      await Promise.resolve();
-      const latest = this.#pendingCompaction;
-      this.#pendingCompaction = undefined;
-      if (latest !== undefined) await this.#compactHistory(latest);
-    })();
-    this.#compactionWork = work;
-    void work.then(
-      () => {
-        if (this.#compactionWork === work) this.#compactionWork = undefined;
-      },
-      () => {
-        if (this.#compactionWork === work) this.#compactionWork = undefined;
-      },
-    );
-    return work;
-  }
-
   /**
    * One stop-the-world compaction: replay the exact request whose usage
    * crossed the threshold, ask the agent's model to summarize that prefix,
@@ -831,14 +773,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    */
   async #compactHistory(input: {
     contextTokens: number;
+    deadlineMs: number;
     hasHistory: boolean;
     llmRequestOffset: number;
     model: string;
     thresholdTokens: number;
     triggerOffset: number;
   }): Promise<void> {
-    const { contextTokens, hasHistory, llmRequestOffset, model, thresholdTokens, triggerOffset } =
-      input;
+    const {
+      contextTokens,
+      deadlineMs,
+      hasHistory,
+      llmRequestOffset,
+      model,
+      thresholdTokens,
+      triggerOffset,
+    } = input;
     if (!hasHistory) return;
     try {
       if (await this.#hasCompactionCovering(llmRequestOffset)) return;
@@ -858,7 +808,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           this.deps.resolveModelFileUrl,
         ),
         signal: new AbortController().signal,
-        deadlineMs: (await this.#configNow()).llmRequestExpiryMs,
+        deadlineMs,
         onChunk: () => {},
       });
 
@@ -888,12 +838,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         triggerOffset,
       });
     }
-  }
-
-  /** The current config, reduced again from the stream — for the rare code path
-   * (compaction) that runs outside a delivery frame and has no `args.state`. */
-  async #configNow(): Promise<AgentProcessorState["config"]> {
-    return reduceAgentEvents(await this.#readConsumedEvents()).config;
   }
 
   /**
@@ -1008,8 +952,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     try {
       await append(...events);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+      if (!isIdempotencyConflict(error)) throw error;
     }
   }
 
@@ -1101,9 +1044,9 @@ type AgentConsumedEvent = ReturnType<typeof AgentProcessorContract.parseEvent>;
  * regains control immediately on interrupt while the orphaned work finishes
  * into the void (its settle append loses the shared idempotency key). */
 function raceAbort<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
-  if (signal.aborted) return Promise.reject(new Error("aborted"));
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new Error("aborted"));
+    const onAbort = () => reject(signal.reason ?? new Error("aborted"));
     signal.addEventListener("abort", onAbort, { once: true });
     work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });

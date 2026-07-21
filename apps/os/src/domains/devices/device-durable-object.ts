@@ -60,8 +60,9 @@ export class DeviceDurableObject extends DurableObject<Env> {
       }): ReturnType<DevicePushSender> => {
         const state: ProcessorState<DeviceProcessorContract> = this.#reads.currentState;
         if (
-          state.pushTokenSecretPath !== pushTokenSecretPath ||
-          state.pushTokenSecretUpdatedOffset !== pushTokenSecretUpdatedOffset
+          state.pushTokenSecret === null ||
+          state.pushTokenSecret.path !== pushTokenSecretPath ||
+          state.pushTokenSecret.updatedOffset !== pushTokenSecretUpdatedOffset
         ) {
           throw new Error("device push token changed before the attempt began");
         }
@@ -196,10 +197,10 @@ export class DeviceDurableObject extends DurableObject<Env> {
   async #revoke(reason: "disabled" | "permission-denied" | "sign-out") {
     const snapshot = await this.#snapshot();
     if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
-    if (snapshot.state.pushTokenSecretUpdatedOffset !== null) {
+    if (snapshot.state.pushTokenSecret !== null) {
       await this.#clearPushTokenSecret({
-        pushTokenSecretPath: this.#pushTokenSecretPath,
-        pushTokenSecretUpdatedOffset: snapshot.state.pushTokenSecretUpdatedOffset,
+        pushTokenSecretPath: snapshot.state.pushTokenSecret.path,
+        pushTokenSecretUpdatedOffset: snapshot.state.pushTokenSecret.updatedOffset,
       });
     }
     const [event] = await this.#stream.append({

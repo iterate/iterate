@@ -149,8 +149,10 @@ describe("DeviceProcessor enrollment", () => {
 
     expect(h.state()).toMatchObject({
       birthCertificate: DEVICE_CREATED.payload,
-      pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
-      pushTokenSecretUpdatedOffset: 1,
+      pushTokenSecret: {
+        path: "/secrets/devices/phone/expo-push-token",
+        updatedOffset: 1,
+      },
       revokedAt: null,
       tokenUpdatedOffset: 1,
     });
@@ -201,8 +203,10 @@ describe("DeviceProcessor enrollment", () => {
         // platform is immutable; everything else tracks the update.
         config: { appVersion: "1.1.0", platform: "ios", pushTokenSecretUpdatedOffset: 7 },
       },
-      pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
-      pushTokenSecretUpdatedOffset: 7,
+      pushTokenSecret: {
+        path: "/secrets/devices/phone/expo-push-token",
+        updatedOffset: 7,
+      },
       revokedAt: null,
       tokenUpdatedOffset: 3,
     });
@@ -349,8 +353,7 @@ describe("DeviceProcessor settlements", () => {
       { payload: { requestOffset: 3, outcome: { kind: "device-unavailable" } } },
     ]);
     expect(h.state()).toMatchObject({
-      pushTokenSecretPath: null,
-      pushTokenSecretUpdatedOffset: null,
+      pushTokenSecret: null,
       revokedAt: expect.any(String),
     });
     expect(h.rootEvents().at(-1)).toMatchObject({
@@ -479,6 +482,98 @@ describe("DeviceProcessor receipts", () => {
           outcome: { kind: "accepted-by-push-service", ticketId: "ticket-123" },
         },
       },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
+  it("a receipt check that loses the settle race accepts the already committed outcome", async () => {
+    const h = makeDeviceHarness();
+    await h.play(
+      [
+        "append",
+        DEVICE_CREATED,
+        notificationRequested({ expiresAt: Date.parse("2026-07-18T09:00:00Z") }),
+      ],
+      ["advanceTime", 15 * 60_000],
+    );
+    const receiptRequested = Promise.withResolvers<void>();
+    const receipt = Promise.withResolvers<ReceiptAnswer>();
+    h.gateway.getReceipt = async () => {
+      receiptRequested.resolve();
+      return receipt.promise;
+    };
+
+    const checking = h.checkReceipts();
+    await receiptRequested.promise;
+    await h.stream.append({
+      type: SETTLED,
+      idempotencyKey: "device/notification-settled@2",
+      payload: {
+        requestOffset: 2,
+        outcome: {
+          kind: "uncertain",
+          phase: "receipt",
+          reason: "A sibling incarnation settled the request first.",
+        },
+      },
+    });
+    receipt.resolve({ status: "accepted-by-push-service" });
+
+    await expect(checking).resolves.toBeUndefined();
+    await h.settle();
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 2, outcome: { kind: "uncertain", phase: "receipt" } } },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
+  it("one lost settle race does not drop a sibling obligation's settlement from the same check", async () => {
+    const h = makeDeviceHarness();
+    await h.play(
+      [
+        "append",
+        DEVICE_CREATED,
+        notificationRequested({ expiresAt: Date.parse("2026-07-18T09:00:00Z") }),
+        notificationRequested({
+          idempotencyKey: "device/notification-requested-2",
+          expiresAt: Date.parse("2026-07-18T09:00:00Z"),
+        }),
+      ],
+      ["advanceTime", 15 * 60_000],
+    );
+    // Receipts are polled sequentially, so gate on the FIRST lookup (offset
+    // 2's), let the sibling settle that offset meanwhile, then release both.
+    const firstReceiptRequested = Promise.withResolvers<void>();
+    const receipt = Promise.withResolvers<ReceiptAnswer>();
+    let receiptCalls = 0;
+    h.gateway.getReceipt = async () => {
+      receiptCalls += 1;
+      if (receiptCalls > 1) return { status: "accepted-by-push-service" };
+      firstReceiptRequested.resolve();
+      return receipt.promise;
+    };
+
+    const checking = h.checkReceipts();
+    await firstReceiptRequested.promise;
+    await h.stream.append({
+      type: SETTLED,
+      idempotencyKey: "device/notification-settled@2",
+      payload: {
+        requestOffset: 2,
+        outcome: {
+          kind: "uncertain",
+          phase: "receipt",
+          reason: "A sibling incarnation settled the request first.",
+        },
+      },
+    });
+    receipt.resolve({ status: "accepted-by-push-service" });
+
+    await expect(checking).resolves.toBeUndefined();
+    await h.settle();
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 2, outcome: { kind: "uncertain", phase: "receipt" } } },
+      { payload: { requestOffset: 3, outcome: { kind: "accepted-by-push-service" } } },
     ]);
     expect(h.state().notifications).toEqual({});
   });

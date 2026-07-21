@@ -13,7 +13,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { phoneRunnableExamples } from "../../../lib/examples.ts";
-import { getItxSession } from "../../../lib/itx.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
@@ -33,8 +33,7 @@ export default function ExamplesScreen() {
   const run = useMutation({
     mutationFn: async (exampleId: string) => {
       const example = EXAMPLES.find((candidate) => candidate.id === exampleId)!;
-      const itx = await getItxSession(baseUrl!);
-      const project = await itx.projects.get(projectId);
+      const project = await getProjectItx(baseUrl!, projectId);
       const execution = await project.capabilityHost.runScript(
         `async (itx) => {\nconst vars = {};\n${example.code}\n}`,
       );

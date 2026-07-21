@@ -165,6 +165,15 @@ it("requires the first-party PostHog project token in every deployed environment
   expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_POSTHOG");
 });
 
+it("requires the Cloudflare API token and marks only deployed environments", () => {
+  expect(REQUIRED_SECRETS).toContain("APP_CONFIG_CLOUDFLARE__API_TOKEN");
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_CLOUDFLARE__API_TOKEN");
+  expect(config.vars).not.toHaveProperty("DEPLOYMENT_ENV");
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    expect(envBlock.vars).toMatchObject({ DEPLOYMENT_ENV: envName });
+  }
+});
+
 it("emits the AI response-cache key for every deployment while keeping production disabled", () => {
   expect(envShapedVars(envs.prd)).toMatchObject({
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",

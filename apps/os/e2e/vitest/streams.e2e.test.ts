@@ -7,6 +7,7 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
+import { isIdempotencyConflict } from "iterate/processors";
 import type { StreamEventBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -362,7 +363,7 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
       idempotencyKey: `chunk-${marker}`,
       payload: { marker, different: true },
     }),
-  ).rejects.toThrow(/idempotency key .* already names a different event/);
+  ).rejects.toSatisfy(isIdempotencyConflict);
 
   // Default reads skip it; includeEphemeral opts in.
   const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };

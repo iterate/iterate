@@ -10,7 +10,7 @@ import { Redirect, router, Stack } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { hasSignIn, signIn } from "../lib/auth.ts";
-import { getItxSession, resetItxSession } from "../lib/itx.ts";
+import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing, rememberedProjectInScope } from "../lib/open-project.ts";
 import { DEFAULT_SERVER, SERVER_PRESETS } from "../lib/servers.ts";
 import {
@@ -79,10 +79,11 @@ export default function SignInScreen() {
         await addRecentServer(baseUrl);
       }
       await signIn(baseUrl);
+      return baseUrl;
     },
-    onSuccess: () => {
+    onSuccess: (baseUrl) => {
       setEditedServer(null);
-      resetItxSession();
+      reconnectItxSession(baseUrl);
       queryClient.clear();
       router.replace("/projects");
     },

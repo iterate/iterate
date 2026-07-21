@@ -5,7 +5,7 @@ import type {
   StreamPushEventBatch,
   StreamSubscriptionHandle,
 } from "iterate/processors";
-import { sameIdempotentEvent } from "iterate/processors";
+import { idempotencyConflictMessage, sameIdempotentEvent } from "iterate/processors";
 import { StreamOffsetConflictError, streamOffsetConflictMessage } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
@@ -416,9 +416,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             throw new Error(`idempotency hit at offset ${existing.offset}, got ${expectedOffset}`);
           }
           if (!sameIdempotentEvent(existing, body)) {
-            throw new Error(
-              `idempotency key "${body.idempotencyKey}" already names a different event at offset ${existing.offset}`,
-            );
+            throw new Error(idempotencyConflictMessage(body.idempotencyKey, existing.offset));
           }
           events.push(existing);
           continue;

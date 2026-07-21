@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { ConsumedEvent, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -89,6 +89,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
   ): undefined {
     const { append, appendTo, blockProcessorWhile, delivery, event, runInBackground, state } = args;
     if (state.birthCertificate === null) return;
+    const { chatId, connection, messageThreadId } = state.birthCertificate.config;
     switch (event?.type) {
       case "events.iterate.com/telegram/webhook-received": {
         const target = telegramUpdateTarget(event.payload.body);
@@ -111,12 +112,23 @@ export class TelegramAgentProcessor extends StreamProcessor<
             ? newCommand.trailingText !== null
             : target?.kind === "message" || target?.kind === "callback_query";
         blockProcessorWhile(() =>
-          this.#transcribeWebhook({ append, event, newCommand, state, target, triggers }),
+          this.#transcribeWebhook({ append, connection, event, newCommand, target, triggers }),
         );
         break;
       }
       case "events.iterate.com/telegram/send-requested": {
-        blockProcessorWhile(() => this.#satisfySendObligation({ append, appendTo, event, state }));
+        blockProcessorWhile(() =>
+          this.#satisfySendObligation({
+            answeringMessageId: state.answeringMessageId,
+            append,
+            appendTo,
+            chatId,
+            connection,
+            event,
+            latestInboundMessageId: state.latestInboundMessageId,
+            messageThreadId,
+          }),
+        );
         break;
       }
       case "events.iterate.com/agent/llm-request-requested":
@@ -176,16 +188,16 @@ export class TelegramAgentProcessor extends StreamProcessor<
    */
   async #transcribeWebhook(input: {
     append: ProcessEventArgs<TelegramAgentProcessorContract>["append"];
+    connection: string;
     event: Extract<
       ConsumedEvent<TelegramAgentProcessorContract>,
       { type: "events.iterate.com/telegram/webhook-received" }
     >;
     newCommand: { trailingText: string | null } | null;
-    state: TelegramAgentProcessorState;
     target: TelegramUpdateTarget | null;
     triggers: boolean;
   }): Promise<void> {
-    const { append, event, newCommand, state, target, triggers } = input;
+    const { append, connection, event, newCommand, target, triggers } = input;
     if (newCommand !== null) {
       // The fixed acknowledgement rides the journaled send pair, so it is
       // delivered with the same obligation semantics as any reply — and
@@ -238,30 +250,33 @@ export class TelegramAgentProcessor extends StreamProcessor<
     // "typing…" so the human knows the bot heard them. Freshness-gated: a
     // replay must not re-type on historical messages.
     if (triggers && target != null && webhookAckIsFresh(event, (this.deps.now ?? Date.now)())) {
-      await this.#sendTyping(state.birthCertificate!.config.connection, target);
+      await this.#sendTyping(connection, target);
     }
   }
 
   /** The send obligation: deliver one send-requested to the Bot API, then
    * mark it here and claim it on the connection stream. */
   async #satisfySendObligation(input: {
+    answeringMessageId: number | undefined;
     append: ProcessEventArgs<TelegramAgentProcessorContract>["append"];
     appendTo: ProcessEventArgs<TelegramAgentProcessorContract>["appendTo"];
+    chatId: string;
+    connection: string;
     event: Extract<
       ConsumedEvent<TelegramAgentProcessorContract>,
       { type: "events.iterate.com/telegram/send-requested" }
     >;
-    state: TelegramAgentProcessorState;
+    latestInboundMessageId: number | undefined;
+    messageThreadId: string | undefined;
   }): Promise<void> {
-    const { append, appendTo, event, state } = input;
+    const { append, appendTo, chatId, connection, event } = input;
     const sessionPath = this.path;
-    const chatId = state.birthCertificate!.config.chatId;
 
     // Replay safety: a marker for this request means the send already
     // happened — never re-send a satisfied obligation. (A crash BEFORE the
     // marker re-sends; that is the accepted at-least-once caveat.)
     const existingMarker = await this.#findSentMarker(event.offset);
-    const messageId = existingMarker?.messageId ?? (await this.#deliver({ chatId, event, state }));
+    const messageId = existingMarker?.messageId ?? (await this.#deliver(input));
 
     await append({
       type: "events.iterate.com/telegram/message-sent",
@@ -272,7 +287,6 @@ export class TelegramAgentProcessor extends StreamProcessor<
     // message_id → sessionPath from it, making reply hints exact for bot
     // messages. Idempotency-keyed, so a crash between marker and claim
     // replays into a single claim.
-    const connection = state.birthCertificate!.config.connection;
     await appendTo(integrationConnectionStreamPath("telegram", connection), {
       type: "events.iterate.com/telegram/message-sent",
       idempotencyKey: `telegram:sent-claim:${sessionPath}:${event.offset}`,
@@ -309,9 +323,12 @@ export class TelegramAgentProcessor extends StreamProcessor<
 
   /** Deliver one send-requested to the Bot API; returns Telegram's message_id. */
   async #deliver(input: {
+    answeringMessageId: number | undefined;
     chatId: string;
+    connection: string;
     event: { offset: number; payload: Record<string, unknown> };
-    state: TelegramAgentProcessorState;
+    latestInboundMessageId: number | undefined;
+    messageThreadId: string | undefined;
   }): Promise<number> {
     if (this.deps.sendTelegramMessage == null) {
       // Loud, not skipped: a send obligation with no delivery dep is a
@@ -320,12 +337,11 @@ export class TelegramAgentProcessor extends StreamProcessor<
         "telegram-agent has no sendTelegramMessage dep; cannot satisfy send-requested",
       );
     }
-    const topicId = input.state.birthCertificate?.config.messageThreadId;
     // The deterministic reply_to_message_id rule (unless the request already
     // chose one): quote the message this turn is answering ONLY when newer
     // messages have arrived since — quoting the latest message is noise,
     // quoting a stale one disambiguates.
-    const { answeringMessageId, latestInboundMessageId } = input.state;
+    const { answeringMessageId, latestInboundMessageId } = input;
     const replyTo =
       input.event.payload.reply_to_message_id !== undefined
         ? undefined
@@ -350,9 +366,11 @@ export class TelegramAgentProcessor extends StreamProcessor<
         ...(replyTo === undefined ? {} : { reply_to_message_id: replyTo }),
         ...payloadRest,
         chat_id: coerceTelegramId(input.chatId),
-        ...(topicId === undefined ? {} : { message_thread_id: coerceTelegramId(topicId) }),
+        ...(input.messageThreadId === undefined
+          ? {}
+          : { message_thread_id: coerceTelegramId(input.messageThreadId) }),
       },
-      connection: input.state.birthCertificate!.config.connection,
+      connection: input.connection,
     });
     return messageId;
   }
@@ -408,8 +426,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     try {
       await append(...events);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+      if (!isIdempotencyConflict(error)) throw error;
     }
   }
 
