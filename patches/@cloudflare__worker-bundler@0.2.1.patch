@@ -1,0 +1,74 @@
+diff --git a/dist/installer-Ns4ivVf5.js b/dist/installer-Ns4ivVf5.js
+index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e82197805a 100644
+--- a/dist/installer-Ns4ivVf5.js
++++ b/dist/installer-Ns4ivVf5.js
+@@ -75,20 +75,32 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+ 	if (existing) return existing;
+ 	const installPromise = (async () => {
+ 		try {
+-			const metadata = await fetchPackageMetadata(name, registry);
+-			const version = resolveVersion(versionRange, metadata);
+-			if (!version) {
+-				result.warnings.push(`Could not resolve version for ${name}@${versionRange}`);
+-				return;
+-			}
+-			const versionMetadata = metadata.versions[version];
+-			if (!versionMetadata) {
+-				result.warnings.push(`Version ${version} not found for ${name}`);
+-				return;
++			const tarballUrl = directTarballUrl(versionRange);
++			let packageFiles;
++			let versionMetadata;
++			if (tarballUrl) {
++				packageFiles = await fetchPackageFiles(name, {
++					version: versionRange,
++					dist: { tarball: tarballUrl }
++				});
++				versionMetadata = packageMetadataFromTarball(name, tarballUrl, packageFiles);
++			} else {
++				const metadata = await fetchPackageMetadata(name, registry);
++				const version = resolveVersion(versionRange, metadata);
++				if (!version) {
++					result.warnings.push(`Could not resolve version for ${name}@${versionRange}`);
++					return;
++				}
++				versionMetadata = metadata.versions[version];
++				if (!versionMetadata) {
++					result.warnings.push(`Version ${version} not found for ${name}`);
++					return;
++				}
++				packageFiles = await fetchPackageFiles(name, versionMetadata);
+ 			}
++			const version = versionMetadata.version;
+ 			installedPackages.set(name, version);
+ 			result.installed.push(`${name}@${version}`);
+-			const packageFiles = await fetchPackageFiles(name, versionMetadata);
+ 			for (const [filePath, content] of Object.entries(packageFiles)) fileSystem.write(`node_modules/${name}/${filePath}`, content);
+ 			const deps = versionMetadata.dependencies ?? {};
+ 			await Promise.all(Object.entries(deps).map(([depName, depVersion]) => installPackage(depName, depVersion, result, fileSystem, installedPackages, inProgress, registry)));
+@@ -104,6 +116,25 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+ 		inProgress.delete(name);
+ 	}
+ }
++/** Return an HTTP(S) dependency spec as a normalized direct-tarball URL. */
++function directTarballUrl(versionRange) {
++	if (!versionRange.startsWith("https://") && !versionRange.startsWith("http://")) return;
++	return new URL(versionRange).toString();
++}
++/** Read and validate the identity and dependency metadata inside a direct tarball. */
++function packageMetadataFromTarball(expectedName, tarballUrl, packageFiles) {
++	const packageJson = packageFiles["package.json"];
++	if (!packageJson) throw new Error(`Direct tarball for ${expectedName} has no package.json (${tarballUrl})`);
++	let metadata;
++	try {
++		metadata = JSON.parse(packageJson);
++	} catch {
++		throw new Error(`Direct tarball for ${expectedName} has an invalid package.json (${tarballUrl})`);
++	}
++	if (metadata.name !== expectedName) throw new Error(`Direct tarball dependency ${expectedName} contains package ${JSON.stringify(metadata.name)} (${tarballUrl})`);
++	if (typeof metadata.version !== "string" || metadata.version.length === 0) throw new Error(`Direct tarball for ${expectedName} has no valid package version (${tarballUrl})`);
++	return metadata;
++}
+ /**
+ * Fetch package metadata from npm registry.
+ */

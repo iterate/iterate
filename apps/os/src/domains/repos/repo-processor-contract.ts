@@ -128,68 +128,16 @@ export const RepoProcessorContract = defineProcessorContract({
       description:
         "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set). Terminates in repos/created or repos/create-failed.",
       payloadSchema: repoCreateRequestSchema(),
-      examples: [
-        {
-          description: "Create a repo containing Iterate's starter files.",
-          payload: { type: "empty" },
-        },
-        {
-          description: "Pull a private GitHub repository through the Worker at depth one.",
-          payload: {
-            type: "github-private",
-            connection: "install-87654321",
-            owner: "acme-inc",
-            repo: "private-app",
-          },
-        },
-        {
-          description:
-            "Ask Cloudflare Artifacts to import a public GitHub repository directly with full history. Set depth to request a shallow import instead.",
-          payload: {
-            type: "github-public",
-            connection: "install-87654321",
-            owner: "acme-inc",
-            repo: "public-app",
-          },
-        },
-      ],
     },
     "events.iterate.com/repos/created": {
       description:
         "The repo creation saga completed and its backing Artifact is ready — the repo's birth certificate.",
       payloadSchema: repoBirthCertificateSchema(),
-      examples: [
-        {
-          description:
-            "The project's config repo finished bootstrapping: its git remote is a Cloudflare Artifacts repository named after the project id and path.",
-          payload: {
-            request: { type: "empty" },
-            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
-            defaultBranch: "main",
-            remote:
-              "https://6d7f0e2c4b9a5138f2ce7a1b8d3e4f50.artifacts.cloudflare.net/git/os-prd-repos/prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw.git",
-          },
-        },
-      ],
     },
     "events.iterate.com/repos/create-failed": {
       description:
         "The repo creation saga reached a terminal failure and did not declare the repo created. Fail-closed: nothing else ever reacts on a failed repo's stream.",
       payloadSchema: repoCreateFailureSchema(),
-      examples: [
-        {
-          description: "Cloudflare Artifacts rejected a public repository import.",
-          payload: {
-            error: "Cloudflare Artifacts 10400: An internal error occurred",
-            request: {
-              type: "github-public",
-              connection: "install-87654321",
-              owner: "acme-inc",
-              repo: "public-app",
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/cloudflare-artifact-event-received": {
       description:
@@ -207,25 +155,6 @@ export const RepoProcessorContract = defineProcessorContract({
           namespace: z.string().meta({ description: "The Artifacts namespace (per deployment)." }),
         })
         .loose(),
-      examples: [
-        {
-          description:
-            "Cloudflare Artifacts reported that main advanced; the repo processor compares the before and after task trees.",
-          payload: {
-            artifactName: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha--L3JlcG9zL2NvbmZpZw",
-            body: {
-              type: "cf.artifacts.repo.pushed",
-              payload: {
-                after: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-                before: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
-                ref: "refs/heads/main",
-              },
-            },
-            cloudflareEventType: "cf.artifacts.repo.pushed",
-            namespace: "os-prd-repos",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/commit-completed": {
       description:
@@ -237,76 +166,23 @@ export const RepoProcessorContract = defineProcessorContract({
         branch: z.string().trim().min(1).meta({ description: "The branch that advanced." }),
         commitOid: z.string().trim().min(1).meta({ description: "The new branch head." }),
       }),
-      examples: [
-        {
-          description: "An external Git push advanced main by one or more commits.",
-          payload: {
-            beforeCommitOid: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/task-created": {
       description: "A Markdown task file was created on the repo's default branch.",
       payloadSchema: taskFileChangedSchema(),
-      examples: [
-        {
-          description: "A new root task became durable on main.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            path: "tasks/ship-board.md",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/task-updated": {
       description: "A Markdown task file changed on the repo's default branch.",
       payloadSchema: taskFileChangedSchema(),
-      examples: [
-        {
-          description: "Moving a board card changed the task's state frontmatter on main.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            path: "apps/os/tasks/ship-board.md",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/task-deleted": {
       description: "A Markdown task file was deleted from the repo's default branch.",
       payloadSchema: taskFileChangedSchema(),
-      examples: [
-        {
-          description: "A completed task file was removed from main.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            path: "tasks/old-task.md",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-link-configured": {
       description:
         "The repo was linked to a GitHub repository (mirror commits out and import fast-forward default-branch pushes).",
       payloadSchema: githubLinkSchema(),
-      examples: [
-        {
-          description:
-            "The repo was linked to acme-inc/acme-config through the GitHub App installation's connection.",
-          payload: {
-            connection: "install-87654321",
-            installationId: "87654321",
-            owner: "acme-inc",
-            repo: "acme-config",
-            repositoryId: 123456789,
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-unlinked": {
       description: "The repo's GitHub link was removed.",
@@ -320,17 +196,6 @@ export const RepoProcessorContract = defineProcessorContract({
           .positive()
           .meta({ description: "GitHub's numeric repository id." }),
       }),
-      examples: [
-        {
-          description: "The link to acme-inc/acme-config was removed; mirroring stops.",
-          payload: {
-            connection: "install-87654321",
-            owner: "acme-inc",
-            repo: "acme-config",
-            repositoryId: 123456789,
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-push-completed": {
       description: "A mirror push delivered the branch head to the linked GitHub repository.",
@@ -340,17 +205,6 @@ export const RepoProcessorContract = defineProcessorContract({
         owner: z.string().meta({ description: "GitHub owner of the mirror target." }),
         repo: z.string().meta({ description: "GitHub name of the mirror target." }),
       }),
-      examples: [
-        {
-          description: "The default branch's new head was mirrored to GitHub after a commit.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-push-failed": {
       description:
@@ -364,32 +218,6 @@ export const RepoProcessorContract = defineProcessorContract({
         owner: z.string().meta({ description: "GitHub owner of the mirror target." }),
         repo: z.string().meta({ description: "GitHub name of the mirror target." }),
       }),
-      examples: [
-        {
-          description:
-            "GitHub rejected the mirror push as non-fast-forward: GitHub has commits this repo does not.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            error:
-              'Error: GitHub push of main was rejected (non-fast-forward means GitHub has commits this repo does not; use syncFromGithub() to adopt them or pushToGithub({ force: true }) to overwrite): {"refs/heads/main":"fetch first"}',
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-        {
-          description:
-            "The push failed before a head was resolved (null commitOid): the connection's installation token could not be minted.",
-          payload: {
-            branch: "main",
-            commitOid: null,
-            error:
-              'Error: GitHub connection "install-87654321" has no usable installation token (HttpError: Not Found). Use itx.integrations.list() to see connections.',
-            owner: "acme-inc",
-            repo: "acme-config",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-synced": {
       description:
@@ -409,59 +237,15 @@ export const RepoProcessorContract = defineProcessorContract({
           description: "True when the artifact was destroyed and recreated (resetFromGithub).",
         }),
       }),
-      examples: [
-        {
-          description: "A fast-forward sync adopted GitHub's newer branch head.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            forced: false,
-            owner: "acme-inc",
-            previousCommitOid: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
-            repo: "acme-config",
-          },
-        },
-        {
-          description: "A forced sync overwrote diverged local history with GitHub's branch head.",
-          payload: {
-            branch: "main",
-            commitOid: "b7e2f0a9c8d14e3fa6570b2c9d8e1f4a3b5c6d70",
-            forced: true,
-            owner: "acme-inc",
-            previousCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            repo: "acme-config",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-import-requested": {
       description: "A linked GitHub default-branch push opened a durable import obligation.",
       payloadSchema: githubImportRequestSchema(),
-      examples: [
-        {
-          description: "A GitHub push requested that main be adopted into Artifacts.",
-          payload: {
-            branch: "main",
-            requestId: "/repos/config:42",
-            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-import-started": {
       description:
         "The repo processor durably began a GitHub import attempt — journaled BEFORE the sync body runs, so an attempt that dies with its incarnation is visibly owed.",
       payloadSchema: githubImportRequestSchema(),
-      examples: [
-        {
-          description: "The durable GitHub import attempt began.",
-          payload: {
-            branch: "main",
-            requestId: "/repos/config:42",
-            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-import-completed": {
       description:
@@ -488,17 +272,6 @@ export const RepoProcessorContract = defineProcessorContract({
           .min(1)
           .meta({ description: "The head the original push delivery announced." }),
       }),
-      examples: [
-        {
-          description: "Artifacts now contains the current GitHub main head.",
-          payload: {
-            branch: "main",
-            commitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-            requestId: "/repos/config:42",
-            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-          },
-        },
-      ],
     },
     "events.iterate.com/repo/github-import-failed": {
       description:
@@ -517,17 +290,6 @@ export const RepoProcessorContract = defineProcessorContract({
           .min(1)
           .meta({ description: "The head the original push delivery announced." }),
       }),
-      examples: [
-        {
-          description: "GitHub and Artifacts had diverged, so the automatic import failed closed.",
-          payload: {
-            branch: "main",
-            error: 'Error: syncFromGithub is not a fast-forward (GitHub says "diverged").',
-            requestId: "/repos/config:42",
-            requestedCommitOid: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-          },
-        },
-      ],
     },
     "events.iterate.com/github/webhook-received": {
       description:
@@ -568,34 +330,6 @@ export const RepoProcessorContract = defineProcessorContract({
             .meta({ description: "The GitHub App installation the delivery was routed by." }),
         })
         .loose(),
-      examples: [
-        {
-          description:
-            "A push delivery (trimmed): GitHub's webhook body under `body`, plus the delivery headers and the routing installation id.",
-          payload: {
-            body: {
-              ref: "refs/heads/main",
-              before: "4c1a9b0e2d3f5a6b7c8d9e0f1a2b3c4d5e6f7a80",
-              after: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-              commits: [
-                {
-                  id: "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01",
-                  message: "Update worker routing",
-                  author: { name: "Jane Doe", email: "jane@acme-inc.com" },
-                },
-              ],
-              repository: { full_name: "acme-inc/acme-config", id: 123456789 },
-              sender: { login: "jane-doe" },
-              installation: { id: 87654321 },
-            },
-            delivery: {
-              id: "72d3162e-cc78-11e3-81ab-4c9367dc0958",
-              name: "push",
-            },
-            installationId: "87654321",
-          },
-        },
-      ],
     },
   },
   processorDeps: [CoreProcessorContract],
@@ -617,14 +351,6 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/github/webhook-received",
     // The stream's own birth fact (core-owned): reduces `initialized`.
     "events.iterate.com/stream/created",
-    // Core lifecycle RE-CHECK signals: neither reduces into state, but their
-    // at-head delivery gives the state-derived pass a guaranteed
-    // consumed-at-head turn — `stream/woken` on a stream (re)start,
-    // `subscriber-connected` on a runner (re)attach. That extra turn is what
-    // retries an obligation whose background append failed transiently while
-    // the cursor already sat at head.
-    "events.iterate.com/stream/woken",
-    "events.iterate.com/stream/subscriber-connected",
     // The platform revival fact (core-owned). MUST be consumed (the runner
     // throws at construction otherwise): its ordinary delivery is the
     // guaranteed at-head turn where `processEvent` under `delivery.caughtUp`

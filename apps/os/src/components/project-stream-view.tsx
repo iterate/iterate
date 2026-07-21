@@ -17,7 +17,7 @@ import {
   connectIterateSession,
   reportTransportSuspicion,
   useLiveState,
-} from "iterate/react";
+} from "iterate/sdk/itx/react";
 import type { Stream } from "../itx-api.generated.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import { useStreamMirror } from "~/domains/streams/client-libraries/browser/hooks/use-stream-mirror.ts";

@@ -1,4 +1,4 @@
-import { RpcTarget } from "capnweb";
+import { RpcTarget } from "@iterate-com/capnweb";
 import type { z } from "zod";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";

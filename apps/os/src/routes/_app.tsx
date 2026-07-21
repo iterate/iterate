@@ -37,9 +37,8 @@ function AppLayout() {
   // presence + Feed/State inside the stream view) — a page publishing a
   // streamBreadcrumb IS a stream page. Only the few non-stream pages
   // (projects list, new-project, session REPL) get this minimal shell header.
-  // Project routes are client-only, so their loader data is absent from the
-  // server render. Static route data keeps the shell's first client render
-  // identical to SSR; the loader breadcrumb takes over after the route loads.
+  // Static route data also supplies labels for explicitly client-only leaves;
+  // SSR-capable project routes replace it with loader breadcrumbs when useful.
   const isStreamPage =
     matches.some(
       (match) => (match.staticData as RouteBreadcrumbStaticData | undefined)?.streamPage === true,

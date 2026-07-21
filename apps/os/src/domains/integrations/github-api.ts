@@ -1,8 +1,8 @@
 // GitHub Web API access for itx — a real Octokit, wrapped so its transport
-// rides one named connection's secret. The installation token never leaves its
+// rides project egress with one named connection's secret placeholder. The installation token never leaves its
 // Secret Durable Object: every request Octokit makes carries a
 // `getSecret(path, { field: "accessToken" })` placeholder Authorization header and is
-// dispatched through the connection secret's own `fetch()`, whose
+// dispatched through project policy before the connection secret's `fetch()`, whose
 // github-app-installation strategy mints the installation token on first use,
 // re-mints on 401, substitutes the placeholder, and pins the host — all in
 // trusted DO code. The caller's mandatory `.octokit` namespace
@@ -14,13 +14,14 @@
 import { Octokit } from "octokit";
 import { itxEnv } from "../../env.ts";
 import { isPathMissMessage } from "../../itx/path-proxy.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { githubAccessTokenPlaceholder, githubConnectionSecretPath } from "./utils.ts";
+import { projectStub } from "../projects/egress.ts";
+import { githubAccessTokenPlaceholder } from "./utils.ts";
 
 /**
  * A connection-scoped Octokit whose every request is routed through the GitHub
- * connection secret's `fetch()` with the access-token placeholder — the token
- * never leaves the Secret DO, and every call lands on the secret's audit trail.
+ * project egress with the access-token placeholder — project policy runs
+ * before the token is substituted in the Secret DO, and every permitted call
+ * lands on the secret's audit trail.
  *
  * `baseUrl` overrides the GitHub API origin (a petshop stand-in in e2e);
  * omitted, Octokit uses `https://api.github.com`.
@@ -30,11 +31,8 @@ export function connectionOctokit(input: {
   connection: string;
   projectId: string;
 }): Octokit {
-  const secretPath = githubConnectionSecretPath(input.connection);
   const placeholder = `Bearer ${githubAccessTokenPlaceholder(input.connection)}`;
-  const stub = itxEnv.SECRET.getByName(
-    DurableObjectNameCodec.stringify({ path: secretPath, projectId: input.projectId }),
-  );
+  const egress = projectStub(itxEnv.PROJECT, input.projectId);
   return new Octokit({
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     // Disable Octokit's own retry paths: replaying an opaque write after a
@@ -50,7 +48,7 @@ export function connectionOctokit(input: {
       fetch: (url: string, init: RequestInit = {}) => {
         const headers = new Headers(init.headers);
         headers.set("authorization", placeholder);
-        return stub.fetch(new Request(url, { ...init, headers }));
+        return egress.fetch(new Request(url, { ...init, headers }));
       },
     },
   });

@@ -21,6 +21,9 @@ export interface Env {
    * internal error).
    */
   WORKER_SELF: string;
+  /** Preview-only exact pkg.pr.new tarball used for `iterate` dependencies in
+   * dynamic builds. Deploy writes this from PREVIEW_PULL_REQUEST_HEAD_SHA. */
+  APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?: string;
   /** Present only in generated deployed env blocks; absent in local dev. */
   DEPLOYMENT_ENV?: string;
   /** Required in deployed config; optional in the local runtime binding shape. */

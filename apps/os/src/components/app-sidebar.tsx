@@ -64,7 +64,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { useIterateSessionQuery, useLiveState } from "iterate/react";
+import { useIterateSessionQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
 import { SidebarAgents } from "./agents/sidebar-agents.tsx";
@@ -138,7 +138,7 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
               >
                 <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
-                  <IterateLogo className="size-6 rounded-sm" />
+                  <IterateLogo className="size-6" />
                 </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>

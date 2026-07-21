@@ -12,7 +12,7 @@
 // dies; the stream, KV progress, and the durable alarm survive.
 
 import { describe, expect, it, vi } from "vitest";
-import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
+import { idempotencyConflictMessage, KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
 import {
   createStreamProcessorRegistry,
@@ -360,12 +360,11 @@ describe("script execution recovery at head", () => {
             : h.stream.events.find((event) => event.idempotencyKey === input.idempotencyKey);
         if (
           existing !== undefined &&
+          input.idempotencyKey !== undefined &&
           JSON.stringify(existing.payload) !== JSON.stringify(input.payload)
         ) {
           conflicts += 1;
-          throw new Error(
-            `idempotency key "${input.idempotencyKey}" already names a different event at offset ${existing.offset}`,
-          );
+          throw new Error(idempotencyConflictMessage(input.idempotencyKey, existing.offset));
         }
       }
       return await append(...inputs);

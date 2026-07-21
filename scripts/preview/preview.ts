@@ -347,9 +347,9 @@ async function deployPreviewApps({
           commandEnvironment: {
             ...runtime.commandEnvironment,
             // apps/os/scripts/deploy.ts turns this into
-            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so projects seeded on the
-            // preview install this head's pkg.pr.new `iterate` build, not
-            // @main. The sha, not @<pr>: pkg.pr.new PR refs are moving
+            // APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC so project seeds and dynamic
+            // builds install this head's pkg.pr.new `iterate` build, not @main.
+            // The sha, not @<pr>: pkg.pr.new PR refs are moving
             // targets, while the sha pins the exact build this deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
           },
@@ -1640,7 +1640,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/mobile/**",
       // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
       ".bun-version",
-      // OS imports iterate/react, and its preview e2e lane builds and runs the
+      // OS imports iterate/sdk/itx/react, and its preview e2e lane builds and runs the
       // iterate TUI artifact. A CLI-only change therefore still needs the OS
       // deployment and post-deploy PTY proof.
       "packages/iterate/**",

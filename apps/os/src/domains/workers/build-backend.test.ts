@@ -25,12 +25,13 @@ function execute(
   source: DynamicWorkerSource = {
     createWorker: { entryPoint: "worker.ts", files: inlineFiles },
   },
+  iteratePackageSpec?: string,
 ) {
-  return executeWorkerBuild({ files, source, workerBundler });
+  return executeWorkerBuild({ files, iteratePackageSpec, source, workerBundler });
 }
 
 describe("executeWorkerBuild", () => {
-  it("calls createWorker with the resolved file map and platform virtual modules", async () => {
+  it("calls createWorker with the resolved file map and caller virtual modules", async () => {
     const source: DynamicWorkerSource = {
       createWorker: {
         bundle: false,
@@ -61,11 +62,6 @@ describe("executeWorkerBuild", () => {
       entryPoint: "apps/basic/src/index.ts",
       files,
       virtualModules: {
-        "@iterate-com/capnweb": expect.any(String),
-        "iterate/live-state": expect.any(String),
-        "iterate/processors": expect.any(String),
-        "iterate/processors/cloudflare": expect.any(String),
-        "iterate/sdk": expect.any(String),
         "virtual:user": "export const user = true;",
       },
     });
@@ -116,6 +112,64 @@ describe("executeWorkerBuild", () => {
   it("does not pre-parse package.json", async () => {
     await execute({ "package.json": "worker-bundler gets to decide", "worker.ts": "source" });
     expect(createWorker).toHaveBeenCalledOnce();
+  });
+
+  it("repoints the root iterate declarations and promotes one for installation", async () => {
+    const previewSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
+    const source: DynamicWorkerSource = {
+      createApp: {
+        client: "apps/guestbook/client.tsx",
+        files: { repoPath: "/repos/config", type: "repo" },
+        server: "apps/guestbook/server.tsx",
+      },
+    };
+    createApp.mockResolvedValue({
+      result: {
+        assetManifest: {},
+        assets: {},
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "built" },
+        warnings: [],
+      },
+    });
+    const files = {
+      "apps/guestbook/package.json": JSON.stringify({
+        dependencies: { iterate: "old-app-spec", react: "19.2.4" },
+      }),
+      "package.json": JSON.stringify({
+        dependencies: { zod: "4.3.6" },
+        devDependencies: { iterate: "old-root-spec", typescript: "5.9.3" },
+      }),
+    };
+
+    await execute(files, source, previewSpec);
+
+    const buildFiles = createApp.mock.calls[0]?.[0].files as Record<string, string>;
+    expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
+      dependencies: { iterate: previewSpec, zod: "4.3.6" },
+      devDependencies: { iterate: previewSpec, typescript: "5.9.3" },
+    });
+    expect(JSON.parse(buildFiles["apps/guestbook/package.json"] ?? "null")).toEqual({
+      dependencies: { iterate: "old-app-spec", react: "19.2.4" },
+    });
+    expect(files["package.json"]).toContain("old-root-spec");
+  });
+
+  it("promotes an existing root devDependency even without a deployment override", async () => {
+    const files = {
+      "package.json": JSON.stringify({
+        devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+      }),
+      "worker.ts": "export default {};",
+    };
+
+    await execute(files);
+
+    const buildFiles = createWorker.mock.calls[0]?.[0].files as Record<string, string>;
+    expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
+      dependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+      devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+    });
   });
 
   it("classifies returned build errors while transport failures remain retryable", async () => {

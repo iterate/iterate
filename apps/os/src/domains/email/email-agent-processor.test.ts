@@ -119,7 +119,7 @@ describe("EmailAgentProcessor", () => {
         },
       ],
     });
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload;
     expect(payload.content).toContain("email/received");
     expect(payload.content).toContain("jonas@example.com");
     expect(payload.content).toContain("Can you help me with something?");
@@ -270,7 +270,7 @@ describe("EmailAgentProcessor", () => {
     const inputs = h.events("events.iterate.com/agents/context-added");
     expect(inputs).toHaveLength(1);
     expect(inputs[0]!.payload).not.toHaveProperty("files");
-    const content = (inputs[0]!.payload as { content: string }).content;
+    const content = inputs[0]!.payload.content;
     expect(content).toContain("cat.png");
     // Never a silent drop: the loss and its cause are visible to the model.
     expect(content).toContain("[1 attachment(s) could not be loaded: signing exploded]");

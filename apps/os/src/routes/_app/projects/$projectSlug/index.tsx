@@ -3,7 +3,7 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowRightIcon } from "lucide-react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { z } from "zod";
-import { useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";

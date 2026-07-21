@@ -260,7 +260,7 @@ test("deleting the main worker file makes the next project worker build fail", a
   // The seeded root worker serves a static homepage; this warm-up only needs
   // proof the seeded worker.ts is live before we delete it.
   const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
-  expect(await warmResponse.text()).toContain("Hello from your Iterate project worker");
+  expect(await warmResponse.text()).toContain("Hello from your iterate project worker");
 
   await project.repo.commitFiles({
     changes: [{ delete: true, path: "worker.ts" }],

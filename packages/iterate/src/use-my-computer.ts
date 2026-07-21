@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 
 import { connectItx } from "./itx/itx-node-client.ts";
 import type { ItxAuthCredentials, Project } from "./itx-api.generated.ts";

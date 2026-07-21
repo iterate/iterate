@@ -9,11 +9,12 @@
 // context-must-commit-before-typing contract is pinned.
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput, StreamEvent, StreamEventInput } from "iterate/processors";
+import type { ConsumedInput, StreamEventInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
   MemoryStreamNetwork,
+  type ProcessorHarness,
 } from "iterate/processors/testing";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -77,7 +78,7 @@ function webhook(payload: ReturnType<typeof humanMessageWebhookPayload>): AgentE
   return { type: "events.iterate.com/telegram/webhook-received", payload };
 }
 
-function contextAddedEvents(h: { events: (type?: string) => StreamEvent[] }) {
+function contextAddedEvents(h: ProcessorHarness<TelegramAgentProcessorContract>) {
   return h.events("events.iterate.com/agents/context-added");
 }
 
@@ -152,13 +153,7 @@ describe("TelegramAgentProcessor", () => {
 
     const inputs = contextAddedEvents(h);
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as {
-      actor?: unknown;
-      content: string;
-      llmRequestPolicy?: unknown;
-      refs?: unknown;
-      role: string;
-    };
+    const payload = inputs[0]!.payload;
     expect(payload).toMatchObject({
       role: "developer",
       actor: { type: "telegram", userId: "555", username: "misha" },
@@ -253,7 +248,7 @@ describe("TelegramAgentProcessor", () => {
 
     const inputs = contextAddedEvents(h);
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload;
     expect(payload.content).toContain("approve");
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
     // The sender is the button PRESSER (callback_query.from), never the
@@ -283,7 +278,7 @@ describe("TelegramAgentProcessor", () => {
 
     const inputs = contextAddedEvents(h);
     expect(inputs).toHaveLength(1);
-    const content = (inputs[0]!.payload as { content: string }).content;
+    const content = inputs[0]!.payload.content;
     expect(content).toContain("[photo]");
     expect(content).toContain("file_id: photo-1");
     expect(content).toContain("file_id is in the raw payload");
@@ -537,7 +532,7 @@ describe("TelegramAgentProcessor", () => {
     expect(h.sentMessages).toEqual([{ chat_id: CHAT_ID, text: TELEGRAM_NEW_SESSION_ACK_TEXT }]);
     const inputs = contextAddedEvents(h);
     expect(inputs).toHaveLength(1);
-    const payload = inputs[0]!.payload as { content: string; llmRequestPolicy?: unknown };
+    const payload = inputs[0]!.payload;
     expect(payload.content).toContain('"plan my week"');
     expect(payload.llmRequestPolicy).toEqual({ behaviour: "after-current-request" });
 
@@ -566,7 +561,7 @@ describe("TelegramAgentProcessor", () => {
       idempotencyKey: "telegram-agent:debug-command:2",
       payload: { executionId: "telegram-debug-command-2" },
     });
-    const code = (scripts[0]!.payload as { code: string }).code;
+    const code = scripts[0]!.payload.code;
     expect(code).toContain("await itx.debug()");
     // The result posts through the journaled send pair on THIS session
     // stream — right thread, full provenance, like the /new ack.
@@ -582,7 +577,7 @@ describe("TelegramAgentProcessor", () => {
     // clock moved re-appends the identical request and dedupes on the key —
     // a now-stamped expiry would be a same-key conflict wedging the frame.
     const command = h.events("events.iterate.com/telegram/webhook-received")[0]!;
-    expect((scripts[0]!.payload as { expiresAt: number }).expiresAt).toBe(
+    expect(scripts[0]!.payload.expiresAt).toBe(
       Date.parse(command.createdAt) + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
     );
     await h.advanceTime(60 * 60_000);
@@ -612,7 +607,7 @@ describe("TelegramAgentProcessor", () => {
 
     const inputs = contextAddedEvents(h);
     expect(inputs).toHaveLength(1);
-    const content = (inputs[0]!.payload as { content: string }).content;
+    const content = inputs[0]!.payload.content;
     expect(content).toContain(`REPLIES to a message from a different thread: ${oldSession}`);
     // The taught read is FILTERED to the conversation event types — an
     // unfiltered getEvents returns the oldest raw events (subscriber/llm

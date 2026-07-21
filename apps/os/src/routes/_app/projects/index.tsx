@@ -11,7 +11,7 @@ import {
   connectIterateSession,
   reconnectIterateSession,
   useIterateSessionQuery,
-} from "iterate/react";
+} from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -26,7 +26,7 @@ type OrganizationSummary = {
 const NO_ORGANIZATIONS: OrganizationSummary[] = [];
 
 // The plain projects list. The root `/` owns the redirect decision (single
-// project → onboarding agent or project home, server-side before rendering);
+// project → project home, server-side before rendering);
 // navigating here directly always shows the list — the sidebar's "All
 // projects" must not hijack single-project users back into their project.
 export const Route = createFileRoute("/_app/projects/")({

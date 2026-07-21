@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { RpcTarget, newWorkersRpcResponse } from "capnweb";
-import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
+import { LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createDurableObjectClient, defineConfig, sql } from "sqlfu";
 import type { Todo, TodoListApi, TodoListState } from "./state.ts";
 

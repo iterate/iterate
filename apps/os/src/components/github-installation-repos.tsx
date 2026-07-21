@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Input } from "@iterate-com/ui/components/input";
-import { useItxQuery } from "iterate/react";
+import { useItxQuery } from "iterate/sdk/itx/react";
 import {
   listInstallationRepos,
   type InstallationRepo,

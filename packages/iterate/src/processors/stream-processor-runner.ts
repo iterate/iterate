@@ -163,38 +163,18 @@ type ProcessorDurability<State> = {
   recovery?: ProcessorRecovery;
 };
 
-/**
- * Where a delivery sits relative to the head the runner has OBSERVED:
- * `"catching-up"` while replaying history, `"live"` once deliveries reach the
- * observed head. A policy input, not a correctness gate — the honest framing
- * that replaces today's `checkpointOffset >= streamMaxOffset` at-head guard.
- */
-export type DeliveryPhase = "catching-up" | "live";
-
-/**
- * Honest event-time context handed to `processEvent`. Head and lag are POLICY
- * inputs (skip the stale typing indicator, debounce the status repaint), never
- * correctness — the observed head can be behind the real head the moment it
- * is read. Effect keys are minted via the processor's own
- * `idempotencyKey(key, whileProcessing?)`: bind the event for per-event
- * effects (a redelivered frame dedupes), or fold the deciding state into
- * `key` with no event bound for obligation-derived stable keys.
- */
+/** Honest delivery information handed to `processEvent`. */
 export type DeliveryContext = {
-  phase: DeliveryPhase;
-  /** The highest stream offset the runner has observed (>= this event's). */
-  observedHeadOffset: number;
   /**
-   * The at-head reconciliation signal: the scan has reached the highest raw
-   * stream offset the runner has observed, so `state` is the complete fold it
-   * has seen. It is true on the last consumed event of a head-reaching frame.
-   * If that frame contains no consumed event, the runner makes one eventless
-   * `processEvent` call (`event: null`) with this flag instead; an unconsumed
-   * tail must not strand obligations on an otherwise quiet stream.
+   * The at-head signal: the scan has reached the highest raw stream offset
+   * the runner has observed, so `state` is the complete reduction of
+   * everything it has seen. It is true on the last consumed event of a
+   * head-reaching frame. If that frame contains no consumed event, the runner
+   * makes one eventless `processEvent` call (`event: null`) with this flag
+   * instead; an unconsumed tail must not strand obligations on an otherwise
+   * quiet stream.
    */
   caughtUp: boolean;
-  /** The processing cursor's current fencing token (see {@link ProcessingProgress}). */
-  cursorRevision: number;
 };
 
 /**
@@ -636,10 +616,7 @@ export class StreamProcessorRunner<
           const caughtUp = batchReachesHead && event.offset === lastDeliveredOffset;
           if (caughtUp) firedCaughtUp = true;
           const delivery: DeliveryContext = {
-            phase: event.offset >= observedHeadOffset ? "live" : "catching-up",
-            observedHeadOffset,
             caughtUp,
-            cursorRevision: ctx.revision,
           };
           // FIFO blocker chain: each registration starts only after the
           // previous one settles, so a later registration in the same
@@ -701,10 +678,7 @@ export class StreamProcessorRunner<
       // passes. Its blockers are awaited before the deferred frame-end commit.
       if (batchReachesHead && !firedCaughtUp) {
         const delivery: DeliveryContext = {
-          phase: "live",
-          observedHeadOffset,
           caughtUp: true,
-          cursorRevision: ctx.revision,
         };
         // Same FIFO blocker chain as the per-event dispatch; its work is
         // awaited before the deferred frame-end commit.

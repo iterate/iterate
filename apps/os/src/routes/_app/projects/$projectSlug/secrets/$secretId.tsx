@@ -13,7 +13,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { useItx, useLiveState } from "iterate/react";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import type { SecretDescription, SecretUpdateInput } from "../../../../../domains/secrets/types.ts";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";

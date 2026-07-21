@@ -4,7 +4,7 @@
 // WebSocket per process, generations, invisible reconnect, terminal-auth
 // parking, half-open verification) plus the shared wire pieces that ride it:
 // the live-state snapshot+patch codec and the ownership-chain disposal helper.
-// React bindings live in `iterate/react`; the node one-shot dial (ws, custom
+// React bindings live in `iterate/sdk/itx/react`; the node one-shot dial (ws, custom
 // headers, frame observer) lives in `iterate/node`.
 //
 // In a browser the keeper needs no configuration (it dials the page's `/api`
@@ -32,7 +32,7 @@ export {
 // LiveStatePatch) come via the generated-contract re-export below — the
 // contract carries structurally identical copies, and exporting both homes
 // would be ambiguous.
-export { applyPatch, createLiveStateStore, diff } from "./live-state.ts";
+export { applyPatch, createLiveStateStore, diff } from "./sdk/capnweb/live-state/index.ts";
 // The generated public contract (also exported by `iterate/sdk`): here so a
 // client consumer needs exactly one import for handles AND their types.
 // `.ts`-suffixed like every relative import here; tsc's

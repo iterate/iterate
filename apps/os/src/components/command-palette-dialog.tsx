@@ -13,7 +13,7 @@ import {
 } from "@iterate-com/ui/components/command";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/sdk/itx/react";
 import {
   agentCommandValue,
   buildStreamForest,

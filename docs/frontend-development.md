@@ -12,11 +12,13 @@ travel over the tab's single `/api` WebSocket and the server answers or pushes.
 The client lives in the published **`iterate` package** and is layered so every
 runtime shares one implementation:
 
-| Entry            | What it is                                                                                                                                                  |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/react`  | The hooks below. **Renderer-agnostic** — the same module runs under react-dom (this dashboard), `@opentui/react` (the chat TUI), and React Native.          |
-| `iterate/client` | The framework-free layer under them: the one-socket session keeper, the live-state snapshot+patch codec, transport-error classification. No React anywhere. |
-| `iterate/node`   | The node one-shot dial (`ws`, custom headers, frame observer) for scripts and e2e — `using`-scoped, no keeper.                                              |
+| Entry                       | What it is                                                                                                                                                                                            |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk/itx/react`     | The thin ITX hooks below. **Renderer-agnostic** — the same module runs under react-dom (this dashboard), `@opentui/react` (the chat TUI), and React Native.                                           |
+| `iterate/client`            | The framework-free ITX layer under them: the one-socket session keeper and transport-error classification. No React anywhere.                                                                         |
+| `iterate/sdk/capnweb`       | Project-independent snapshot+patch protocol, client store, and server engine over Cap'n Web. [Its README](../packages/iterate/src/sdk/capnweb/live-state/README.md) documents the standalone surface. |
+| `iterate/sdk/capnweb/react` | Generic `CapnWebProvider`, `useCapnWebRoot`, and `useLiveState`; ITX's `ProjectScope` and live-state hooks are deliberately tiny adapters over this entry.                                            |
+| `iterate/node`              | The node one-shot dial (`ws`, custom headers, frame observer) for scripts and e2e — `using`-scoped, no keeper.                                                                                        |
 
 In a browser the keeper needs zero configuration (it dials the page's `/api`
 with cookie auth); non-browser consumers point it at a deployment with
@@ -86,8 +88,8 @@ React owns local interaction):
 ## The hooks
 
 Everything a component needs comes from one import,
-`import { … } from "iterate/react"`
-([`packages/iterate/src/itx/itx-react.ts`](../packages/iterate/src/itx/itx-react.ts)).
+`import { … } from "iterate/sdk/itx/react"`
+([`packages/iterate/src/sdk/itx/react.ts`](../packages/iterate/src/sdk/itx/react.ts)).
 
 ### Get a handle
 
@@ -179,11 +181,11 @@ const send = useMutation({ mutationFn: (text: string) => itx.chat.sendMessage(te
 ### Mount
 
 One component. `<ProjectScope slug>` carries the ambient project slug (so
-`useItx()` resolves without an argument) AND pre-warms the one socket. Mount it
-under an `ssr: false` route — itx never SSRs (it dials a WebSocket and throws on
-the server). No provider is needed above it: the socket is module-global and
-every hook dials it lazily, so the sidebar / ⌘K / admin use itx with no
-`<ProjectScope>` at all.
+`useItx()` resolves without an argument), pre-warms the one socket, and installs
+the generic reconnectable Cap'n Web provider consumed by `useLiveState`. Mount
+it under an `ssr: false` route — itx never SSRs (it dials a WebSocket and throws
+on the server). No additional provider is needed above it. Session-scoped hooks
+in the sidebar / ⌘K / admin use the module-global keeper directly.
 
 ```tsx
 <ProjectScope slug={project.slug}>
@@ -211,7 +213,7 @@ state. A `slug` argument also accepts a `prj_…` id.
 | `useLiveState(node, selector)`               | hook      | Subscribe to a `.liveState` node; server pushes a snapshot then diffs, the stable-slice `selector` picks what you render. Never suspends. The LiveView primitive.                                                                                                                                       |
 | `useIterateSessionLiveState(node, selector)` | hook      | Session-root sibling of `useLiveState`, for deployment-wide live nodes such as admin streams.                                                                                                                                                                                                           |
 | `useItxSubscription(subscribe, deps)`        | hook      | Low-level escape hatch for raw ordered event streams (the activity tail). Most UI wants `useLiveState`.                                                                                                                                                                                                 |
-| `<ProjectScope slug>`                        | component | Sets the ambient project + pre-warms the socket. The one mount.                                                                                                                                                                                                                                         |
+| `<ProjectScope slug>`                        | component | Sets the ambient project, pre-warms the socket, and provides its reconnectable project root to generic LiveState. The one mount.                                                                                                                                                                        |
 | `reconnectIterateSession()`                  | fn        | The deliberate **semantic reset** — drop + re-dial the socket to pick up new claims (after creating a project / unlocking admin). Distinct from the automatic, invisible transport reconnect. Pair with `invalidateQueries({ queryKey: ["itx"] })` when cached reads must refresh under the new claims. |
 | `disconnectIterateSession()`                 | fn        | Release the current socket and authority without reconnecting, for native sign-out/process lifecycle boundaries. The selected deployment remains configured for a later connection.                                                                                                                     |
 | `isItxTransportError(e)`                     | fn        | Is an error a transport-close (retryable), vs auth/validation/app (not)?                                                                                                                                                                                                                                |
@@ -224,7 +226,7 @@ state. A `slug` argument also accepts a `prj_…` id.
 Mutations have no hook — you call the capability on the handle
 (`itx.chat.sendMessage(text)`), usually inside a `useMutation`.
 
-That's the whole surface — one entry (`iterate/react`), no others. The everyday
+That's the whole surface — one entry (`iterate/sdk/itx/react`), no others. The everyday
 four are `useIterateSession` / `useItx` / `useItxQuery` / `useLiveState`; the
 rest are imperative siblings, the mount, the one escape hatch, and types. The
 chat TUI consumes the SAME entry under OpenTUI — its data layer is

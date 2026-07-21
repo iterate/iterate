@@ -1,19 +1,25 @@
-// connectionOctokit: the wrapped Octokit's transport must ride the connection
-// secret's fetch with an access-token PLACEHOLDER (never a real token), so the
+// connectionOctokit: the wrapped Octokit's transport must ride project egress
+// with an access-token PLACEHOLDER (never a real token), so the
 // itx caller surface (github.get("<conn>").octokit.rest.* / .octokit.graphql()
-// / .octokit.request()) keeps the token in its Secret DO. Only the secret stub
+// / .octokit.request()) keeps the token in its Secret DO. Only project egress
 // is mocked; the all-in-one Octokit is real.
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const captured: { request?: Request; requestCount: number; responseStatus?: number } = {
+const captured: {
+  projectDurableObjectName?: string;
+  request?: Request;
+  requestCount: number;
+  responseStatus?: number;
+} = {
   requestCount: 0,
 };
 vi.mock("../../env.ts", () => ({
   itxEnv: {
-    SECRET: {
-      getByName: () => ({
+    PROJECT: {
+      getByName: (name: string) => ({
         fetch: async (request: Request) => {
+          captured.projectDurableObjectName = name;
           captured.request = request;
           captured.requestCount += 1;
           if (captured.responseStatus !== undefined) {
@@ -39,6 +45,7 @@ const { connectionOctokit, normalizeGithubError, GITHUB_CALL_GRAMMAR } =
   await import("./github-api.ts");
 
 beforeEach(() => {
+  captured.projectDurableObjectName = undefined;
   captured.request = undefined;
   captured.requestCount = 0;
   captured.responseStatus = undefined;
@@ -91,7 +98,7 @@ describe("normalizeGithubError", () => {
 });
 
 describe("connectionOctokit", () => {
-  test(".request() rides the connection secret's fetch with a placeholder auth header", async () => {
+  test(".request() rides project egress with a placeholder auth header", async () => {
     const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
     const response = await octokit.request("GET /user");
 
@@ -102,6 +109,7 @@ describe("connectionOctokit", () => {
     expect(request.headers.get("authorization")).toBe(
       'Bearer getSecret("/secrets/integrations/github/acme", { field: "accessToken" })',
     );
+    expect(captured.projectDurableObjectName).toContain("prj_1");
   });
 
   test("rest.* namespaced methods hit the right path over the same jailed transport", async () => {

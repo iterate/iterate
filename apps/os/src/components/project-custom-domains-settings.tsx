@@ -5,7 +5,7 @@ import { PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { connectItx } from "iterate/react";
+import { connectItx } from "iterate/sdk/itx/react";
 import { ProjectProcessorContract } from "~/domains/projects/project-processor-contract.ts";
 import {
   isReservedProjectHostname,

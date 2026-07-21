@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  documentedProcessorContracts,
   eventDocs,
   getEventDocByPath,
   getEventDocByProcessorRoute,
@@ -99,43 +98,6 @@ describe("event docs catalog", () => {
   it("builds a non-empty processor and event catalog", () => {
     expect(processorDocs.length).toBeGreaterThan(5);
     expect(eventDocs.length).toBeGreaterThan(10);
-  });
-});
-
-describe("event docs examples", () => {
-  it("documents at least one example for every owned event type", () => {
-    const undocumented = eventDocs
-      .filter((event) => event.examples.length === 0)
-      .map((event) => event.type);
-    expect(
-      undocumented,
-      "every contract event needs an `examples` entry for the docs site",
-    ).toEqual([]);
-  });
-
-  it("parses every example payload against its event's payload schema", () => {
-    for (const contract of documentedProcessorContracts) {
-      for (const [type, definition] of Object.entries(contract.events)) {
-        for (const example of definition.examples ?? []) {
-          const result = definition.payloadSchema.safeParse(example.payload);
-          expect(
-            result.success,
-            `${type} example "${example.description}" must parse: ${result.error}`,
-          ).toBe(true);
-        }
-      }
-    }
-  });
-
-  it("keeps every example payload JSON-serializable", () => {
-    for (const event of eventDocs) {
-      for (const example of event.examples) {
-        const roundTripped: unknown = JSON.parse(JSON.stringify(example.payload));
-        expect(roundTripped, `${event.type} example "${example.description}"`).toEqual(
-          example.payload,
-        );
-      }
-    }
   });
 });
 

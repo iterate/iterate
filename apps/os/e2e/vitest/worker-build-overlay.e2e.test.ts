@@ -42,7 +42,7 @@ test(
       "a successful worker build",
     );
     const homepage = await healthy.response.text();
-    expect(homepage).toContain("Hello from your Iterate project worker");
+    expect(homepage).toContain("Hello from your iterate project worker");
     expect(homepage).toContain("__iterateWorkerOverlay");
     expect(homepage.indexOf("__iterateWorkerOverlay")).toBeGreaterThan(homepage.indexOf("<body"));
 
@@ -70,6 +70,6 @@ test(
       "the fixed worker commit",
     );
     expect(healed).toMatchObject({ commitOid: fixed.commitOid });
-    expect(await healed.response.text()).toContain("Hello from your Iterate project worker");
+    expect(await healed.response.text()).toContain("Hello from your iterate project worker");
   },
 );

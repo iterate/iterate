@@ -198,17 +198,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       description:
         "Creates a capability-host processor on this stream. The birth certificate records the scope's `fallback`: the itx expression a capability miss follows (usually straight to the project root host), or null at the root.",
       payloadSchema: capabilityHostBirthCertificateSchema(),
-      examples: [
-        {
-          description: "The project root host is born with no fallback — resolution ends here.",
-          payload: { config: {}, fallback: null },
-        },
-        {
-          description:
-            'An agent scope host is born falling back directly to the project root: a miss at this scope re-resolves at itx.capabilityHosts.get("/").',
-          payload: { config: {}, fallback: ["capabilityHosts", ["get", "/"]] },
-        },
-      ],
     },
     "events.iterate.com/capability-host/capability-provided": {
       description: "A capability was mounted at a path.",
@@ -292,32 +281,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         .meta({
           description: "The mount record — everything durable about the capability.",
         }) satisfies z.ZodType<CapabilityProvidedPayload, unknown>,
-      examples: [
-        {
-          description:
-            "A live capability object mounted at tools.weather; it lives only as long as the providing session.",
-          payload: {
-            instructions: "Call tools.weather.forecast({ city }) for a 3-day forecast.",
-            path: ["tools", "weather"],
-            type: "live",
-          },
-        },
-        {
-          description:
-            "An OpenAPI connection persisted as an itx expression and mounted at pets; each use re-evaluates the expression.",
-          payload: {
-            expression: [
-              "openapi",
-              ["connect", { specUrl: "https://petstore.example.com/openapi.json" }],
-            ],
-            instructions: "The pet store API. List pets with pets.listPets().",
-            path: ["pets"],
-            type: "itx-expression",
-            types:
-              "export type Capability = { listPets(): Promise<{ id: number; name: string }[]> };",
-          },
-        },
-      ],
     },
     "events.iterate.com/capability-host/capability-revoked": {
       description: "A dynamic capability was removed.",
@@ -337,13 +300,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               "newer mount.",
           }),
       }) satisfies z.ZodType<RevokeCapabilityInput, unknown>,
-      examples: [
-        {
-          description:
-            "The current mount at pets is removed; pass providedAtOffset to revoke one exact mount instead.",
-          payload: { path: ["pets"] },
-        },
-      ],
     },
     "events.iterate.com/capability-host/script-run-requested": {
       description:
@@ -366,16 +322,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               "instead of running.",
           }),
       }),
-      examples: [
-        {
-          description: "An agent codemode turn asks the scope to run a script.",
-          payload: {
-            code: 'async (itx) => {\n  await itx.chat.sendMessage("Checking your email now...");\n}',
-            executionId: "d0f7f2a4-9c1b-4e0e-8f3a-2b7c6d5e4a31",
-            expiresAt: 1783012500000,
-          },
-        },
-      ],
     },
     "events.iterate.com/capability-host/script-run-started": {
       description:
@@ -383,12 +329,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
       payloadSchema: z.looseObject({
         executionId: z.string().meta({ description: "The obligation this attempt belongs to." }),
       }),
-      examples: [
-        {
-          description: "The scope began executing the requested script.",
-          payload: { executionId: "d0f7f2a4-9c1b-4e0e-8f3a-2b7c6d5e4a31" },
-        },
-      ],
     },
     "events.iterate.com/capability-host/script-run-settled": {
       description:
@@ -397,29 +337,6 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         executionId: z.string().meta({ description: "The obligation this settlement closes." }),
         settlement: ScriptExecutionSettlement,
       }),
-      examples: [
-        {
-          description: "The script finished and returned a value.",
-          payload: {
-            executionId: "d0f7f2a4-9c1b-4e0e-8f3a-2b7c6d5e4a31",
-            settlement: { status: "succeeded", result: { unreadCount: 3 } },
-          },
-        },
-        {
-          description: "The script threw; the error message is recorded in the settlement.",
-          payload: {
-            executionId: "7c9e6679-7425-40de-944b-e07fc1f90ae7",
-            settlement: {
-              status: "failed",
-              error: "TypeError: itx.integrations.gmail.get(...).listMessages is not a function",
-              failureKind: "runtime",
-              phase: "execution",
-              executionMayHaveOccurred: true,
-              cancellation: "external-work-may-continue",
-            },
-          },
-        },
-      ],
     },
   },
   consumes: [

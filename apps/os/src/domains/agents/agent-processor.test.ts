@@ -849,7 +849,7 @@ describe("AgentProcessor script execution", () => {
         },
       },
     ]);
-    const executionId = (scriptRequests[0]!.payload as { executionId: string }).executionId;
+    const executionId = scriptRequests[0]!.payload.executionId;
     expect(h.state().activeScriptExecutionIds).toEqual([executionId]);
 
     // The capability host settles (played by the test); the rendered result is
@@ -942,11 +942,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => { await itx.chat.sendMessage('done'); }\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     const itemsBefore = h.state().contextItems.length;
     await h.play(
@@ -993,11 +990,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     const bigText = "x".repeat(500);
     await h.play([
@@ -1029,11 +1023,8 @@ describe("AgentProcessor script execution", () => {
     await h.play(["advanceTime", 60_000], () =>
       h.llm.respond("```ts\nasync (itx) => itx.small()\n```"),
     );
-    const secondExecution = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[1]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const secondExecution = h.events("events.iterate.com/capability-host/script-run-requested")[1]!
+      .payload.executionId;
     await h.play([
       "append",
       {
@@ -1066,11 +1057,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
     await h.play([
       "append",
       {
@@ -1092,11 +1080,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.email.read()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     await h.play(
       [
@@ -1140,11 +1125,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.note()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     await h.play([
       "append",
@@ -1186,11 +1168,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     const result = { items: "x".repeat(500) };
     await h.play([
@@ -1243,7 +1222,7 @@ describe("AgentProcessor script execution", () => {
 
     const requests = h.events("events.iterate.com/capability-host/script-run-requested");
     expect(requests).toHaveLength(1);
-    expect((requests[0]!.payload as { code: string }).code).toBe(script);
+    expect(requests[0]!.payload.code).toBe(script);
   });
 
   it("rejects a mixed-language multi-block response without executing the TypeScript block", async () => {
@@ -1307,11 +1286,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.email.unreadCount()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
     await h.play(
       [
         "append",
@@ -1440,7 +1416,7 @@ describe("AgentProcessor stream facts", () => {
     expect(h.llm.calls).toHaveLength(1);
     const requested = h.events(REQUESTED)[0]!;
     const trigger = h.events(CONTEXT_ADDED)[1]!; // the user message
-    expect((requested.payload as { expiresAt: number }).expiresAt).toBe(
+    expect(requested.payload.expiresAt).toBe(
       Date.parse(trigger.createdAt) + h.state().config.llmRequestExpiryMs,
     );
   });
@@ -1669,7 +1645,7 @@ describe("AgentProcessor stream facts", () => {
       ],
       ["advanceTime", 10_000],
     );
-    expect((h.events(REQUESTED)[1]!.payload as { model: string }).model).toBe("better-model");
+    expect(h.events(REQUESTED)[1]!.payload.model).toBe("better-model");
     expect(h.llm.calls[1]!.model).toBe("better-model");
   });
 
@@ -2176,7 +2152,7 @@ describe("AgentProcessor compaction", () => {
 
     const compactionRows = h
       .events(CONTEXT_ADDED)
-      .filter((row) => (row.payload as { compaction?: unknown }).compaction !== undefined);
+      .filter((row) => row.payload.compaction !== undefined);
     expect(compactionRows).toHaveLength(2);
     expect(compactionRows[1]).toMatchObject({
       payload: { compaction: { replacesHistoryThrough: secondRequestOffset } },
@@ -2269,9 +2245,7 @@ describe("AgentProcessor compaction", () => {
       () => h.llm.respond("Hi!"), // the vendor reported no usage
     );
     expect(h.events("events.iterate.com/agent/token-usage-reported")).toHaveLength(0);
-    expect(
-      (h.events(SETTLED)[0]!.payload as { result: Record<string, unknown> }).result,
-    ).not.toHaveProperty("usage");
+    expect(h.events(SETTLED)[0]!.payload.result).not.toHaveProperty("usage");
 
     // Failed attempts never report either.
     await h.play(["append", userMessage("again")], ["advanceTime", 10_000], () =>

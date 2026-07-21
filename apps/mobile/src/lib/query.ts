@@ -1,5 +1,5 @@
 import { focusManager, QueryClient } from "@tanstack/react-query";
-import { reportTransportSuspicion } from "iterate/react";
+import { reportTransportSuspicion } from "iterate/sdk/itx/react";
 import { AppState, Platform } from "react-native";
 
 if (Platform.OS !== "web") {
@@ -12,7 +12,7 @@ if (Platform.OS !== "web") {
   });
 }
 
-// Module-level client shared by screens and iterate/react subscription sinks.
+// Module-level client shared by screens and iterate/sdk/itx/react subscription sinks.
 // _layout.tsx provides this exact instance.
 export const queryClient = new QueryClient({
   defaultOptions: {

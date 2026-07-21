@@ -1,6 +1,8 @@
 import { request as httpRequest } from "node:http";
 import { expect, test } from "vitest";
 import WebSocket from "ws";
+import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StatefulDynamicWorkerRef } from "iterate/sdk";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 
 /** The Response surface these tests read — what both lanes of fetchApp
@@ -26,7 +28,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
   expect(pageResponse).toMatchObject({ status: 200 });
   const homepage = await pageResponse.text();
-  expect(homepage).toContain("Hello from your Iterate project worker");
+  expect(homepage).toContain("Hello from your iterate project worker");
   // The homepage links to each seeded app on its own host: the current host
   // prefixed with "<app>--".
   const requestHost = new URL(buildUrl({ path: "/" })).host;
@@ -52,6 +54,50 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   });
   using project = await itx.projects.get(slug).create({});
   const { projectId } = await project.__describe();
+
+  // The app owns its birth invariant even when called directly, before the
+  // userspace root route has had an opportunity to initialize the stream.
+  const guestbookAppRef = {
+    className: "GuestbookApp",
+    durableWorkerKey: "app-guestbook-stream",
+    path: "/",
+    source: {
+      createApp: {
+        client: "apps/guestbook/client.tsx",
+        files: { repoPath: "/repos/config", type: "repo" },
+        server: "apps/guestbook/server.tsx",
+      },
+    },
+    type: "stateful",
+  } satisfies StatefulDynamicWorkerRef;
+  using directGuestbook = project.workers.get(guestbookAppRef) as unknown as {
+    processor: {
+      wakeStreamSubscriber(
+        request: StreamSubscriberWakeRequest,
+      ): Promise<StreamSubscriberWakeResponse>;
+    };
+    sign(name: string, message: string): Promise<void>;
+  } & Disposable;
+  await expect(
+    directGuestbook.sign("Direct caller", "Born before routing"),
+  ).resolves.toBeUndefined();
+  using guestbookStream = project.streams.get("/guestbook");
+  expect(
+    (await guestbookStream.getEvents())
+      .map(({ type }) => type)
+      .filter((type) => type.startsWith("events.iterate.com/guestbook/")),
+  ).toEqual(["events.iterate.com/guestbook/created", "events.iterate.com/guestbook/entry-signed"]);
+  // The wake expression uses workers.get(ref)'s default member replay. Its
+  // intermediate `processor` property must therefore survive Workers RPC as
+  // a real RpcTarget; reaching the registry's coordinate fence proves that
+  // exact lane without opening a live delivery sink in the test.
+  await expect(
+    directGuestbook.processor.wakeStreamSubscriber({
+      processorSlug: "guestbook",
+      stream: { path: "/wrong-stream", projectId, streamMaxOffset: 2 },
+      subscriptionKey: "app-guestbook#guestbook",
+    }),
+  ).rejects.toThrow("wakeStreamSubscriber coordinate mismatch");
 
   const fetchApp = (
     appHostPrefix: string,
@@ -118,10 +164,9 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   const read = await fetchApp(`counter--${slug}`);
   expect(await read.text()).toContain('count: <span id="n">2</span>');
 
-  // createApp keeps the server in transform-only mode, compiles the browser
-  // entry at its unchanged repo path, and lets worker-bundler's asset handler
-  // serve the result. URL imports remain external instead of copying React
-  // into the generated asset.
+  // createApp compiles the browser entry at its unchanged repo path, resolves
+  // ordinary package.json dependencies (including iterate/sdk/capnweb/react),
+  // and lets worker-bundler's asset handler serve the result.
   const guestbook = await fetchAppReady(`guestbook--${slug}`);
   expect(guestbook).toMatchObject({ status: 200 });
   const guestbookHtml = await guestbook.text();
@@ -136,8 +181,8 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(guestbookClient).toMatchObject({ status: 200 });
   expect(guestbookClient.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
   const guestbookClientSource = await guestbookClient.text();
-  expect(guestbookClientSource).toContain("https://esm.sh/react@19.2.4");
-  expect(guestbookClientSource).toContain("https://esm.sh/react-dom@19.2.4/client");
+  expect(guestbookClientSource).not.toContain("esm.sh");
+  expect(guestbookClientSource).toContain("useLiveState needs <CapnWebProvider>");
 
   // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.ts" });

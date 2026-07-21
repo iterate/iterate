@@ -146,13 +146,6 @@ export const SchedulerProcessorContract = defineProcessorContract({
         "appends it (idempotency-keyed per project + path) and returns only after the " +
         "processor has reduced it.",
       payloadSchema: schedulerBirthCertificateSchema(),
-      examples: [
-        {
-          description:
-            'itx.schedulers.get("/scheduler/primary").create() births the default project Scheduler.',
-          payload: { config: {} },
-        },
-      ],
     },
     "events.iterate.com/scheduler/schedule-set": {
       description:
@@ -174,33 +167,6 @@ export const SchedulerProcessorContract = defineProcessorContract({
           }),
         recurrence: schedulerRecurrenceSchema(),
       }),
-      examples: [
-        {
-          description: "A weekday 9am London report, re-set idempotently by a declarative client.",
-          payload: {
-            key: "daily-report",
-            recurrence: { cron: "0 9 * * 1-5", timezone: "Europe/London" },
-            action: {
-              kind: "itx-script",
-              script:
-                'async (itx, schedule, trigger) => { await itx.agents.get("/agents/reporter").tell(`Compile the daily report (run ${trigger.runCount})`); }',
-            },
-            metadata: { owner: "ops" },
-          },
-        },
-        {
-          description:
-            "A one-shot at a fixed instant ({ in: seconds } API sugar lowers to { at } before anything is appended, so the log has one spelling).",
-          payload: {
-            key: "renewal-reminder",
-            recurrence: { at: "2026-08-01T09:00:00Z" },
-            action: {
-              kind: "itx-script",
-              script: 'async (itx) => { await itx.friction.report("Domain renewal is due"); }',
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/scheduler/schedule-cancelled": {
       description:
@@ -209,12 +175,6 @@ export const SchedulerProcessorContract = defineProcessorContract({
       payloadSchema: z.looseObject({
         key: z.string().trim().min(1).meta({ description: "The key to remove." }),
       }),
-      examples: [
-        {
-          description: 'itx.scheduler.cancel("daily-report") removes the Schedule.',
-          payload: { key: "daily-report" },
-        },
-      ],
     },
     "events.iterate.com/scheduler/trigger-requested": {
       description:
@@ -249,19 +209,6 @@ export const SchedulerProcessorContract = defineProcessorContract({
           description: "When this occurrence was due. Equals requestedAt for manual triggers.",
         }),
       }),
-      examples: [
-        {
-          description:
-            "The 9am occurrence of daily-report, requested by the alarm shortly after it came due.",
-          payload: {
-            executionId: "3e6f5f9b-4a67-4b8e-9d2e-6f0a1c2b3d4e",
-            key: "daily-report",
-            requestedAt: "2026-07-20T09:00:01.800Z",
-            runCount: 12,
-            scheduledFor: "2026-07-20T09:00:00.000Z",
-          },
-        },
-      ],
     },
     "events.iterate.com/scheduler/trigger-completed": {
       description:
@@ -292,27 +239,6 @@ export const SchedulerProcessorContract = defineProcessorContract({
             "The Action's JSON-detached return value, when it succeeded and returned one.",
         }),
       }),
-      examples: [
-        {
-          description: "The report script succeeded and returned a value.",
-          payload: {
-            definedAtOffset: 2,
-            executionId: "3e6f5f9b-4a67-4b8e-9d2e-6f0a1c2b3d4e",
-            key: "daily-report",
-            outcome: "succeeded",
-            result: { emailed: true },
-          },
-        },
-        {
-          description:
-            "The Schedule was cancelled between request and execution — completed as skipped without running any code.",
-          payload: {
-            executionId: "9a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
-            key: "daily-report",
-            outcome: "skipped",
-          },
-        },
-      ],
     },
   },
   consumes: [

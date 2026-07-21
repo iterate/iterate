@@ -1,5 +1,5 @@
 import { newWebSocketRpcSession } from "capnweb";
-import { createLiveStateStore } from "iterate/live-state";
+import { createLiveStateStore } from "iterate/sdk/capnweb";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TodoListApi, TodoListState } from "../state.ts";
 
