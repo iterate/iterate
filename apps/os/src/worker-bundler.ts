@@ -23,6 +23,7 @@ import type {
   WorkerBundlerCreateAppOptions,
   WorkerBundlerCreateWorkerOptions,
 } from "./domains/workers/schemas.ts";
+import { withEsmShIteratePackage } from "./esm-sh-iterate-plugin.ts";
 
 type WorkerBundlerCreateWorkerResult = {
   mainModule: string;
@@ -61,7 +62,7 @@ export default class WorkerBundlerEntrypoint extends WorkerEntrypoint {
     },
   ): Promise<WorkerBundlerBuildResult<WorkerBundlerCreateAppResult>> {
     return await captureBuildResult(async () =>
-      normalizeAppBuildResult(await workerBundlerCreateApp(options)),
+      normalizeAppBuildResult(await workerBundlerCreateApp(withEsmShIteratePackage(options))),
     );
   }
 

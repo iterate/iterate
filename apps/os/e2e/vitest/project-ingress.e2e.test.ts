@@ -118,10 +118,9 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   const read = await fetchApp(`counter--${slug}`);
   expect(await read.text()).toContain('count: <span id="n">2</span>');
 
-  // createApp keeps the server in transform-only mode, compiles the browser
-  // entry at its unchanged repo path, and lets worker-bundler's asset handler
-  // serve the result. URL imports remain external instead of copying React
-  // into the generated asset.
+  // createApp bundles both graphs, keeps the browser entry at its unchanged
+  // repo path, and lets worker-bundler's asset handler serve the result. React
+  // is present in the generated asset rather than left as a browser URL import.
   const guestbook = await fetchAppReady(`guestbook--${slug}`);
   expect(guestbook).toMatchObject({ status: 200 });
   const guestbookHtml = await guestbook.text();
@@ -136,8 +135,57 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(guestbookClient).toMatchObject({ status: 200 });
   expect(guestbookClient.headers.get("content-type")).toBe("application/javascript; charset=utf-8");
   const guestbookClientSource = await guestbookClient.text();
-  expect(guestbookClientSource).toContain("https://esm.sh/react@19.2.4");
-  expect(guestbookClientSource).toContain("https://esm.sh/react-dom@19.2.4/client");
+  expect(guestbookClientSource).toContain("createRoot");
+  expect(guestbookClientSource).not.toContain("https://esm.sh");
+  expect(guestbookClientSource).not.toMatch(/from\s*["'](?:react|react-dom)/);
+
+  // Prove the preview's exact pkg.pr.new Iterate build works on BOTH sides of
+  // createApp. The server executes a bundled live-state import; the client
+  // asset contains the same package's code without retaining an esm.sh import.
+  await project.repo.commitFiles({
+    changes: [
+      {
+        path: "apps/guestbook/client.tsx",
+        content: `
+          import { diff } from "iterate/live-state";
+
+          document.documentElement.dataset.iterateBundleProof = JSON.stringify(
+            diff({ status: "before" }, { status: "after" }),
+          );
+        `,
+      },
+      {
+        path: "apps/guestbook/server.tsx",
+        content: `
+          import { DurableObject } from "cloudflare:workers";
+          import { diff } from "iterate/live-state";
+
+          export class GuestbookApp extends DurableObject {
+            fetch() {
+              return Response.json(diff({ status: "before" }, { status: "after" }), {
+                headers: { "x-iterate-esm-proof": "server-bundled" },
+              });
+            }
+          }
+        `,
+      },
+    ],
+    message: "Prove Iterate bundles in both app graphs",
+  });
+  const iterateServerProof = await fetchAppReady(`guestbook--${slug}`);
+  expect(iterateServerProof).toMatchObject({ status: 200 });
+  expect(iterateServerProof.headers.get("x-iterate-esm-proof")).toBe("server-bundled");
+  expect(await iterateServerProof.json()).toEqual({ fields: { status: { set: "after" } } });
+
+  const iterateClientProof = await fetchApp(`guestbook--${slug}`, {
+    path: "/apps/guestbook/client.js",
+  });
+  const iterateClientSource = await iterateClientProof.text();
+  expect(iterateClientProof).toMatchObject({ status: 200 });
+  expect(iterateClientSource).toContain("iterateBundleProof");
+  expect(iterateClientSource).not.toMatch(
+    /(?:from\s*|import\s*\()\s*["'](?:https:\/\/esm\.sh|\/pr\/iterate\/iterate)/,
+  );
 
   // The seeded repo is readable through the itx repo capability.
   const workerSource = await project.repo.readFile({ path: "worker.ts" });

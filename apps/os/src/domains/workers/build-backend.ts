@@ -16,6 +16,10 @@ import type { DynamicWorkerSource, WorkerBundlerAssetConfig } from "./schemas.ts
  * build key so a bundler upgrade cannot reuse artifacts made by older code. */
 export const WORKER_BUNDLER_VERSION = "0.2.1";
 
+/** Bump whenever our worker-bundler adapter changes emitted artifacts without
+ * changing the upstream package pin or artifact schema. */
+export const WORKER_BUNDLER_ADAPTER_VERSION = 1;
+
 /** Dynamic-worker compatibility moves independently from the OS worker. */
 export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];

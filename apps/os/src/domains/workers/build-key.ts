@@ -1,6 +1,10 @@
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
-import { WORKER_BUNDLER_VERSION, workerVirtualModules } from "./build-backend.ts";
+import {
+  WORKER_BUNDLER_ADAPTER_VERSION,
+  WORKER_BUNDLER_VERSION,
+  workerVirtualModules,
+} from "./build-backend.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
 /**
@@ -54,9 +58,9 @@ function virtualModulesDigest(overrides?: Record<string, string>): Promise<strin
 
 /**
  * Deterministic identity of one build: normalized source snapshot, build
- * options, the bundler pin, compatibility settings, and the artifact schema
- * version. Same input, same key — concurrent callers converge on one artifact
- * and a repeated request is a cache hit.
+ * options, the bundler pin, our adapter version, compatibility settings, and
+ * the artifact schema version. Same input, same key — concurrent callers
+ * converge on one artifact and a repeated request is a cache hit.
  *
  * Identical build requests share this key across projects. If package ranges
  * are not locked, the first successful worker-bundler resolution becomes the
@@ -80,6 +84,7 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
     compatibilityDate: input.compatibilityDate,
     compatibilityFlags: input.compatibilityFlags,
     files: normalizeResolvedSource(input.files),
+    bundlerAdapterVersion: WORKER_BUNDLER_ADAPTER_VERSION,
     bundlerVersion: WORKER_BUNDLER_VERSION,
     type: "worker-build-key",
   });

@@ -65,11 +65,11 @@ worker-bundler unchanged.
 
 `apps/todo` and `apps/guestbook` show the intentionally smallest browser-app
 shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per
-app. The client entry is served separately and imports React directly from
-`esm.sh`; those browser dependencies are not copied into the Worker bundle.
-This is an example, not a platform file-layout rule. The apps deliberately
-avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform
-can inject the small Iterate status overlay in the corner.
+app. The same worker-bundler call bundles and tree-shakes the server and client
+graphs; React is an ordinary root dependency and no URL import is left for the
+browser. This is an example, not a platform file-layout rule. The apps
+deliberately avoid Vite and framework adapters. Their HTML leaves CSP unset so
+the platform can inject the small Iterate status overlay in the corner.
 
 `InternalApp` is the canonical authenticated userspace-app shape: partial-fetch
 HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an

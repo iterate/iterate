@@ -34,20 +34,21 @@ test("template ships only the two deliberately basic app pairs", () => {
     dependencies?: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  // The seed needs no runtime packages because its root Worker uses platform
-  // virtual modules. This is a template choice, not a build restriction.
-  expect(templatePackageJson.dependencies).toBeUndefined();
+  expect(templatePackageJson.dependencies).toEqual({
+    react: "19.2.4",
+    "react-dom": "19.2.4",
+  });
   expect(templatePackageJson.devDependencies).toMatchObject({
     "@iterate-com/capnweb": expect.any(String),
   });
 });
 
-test("basic apps use one server entry, one client entry, and external browser imports", () => {
+test("basic apps use one server entry, one bundled client entry, and ordinary imports", () => {
   for (const app of ["guestbook", "todo"]) {
     expect(templateFile(`apps/${app}/server.tsx`)).toContain('from "cloudflare:workers"');
     const client = templateFile(`apps/${app}/client.tsx`);
-    expect(client).toContain('from "https://esm.sh/react@19.2.4"');
-    expect(client).toContain('from "https://esm.sh/react-dom@19.2.4/client"');
+    expect(client).toContain('from "react"');
+    expect(client).toContain('from "react-dom/client"');
     expect(client).toContain(`export function ${app === "todo" ? "Todo" : "Guestbook"}Client()`);
     expect(client).not.toContain("react/jsx-runtime");
     // Platform overlay injection owns the final response and skips CSP pages.
@@ -58,6 +59,7 @@ test("basic apps use one server entry, one client entry, and external browser im
   expect(worker.match(/createApp:/g)).toHaveLength(2);
   expect(worker.match(/client: "apps\/(?:todo|guestbook)\/client\.tsx"/g)).toHaveLength(2);
   expect(worker.match(/server: "apps\/(?:todo|guestbook)\/server\.tsx"/g)).toHaveLength(2);
+  expect(worker.match(/bundle: true/g)).toHaveLength(2);
   expect(worker).not.toContain("rootDir");
   expect(worker).not.toContain("clientEntryPoint");
   expect(worker).not.toContain("pipeline:");

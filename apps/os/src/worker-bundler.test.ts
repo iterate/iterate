@@ -132,6 +132,44 @@ describe("worker-bundler RPC boundary", () => {
     expect(createWorker).not.toHaveBeenCalled();
   });
 
+  it("adds the internal esm.sh resolver for a pkg.pr.new Iterate app dependency", async () => {
+    createApp.mockResolvedValue({
+      assetManifest: new Map(),
+      assets: {},
+      mainModule: "bundle.js",
+      modules: { "bundle.js": "server" },
+    });
+    const packageSpec =
+      "https://pkg.pr.new/iterate/iterate/iterate@0123456789abcdef0123456789abcdef01234567";
+    const packageJson = JSON.stringify({
+      dependencies: { iterate: packageSpec, react: "19.2.4" },
+    });
+
+    await bundler.createApp({
+      bundle: true,
+      client: "client.tsx",
+      files: {
+        "client.tsx": 'import { diff } from "iterate/live-state";',
+        "package.json": packageJson,
+        "server.ts": "export default {};",
+      },
+      server: "server.ts",
+    });
+
+    expect(createApp).toHaveBeenCalledOnce();
+    const options = createApp.mock.calls[0]![0] as {
+      __dangerouslyUseEsBuildPluginsDoNotUseOrYouWillBeFired: unknown[];
+      files: Record<string, string>;
+    };
+    expect(JSON.parse(options.files["package.json"]!)).toEqual({
+      dependencies: { react: "19.2.4" },
+    });
+    expect(options.__dangerouslyUseEsBuildPluginsDoNotUseOrYouWillBeFired).toEqual([
+      expect.objectContaining({ name: "esm-sh-iterate", setup: expect.any(Function) }),
+    ]);
+    expect(packageJson).toContain(packageSpec);
+  });
+
   it("preserves non-fatal worker-bundler warnings and JSON/text modules", async () => {
     createWorker.mockResolvedValue({
       mainModule: "src/index.js",

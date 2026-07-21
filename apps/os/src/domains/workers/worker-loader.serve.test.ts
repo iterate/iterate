@@ -73,6 +73,7 @@ const h = vi.hoisted(() => {
 
 vi.mock("../../env.ts", () => ({ itxEnv: h.itxEnv }));
 vi.mock("./build-backend.ts", () => ({
+  WORKER_BUNDLER_ADAPTER_VERSION: 1,
   WORKER_BUNDLER_VERSION: "0.2.1",
   WORKER_COMPATIBILITY_DATE: "2026-05-01",
   WORKER_COMPATIBILITY_FLAGS: ["nodejs_compat"],

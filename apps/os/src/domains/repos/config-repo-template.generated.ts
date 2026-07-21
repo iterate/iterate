@@ -75,11 +75,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "`apps/todo` and `apps/guestbook` show the intentionally smallest browser-app\n" +
       "shape: one `server.tsx` Durable Object and one `client.tsx` browser entry per\n" +
-      "app. The client entry is served separately and imports React directly from\n" +
-      "`esm.sh`; those browser dependencies are not copied into the Worker bundle.\n" +
-      "This is an example, not a platform file-layout rule. The apps deliberately\n" +
-      "avoid Vite and framework adapters. Their HTML leaves CSP unset so the platform\n" +
-      "can inject the small Iterate status overlay in the corner.\n" +
+      "app. The same worker-bundler call bundles and tree-shakes the server and client\n" +
+      "graphs; React is an ordinary root dependency and no URL import is left for the\n" +
+      "browser. This is an example, not a platform file-layout rule. The apps\n" +
+      "deliberately avoid Vite and framework adapters. Their HTML leaves CSP unset so\n" +
+      "the platform can inject the small Iterate status overlay in the corner.\n" +
       "\n" +
       "`InternalApp` is the canonical authenticated userspace-app shape: partial-fetch\n" +
       "HTTP auth plus an explicitly authenticated Cap'n Web `/api` that returns an\n" +
@@ -145,15 +145,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "use, so committing a change here changes the running worker on its next use.\n" +
       "The platform passes this repo's files and build options directly to\n" +
       "`@cloudflare/worker-bundler`; when `package.json` declares dependencies, that\n" +
-      "library attempts to install and bundle them.\n" +
+      "library attempts to install and bundle them. The pinned pkg.pr.new `iterate`\n" +
+      "entry is the one exception: bundled apps resolve its unbundled esm.sh graph\n" +
+      "inside the same client and server esbuild passes, preserving final tree\n" +
+      "shaking without leaving URL imports at runtime.\n" +
       "\n" +
       "`apps/todo` and `apps/guestbook` are deliberately basic browser examples.\n" +
       "Each contains only `server.tsx` and `client.tsx`: the server exports a\n" +
-      "Durable Object and the client becomes a separately served browser module. JSX is\n" +
-      "compiled with the classic transform, so the explicit React imports remain\n" +
-      "direct `esm.sh` URLs instead of becoming npm dependencies. There is no\n" +
-      "app-local install, Vite config, router generator, or framework adapter. Iterate\n" +
-      "injects its small status overlay into the HTML response in production.\n" +
+      "Durable Object and the client becomes a separately served browser bundle. The\n" +
+      "same worker-bundler call bundles and tree-shakes the server and client graphs;\n" +
+      "React is an ordinary root dependency and no URL imports reach the browser.\n" +
+      "There is no app-local install, Vite config, router generator, or framework\n" +
+      "adapter. Iterate injects its small status overlay into the HTML response in\n" +
+      "production.\n" +
       "Their two-file layout is only an example: app refs may choose arbitrary server\n" +
       "and client entry points from the complete `files` map passed to the bundler.\n" +
       "\n" +
@@ -210,13 +214,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/guestbook/client.tsx",
     content:
-      "import React, {\n" +
-      "  type FormEvent,\n" +
-      "  useCallback,\n" +
-      "  useEffect,\n" +
-      "  useState,\n" +
-      "} from \"https://esm.sh/react@19.2.4\";\n" +
-      "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
+      "import React, { type FormEvent, useCallback, useEffect, useState } from \"react\";\n" +
+      "import { createRoot } from \"react-dom/client\";\n" +
       "\n" +
       "type Entry = {\n" +
       "  id: string;\n" +
@@ -414,13 +413,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/todo/client.tsx",
     content:
-      "import React, {\n" +
-      "  type FormEvent,\n" +
-      "  useCallback,\n" +
-      "  useEffect,\n" +
-      "  useState,\n" +
-      "} from \"https://esm.sh/react@19.2.4\";\n" +
-      "import { createRoot } from \"https://esm.sh/react-dom@19.2.4/client\";\n" +
+      "import React, { type FormEvent, useCallback, useEffect, useState } from \"react\";\n" +
+      "import { createRoot } from \"react-dom/client\";\n" +
       "\n" +
       "type Todo = {\n" +
       "  createdAt: string;\n" +
@@ -662,7 +656,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"description\": \"Iterate project worker and bundled browser apps.\",\n" +
+      "  \"dependencies\": {\n" +
+      "    \"react\": \"19.2.4\",\n" +
+      "    \"react-dom\": \"19.2.4\"\n" +
+      "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
@@ -714,7 +712,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  path: \"/\",\n" +
       "  source: {\n" +
       "    createApp: {\n" +
-      "      bundle: false,\n" +
+      "      bundle: true,\n" +
       "      client: \"apps/todo/client.tsx\",\n" +
       "      files: repoFiles,\n" +
       "      server: \"apps/todo/server.tsx\",\n" +
@@ -728,7 +726,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  path: \"/\",\n" +
       "  source: {\n" +
       "    createApp: {\n" +
-      "      bundle: false,\n" +
+      "      bundle: true,\n" +
       "      client: \"apps/guestbook/client.tsx\",\n" +
       "      files: repoFiles,\n" +
       "      server: \"apps/guestbook/server.tsx\",\n" +

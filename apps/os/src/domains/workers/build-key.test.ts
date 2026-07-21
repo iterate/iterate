@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { workerBuildKey, type WorkerBuildInput } from "./build-key.ts";
-import { WORKER_BUNDLER_VERSION } from "./build-backend.ts";
+import { WORKER_BUNDLER_ADAPTER_VERSION, WORKER_BUNDLER_VERSION } from "./build-backend.ts";
 
 const buildSource = (entryPoint: string): WorkerBuildInput["source"] => ({
   createWorker: {
@@ -104,10 +104,11 @@ describe("workerBuildKey", () => {
     );
   });
 
-  it("pins the build-key version to the worker-bundler dependency", () => {
+  it("pins both compiler versions used by the build key", () => {
     const packageJson = JSON.parse(
       readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
     ) as { dependencies: Record<string, string> };
     expect(packageJson.dependencies["@cloudflare/worker-bundler"]).toBe(WORKER_BUNDLER_VERSION);
+    expect(WORKER_BUNDLER_ADAPTER_VERSION).toBe(1);
   });
 });

@@ -3,7 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.",
+  "description": "Iterate project worker and bundled browser apps.",
+  "dependencies": {
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
     "@iterate-com/capnweb": "0.10.0",

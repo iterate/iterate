@@ -300,6 +300,13 @@ masked by include/exclude globs), and an isolated workerd sidecar runs
 repo-aware value and otherwise passes the serializable options and unchanged
 paths to the named library function. App layouts and entry points are not
 fixed, and worker-bundler may install root `package.json` dependencies.
+For bundled apps, the sidecar recognizes the exact
+`https://pkg.pr.new/iterate/iterate/iterate@<ref>` manifest entry, removes
+only that unsupported direct URL from worker-bundler's npm-install input, and
+resolves `iterate/*` through esm.sh's unbundled graph. The same esbuild passes
+still produce and tree-shake the client asset and server Worker; URL imports
+never become browser or Worker Loader dependencies. Ordinary npm dependencies
+continue through worker-bundler's installer.
 Project build commands do not run. One JSON artifact record is
 cached in KV under a deterministic key shared by identical inputs. Builds pass
 inert source text by value and leave no events in the journal; errors returned

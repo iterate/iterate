@@ -1,10 +1,5 @@
-import React, {
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useState,
-} from "https://esm.sh/react@19.2.4";
-import { createRoot } from "https://esm.sh/react-dom@19.2.4/client";
+import React, { type FormEvent, useCallback, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
 
 type Entry = {
   id: string;

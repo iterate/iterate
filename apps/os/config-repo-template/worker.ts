@@ -19,7 +19,7 @@ const todoAppRef = {
   path: "/",
   source: {
     createApp: {
-      bundle: false,
+      bundle: true,
       client: "apps/todo/client.tsx",
       files: repoFiles,
       server: "apps/todo/server.tsx",
@@ -33,7 +33,7 @@ const guestbookAppRef = {
   path: "/",
   source: {
     createApp: {
-      bundle: false,
+      bundle: true,
       client: "apps/guestbook/client.tsx",
       files: repoFiles,
       server: "apps/guestbook/server.tsx",
