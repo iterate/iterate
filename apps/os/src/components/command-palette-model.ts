@@ -104,20 +104,42 @@ const STREAM_TREE_SHAPE = {
     node.row.path.toLowerCase().includes(query),
 };
 
+/** Streams render fully expanded by default; `collapsedPaths` holds the exceptions. */
 export function flattenStreamRows(
   forest: readonly PaletteStreamTreeNode[],
-  expandedPaths: ReadonlySet<string>,
+  collapsedPaths: ReadonlySet<string>,
   query: string,
 ): TreeRow<PaletteStreamTreeNode>[] {
+  const expandedPaths = new Set<string>();
+  const visit = (nodes: readonly PaletteStreamTreeNode[]) => {
+    for (const node of nodes) {
+      if (!collapsedPaths.has(node.row.path)) expandedPaths.add(node.row.path);
+      visit(node.children);
+    }
+  };
+  visit(forest);
   return flattenTreeRows(forest, STREAM_TREE_SHAPE, expandedPaths, query);
+}
+
+/** Leaf label for a stream path in the tree (Pierre-style: basename only). */
+export function streamTreeLabel(path: string): string {
+  if (path === "/") return "/";
+  const segments = path.split("/").filter(Boolean);
+  return segments.at(-1) ?? path;
+}
+
+export function formatEventCount(count: number): string {
+  return count === 1 ? "1 event" : `${count.toLocaleString()} events`;
 }
 
 type PaletteDialogState = {
   tab: PaletteTab;
   query: string;
   selectedValue: string;
+  /** Agents render collapsed to roots by default; these are expanded. */
   expandedAgentPaths: ReadonlySet<string>;
-  expandedStreamPaths: ReadonlySet<string>;
+  /** Streams render fully expanded by default; these are collapsed. */
+  collapsedStreamPaths: ReadonlySet<string>;
 };
 
 export function initialPaletteDialogState(): PaletteDialogState {
@@ -126,13 +148,13 @@ export function initialPaletteDialogState(): PaletteDialogState {
     query: "",
     selectedValue: "",
     expandedAgentPaths: new Set(),
-    expandedStreamPaths: new Set(),
+    collapsedStreamPaths: new Set(),
   };
 }
 
 type PaletteDialogAction =
   | { type: "closed" }
-  | { type: "opened"; tab: PaletteTab; expandedStreamPaths: ReadonlySet<string> }
+  | { type: "opened"; tab: PaletteTab }
   | { type: "query_changed"; query: string }
   | { type: "selection_changed"; selectedValue: string }
   | { type: "tab_changed"; tab: PaletteTab }
@@ -152,7 +174,7 @@ export function reducePaletteDialogState(
         query: "",
         selectedValue: "",
         expandedAgentPaths: new Set(),
-        expandedStreamPaths: action.expandedStreamPaths,
+        collapsedStreamPaths: new Set(),
       };
     case "query_changed":
       return { ...state, query: action.query, selectedValue: "" };
@@ -168,7 +190,7 @@ export function reducePaletteDialogState(
     case "stream_toggled":
       return {
         ...state,
-        expandedStreamPaths: toggledSet(state.expandedStreamPaths, action.path),
+        collapsedStreamPaths: toggledSet(state.collapsedStreamPaths, action.path),
       };
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Bot, ChevronRight, Clock3, GitBranch, Plus } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Command,
@@ -9,7 +9,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandShortcut,
 } from "@iterate-com/ui/components/command";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -19,6 +18,7 @@ import {
   buildStreamForest,
   defaultPaletteTab,
   flattenStreamRows,
+  formatEventCount,
   hasPathDescendant,
   initialPaletteDialogState,
   isPaletteResultKeyboardTarget,
@@ -26,6 +26,7 @@ import {
   paletteKeyboardAction,
   paletteKeyboardTarget,
   reducePaletteDialogState,
+  streamTreeLabel,
   type PaletteTab,
 } from "./command-palette-model.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
@@ -33,7 +34,6 @@ import { normalizePath } from "~/domains/durable-object-names.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
-import { streamPathAncestors } from "~/lib/stream-links.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import {
@@ -49,6 +49,12 @@ const CLOCK_TICK_MS = 5_000;
 const MAX_AGENT_RESULTS = 100;
 const MAX_STREAM_TREE_RESULTS = 200;
 const MAX_RECENT_RESULTS = 50;
+
+const PALETTE_TABS: { value: PaletteTab; label: string }[] = [
+  { value: "tree", label: "Tree" },
+  { value: "agents", label: "Agents" },
+  { value: "recent", label: "Recent" },
+];
 
 export function CommandPaletteDialog({
   open,
@@ -71,7 +77,7 @@ export function CommandPaletteDialog({
     undefined,
     initialPaletteDialogState,
   );
-  const { tab, query, selectedValue, expandedAgentPaths, expandedStreamPaths } = palette;
+  const { tab, query, selectedValue, expandedAgentPaths, collapsedStreamPaths } = palette;
   const enabled = open && liveIndex;
   const nowMs = useTickingNowMs(CLOCK_TICK_MS, open);
   const streamsState = useLiveState(
@@ -95,7 +101,6 @@ export function CommandPaletteDialog({
     dispatchPalette({
       type: "opened",
       tab: defaultPaletteTab(currentPath, liveIndex),
-      expandedStreamPaths: new Set(["/", ...streamPathAncestors(currentPath)]),
     });
   }, [currentPath, liveIndex, open]);
 
@@ -118,20 +123,21 @@ export function CommandPaletteDialog({
         onOpenChange={onOpenChange}
         title="Stream tree"
         description="Browse remote admin streams"
-        className="flex h-[calc(100svh-2rem)] w-[calc(100vw-1rem)] max-w-none flex-col p-3 sm:h-[66svh] sm:w-[66vw] sm:max-w-[66vw]"
+        className="flex h-[calc(100svh-2rem)] w-[calc(100vw-1rem)] max-w-none flex-col sm:h-[66svh] sm:w-[66vw] sm:max-w-[66vw]"
       >
-        <div className="mb-2">
-          <h2 className="text-sm font-semibold">Stream tree</h2>
-          <p className="truncate font-mono text-xs text-muted-foreground">{currentPath}</p>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <AdminRemoteStreamTree
-            key={`${scope}:${currentPath}:${open ? "open" : "closed"}`}
-            currentPath={currentPath}
-            onOpenPath={openStream}
-            scope={scope}
-            source={navigator.remoteTreeSource}
-          />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b px-3 py-2">
+            <p className="truncate font-mono text-xs text-muted-foreground">{currentPath}</p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <AdminRemoteStreamTree
+              key={`${scope}:${currentPath}:${open ? "open" : "closed"}`}
+              currentPath={currentPath}
+              onOpenPath={openStream}
+              scope={scope}
+              source={navigator.remoteTreeSource}
+            />
+          </div>
         </div>
       </CommandDialog>
     );
@@ -153,7 +159,7 @@ export function CommandPaletteDialog({
     const expanded =
       target.kind === "agent"
         ? expandedAgentPaths.has(target.path)
-        : expandedStreamPaths.has(target.path);
+        : !collapsedStreamPaths.has(target.path);
     const action = paletteKeyboardAction({
       target,
       key: event.key,
@@ -193,33 +199,25 @@ export function CommandPaletteDialog({
           dispatchPalette({ type: "selection_changed", selectedValue: value })
         }
         onKeyDown={handleCommandKeyDown}
-        className="min-h-0 flex-1"
+        className="flex min-h-0 flex-1 flex-col"
       >
-        <CommandInput
-          value={query}
-          onValueChange={(value) => {
-            dispatchPalette({ type: "query_changed", query: value });
-          }}
-          placeholder={tab === "agents" ? "Search agents" : "Search streams by path"}
-        />
         <Tabs
           value={tab}
           onValueChange={(value) => {
             dispatchPalette({ type: "tab_changed", tab: value as PaletteTab });
           }}
-          className="min-h-0 flex-1 overflow-hidden"
+          className="flex min-h-0 flex-1 flex-col gap-0"
         >
-          <TabsList className="mx-2 mt-1 grid w-auto grid-cols-3" aria-label="Navigation mode">
-            <TabsTrigger value="tree">
-              <GitBranch /> Tree
-            </TabsTrigger>
-            <TabsTrigger value="agents">
-              <Bot /> Agents
-            </TabsTrigger>
-            <TabsTrigger value="recent">
-              <Clock3 /> Recent
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex shrink-0 items-center justify-end border-b px-3 py-2">
+            <TabsList className="h-8" aria-label="Navigation mode">
+              {PALETTE_TABS.map((item) => (
+                <TabsTrigger key={item.value} value={item.value} className="px-2.5 text-xs">
+                  {item.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
+
           <CommandList key={tab} className="max-h-none min-h-0 flex-1">
             {tab === "agents" ? (
               <AgentResults
@@ -235,7 +233,7 @@ export function CommandPaletteDialog({
             ) : tab === "tree" ? (
               <StreamTreeResults
                 currentPath={currentPath}
-                expandedPaths={expandedStreamPaths}
+                collapsedPaths={collapsedStreamPaths}
                 loading={streamsLoading}
                 query={query}
                 streams={streams}
@@ -253,19 +251,35 @@ export function CommandPaletteDialog({
             )}
           </CommandList>
         </Tabs>
-        {tab === "tree" && normalizedCreatePath !== null ? (
-          <div className="border-t p-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start font-mono text-xs"
-              onClick={() => openStream(normalizedCreatePath)}
-            >
-              <Plus /> Open or create {normalizedCreatePath}
-            </Button>
-          </div>
-        ) : null}
+
+        <div className="shrink-0 border-t">
+          {tab === "tree" && normalizedCreatePath !== null ? (
+            <div className="border-b px-2 py-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 w-full justify-start font-mono text-xs"
+                onClick={() => openStream(normalizedCreatePath)}
+              >
+                <Plus /> Open or create {normalizedCreatePath}
+              </Button>
+            </div>
+          ) : null}
+          <CommandInput
+            value={query}
+            onValueChange={(value) => {
+              dispatchPalette({ type: "query_changed", query: value });
+            }}
+            placeholder={
+              tab === "agents"
+                ? "Search agents…"
+                : tab === "tree"
+                  ? "Search streams by path…"
+                  : "Search recent streams…"
+            }
+          />
+        </div>
       </Command>
     </CommandDialog>
   );
@@ -309,7 +323,7 @@ function AgentResults({
     );
   }
   return (
-    <CommandGroup heading={query.trim() === "" ? "Active, waiting, and recent" : "Matches"}>
+    <CommandGroup className="p-0">
       {visibleRows.map(({ node, depth, expanded }) => (
         <AgentCommandItem
           key={node.agent.path}
@@ -348,8 +362,8 @@ function AgentCommandItem({
     <CommandItem
       value={agentCommandValue(node.agent.path)}
       onSelect={() => onOpen(node.agent.path)}
-      className="gap-2"
-      style={{ marginLeft: `${Math.min(depth, 4) * 12}px` }}
+      className="items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0"
+      style={{ paddingLeft: `${12 + Math.min(depth, 6) * 16}px` }}
       aria-label={agentCommandAccessibleLabel(node, expanded)}
       aria-expanded={hasChildren ? expanded : undefined}
       aria-keyshortcuts="Shift+P"
@@ -373,7 +387,7 @@ function AgentCommandItem({
 
 function StreamTreeResults({
   currentPath,
-  expandedPaths,
+  collapsedPaths,
   loading,
   query,
   streams,
@@ -381,7 +395,7 @@ function StreamTreeResults({
   onToggleExpanded,
 }: {
   currentPath: string;
-  expandedPaths: ReadonlySet<string>;
+  collapsedPaths: ReadonlySet<string>;
   loading: boolean;
   query: string;
   streams: Record<string, StreamIndexRow>;
@@ -390,14 +404,14 @@ function StreamTreeResults({
 }) {
   const forest = useMemo(() => buildStreamForest(streams), [streams]);
   const rows = useMemo(
-    () => flattenStreamRows(forest, expandedPaths, query).slice(0, MAX_STREAM_TREE_RESULTS),
-    [expandedPaths, forest, query],
+    () => flattenStreamRows(forest, collapsedPaths, query).slice(0, MAX_STREAM_TREE_RESULTS),
+    [collapsedPaths, forest, query],
   );
   if (rows.length === 0) {
     return <CommandEmpty>{loading ? "Loading streams…" : "No matching streams."}</CommandEmpty>;
   }
   return (
-    <CommandGroup heading="Stream tree">
+    <CommandGroup className="p-0">
       {rows.map(({ node, depth, expanded }) => {
         const hasChildren = node.children.length > 0;
         return (
@@ -405,7 +419,10 @@ function StreamTreeResults({
             key={node.row.path}
             value={node.row.path}
             onSelect={() => onOpen(node.row.path)}
-            className={cn(currentPath === node.row.path && "bg-accent")}
+            className={cn(
+              "gap-1.5 border-b border-border/40 py-1.5 font-mono text-xs last:border-b-0",
+              currentPath === node.row.path && "bg-accent",
+            )}
             aria-expanded={hasChildren ? expanded : undefined}
             onClickCapture={(event) => {
               if (!hasChildren || !(event.target as Element).closest("[data-stream-disclosure]")) {
@@ -416,23 +433,30 @@ function StreamTreeResults({
               onToggleExpanded(node.row.path);
             }}
           >
-            <span style={{ width: `${Math.min(depth, 5) * 12}px` }} className="shrink-0" />
-            {hasChildren ? (
-              <span
-                data-stream-disclosure
-                className="-m-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted"
-                title={expanded ? "Collapse stream" : "Expand stream"}
-                aria-hidden
-              >
-                <ChevronRight
-                  className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-                />
-              </span>
-            ) : (
-              <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <span className="min-w-0 flex-1 truncate font-mono text-xs">{node.row.path}</span>
-            <CommandShortcut>{node.row.eventCount}</CommandShortcut>
+            <span
+              style={{ width: `${Math.min(depth, 8) * 12}px` }}
+              className="shrink-0"
+              aria-hidden
+            />
+            <span className="flex w-4 shrink-0 justify-center" aria-hidden>
+              {hasChildren ? (
+                <span
+                  data-stream-disclosure
+                  className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
+                  title={expanded ? "Collapse" : "Expand"}
+                >
+                  <ChevronRight
+                    className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+                  />
+                </span>
+              ) : null}
+            </span>
+            <span className="min-w-0 flex-1 truncate" title={node.row.path}>
+              {streamTreeLabel(node.row.path)}
+            </span>
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {formatEventCount(node.row.eventCount)}
+            </span>
           </CommandItem>
         );
       })}
@@ -470,20 +494,51 @@ function RecentStreamResults({
     return <CommandEmpty>{loading ? "Loading streams…" : "No recent streams."}</CommandEmpty>;
   }
   return (
-    <CommandGroup heading="Most recently active">
+    // overflow-visible: the group's default overflow-hidden would trap the
+    // sticky header, which must stick to the scrolling CommandList instead.
+    <CommandGroup className="overflow-visible p-0">
+      <div
+        className="sticky top-0 z-10 hidden border-b bg-popover px-3 py-1.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_5.5rem_5.5rem] sm:gap-3"
+        aria-hidden
+      >
+        <span>Path</span>
+        <span>Last event</span>
+        <span className="text-right">Active</span>
+        <span className="text-right">Events</span>
+      </div>
       {rows.map((row) => (
-        <CommandItem key={row.path} value={row.path} onSelect={() => onOpen(row.path)}>
-          <Clock3 className="text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-mono text-xs">{row.path}</span>
-            <span className="block truncate text-[10px] text-muted-foreground">{row.lastType}</span>
+        <CommandItem
+          key={row.path}
+          value={row.path}
+          onSelect={() => onOpen(row.path)}
+          className="items-start gap-0 border-b border-border/40 py-2 last:border-b-0 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_5.5rem_5.5rem] sm:items-center sm:gap-3"
+        >
+          <span className="min-w-0 flex-1 truncate font-mono text-xs sm:flex-none" title={row.path}>
+            {row.path}
           </span>
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-            {formatTimeAgo(row.lastActivityAt, nowMs)}
+          <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground sm:mt-0 sm:contents">
+            <span className="min-w-0 truncate" title={row.lastType}>
+              {shortEventType(row.lastType)}
+            </span>
+            <time
+              dateTime={row.lastActivityAt}
+              title={row.lastActivityAt}
+              className="shrink-0 tabular-nums sm:text-right"
+            >
+              {formatTimeAgo(row.lastActivityAt, nowMs)}
+            </time>
+            <span className="shrink-0 tabular-nums sm:text-right">
+              {formatEventCount(row.eventCount)}
+            </span>
           </span>
-          <CommandShortcut>{row.eventCount}</CommandShortcut>
         </CommandItem>
       ))}
     </CommandGroup>
   );
+}
+
+/** Drop the long `events.iterate.com/` prefix when present for denser columns. */
+function shortEventType(type: string): string {
+  const prefix = "events.iterate.com/";
+  return type.startsWith(prefix) ? type.slice(prefix.length) : type;
 }

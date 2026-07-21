@@ -391,9 +391,10 @@ export function AgentDetailCard({
   );
 }
 
-/** Passive, cmdk-safe agent content. CommandItem remains the single
- * interactive option; pointer hit areas are marked for the owning option to
- * interpret without nesting buttons, links, or another listbox option. */
+/** Passive, cmdk-safe agent content matching the /agents catalog row layout.
+ * CommandItem remains the single interactive option; pointer hit areas are
+ * marked for the owning option to interpret without nesting buttons, links,
+ * or another listbox option. */
 export function AgentCommandPresentation({
   expanded,
   node,
@@ -403,18 +404,19 @@ export function AgentCommandPresentation({
   node: AgentTreeNode;
   nowMs: number;
 }) {
+  const agent = node.agent;
   const displayState = agentNodeDisplayState(node);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const activity = node.agent.summary.activity;
-  const childCount = node.aggregateAgentCount - 1;
+  const activity = agent.summary.activity;
+  const descendantCount = node.aggregateAgentCount - 1;
   const hasChildren = node.children.length > 0;
   return (
     <>
-      <span className="flex size-6 shrink-0 items-center justify-center" aria-hidden>
+      <span className="flex w-4 shrink-0 justify-end pt-0.5" aria-hidden>
         {hasChildren ? (
           <span
             data-agent-disclosure
-            className="-m-1 flex size-6 cursor-pointer items-center justify-center rounded hover:bg-muted"
+            className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
             title={expanded ? "Collapse child agents" : "Expand child agents"}
           >
             <ChevronRight
@@ -422,37 +424,51 @@ export function AgentCommandPresentation({
             />
           </span>
         ) : null}
-        <StateDot state={state} className={cn(hasChildren && "-ml-1 ring-2 ring-background")} />
       </span>
+      <StateDot state={state} className="mt-1.5" />
       <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-sm font-medium">{agentTitle(node.agent)}</span>
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate text-sm font-medium">{agentTitle(agent)}</span>
+          {agent.summary.pinned ? (
+            <Star
+              className="size-3 shrink-0 self-center fill-amber-400 text-amber-500"
+              aria-hidden
+            />
+          ) : null}
+          <time
+            dateTime={node.aggregateLastWorkAt}
+            title={node.aggregateLastWorkAt}
+            className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground"
+          >
+            {formatTimeAgo(node.aggregateLastWorkAt, nowMs)}
+          </time>
         </span>
         <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="min-w-0 truncate" title={activity ?? node.agent.path}>
-            {activity ?? node.agent.path}
-          </span>
-          {node.agent.binding === undefined ? null : (
-            <span className="max-w-48 shrink-0 truncate">{bindingLabel(node.agent.binding)}</span>
+          {activity !== undefined ? (
+            <span className="min-w-0 truncate">{activity}</span>
+          ) : (
+            <span className="min-w-0 truncate font-mono text-[11px]">{agent.path}</span>
           )}
+          {descendantCount > 0 ? (
+            <span className="shrink-0">
+              · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+            {agent.binding !== undefined ? (
+              <span className="max-w-36 truncate">{bindingLabel(agent.binding)}</span>
+            ) : null}
+            <span className="shrink-0">{state.label}</span>
+          </span>
         </span>
       </span>
-      <span className="shrink-0 text-right text-[10px] text-muted-foreground">
-        <span className="block">{state.label}</span>
-        <span className="block tabular-nums">{formatTimeAgo(node.aggregateLastWorkAt, nowMs)}</span>
-      </span>
-      {childCount > 0 ? (
-        <span className="shrink-0 text-[10px] text-muted-foreground">{childCount} below</span>
-      ) : null}
       <span
         data-agent-pin
-        className="-m-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded hover:bg-muted"
-        title={node.agent.summary.pinned ? "Unpin agent (Shift+P)" : "Pin agent (Shift+P)"}
+        className="-m-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+        title={agent.summary.pinned ? "Unpin agent (Shift+P)" : "Pin agent (Shift+P)"}
         aria-hidden
       >
-        <Star
-          className={cn("size-3.5", node.agent.summary.pinned && "fill-amber-400 text-amber-500")}
-        />
+        <Star className={cn("size-3.5", agent.summary.pinned && "fill-amber-400 text-amber-500")} />
       </span>
     </>
   );
