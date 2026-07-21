@@ -49,11 +49,20 @@ describe("scriptWorkerRef", () => {
     expect(main).toContain(`const executionDeadline = ${expiresAt}`);
     expect(main).toContain(`const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS}`);
     expect(main).toContain("const sandboxExecTimeout = ");
+    expect(main).toContain("function receiverBoundProperty(target, property)");
+    expect(main).toContain("Reflect.apply(value, target, args)");
+    expect(main).toContain('if (property === "then")');
+    expect(main).toContain("if (resolved) return undefined");
+    expect(main).toContain("onFulfilled(sandboxWithExecutionDeadline(value, true))");
     expect(main).toContain("requestedTimeout: options.timeout");
-    expect(main).toContain("return target.exec(command, { ...options, timeout })");
+    expect(main).toContain(
+      "return Reflect.apply(exec, target, [command, { ...options, timeout }])",
+    );
     expect(main).toContain('if (property === "execStream")');
     expect(main).toContain("sandbox.execStream is unavailable inside scripts");
-    expect(main).toContain("return (...args) => sandboxWithExecutionDeadline(target.get(...args))");
+    expect(main).toContain("sandboxWithExecutionDeadline(Reflect.apply(get, target, args))");
+    expect(main).not.toContain("target.get(...args)");
+    expect(main).not.toContain("target.exec(command");
     expect(main).not.toContain("sandboxWithExecutionDeadline(await target.get(...args))");
   });
 });

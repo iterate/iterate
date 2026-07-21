@@ -155,9 +155,33 @@ export function scriptWorkerRef(input: {
     const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS};
     const sandboxExecTimeout = ${sandboxExecTimeoutSource};
 
-    function sandboxWithExecutionDeadline(sandbox) {
+    function receiverBoundProperty(target, property) {
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function"
+        ? (...args) => Reflect.apply(value, target, args)
+        : value;
+    }
+
+    function sandboxWithExecutionDeadline(sandbox, resolved = false) {
       return new Proxy(sandbox, {
         get(target, property) {
+          if (property === "then") {
+            // The pipelined handle is thenable. Preserve its receiver while
+            // re-wrapping the fulfilled stub so awaiting sandboxes.get(...)
+            // cannot escape the execution-deadline guard. The fulfilled
+            // wrapper must no longer look thenable or promise resolution
+            // would recursively assimilate it.
+            if (resolved) return undefined;
+            const then = Reflect.get(target, property, target);
+            if (typeof then !== "function") return then;
+            return (onFulfilled, onRejected) =>
+              Reflect.apply(then, target, [
+                typeof onFulfilled === "function"
+                  ? (value) => onFulfilled(sandboxWithExecutionDeadline(value, true))
+                  : onFulfilled,
+                onRejected,
+              ]);
+          }
           if (property === "execStream") {
             return () => {
               throw new Error(
@@ -165,7 +189,8 @@ export function scriptWorkerRef(input: {
               );
             };
           }
-          if (property !== "exec") return Reflect.get(target, property, target);
+          if (property !== "exec") return receiverBoundProperty(target, property);
+          const exec = Reflect.get(target, property, target);
           return (command, options = {}) => {
             const timeout = sandboxExecTimeout({
               executionDeadline,
@@ -173,7 +198,7 @@ export function scriptWorkerRef(input: {
               nowMs: Date.now(),
               requestedTimeout: options.timeout,
             });
-            return target.exec(command, { ...options, timeout });
+            return Reflect.apply(exec, target, [command, { ...options, timeout }]);
           };
         },
       });
@@ -183,19 +208,21 @@ export function scriptWorkerRef(input: {
       const sandboxes = itx.sandboxes;
       const guardedSandboxes = new Proxy(sandboxes, {
         get(target, property) {
-          if (property !== "get") return Reflect.get(target, property, target);
+          if (property !== "get") return receiverBoundProperty(target, property);
           // Collection.get() is deliberately synchronous: capnweb returns a
           // pipelined handle whose methods (including create) can be called
           // before any round trip. Awaiting it here turns that handle into a
           // plain Promise and erases the handle-level surface.
-          return (...args) => sandboxWithExecutionDeadline(target.get(...args));
+          const get = Reflect.get(target, property, target);
+          return (...args) =>
+            sandboxWithExecutionDeadline(Reflect.apply(get, target, args));
         },
       });
       return new Proxy(itx, {
         get(target, property) {
           return property === "sandboxes"
             ? guardedSandboxes
-            : Reflect.get(target, property, target);
+            : receiverBoundProperty(target, property);
         },
       });
     }
