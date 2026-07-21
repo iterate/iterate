@@ -108,7 +108,7 @@ A1).
 
 ### B1. Agent compaction coalescing machinery is dead, guarded by lying comments
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `agent-processor-implementation.ts:137-140` and `:780-821`
 (`#pendingCompaction` / `#compactionWork` / the microtask yield in
@@ -133,7 +133,7 @@ at-head pass — a design change, file separately if desired.
 
 ### B2. Agent `#configNow()` re-reduces the entire stream for one in-scope field
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `agent-processor-implementation.ts:893-897`: doc comment claims it serves "the
 rare code path (compaction) that runs outside a delivery frame and has no
@@ -165,7 +165,7 @@ The runner keeps its internals; this is author surface only.
 
 ### B4. Keepalive fire-and-forget→promise bridge duplicated inside the framework
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `StreamProcessor.#runKeepAliveBackedWork` (`stream-processor.ts:556-571`) and
 `StreamProcessorRunner.#keepAliveBackedWork`
@@ -180,7 +180,7 @@ the runner call site.
 
 ### B5. Dead harness exports
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `driveProcessor` (`testing.ts:253-266`) and `eventsOfType`
 (`testing.ts:269-272`) have zero users outside `testing.ts`;
@@ -192,7 +192,7 @@ minimal host (`apps/streams-example-app/e2e/vitest/stream-processor-node.test.ts
 
 ### B6. slack-agent re-implements readers that `integrations/utils.ts` exports
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `slack-agent-processor-implementation.ts:910-924` defines private
 `readStringField` / `readRecordField` / `readNestedMessageStringField`
@@ -203,7 +203,7 @@ shadowing `readString` / `readRecord` from `integrations/utils.ts`
 
 ### B7. capability-host: vestigial `void` + side-effecting wait predicate
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `capability-host-processor-implementation.ts:527-531`: `void
 observedSettlement;` is a no-op that reads like rejection-observation (the
@@ -219,7 +219,7 @@ caller — skip unless a second caller appears.
 
 ### B8. Duplicated slack-agent status-paint block with drifted guards
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `slack-agent-processor-implementation.ts:486-499` (`#paintRuntime`) vs
 `:564-577` (`#repaintPresence`): both compose
@@ -308,7 +308,7 @@ each helper's input/output against a sample contract (cheap, catches drift).
 
 ### C4. email-agent: unsound type predicate immediately contradicted
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `email-agent-processor-implementation.ts:99-113`: the filter asserts
 `attachment is StoredInboundAttachment & { size: number }` while checking
@@ -319,7 +319,7 @@ the `!`, keep the `??` normalization the mapper already does.
 
 ### C5. telegram-agent: four `birthCertificate!` assertions instead of narrowed params
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `telegram-agent-processor-implementation.ts:241, 258, 275, 355` —
 `state.birthCertificate!.config…` inside helpers whose guard lives one frame
@@ -330,7 +330,7 @@ they need (`connection`, `chatId`) instead of whole nullable state.
 
 ### C6. devices: paired credential fields modelled as independent nullables
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `device-processor-implementation.ts:392-397` — `pushTokenSecretPath` and
 `pushTokenSecretUpdatedOffset` are always set/cleared together (reduce arms
@@ -342,7 +342,7 @@ change; this contract is young.)
 
 ### C7. Agent `raceAbort` discards the abort reason
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `agent-processor-implementation.ts:1103-1110` — both reject paths manufacture
 `new Error("aborted")`, ignoring `signal.reason`, while the runner's own
@@ -351,7 +351,7 @@ change; this contract is young.)
 
 ### C8. Orphaned doc comment in `StreamProcessor`
 
-**Status:** in-pr.
+**Status:** in-pr #2178.
 
 `stream-processor.ts:417-425`: two stacked docblocks on `#parseConsumedEvent`
 — the first (carrying the load-bearing "throwing here would wedge the cursor
