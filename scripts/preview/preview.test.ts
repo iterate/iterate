@@ -48,6 +48,7 @@ const {
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
+  resolveSharedPreviewSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
@@ -138,6 +139,26 @@ test("Auth preview provisioning can target only an approved slot range", () => {
       slots: "3-4",
     }),
   ).toThrow(/unknown preview slot 4/);
+});
+
+test("Auth and OS preview provisioning share one new project-app session secret", () => {
+  expect(
+    resolveSharedPreviewSecret({
+      authSecret: null,
+      createSecret: () => "new-shared-secret",
+      osSecret: null,
+    }),
+  ).toBe("new-shared-secret");
+});
+
+test("Auth preview provisioning refuses divergent project-app session secrets", () => {
+  expect(() =>
+    resolveSharedPreviewSecret({
+      authSecret: "auth-secret",
+      createSecret: () => "unused",
+      osSecret: "os-secret",
+    }),
+  ).toThrow(/project-app session secrets differ/);
 });
 
 describe("preview app dependency expansion", () => {

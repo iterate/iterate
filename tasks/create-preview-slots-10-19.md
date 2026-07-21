@@ -30,10 +30,14 @@ and release the old recorded slot instead of self-blocking; a failed exact-slot
 request releases any unrelated adopted lease. Markdown examples and comments
 cannot activate the PR-body selector. Local OS tests and typecheck are green;
 the latest preview run exposed and now has a regression for an unbounded
-cross-slot subscription scan. Fresh CI and Bugbot review remain before merge.
-Production deployment and Semaphore lease publication remain later, separate
-approval boundaries. The strict PR-body slot selector makes it possible to
-canary one expanded slot without exposing all ten to old clients.
+cross-slot subscription scan. PR #2161 merged and the normal production rollout
+passed. Post-merge preview deployment exposed one missing provisioner invariant:
+the required project-app session secret was not shared into Auth and OS for new
+slots. The follow-up is regression-tested and ready to provision without
+rotating existing credentials. Preview deployment, full Slack manifests, and
+Semaphore lease publication remain; lease publication is still the separate
+production approval boundary. The strict PR-body slot selector makes it
+possible to canary one expanded slot without exposing all ten to old clients.
 
 ## Goal
 
@@ -140,7 +144,9 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _Stacked PR #2163 keeps old clients on preview-1 through preview-9; this PR
   requires all configured slugs and accepts one standalone directive such as
   `preview_environment=preview-17` without bypassing preview eligibility._
-- [ ] Merge the repository change before deploying or leasing the slots.
+- [x] Merge the repository change before deploying or leasing the slots.
+  _PR #2161 squash-merged as `fe1f3d4a`; the production Auth/OS, Semaphore,
+  Streams, tunnels, test, lint, and publish checks all passed._
 - [ ] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
   each slot from current `main`; verify integrations and operational telemetry.
 - [ ] Present the completed provisioning ledger and obtain separate approval
@@ -456,3 +462,10 @@ the recorded projection.
   and attempting a duplicate POST. The regression places the existing item on
   page 3 and later names on page 4. All 2,116 OS unit tests, OS typecheck, lint,
   and changed-file format checks pass locally.
+- 2026-07-21: Post-merge deployment stopped before its first write because
+  Auth preview-10 lacked `APP_CONFIG_PROJECT_APP_SESSION_SECRET`. The remote-app
+  auth change made that secret required, but preview provisioning did not copy
+  one shared value into both Auth and OS. The provisioner now creates or
+  preserves one per-slot value and rejects divergent existing values. The live
+  command will run without `--rotate`, so existing OAuth and app credentials
+  remain unchanged.

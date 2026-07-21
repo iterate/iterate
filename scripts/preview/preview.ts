@@ -3014,6 +3014,17 @@ function resolveAuthPreviewRootSecret(input: {
   );
 }
 
+function resolveSharedPreviewSecret(input: {
+  authSecret: string | null;
+  createSecret: () => string;
+  osSecret: string | null;
+}) {
+  if (input.authSecret && input.osSecret && input.authSecret !== input.osSecret) {
+    throw new Error("Auth and OS project-app session secrets differ");
+  }
+  return input.authSecret || input.osSecret || input.createSecret();
+}
+
 async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
   const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
   if (!authSigningPrivateJwk) {
@@ -3085,6 +3096,15 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
       ? null
       : getDopplerSecret("auth", config, "APP_CONFIG_BETTER_AUTH_SECRET");
     const betterAuthSecret = existingBetterAuthSecret || freshSecret();
+    const projectAppSessionSecret = resolveSharedPreviewSecret({
+      authSecret: input.rotate
+        ? null
+        : getDopplerSecret("auth", config, "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
+      createSecret: freshSecret,
+      osSecret: input.rotate
+        ? null
+        : getDopplerSecret("os", config, "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
+    });
 
     const seed = JSON.stringify([
       {
@@ -3120,6 +3140,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
       AUTH_SEED_OAUTH_CLIENTS: seed,
       APP_CONFIG_AUTH_APP_ORIGIN: authOrigin,
       APP_CONFIG_BETTER_AUTH_SECRET: betterAuthSecret,
+      APP_CONFIG_PROJECT_APP_SESSION_SECRET: projectAppSessionSecret,
       APP_CONFIG_SERVICE_AUTH_TOKEN: serviceToken,
     });
 
@@ -3127,6 +3148,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
       APP_CONFIG_ITERATE_AUTH__ISSUER: `${authOrigin}/api/auth`,
       APP_CONFIG_ITERATE_AUTH__CLIENT_ID: clientId,
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: clientSecret,
+      APP_CONFIG_PROJECT_APP_SESSION_SECRET: projectAppSessionSecret,
     });
 
     setDopplerSecrets("semaphore", config, {
@@ -5662,6 +5684,7 @@ export const previewInternals = {
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
+  resolveSharedPreviewSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
