@@ -150,6 +150,7 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain('RUNS="${RUNS:-25}"');
     expect(source).toContain('MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-300}"');
     expect(source).toContain("pnpm preview deploy --all-apps --allow-draft");
+    expect(source).toContain("for app in os semaphore auth streams-example-app dummy-petshop; do");
 
     const normalWorkflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
@@ -162,6 +163,10 @@ describe("watchdogs the shell can't import stay in sync", () => {
     const osVitestConfig = readFileSync(resolve(repoRoot, "apps/os/e2e/vitest.config.ts"), "utf8");
     expect(normalWorkflow).toContain("runs-on: depot-ubuntu-24.04-64");
     expect(marathonWorkflow).toContain("runs-on: depot-ubuntu-24.04-64");
+    expect(marathonWorkflow).toContain(
+      "group: cloudflare-previews-${{ inputs.pull-request-number }}",
+    );
+    expect(marathonWorkflow).toContain("cancel-in-progress: false");
     expect(osVitestConfig).toContain("maxWorkers: ci ? 64 : 1");
     expect(osVitestConfig).not.toContain("sequencer:");
     expect(marathonWorkflow).toContain('default: "25"');

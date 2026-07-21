@@ -145,7 +145,7 @@ while [ "$run" -le "$RUNS" ]; do
 
   testable_line=$(grep -m1 'testable apps:' "$test_log" || true)
   missing=""
-  for app in os semaphore auth streams-example-app; do
+  for app in os semaphore auth streams-example-app dummy-petshop; do
     case "$testable_line" in
       *"$app"*) ;;
       *) missing="$missing $app" ;;

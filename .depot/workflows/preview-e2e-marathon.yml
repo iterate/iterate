@@ -28,6 +28,13 @@ on:
         required: false
         default: "300"
 
+# A marathon must never race the ordinary preview workflow or cleanup for the
+# same PR. Queue behind an existing run; a newer PR event may cancel this stale
+# proof through the same repository-wide group.
+concurrency:
+  group: cloudflare-previews-${{ inputs.pull-request-number }}
+  cancel-in-progress: false
+
 jobs:
   marathon:
     name: Preview e2e marathon
