@@ -568,7 +568,7 @@ export class ProjectProcessor extends StreamProcessor<
 // Injected dependencies.
 // -----------------------------------------------------------------------------
 
-export type ProjectProcessorDeps = {
+type ProjectProcessorDeps = {
   /** The project's own itx surface: sibling processor facades + worker dispatch. */
   itx: ProjectRpcTarget;
   /** Cloudflare custom-hostname provisioning; absent in hosts without it. */

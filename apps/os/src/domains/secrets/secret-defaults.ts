@@ -25,7 +25,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
 
 /** The `secret/created` payload — the secret's birth certificate (material already encrypted by the DO). */
-export type SecretCreatedPayload = z.input<
+type SecretCreatedPayload = z.input<
   (typeof SecretProcessorContract.events)["events.iterate.com/secret/created"]["payloadSchema"]
 >;
 

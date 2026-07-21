@@ -1,7 +1,27 @@
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import type { SandboxInstanceType } from "./instance-types.ts";
+import { DEFAULT_SANDBOX_INSTANCE_TYPE, SandboxInstanceType } from "./instance-types.ts";
 import { SandboxProcessorContract } from "./sandbox-processor-contract.ts";
+import { assertValidSleepAfter, sandboxCreateClaimKey, type SandboxCreateInput } from "./utils.ts";
+
+/** The canonical `/sandboxes` catalogue claim for one create request. */
+export function sandboxCreateClaimEvent(input: { create: SandboxCreateInput; path: string }) {
+  const instanceType = SandboxInstanceType.parse(
+    input.create.instanceType ?? DEFAULT_SANDBOX_INSTANCE_TYPE,
+  );
+  if (input.create.sleepAfter !== undefined) assertValidSleepAfter(input.create.sleepAfter);
+  return SandboxProcessorContract.buildEvent({
+    type: "events.iterate.com/sandbox/create-requested",
+    idempotencyKey: sandboxCreateClaimKey(input.path),
+    payload: {
+      path: input.path,
+      instanceType,
+      ...(input.create.sleepAfter === undefined ? {} : { sleepAfter: input.create.sleepAfter }),
+      ...(input.create.keepAlive === undefined ? {} : { keepAlive: input.create.keepAlive }),
+      ...(input.create.env === undefined ? {} : { env: input.create.env }),
+    },
+  });
+}
 
 /** The complete atomic sandbox birth batch: certificate plus hosted processor subscription. */
 export function sandboxCreationEvents(input: {

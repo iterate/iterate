@@ -5,84 +5,6 @@ import {
 } from "../integrations/utils.ts";
 import type { SandboxInstanceType } from "./instance-types.ts";
 
-/**
- * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
- * wrapped on top. Whatever the installed SDK exposes is callable —
- * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
- * contract re-declares lifecycle controls and the everyday command door,
- * `exec` (the rest stays undeclared, same stance as `McpClientRpc`, so new SDK
- * methods need no forwarding code here); https://developers.cloudflare.com/sandbox/api/
- * is the authoritative reference. The image is the stock Cloudflare sandbox
- * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
- * you need at runtime.
- *
- * Platform deltas over stock Cloudflare (everything else passes through):
- * - Sandboxes are created explicitly
- *   (`itx.sandboxes.get(path).create(input)`), never minted by addressing.
- * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the
- *   idle timer, restored on the next start — where stock Cloudflare loses all
- *   state. Everything outside `/workspace` is ephemeral, and a crash loses
- *   anything since the last snapshot.
- * - `start()` boots the container now instead of lazily; `sleep()` snapshots
- *   and tears down now instead of waiting for `sleepAfter` (the SDK's
- *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
- *   `destroy()` is permanent — the name is retired.
- * - Top-level `exec()` is sessionless: every call gets a fresh shell, and a
- *   timeout terminates the complete Linux process group before resolving an
- *   exit-code-124 result. Use the SDK's explicit session APIs when commands
- *   intentionally need shared shell state.
- * - `__describe()` (the capability-tree convention) carries the durable
- *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
- * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
- *   recorded as a `configured` event); values are conventionally
- *   `getSecret(path)` placeholders substituted only at egress — real
- *   secret material never enters the container. All sandbox egress flows
- *   through project egress policy; there is no direct internet path.
- * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
- *   snapshots cover persistence, and `tunnels` covers public URLs.
- */
-export type CloudflareSandbox = object & {
-  /** Boot the container now. */
-  start(): Promise<void>;
-  /** Snapshot `/workspace` and tear the container down. */
-  sleep(): Promise<void>;
-  /** Snapshot, tear down, and boot a fresh container. */
-  restart(): Promise<void>;
-  /** Permanently destroy the sandbox and retire its name. */
-  destroy(): Promise<void>;
-  /** Run one shell command to completion and return its captured output —
-   * the SDK's `exec`, declared with the data fields that travel over every
-   * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
-   * exist at runtime but are transport-dependent, so they stay out of this
-   * contract). `env` values override the session's for this one command;
-   * `timeout` is milliseconds. */
-  exec(
-    command: string,
-    options?: {
-      cwd?: string;
-      encoding?: string;
-      env?: Record<string, string | undefined>;
-      timeout?: number;
-    },
-  ): Promise<{
-    /** Whether the command succeeded (`exitCode === 0`). */
-    success: boolean;
-    exitCode: number;
-    stdout: string;
-    stderr: string;
-    /** The command that was executed. */
-    command: string;
-    /** Execution duration in milliseconds. */
-    duration: number;
-    /** ISO timestamp of when the command started. */
-    timestamp: string;
-    sessionId?: string;
-  }>;
-  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
-  kill(): Promise<void>;
-};
-
 /** What `itx.sandboxes.get(path).create` takes — Cloudflare's own vocabulary
  * (instance types and `SandboxOptions.sleepAfter`/`keepAlive`). */
 export type SandboxCreateInput = {
@@ -91,7 +13,7 @@ export type SandboxCreateInput = {
   /** Idle time before the container is snapshotted and torn down: a positive
    * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,
    * `"1h"` — no other units). Defaults to the SDK's 10 minutes. The workspace
-   * survives — see {@link CloudflareSandbox}. */
+   * survives across idle sleep. */
   sleepAfter?: string | number;
   /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
    * `sleep()` or `destroy()` explicitly. */

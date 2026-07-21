@@ -99,8 +99,8 @@ export function normalizeWorkspaceMountKeys<
 
 /**
  * The complete atomic workspace birth batch: the `workspace/created` birth
- * certificate, an optional initial `workspace/configured` patch carrying the
- * caller's exact mount table, and the processor subscription. The created and
+ * certificate, an optional initial `workspace/configured` patch merged over
+ * the default mount table, and the processor subscription. The created and
  * configured keys contain identity only: identical retries dedupe, while a
  * retry with a different initial table fails through the stream's
  * same-key-different-body check.
@@ -117,30 +117,19 @@ export function workspaceCreationEvents(input: {
           mounts: normalizeWorkspaceMountKeys(input.mounts),
         }).mounts;
   const defaultMounts = defaultWorkspaceMounts();
-  const configuredMounts =
-    desiredMounts === undefined
-      ? undefined
-      : {
-          ...Object.fromEntries(
-            Object.keys(defaultMounts)
-              .filter((path) => !(path in desiredMounts))
-              .map((path) => [path, null]),
-          ),
-          ...desiredMounts,
-        };
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
       idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
       payload: { config: { mounts: defaultMounts } },
     }),
-    ...(configuredMounts === undefined
+    ...(desiredMounts === undefined
       ? []
       : [
           WorkspaceProcessorContract.buildEvent({
             type: "events.iterate.com/workspace/configured",
             idempotencyKey: `workspace-configured-at-creation:${input.projectId}:${input.path}`,
-            payload: { config: { mounts: configuredMounts } },
+            payload: { config: { mounts: desiredMounts } },
           }),
         ]),
     buildDurableObjectProcessorSubscriptionConfiguredEvent({

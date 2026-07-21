@@ -440,12 +440,12 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
    * Create the sandbox: write the durable record that makes it exist. The
    * instance type is validated against THIS class (the collection routed here
    * by the type it recorded on `create-requested`) and fixed for life.
-   * Strict once setup completes — a pet is born once; an existing or
-   * destroyed path is an error, so two callers can't silently share a sandbox
-   * they each think they created. The sole exception is a durable
-   * `creationPending` record: it means a previous attempt failed before setup
-   * returned, so replay the idempotent birth batch and finish that same
-   * catalogue claim instead of stranding half-created state.
+   * Idempotent once setup completes: the catalogue claim has already proved
+   * that this call names the same canonical request body, so re-entry returns
+   * the existing pet without appending or reapplying configuration. A durable
+   * `creationPending` record means a previous attempt failed before setup
+   * returned; replay the idempotent birth batch and finish that same claim
+   * instead of stranding half-created state.
    *
    * `sleepAfter` and `keepAlive` pass straight through to the SDK's own
    * durable setters (`setSleepAfter` / `setKeepAlive` — the SDK persists and
@@ -482,9 +482,11 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
       );
     }
     if (existing !== undefined && existing.creationPending !== true) {
-      throw new Error(
-        `sandbox "${input.path}" already exists — itx.sandboxes.get("${input.path}") to use it`,
-      );
+      return {
+        createdAt: existing.createdAt,
+        instanceType: existing.instanceType,
+        path: this.#identity().path,
+      };
     }
     if (existing?.instanceType !== undefined && existing.instanceType !== input.instanceType) {
       throw new Error(

@@ -30,7 +30,6 @@ describe("workspaceCreationEvents", () => {
     expect(first[1]?.payload).toEqual({
       config: {
         mounts: {
-          "/": null,
           "/cfg": { policy: "read-only", repoPath: "/repos/config" },
         },
       },

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
+import { MemoryStream } from "iterate/processors/testing";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
-import { sandboxCreationEvents } from "./sandbox-defaults.ts";
+import { sandboxCreateClaimEvent, sandboxCreationEvents } from "./sandbox-defaults.ts";
 import {
   assertSandboxPath,
   githubTokenEnvForConnections,
@@ -9,6 +10,29 @@ import {
 } from "./utils.ts";
 
 describe("sandboxCreationEvents", () => {
+  test("the canonical catalogue claim dedupes after a transport round trip and has one writer", async () => {
+    const stream = new MemoryStream("/sandboxes");
+    const claim = sandboxCreateClaimEvent({ create: {}, path: "/sandboxes/example" });
+    const transported = JSON.parse(JSON.stringify(claim)) as typeof claim;
+
+    const [first] = await stream.append(transported);
+    const [retry] = await stream.append(claim);
+
+    expect(retry?.offset).toBe(first?.offset);
+    expect(stream.events).toHaveLength(1);
+    expect(claim.payload).toEqual({
+      instanceType: "basic",
+      path: "/sandboxes/example",
+    });
+    expect(
+      sandboxCreationEvents({
+        instanceType: "basic",
+        path: "/sandboxes/example",
+        projectId: "prj_test",
+      }).map((event) => event.type),
+    ).not.toContain("events.iterate.com/sandbox/create-requested");
+  });
+
   test("builds one complete instance-stream birth batch with payload-free identity keys", () => {
     const first = sandboxCreationEvents({
       env: { API_TOKEN: 'getSecret("/secrets/api")' },

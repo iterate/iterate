@@ -19,6 +19,7 @@ import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { WorkspaceProcessorContract } from "./workspace-processor-contract.ts";
 import { WorkspaceProcessor } from "./workspace-processor-implementation.ts";
+import { workspaceCreationEvents } from "./utils.ts";
 
 const WORKSPACE_PATH = "/workspaces/example";
 
@@ -39,6 +40,29 @@ function makeWorkspaceHarness(substrate?: HarnessSubstrate) {
 }
 
 describe("WorkspaceProcessor reduce", () => {
+  test("creation merges supplied mounts over the default root mount", async () => {
+    const h = makeWorkspaceHarness();
+    await h.play(() =>
+      h.stream.append(
+        ...workspaceCreationEvents({
+          mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+          path: WORKSPACE_PATH,
+          projectId: "prj_example",
+        }),
+      ),
+    );
+
+    expect(h.state()).toMatchObject({
+      birthCertificate: { config: { mounts: { "/": configMount } } },
+      config: {
+        mounts: {
+          "/": configMount,
+          "/cfg": { policy: "read-only", repoPath: "/repos/config" },
+        },
+      },
+    });
+  });
+
   test("created reduces the birth certificate and its config", async () => {
     const h = makeWorkspaceHarness();
     await h.play(["append", CREATED]);

@@ -5,7 +5,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 /** The immutable `project/created` birth certificate payload. */
-export type ProjectCreatePayload = z.input<
+type ProjectCreatePayload = z.input<
   (typeof ProjectProcessorContract.events)["events.iterate.com/project/created"]["payloadSchema"]
 >;
 

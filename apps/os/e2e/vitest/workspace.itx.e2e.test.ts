@@ -238,7 +238,7 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
     mounts: { "/": { policy: "commit-to-main", repoPath: "/repos/config" } },
   });
 
-  // -- explicit create with a custom table is idempotent -------------------
+  // -- explicit create merges custom mounts over the default table --------
 
   const customPath = `/workspaces/custom-${crypto.randomUUID()}`;
   using custom = project.workspaces.get(customPath);
@@ -246,12 +246,13 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
     mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
   });
   expect(await custom.getConfig()).toMatchObject({
-    mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+    mounts: {
+      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/cfg": { policy: "read-only", repoPath: "/repos/config" },
+    },
   });
   expect(await custom.readFile("/cfg/package.json")).not.toBeNull();
-  // Paths outside every mount are private scratch — readable, listable,
-  // never committable.
-  expect(await custom.readFile("/package.json")).toBeNull();
+  expect(await custom.readFile("/package.json")).not.toBeNull();
 
   // -- itx.files <-> workspace: the two file domains compose through bytes.
 

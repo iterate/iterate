@@ -99,16 +99,12 @@ import { CONFIG_REPO_PATH } from "./domains/repos/paths.ts";
 import { defaultProjectWorkerRef, isRepoNotSeededError } from "./domains/repos/utils.ts";
 import { isWorkerBuildInProgressError } from "./domains/workers/worker-loader.ts";
 import type { SandboxDurableObject } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
+import { sandboxCreateClaimEvent } from "./domains/sandboxes/sandbox-defaults.ts";
 import {
-  DEFAULT_SANDBOX_INSTANCE_TYPE,
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SandboxInstanceType,
 } from "./domains/sandboxes/instance-types.ts";
-import {
-  assertSandboxPath,
-  sandboxCreateClaimKey,
-  assertValidSleepAfter,
-} from "./domains/sandboxes/utils.ts";
+import { assertSandboxPath, sandboxCreateClaimKey } from "./domains/sandboxes/utils.ts";
 import {
   SandboxProcessorContract,
   type SandboxProcessorState,
@@ -1610,25 +1606,11 @@ class SandboxRpcTarget extends IterateRpcTarget<"Sandbox"> {
     })) as Description;
   }
 
-  /** Claim, birth, and configure this sandbox; strict after a completed birth. */
+  /** Claim, birth, and configure this sandbox; identical re-entry returns this handle. */
   async create(input: SandboxCreateInput = {}): Promise<SandboxRpcTarget> {
-    const instanceType = SandboxInstanceType.parse(
-      input.instanceType ?? DEFAULT_SANDBOX_INSTANCE_TYPE,
-    );
-    if (input.sleepAfter !== undefined) assertValidSleepAfter(input.sleepAfter);
-    const [claim] = await this.#catalogue.append(
-      SandboxProcessorContract.buildEvent({
-        type: "events.iterate.com/sandbox/create-requested",
-        idempotencyKey: sandboxCreateClaimKey(this.props.path),
-        payload: {
-          path: this.props.path,
-          instanceType,
-          sleepAfter: input.sleepAfter,
-          keepAlive: input.keepAlive,
-          env: input.env,
-        },
-      }),
-    );
+    const requestedClaim = sandboxCreateClaimEvent({ create: input, path: this.props.path });
+    const instanceType = requestedClaim.payload.instanceType;
+    const [claim] = await this.#catalogue.append(requestedClaim);
     if (claim === undefined) {
       throw new Error(`sandbox "${this.props.path}": the catalogue append returned no event`);
     }
@@ -1794,7 +1776,7 @@ class WorkspaceCollectionRpcTarget extends IterateRpcTarget<"WorkspaceCollection
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. The default mounts the config repo at "/" with commit-to-main policy; a supplied mount table is committed atomically as an initial configured patch. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
+        'Event-sourced, mount-routed workspaces. get("/workspaces/<name>") returns a handle without creating anything; call handle.create({ mounts? }) once before use. Birth always mounts the config repo at "/" with commit-to-main policy; supplied mounts are committed atomically as an initial configured patch on top. An agent\'s own workspace is its agent path under the prefix (what itx.workspace resolves to).',
       children: {
         get: "A possibly nonexistent workspace handle; call get(path).create({ mounts? }) before use.",
       },
@@ -1832,7 +1814,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
       instructions: `A workspace at "${this.props.path}" (event-sourced, mount-routed). Its mount table (getConfig/configure) maps repos into the tree — by default the config repo is mounted at "/", so reads see the repo's latest main until a local write shadows a path. Writes stay in a private overlay; git.commit({ message, scope? }) commits ONE mount's changes to that repo's main (read-only mounts reject commits; scope is optional when one mount is dirty). Paths outside every mount are private scratch.`,
       children: {
         create:
-          "Create this workspace with the default config-repo mount or an exact custom mount table; waits through the atomic birth batch and returns this handle.",
+          "Create this workspace with the default config-repo root mount plus any supplied mounts; waits through the atomic birth batch and returns this handle.",
         configure:
           "Patch configuration ({ config: { mounts } }) — deep-merged per mount point: unknown keys add mounts, partial values edit one mount, null removes one. Appends workspace/configured.",
         deleteFile: "Delete one file (whiteouts a mount copy; false when it did not exist).",

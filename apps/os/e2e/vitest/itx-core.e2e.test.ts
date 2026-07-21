@@ -67,7 +67,9 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(await itx.projects.get(description.projectId).__describe()).toMatchObject({
     projectId: description.projectId,
   });
-  await expect(itx.projects.get("no-such-project-xyz").__describe()).rejects.toThrow(/no project/);
+  await expect(itx.projects.get("no-such-project-xyz").__describe()).rejects.toThrow(
+    /does not exist/,
+  );
   expect(messages).toContainEqual([
     expect.any(Number),
     "out",

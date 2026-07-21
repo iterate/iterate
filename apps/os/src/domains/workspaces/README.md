@@ -15,9 +15,11 @@ filesystems for agents and tooling.
   nonexistent handle. `await handle.create({ mounts? })` appends one atomic
   batch: the birth certificate with the DEFAULT mount table — the config repo
   mounted at `"/"`, committable — an optional `workspace/configured` patch
-  carrying the caller's exact initial table, and the Workspace processor
-  subscription. It waits the processor through the batch and returns the same
-  handle. Filesystem and configuration methods reject loudly before creation;
+  carrying the caller's supplied mounts, and the Workspace processor
+  subscription. The supplied mounts patch over the default table, so omitting
+  or adding mounts never removes the default root mount. It waits the processor
+  through the batch and returns the same handle. Filesystem and configuration
+  methods reject loudly before creation;
   no read, write, or first touch can birth a workspace. Agent creation
   explicitly creates the agent's own workspace before the agent handle is
   returned.

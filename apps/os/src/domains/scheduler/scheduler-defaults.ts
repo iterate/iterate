@@ -4,7 +4,7 @@ import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../strea
 import { SchedulerProcessorContract } from "./scheduler-processor-contract.ts";
 
 /** The immutable `scheduler/created` birth certificate payload. */
-export type SchedulerCreatePayload = z.input<
+type SchedulerCreatePayload = z.input<
   (typeof SchedulerProcessorContract.events)["events.iterate.com/scheduler/created"]["payloadSchema"]
 >;
 

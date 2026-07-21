@@ -5,7 +5,7 @@ import { EmailProcessorContract } from "./email-processor-contract.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "./utils.ts";
 
 /** The immutable `email/created` router birth certificate payload. */
-export type EmailRouterCreatePayload = z.input<
+type EmailRouterCreatePayload = z.input<
   (typeof EmailProcessorContract.events)["events.iterate.com/email/created"]["payloadSchema"]
 >;
 

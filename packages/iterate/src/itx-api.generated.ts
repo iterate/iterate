@@ -1393,7 +1393,7 @@ export interface Device {
  */
 export interface Sandbox {
   __describe(): Promise<Description>;
-  /** Claim, birth, and configure this sandbox; strict after a completed birth. */
+  /** Claim, birth, and configure this sandbox; identical re-entry returns this handle. */
   create(input: SandboxCreateInput): Promise<Sandbox>;
   /** The sandbox's hosted lifecycle reducer. */
   processor: WakeableStreamProcessorRpc<SandboxProcessorState>;
@@ -3285,7 +3285,7 @@ export type SandboxCreateInput = {
   /** Idle time before the container is snapshotted and torn down: a positive
    * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,
    * `"1h"` — no other units). Defaults to the SDK's 10 minutes. The workspace
-   * survives — see {@link CloudflareSandbox}. */
+   * survives across idle sleep. */
   sleepAfter?: string | number;
   /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
    * `sleep()` or `destroy()` explicitly. */
