@@ -7,7 +7,9 @@ already terminated on timeout for its retry, and it hardwires shared global
 state (the spec transform cache under cwd, the zsh dotfiles folder under
 tmpdir) that concurrent invocations race on. Keeping the lane green required a
 patched framework plus a bespoke isolation harness, which is not worth
-carrying for a surface nobody uses yet.
+carrying for a surface nobody uses yet. Evidence, restoration work, and exit
+criteria are tracked in
+[`tasks/quarantined-tui-e2e.md`](../../../../tasks/quarantined-tui-e2e.md).
 
 The specs and `tui-test.config.ts` in this directory are kept as the starting
 point for reviving the lane once the TUI matters again. They use Microsoft TUI

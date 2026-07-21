@@ -11,9 +11,10 @@ import { writeFileSync } from "node:fs";
 // worth carrying for a surface nobody uses yet.
 //
 // The specs and tui-test.config.ts next to this file are kept as the starting
-// point for reviving the lane once the TUI matters again.
+// point for reviving the lane once the TUI matters again. The evidence and
+// removal criteria live in tasks/quarantined-tui-e2e.md.
 console.info(
-  "[tui-test] SKIPPED: the terminal UI e2e lane is disabled — the TUI has known bugs and no users yet (see this file's header).",
+  "[tui-test] SKIPPED: quarantined by tasks/quarantined-tui-e2e.md — the terminal UI has known bugs and tui-test 0.0.4 is not concurrency-safe.",
 );
 
 // The preview lane reads a retry-telemetry file from every sub-lane; an empty

@@ -174,7 +174,7 @@ describe("watchdogs the shell can't import stay in sync", () => {
         { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
       ],
     });
-    const annotation = `::notice title=Preview e2e retries::os: ${rendered}. A retried test is a real failure.`;
+    const annotation = `::notice title=Preview e2e retries::os: ${rendered}. The retry passed and does not fail this run.`;
     expect(annotation.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
   });
 });

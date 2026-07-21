@@ -1599,8 +1599,8 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   }
   const level = summary.retried.length >= 4 ? "warning" : "notice";
   console.log(
-    `::${level} title=Preview e2e retries::${slug}: ${rendered}. A retried test is a real failure a ` +
-      `re-roll absorbed — see docs/testing.md#retries-and-timeouts.`,
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. The retry passed and does not fail ` +
+      `this run; quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.`,
   );
 }
 
