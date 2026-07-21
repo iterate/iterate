@@ -38,7 +38,8 @@ const ci = process.env.CI === "true";
 // (roughly the observed median); exact numbers matter much less than the
 // slow/fast partition, so refresh only when the ranking visibly drifts.
 const observedFileSeconds: Record<string, number> = {
-  // One shared fixture project; its slowest case runs four runtimes serially.
+  // Per-runtime project pools let each case overlap its four runtimes; only
+  // cases that deliberately exercise one warm sandbox opt into serial order.
   "examples-matrix.e2e.test.ts": 132,
   "workspace.itx.e2e.test.ts": 67,
   "itx-workers.e2e.test.ts": 51,
@@ -106,7 +107,8 @@ export default defineConfig({
   test: {
     // Run-scheduler options live at the ROOT test level — this is where vitest
     // reads them, even with `projects`. Parallel in CI: files either provision
-    // isolated projects or marker-isolate the examples matrix's shared fixture.
+    // isolated projects or lease exclusive projects from the matrix's
+    // runtime-specific pools.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
     // Twelve files × two cases keeps the proven aggregate peak while allowing
