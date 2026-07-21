@@ -37,12 +37,6 @@ export function requireEnv(name: string): string {
   return value;
 }
 
-export function wsUrl(baseUrl: string): string {
-  const url = new URL("/api", baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
 /**
  * The RFC 8707 resource for an OS deployment — port-stripped loopback for
  * local dev, matching the auth worker's audience list. Mirrors osResource()

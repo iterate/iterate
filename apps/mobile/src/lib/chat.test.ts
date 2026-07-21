@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
+import type { StreamEvent } from "iterate/react";
 import {
   ASSISTANT_MESSAGE_TYPE,
   mergeEventsByOffset,

@@ -95,12 +95,16 @@ export {
   configureIterateSession,
   connectIterateSession,
   connectItx,
+  disconnectIterateSession,
   isItxTransportError,
   reconnectIterateSession,
+  retryFailedIterateSession,
   reportTransportSuspicion,
   type Itx,
   type ItxLiveSubscriptionHandle,
   type IterateSessionConfig,
+  type ProjectStub,
+  type SessionStub,
 } from "./itx-session.ts";
 export { createIterateQueryClient } from "./query-client.ts";
 
@@ -410,10 +414,10 @@ function useRecoveringSubscription<Root>(
           );
           if (signal.disposed) return;
           reportTransportSuspicion();
-          setState({
-            status: "error",
-            error: `itx subscription did not establish within ${SUBSCRIBE_TIMEOUT_MS}ms`,
-          });
+          // This attempt is bounded and a retry is already scheduled, so the
+          // consumer remains in a recoverable connecting state rather than
+          // replacing already-loaded data with terminal error UI.
+          setState({ status: "connecting" });
           // Retry regardless of the verifier's verdict: a wedged-but-alive
           // server (cold DO) recovers on the next attempt, not on a re-dial.
           const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
@@ -424,11 +428,16 @@ function useRecoveringSubscription<Root>(
         // The ONE cancellation signal: a run superseded mid-await (unmount,
         // deps, reconnect) must not touch state its successor now owns.
         if (signal.disposed) return;
-        setState({
-          status: "error",
-          error: error instanceof Error ? error.message : String(error),
-        });
-        if (!isItxTransportError(error)) return;
+        if (!isItxTransportError(error)) {
+          setState({
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
+        }
+        // Recoverable transport failures never become terminal UI errors. Keep
+        // already-loaded consumers rendered while this hook retries.
+        setState({ status: "connecting" });
         const retry = setTimeout(() => setEpoch((current) => current + 1), SUBSCRIBE_RETRY_MS);
         return () => clearTimeout(retry);
       }
@@ -466,10 +475,14 @@ function useRecoveringSubscription<Root>(
       // on "connecting" forever. No timer: the failed dial has already published
       // a paced successor, and that generation dep re-runs the effect.
       onConnectionError: (error) => {
-        setState({
-          status: "error",
-          error: error instanceof Error ? error.message : String(error),
-        });
+        setState(
+          isItxTransportError(error)
+            ? { status: "connecting" }
+            : {
+                status: "error",
+                error: error instanceof Error ? error.message : String(error),
+              },
+        );
       },
     },
   );

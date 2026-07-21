@@ -149,8 +149,10 @@ describe("DeviceProcessor enrollment", () => {
 
     expect(h.state()).toMatchObject({
       birthCertificate: DEVICE_CREATED.payload,
-      pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
-      pushTokenSecretUpdatedOffset: 1,
+      pushTokenSecret: {
+        path: "/secrets/devices/phone/expo-push-token",
+        updatedOffset: 1,
+      },
       revokedAt: null,
       tokenUpdatedOffset: 1,
     });
@@ -201,8 +203,10 @@ describe("DeviceProcessor enrollment", () => {
         // platform is immutable; everything else tracks the update.
         config: { appVersion: "1.1.0", platform: "ios", pushTokenSecretUpdatedOffset: 7 },
       },
-      pushTokenSecretPath: "/secrets/devices/phone/expo-push-token",
-      pushTokenSecretUpdatedOffset: 7,
+      pushTokenSecret: {
+        path: "/secrets/devices/phone/expo-push-token",
+        updatedOffset: 7,
+      },
       revokedAt: null,
       tokenUpdatedOffset: 3,
     });
@@ -349,8 +353,7 @@ describe("DeviceProcessor settlements", () => {
       { payload: { requestOffset: 3, outcome: { kind: "device-unavailable" } } },
     ]);
     expect(h.state()).toMatchObject({
-      pushTokenSecretPath: null,
-      pushTokenSecretUpdatedOffset: null,
+      pushTokenSecret: null,
       revokedAt: expect.any(String),
     });
     expect(h.rootEvents().at(-1)).toMatchObject({

@@ -23,10 +23,10 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DeviceProcessorContract = defineProcessorContract({
   slug: "device",
-  // 0.3.0: tuning knobs moved into state.config (schema defaults only — no
-  // configured event); reducer semantics are unchanged, the bump just refolds
-  // checkpoints into the new shape.
-  version: "0.3.0",
+  // 0.4.0: pushTokenSecretPath + pushTokenSecretUpdatedOffset merged into one
+  // nullable pushTokenSecret object (always set/cleared together); the bump
+  // refolds persisted reduction caches into the new shape.
+  version: "0.4.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   processorDeps: [CoreProcessorContract, NotificationIntentContract],
   stateSchema: z.object({
@@ -71,26 +71,27 @@ export const DeviceProcessorContract = defineProcessorContract({
           "Receipt-polling knobs, every value defaulted by the schema (no configured event " +
           "— nothing here needs runtime configuration yet).",
       }),
-    pushTokenSecretPath: z
-      .string()
+    pushTokenSecret: z
+      .object({
+        path: z.string().meta({
+          description: "Stream path of the write-only Secret holding the current Expo push token.",
+        }),
+        updatedOffset: z
+          .number()
+          .int()
+          .positive()
+          .meta({
+            description:
+              "The Secret update offset fencing every send and compare-and-clear against a " +
+              "concurrent credential rotation.",
+          }),
+      })
       .nullable()
       .default(null)
       .meta({
         description:
-          "Stream path of the write-only Secret holding the CURRENT Expo push token, or null " +
-          "once revoked — the send gate: no path, no attempts.",
-      }),
-    pushTokenSecretUpdatedOffset: z
-      .number()
-      .int()
-      .positive()
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The Secret's update offset for the current credential. Every send and every " +
-          "compare-and-clear is fenced on it, so an invalid-token response for an OLDER Expo " +
-          "request cannot erase Secret material rotated while that request was in flight.",
+          "The current Expo push-token Secret coordinates, or null once revoked. Keeping the " +
+          "path and update offset together makes the send gate and rotation fence atomic.",
       }),
     revokedAt: z
       .string()

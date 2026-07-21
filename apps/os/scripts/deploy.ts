@@ -56,6 +56,7 @@ import {
 } from "./generate-wrangler-config.ts";
 import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
+import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
 
@@ -243,6 +244,11 @@ export default async function deploy(
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {
+      await ensureInboundEmailRouting(ctx, {
+        projectHostnameBases: ctx.env.projectHostnameBases,
+        workerName: ctx.env.osWorkerName,
+        workerRequirement: "require-deployed-worker",
+      });
       await smokeAuthRpc(ctx.env, "auth Workers RPC");
     },
   });

@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { ProjectScope } from "iterate/react";
 import { ItxResourceLoading } from "~/components/itx-boundary.tsx";
@@ -24,6 +24,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
 
 function ProjectLayout() {
   const { project } = Route.useRouteContext();
+  useEffect(() => {
+    document.cookie = `iterate_recent_project=${encodeURIComponent(project.slug)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+  }, [project.slug]);
   // The whole tab shares ONE itx session socket; <ProjectScope> carries this
   // project's slug so `useItx()` / `useItxQuery()` resolve without an explicit
   // argument (the browser passes the URL slug straight through, no slug→id hop)

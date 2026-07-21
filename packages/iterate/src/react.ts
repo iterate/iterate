@@ -5,3 +5,4 @@
 // keeper surface too, so a component file imports from exactly one place.
 //
 export * from "./itx/itx-react.ts";
+export type * from "./itx-api.generated.ts";

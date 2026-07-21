@@ -22,8 +22,10 @@ runtime shares one implementation:
 
 In a browser the keeper needs zero configuration (it dials the page's `/api`
 with cookie auth); non-browser consumers point it at a deployment with
-`configureIterateSession({ baseUrl, credentials })` — that is the entire
-difference between the dashboard and the chat TUI's data layer.
+`configureIterateSession({ baseUrl, credentials })`. Credential providers are
+resolved for every dial, and native clients can replace deployments or
+disconnect at sign-out. That is the entire runtime-specific binding around the
+shared keeper.
 
 ## The stack
 
@@ -213,9 +215,10 @@ state. A `slug` argument also accepts a `prj_…` id.
 | `useItxSubscription(subscribe, deps)`        | hook      | Low-level escape hatch for raw ordered event streams (the activity tail). Most UI wants `useLiveState`.                                                                                                                                                                                                 |
 | `<ProjectScope slug>`                        | component | Sets the ambient project, pre-warms the socket, and provides its reconnectable project root to generic LiveState. The one mount.                                                                                                                                                                        |
 | `reconnectIterateSession()`                  | fn        | The deliberate **semantic reset** — drop + re-dial the socket to pick up new claims (after creating a project / unlocking admin). Distinct from the automatic, invisible transport reconnect. Pair with `invalidateQueries({ queryKey: ["itx"] })` when cached reads must refresh under the new claims. |
+| `disconnectIterateSession()`                 | fn        | Release the current socket and authority without reconnecting, for native sign-out/process lifecycle boundaries. The selected deployment remains configured for a later connection.                                                                                                                     |
 | `isItxTransportError(e)`                     | fn        | Is an error a transport-close (retryable), vs auth/validation/app (not)?                                                                                                                                                                                                                                |
 | `reportTransportSuspicion()`                 | fn        | Escape hatch for the **non-React** transport consumer (the browser stream mirror): "this socket looks half-open." Routes to the socket-owned verifier — which two-strike-checks and may re-dial — but **never** closes the socket itself.                                                               |
-| `configureIterateSession(config)`            | fn        | Point the keeper at a deployment explicitly (`{ baseUrl, credentials }`) — the **non-browser** entry into the one-socket model (the chat TUI, keeper-based scripts). Browser apps never call it. Must run before the first connect.                                                                     |
+| `configureIterateSession(config)`            | fn        | Point the keeper at a deployment explicitly (`{ baseUrl, credentials }`) — the **non-browser** entry into the one-socket model (mobile, chat TUI, keeper-based scripts). A credential provider is resolved per dial; the same target updates it in place, while a different target replaces the socket. |
 | `Itx` (type)                                 | type      | `RpcStub<Project>` — a project handle, for typing helpers that take one.                                                                                                                                                                                                                                |
 | `ItxLiveSubscriptionHandle` (type)           | type      | What any `subscribe()` returns — `ping()` + `unsubscribe()` (+ optional `[Symbol.dispose]`; the hook both unsubscribes AND disposes on teardown). The shape `useItxSubscription` drives.                                                                                                                |
 | `ItxSubscriptionStatus` (type)               | type      | `"connecting" \| "live" \| "error"` — the lifecycle a subscription reports.                                                                                                                                                                                                                             |
@@ -257,8 +260,8 @@ component needs project data, call `useItxQuery`/`useLiveState` at the leaf.
 ## Where this is going
 
 The model is ~95% in place. The non-React transport core now exists
-(`iterate/client` — the TUI runs on it; React Native is the next consumer). The
-remaining steps — capability-aligned live projections so mutable lists
+(`iterate/client` — the TUI and React Native app run on it). The remaining
+steps — capability-aligned live projections so mutable lists
 (integrations, scheduler) stop hand-invalidating, and retiring the browser
 stream mirror for server-owned live views — are laid out in
 [`apps/os/docs/itx-frontend-model-roadmap.md`](../apps/os/docs/itx-frontend-model-roadmap.md).

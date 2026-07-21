@@ -9,8 +9,6 @@ import {
 import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
 
-type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
-
 const addPagePlugins = (page: Page, testInfo: TestInfo) =>
   addPlugins({
     page,
@@ -33,14 +31,18 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
 
 export const test = base.extend<{
   helpers: {
-    createFixture: (slugPrefix: string) => Promise<ForgedProjectFixture>;
+    createFixture: (
+      slugPrefix: string,
+      options?: { projectCount?: number },
+    ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
   helpers: async ({ baseURL, page }, use) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
     await use({
-      createFixture: (slugPrefix) => createForgedProjectFixture(slugPrefix, { baseURL, page }),
+      createFixture: (slugPrefix, options) =>
+        createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {

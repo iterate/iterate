@@ -241,27 +241,44 @@ async function deployPreviewApps({
       .join(" then ")}`,
   );
 
+  const requestedEnvironment = resolveRequestedPreviewEnvironment(context.pullRequestBody);
+  if (requestedEnvironment) {
+    logPreview(`PR body requests ${requestedEnvironment}`);
+  }
+
   let environmentConfigLease: EnvironmentConfigLease;
   try {
-    environmentConfigLease = await claimEnvironmentConfigLease({
-      eraseSlotData: makePreviewSlotDataEraser(runtime),
-      holder,
-      leaseMs: defaultPreviewLeaseMs,
-      // Surface the wait in the PR body the moment every slot is busy, not
-      // only in workflow logs nobody has open.
-      onFirstWait: async (holderTable) => {
-        await updatePreviewState(context, (state) => ({
-          ...state,
-          notice: [
-            `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
-            holderTable,
-          ].join("\n"),
-        }));
-      },
-      recordedSlug: current.state.environmentConfigLease?.slug ?? null,
-      semaphore,
-      waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
-    });
+    const recordedSlug = current.state.environmentConfigLease?.slug ?? null;
+    environmentConfigLease = requestedEnvironment
+      ? (
+          await assignEnvironmentConfigLease({
+            eraseSlotData: makePreviewSlotDataEraser(runtime),
+            holder,
+            leaseMs: defaultPreviewLeaseMs,
+            recordedSlug,
+            semaphore,
+            wantedSlug: requestedEnvironment,
+          })
+        ).lease
+      : await claimEnvironmentConfigLease({
+          eraseSlotData: makePreviewSlotDataEraser(runtime),
+          holder,
+          leaseMs: defaultPreviewLeaseMs,
+          // Surface the wait in the PR body the moment every slot is busy, not
+          // only in workflow logs nobody has open.
+          onFirstWait: async (holderTable) => {
+            await updatePreviewState(context, (state) => ({
+              ...state,
+              notice: [
+                `All preview slots are leased — this PR is waiting in line for one (since ${new Date().toISOString()}).`,
+                holderTable,
+              ].join("\n"),
+            }));
+          },
+          recordedSlug,
+          semaphore,
+          waitTotalMs: resolveSlotWaitTotalMs(runtime.commandEnvironment),
+        });
   } catch (error) {
     await updatePreviewState(context, (state) => ({
       ...state,
@@ -292,10 +309,12 @@ async function deployPreviewApps({
   }
   // A successful claim clears exhaustion/takeover banners; a slot move
   // leaves its own so the change is impossible to miss.
-  const claimNotice =
-    previousSlug && previousSlug !== environmentConfigLease.slug
-      ? `This PR's slot changed from ${previousSlug} to ${environmentConfigLease.slug} at ${new Date().toISOString()} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`
-      : null;
+  const claimNotice = describePreviewSlotChange({
+    changedAt: new Date().toISOString(),
+    nextSlug: environmentConfigLease.slug,
+    previousSlug,
+    requestedEnvironment,
+  });
   const leaseUpdate = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(environmentConfigLease),
@@ -892,6 +911,7 @@ export async function acquire(options: AcquireOptions) {
   }
 
   const lease = await semaphore.acquireSpecific({
+    allowedSlugs: previewEnvironmentSlugs,
     leaseMs: (options.hours || 3) * 3_600_000,
     slug,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -1061,6 +1081,7 @@ export async function reclaim(options: ReclaimOptions = {}) {
   // rather than returning a dirty slot to the pool.
   const holder = `reclaim-${userInfo().username}`;
   const taken = await semaphore.acquireSpecific({
+    allowedSlugs: previewEnvironmentSlugs,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     slug,
     leaseMs: 30 * 60_000,
@@ -1172,6 +1193,7 @@ export async function gc(options: GcOptions = {}) {
       continue;
     }
     const taken = await semaphore.acquireSpecific({
+      allowedSlugs: previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: slot.slug,
       leaseMs: holdMs,
@@ -1240,19 +1262,57 @@ export async function reconcile() {
 type ProvisionAuthPreviewConfigsOptions = {
   /** Regenerate OAuth client secrets and app auth tokens instead of keeping existing values. */
   rotate?: boolean;
+  /** Comma-separated preview slots or ranges, for example `10-19` or `10-12,19`. */
+  slots?: string;
 };
 
 export async function provisionAuthPreviewConfigs(
   options: ProvisionAuthPreviewConfigsOptions = {},
 ) {
+  const slots = resolveProvisionAuthPreviewSlotNumbers({
+    availableSlots: previewEnvironmentSlotNumbers,
+    slots: options.slots,
+  });
   await ensureAuthPreviewConfigs({
     rotate: Boolean(options.rotate),
+    slots,
   });
 
   return {
     rotated: Boolean(options.rotate),
-    slots: previewEnvironmentSlotNumbers.length,
+    slots: slots.length,
   };
+}
+
+function resolveProvisionAuthPreviewSlotNumbers(input: {
+  availableSlots: number[];
+  slots: string | undefined;
+}) {
+  if (!input.slots) return input.availableSlots;
+
+  const requestedSlots = input.slots.split(",").flatMap((segment) => {
+    const trimmedSegment = segment.trim();
+    const singleSlot = /^(\d+)$/.exec(trimmedSegment);
+    if (singleSlot) return [Number(singleSlot[1])];
+
+    const range = /^(\d+)-(\d+)$/.exec(trimmedSegment);
+    if (!range) throw new Error(`Invalid preview slot selection ${JSON.stringify(segment)}`);
+
+    const first = Number(range[1]);
+    const last = Number(range[2]);
+    if (last < first) {
+      throw new Error(`Invalid descending preview slot range ${trimmedSegment}`);
+    }
+    return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  });
+
+  const uniqueSlots = [...new Set(requestedSlots)];
+  for (const slot of uniqueSlots) {
+    if (!input.availableSlots.includes(slot)) {
+      throw new Error(`Cannot provision unknown preview slot ${slot}`);
+    }
+  }
+  return uniqueSlots;
 }
 
 export const CloudflarePreviewAppSlug = z.enum([
@@ -1985,6 +2045,61 @@ export const environmentConfigLeaseInventory = previewEnvironmentSlotNumbers.map
   };
 }) satisfies EnvironmentConfigLeaseInventoryItem[];
 
+const previewEnvironmentSlugs = environmentConfigLeaseInventory.map((resource) => resource.slug);
+
+function resolveRequestedPreviewEnvironment(body: string): string | null {
+  const actionableBody = withoutMarkdownExamplesOrComments(body);
+  const matches = [...actionableBody.matchAll(/^preview_environment=(preview-\d+)\r?$/gm)];
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error("PR body must contain at most one preview_environment directive");
+  }
+
+  const slug = matches[0]?.[1];
+  if (!slug || !previewEnvironmentSlugs.includes(slug)) {
+    throw new Error(
+      `Unknown preview_environment ${slug || "value"}. Expected one of: ${previewEnvironmentSlugs.join(", ")}`,
+    );
+  }
+  return slug;
+}
+
+function withoutMarkdownExamplesOrComments(body: string): string {
+  const lines = body.replace(/<!--[\s\S]*?-->/g, "").split("\n");
+  const actionable: string[] = [];
+  let fence: { length: number; marker: "`" | "~" } | null = null;
+
+  for (const line of lines) {
+    const match = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (match && match[1]?.[0] === fence.marker && match[1].length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    if (match?.[1]) {
+      fence = { length: match[1].length, marker: match[1][0] as "`" | "~" };
+      continue;
+    }
+    actionable.push(line);
+  }
+
+  return actionable.join("\n");
+}
+
+function describePreviewSlotChange(input: {
+  changedAt: string;
+  nextSlug: string;
+  previousSlug: string | null;
+  requestedEnvironment: string | null;
+}): string | null {
+  if (!input.previousSlug || input.previousSlug === input.nextSlug) return null;
+  if (input.requestedEnvironment === input.nextSlug) {
+    return `This PR requested ${input.nextSlug} via preview_environment, so its slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt}. Everything below refers to the new slot.`;
+  }
+  return `This PR's slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`;
+}
+
 type PreviewSemaphoreLease = {
   data: Record<string, unknown>;
   expiresAt: number;
@@ -1996,12 +2111,14 @@ type PreviewSemaphoreLease = {
 
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: {
+    allowedSlugs: string[];
     holder?: string;
     leaseMs: number;
     type: string;
     waitMs?: number;
   }) => Promise<PreviewSemaphoreLease>;
   acquireSpecific: (input: {
+    allowedSlugs: string[];
     force?: boolean;
     holder?: string;
     leaseMs: number;
@@ -2036,6 +2153,7 @@ type PreviewRuntime = {
 type PullRequestPreviewContext = {
   githubToken: string;
   pullRequestBaseSha: string;
+  pullRequestBody: string;
   pullRequestHeadSha: string;
   pullRequestIsDraft: boolean;
   pullRequestLabels: string[];
@@ -2099,10 +2217,10 @@ function createPreviewSemaphoreResourceClient(
   });
 
   return {
-    acquire: ({ holder, leaseMs, type, waitMs }) =>
-      semaphore.resources.acquire({ holder, leaseMs, type, waitMs }),
-    acquireSpecific: ({ force, holder, leaseMs, slug, type }) =>
-      semaphore.resources.acquireSpecific({ force, holder, leaseMs, slug, type }),
+    acquire: ({ allowedSlugs, holder, leaseMs, type, waitMs }) =>
+      semaphore.resources.acquire({ allowedSlugs, holder, leaseMs, type, waitMs }),
+    acquireSpecific: ({ allowedSlugs, force, holder, leaseMs, slug, type }) =>
+      semaphore.resources.acquireSpecific({ allowedSlugs, force, holder, leaseMs, slug, type }),
     release: ({ force, leaseId, slug, type }) =>
       semaphore.resources.release({ force, leaseId, slug, type }),
     list: ({ type }) => semaphore.resources.list({ type }),
@@ -2896,7 +3014,7 @@ function resolveAuthPreviewRootSecret(input: {
   );
 }
 
-async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
+async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
   const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
   if (!authSigningPrivateJwk) {
     throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
@@ -2928,7 +3046,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
 
-  for (const slot of previewEnvironmentSlotNumbers) {
+  for (const slot of input.slots) {
     const config = `preview_${slot}`;
     const authOrigin = `https://auth.iterate-preview-${slot}.com`;
     const osOrigin = `https://os.iterate-preview-${slot}.com`;
@@ -4115,6 +4233,7 @@ async function acquireAnyEnvironmentConfigLease(input: {
     const waitMs = attempt === 1 ? 0 : Math.max(0, Math.min(slotWaitPerAttemptMs, remainingMs));
     try {
       const acquired = await input.semaphore.acquire({
+        allowedSlugs: previewEnvironmentSlugs,
         type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         leaseMs: input.leaseMs,
         waitMs,
@@ -4285,6 +4404,14 @@ async function assignEnvironmentConfigLease(input: {
     (await adoptLeaseHeldBySemaphore({
       holder: input.holder,
       leaseMs: input.leaseMs,
+      onAdopted: (lease) =>
+        lease.slug === input.recordedSlug
+          ? Promise.resolve(true)
+          : eraseAcquiredSlotOrGiveItBack({
+              eraseSlotData: input.eraseSlotData,
+              lease,
+              semaphore: input.semaphore,
+            }),
       preferSlug: input.recordedSlug,
       semaphore: input.semaphore,
     })) ??
@@ -4305,61 +4432,90 @@ async function assignEnvironmentConfigLease(input: {
 
   let lease: EnvironmentConfigLease;
   if (input.wantedSlug) {
-    if (input.force) {
+    try {
       const currentHolder = await findEnvironmentConfigLeaseHolder(
         input.semaphore,
         input.wantedSlug,
       );
-      if (currentHolder && currentHolder !== input.holder) {
+      const resumeInterruptedMove = currentHolder === input.holder;
+      if (resumeInterruptedMove) {
+        logPreview(
+          `continuing interrupted move: ${input.holder} already holds requested slot ${input.wantedSlug}`,
+        );
+      } else if (input.force && currentHolder) {
         logPreview(
           `--force: evicting ${currentHolder} from ${input.wantedSlug}. Their deployment on the slot is now fair game.`,
         );
       }
-    }
 
-    const acquired = await input.semaphore.acquireSpecific({
-      leaseMs: input.leaseMs,
-      slug: input.wantedSlug,
-      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-      holder: input.holder,
-      force: input.force,
-    });
-    if (!acquired) {
-      const currentHolder = await findEnvironmentConfigLeaseHolder(
-        input.semaphore,
-        input.wantedSlug,
-      );
-      if (currentHolder) {
-        const prUrl = holderPullRequestUrl(currentHolder);
+      const acquired = await input.semaphore.acquireSpecific({
+        allowedSlugs: previewEnvironmentSlugs,
+        leaseMs: input.leaseMs,
+        slug: input.wantedSlug,
+        type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        holder: input.holder,
+        // Semaphore intentionally rejects every active lease without force,
+        // including another lease held by this same holder. Re-issue that one
+        // exactly like adoption, then release the old recorded slot below.
+        force: input.force || resumeInterruptedMove,
+      });
+      if (!acquired) {
+        const currentHolder = await findEnvironmentConfigLeaseHolder(
+          input.semaphore,
+          input.wantedSlug,
+        );
+        if (currentHolder) {
+          const prUrl = holderPullRequestUrl(currentHolder);
+          throw new Error(
+            [
+              `${input.wantedSlug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
+              "Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:",
+              await describeEnvironmentConfigLeases(input.semaphore),
+            ].join("\n"),
+          );
+        }
+
         throw new Error(
           [
-            `${input.wantedSlug} is leased by ${currentHolder}${prUrl ? ` (${prUrl})` : ""}.`,
-            "Re-run with --force to evict them (their deployment will be clobbered), or pick a free slot:",
+            `${input.wantedSlug} is not a known preview slot. Known slots:`,
             await describeEnvironmentConfigLeases(input.semaphore),
           ].join("\n"),
         );
       }
-
-      throw new Error(
-        [
-          `${input.wantedSlug} is not a known preview slot. Known slots:`,
-          await describeEnvironmentConfigLeases(input.semaphore),
-        ].join("\n"),
-      );
+      // Same entry invariant as every other handover — this also covers a
+      // --force eviction, where the acquired slot holds the evicted PR's data.
+      const clean = await eraseAcquiredSlotOrGiveItBack({
+        eraseSlotData: input.eraseSlotData,
+        lease: acquired,
+        semaphore: input.semaphore,
+      });
+      if (!clean) {
+        throw new Error(
+          `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
+        );
+      }
+      lease = toEnvironmentConfigLease(acquired);
+    } catch (error) {
+      if (!heldLease || heldLease.slug === input.recordedSlug) throw error;
+      try {
+        const released = await input.semaphore.release({
+          type: heldLease.type,
+          slug: heldLease.slug,
+          leaseId: heldLease.leaseId,
+        });
+        logPreview(
+          released.released
+            ? `requested slot assignment failed; released unrelated held slot ${heldLease.slug}`
+            : `requested slot assignment failed; unrelated held slot ${heldLease.slug} was already gone`,
+        );
+      } catch (releaseError) {
+        throw new AggregateError(
+          [error, releaseError],
+          `Requested slot ${input.wantedSlug} could not be assigned, and releasing unrelated held slot ${heldLease.slug} also failed.`,
+        );
+      }
+      throw error;
     }
-    // Same entry invariant as every other handover — this also covers a
-    // --force eviction, where the acquired slot holds the evicted PR's data.
-    const clean = await eraseAcquiredSlotOrGiveItBack({
-      eraseSlotData: input.eraseSlotData,
-      lease: acquired,
-      semaphore: input.semaphore,
-    });
-    if (!clean) {
-      throw new Error(
-        `Erasing ${acquired.slug} failed, so its lease was given back rather than assigning a dirty slot. Retry, or pick another slot.`,
-      );
-    }
-    lease = toEnvironmentConfigLease(acquired);
   } else {
     // A human is asking right now — fail fast with the holder table instead
     // of queueing like CI does.
@@ -4453,6 +4609,7 @@ async function adoptLeaseHeldBySemaphore(input: {
   );
   for (const resource of held) {
     const reissued = await input.semaphore.acquireSpecific({
+      allowedSlugs: previewEnvironmentSlugs,
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: resource.slug,
       leaseMs: input.leaseMs,
@@ -4492,6 +4649,7 @@ async function retakeRecordedSlotIfFree(input: {
     return null;
   }
   const retaken = await input.semaphore.acquireSpecific({
+    allowedSlugs: previewEnvironmentSlugs,
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     slug: input.recordedSlug,
     leaseMs: input.leaseMs,
@@ -5448,6 +5606,7 @@ async function resolvePullRequestPreviewContext(params: {
   return {
     githubToken: params.githubToken,
     pullRequestBaseSha: pullRequest.data.base.sha,
+    pullRequestBody: pullRequest.data.body || "",
     pullRequestHeadSha: pullRequest.data.head.sha,
     pullRequestIsDraft: pullRequest.data.draft === true,
     pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
@@ -5480,6 +5639,7 @@ export const previewInternals = {
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
+  describePreviewSlotChange,
   diagnosePreviewFleetCapacity,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
@@ -5502,6 +5662,8 @@ export const previewInternals = {
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
   resolveAuthPreviewRootSecret,
+  resolveProvisionAuthPreviewSlotNumbers,
+  resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,

@@ -18,6 +18,7 @@ describe("chooseRootProjectRedirect", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: "beta",
+        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha" }), project({ id: "prj_b", slug: "beta" })],
       }),
     ).toMatchObject({
@@ -27,10 +28,25 @@ describe("chooseRootProjectRedirect", () => {
     });
   });
 
+  test("checks onboarding for the most recently active project", () => {
+    expect(
+      chooseRootProjectRedirect({
+        preferredProjectSlug: "beta",
+        preferredProjectOnboarding: true,
+        projects: [project({ id: "prj_a", slug: "alpha" }), project({ id: "prj_b", slug: "beta" })],
+      }),
+    ).toMatchObject({
+      kind: "project",
+      project: { slug: "beta" },
+      onboarding: true,
+    });
+  });
+
   test("sends the only ready project to onboarding", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
+        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha" })],
       }),
     ).toMatchObject({
@@ -44,6 +60,7 @@ describe("chooseRootProjectRedirect", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
+        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "missing" })],
       }),
     ).toMatchObject({
@@ -57,6 +74,7 @@ describe("chooseRootProjectRedirect", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
+        preferredProjectOnboarding: false,
         projects: [
           project({ id: "prj_a", slug: "alpha", deploymentStatus: "missing" }),
           project({ id: "prj_b", slug: "beta", deploymentStatus: "missing" }),
@@ -67,6 +85,7 @@ describe("chooseRootProjectRedirect", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
+        preferredProjectOnboarding: false,
         projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
       }),
     ).toEqual({ kind: "projects" });
