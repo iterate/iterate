@@ -441,8 +441,9 @@ independent sockets from killing each other. Collapse to one:
   `params.projectSlug` straight through with no client-side slug→id hop.
   There is **no provider**: the socket is module-global and every hook dials it
   lazily, so `<ProjectScope slug>` just carries the ambient slug (for `useItx()`
-  with no arg) and pre-warms the socket — the sidebar / ⌘K / admin use itx with
-  no `<ProjectScope>` at all.
+  with no arg) — the sidebar / ⌘K / admin use itx with no `<ProjectScope>` at
+  all. The OS project layout separately pre-warms the socket behind the narrow
+  browser-only boundary, leaving project identity and simple leaves SSR-safe.
 - **Reconnect is invisible.** React reads an immutable `Snapshot`;
   `snapshot.session` keeps the last live session across a transport gap, so
   `useIterateSession()` suspends exactly once (first load) and reads are
@@ -484,7 +485,7 @@ independent sockets from killing each other. Collapse to one:
 - **Deleted:** the socket `Map`, `connectionKey`, `ItxAddress`,
   `evictItxSocket`/`evictItxSocketIfCurrent`, the `Session & Project` handle
   intersection, the mirror's dedicated socket, **`<ItxProvider>`** (no provider is
-  needed above a module-global socket — its pre-warm folded into `<ProjectScope>`),
+  needed above a module-global socket; pre-warm is an app-level client boundary),
   and the **12 per-page `<ItxBoundary>` wrappers** (TanStack Router already wraps
   every route match in `<Suspense>` via its `defaultPendingComponent`). The mirror
   rides the shared session and can no longer blank the page on its own reconnect.
