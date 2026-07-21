@@ -7,7 +7,6 @@ import type {
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
-import { freshTestProjectId } from "../../apps/os/e2e/test-support/with-test-project-identifiers.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 
 type OsPlaywrightAuthConfig = {
@@ -135,9 +134,7 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,
   });
-  using created = await session.projects
-    .get(input.slug)
-    .create({ projectId: freshTestProjectId() });
+  using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 
