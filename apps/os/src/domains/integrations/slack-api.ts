@@ -116,8 +116,8 @@ function slackEgressAdapter(input: {
 export function connectionSlackClient(input: { connection: string; projectId: string }): WebClient {
   const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   return new WebClient(placeholder, {
-    // Dials the project egress door (not the Secret DO directly, unlike
-    // github/gmail) so project egress interceptors observe Slack calls.
+    // Dials the project egress door so project interceptors and approval rules
+    // observe Slack calls before the Secret DO substitutes the token.
     adapter: slackEgressAdapter({
       connection: input.connection,
       projectId: input.projectId,
