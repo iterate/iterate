@@ -68,7 +68,7 @@ type ProjectStreamViewProps = {
   /** Domain identity shown directly below the generic stream header. */
   contextHeader?: ReactNode;
   defaultComposerMode?: "message" | "raw";
-  emptyLabel?: string;
+  emptyLabel?: string | null;
   /**
    * "split" (default) shows the panel beside the feed; "fullPanel" hands the
    * panel the whole content area and relegates the feed (with its filter row,

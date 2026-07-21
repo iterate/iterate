@@ -169,7 +169,7 @@ function ProjectAgentDetailContent() {
               runtimeTransition={agentRuntimeTransition}
             />
           }
-          emptyLabel="No events on this agent stream yet."
+          emptyLabel={null}
           messageComposer={{
             onInterrupt: interruptAgentMessage,
             onSubmit: submitAgentMessage,
