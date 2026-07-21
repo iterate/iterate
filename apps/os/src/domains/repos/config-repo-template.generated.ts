@@ -933,6 +933,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type: \"stateful\",\n" +
       "} satisfies StatefulDynamicWorkerRef;\n" +
       "\n" +
+      "let guestbookInitialization: Promise<void> | undefined;\n" +
+      "\n" +
       "// This is ordinary project policy. Every GitHub-linked project repository is\n" +
       "// in scope; no platform GitHub code knows that pull-request agents exist.\n" +
       "// Record keys are stable rule IDs: duplicate identities are structurally\n" +
@@ -1042,31 +1044,39 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
-      "      using itx = await this.env.ITX.get();\n" +
-      "      await itx.streams.get(\"/guestbook\").append(\n" +
-      "        {\n" +
-      "          type: \"events.iterate.com/guestbook/created\",\n" +
-      "          payload: { config: { title: \"Guestbook\" } },\n" +
-      "          idempotencyKey: \"guestbook/created\",\n" +
-      "        },\n" +
-      "        {\n" +
-      "          type: \"events.iterate.com/stream/subscription-configured\",\n" +
-      "          payload: {\n" +
-      "            subscriptionKey: \"app-guestbook#guestbook\",\n" +
-      "            delivery: {\n" +
-      "              mode: \"wake\",\n" +
-      "              expression: [\n" +
-      "                \"workers\",\n" +
-      "                [\"get\", guestbookAppRef],\n" +
-      "                \"processor\",\n" +
-      "                \"wakeStreamSubscriber\",\n" +
-      "              ],\n" +
-      "              processorSlug: \"guestbook\",\n" +
-      "            },\n" +
+      "      guestbookInitialization ??= (async () => {\n" +
+      "        using itx = await this.env.ITX.get();\n" +
+      "        await itx.streams.get(\"/guestbook\").append(\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/guestbook/created\",\n" +
+      "            payload: { config: { title: \"Guestbook\" } },\n" +
+      "            idempotencyKey: \"guestbook/created\",\n" +
       "          },\n" +
-      "          idempotencyKey: \"guestbook/subscription:v1\",\n" +
-      "        },\n" +
-      "      );\n" +
+      "          {\n" +
+      "            type: \"events.iterate.com/stream/subscription-configured\",\n" +
+      "            payload: {\n" +
+      "              subscriptionKey: \"app-guestbook#guestbook\",\n" +
+      "              delivery: {\n" +
+      "                mode: \"wake\",\n" +
+      "                expression: [\n" +
+      "                  \"workers\",\n" +
+      "                  [\"get\", guestbookAppRef],\n" +
+      "                  \"processor\",\n" +
+      "                  \"wakeStreamSubscriber\",\n" +
+      "                ],\n" +
+      "                processorSlug: \"guestbook\",\n" +
+      "              },\n" +
+      "            },\n" +
+      "            idempotencyKey: \"guestbook/subscription:v1\",\n" +
+      "          },\n" +
+      "        );\n" +
+      "      })().catch((error: unknown) => {\n" +
+      "        // A failed setup must be retryable by the next request; successful\n" +
+      "        // setup remains durable and needs no more stream RPCs in this isolate.\n" +
+      "        guestbookInitialization = undefined;\n" +
+      "        throw error;\n" +
+      "      });\n" +
+      "      await guestbookInitialization;\n" +
       "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +
       "    }\n" +
       "    if (app === \"tasks\") {\n" +
