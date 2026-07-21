@@ -278,6 +278,10 @@ browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
 `8x32`, or `16x64` from measured workload demand. Preview deploy/e2e retains
 `16x64` for its overlapping browser and Vitest pools; its first experiment
 with the image measures startup independently from Cloudflare convergence.
+The image rebuilds when dependency manifests or its bake inputs land on
+`main`, with a weekly scheduled rebuild as a drift repair. Consumers still run
+`pnpm install --frozen-lockfile --prefer-offline`; that reconcile is the
+correctness check and safely handles a stale image.
 Jobs that consume it must keep the image and checkout behavior:
 
 ```yaml

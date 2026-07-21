@@ -18,9 +18,8 @@ import { startEgressEcho } from "./itx-capability-fixtures.ts";
 import { petshopBaseUrl, petshopExpireTokens, shouldSkipPetshopE2e } from "./petshop-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
-
 test("a project mounts ocado into the collection; connections + secret confinement hold", async () => {
+  const runSuffix = crypto.randomUUID().slice(0, 8);
   const echo = await startEgressEcho();
   try {
     using session = withItxSession();
@@ -28,7 +27,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = await itx.projects.get(`ocado-${RUN_SUFFIX}`).create({});
+    using project = await itx.projects.get(`ocado-${runSuffix}`).create({});
     await project.__describe();
     const integrations = project.integrations as any;
 
@@ -78,8 +77,8 @@ test("a project mounts ocado into the collection; connections + secret confineme
     // Two connections of one integration, secrets at the same fully
     // qualified paths a built-in would use.
     const secrets = {
-      family: `ocado-session-family-${RUN_SUFFIX}`,
-      mum: `ocado-session-mum-${RUN_SUFFIX}`,
+      family: `ocado-session-family-${runSuffix}`,
+      mum: `ocado-session-mum-${runSuffix}`,
     };
     for (const [connection, material] of Object.entries(secrets)) {
       using secret = project.secrets.get(`/secrets/integrations/ocado/${connection}/session`);
@@ -188,9 +187,10 @@ test("a project mounts ocado into the collection; connections + secret confineme
 // the grammar guard, per-connection __describe (the connect recipe lives
 // there), and a loud method miss out of the replayed client.
 test("builtin waitrose: grammar, __describe, and method-miss stay loud", async () => {
+  const runSuffix = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = await itx.projects.get(`waitrose-builtin-${RUN_SUFFIX}`).create({});
+  using project = await itx.projects.get(`waitrose-builtin-${runSuffix}`).create({});
   await project.__describe();
   const integrations = project.integrations as any;
 
@@ -238,12 +238,13 @@ test("builtin waitrose: grammar, __describe, and method-miss stay loud", async (
 test.skipIf(shouldSkipPetshopE2e())(
   "waitrose-session strategy: username/password secret mints on first use, re-mints on 401, session works on the API",
   async () => {
+    const runSuffix = crypto.randomUUID().slice(0, 8);
     const petshop = petshopBaseUrl();
-    const username = `mum-${RUN_SUFFIX}@example.com`;
+    const username = `mum-${runSuffix}@example.com`;
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = await itx.projects.get(`waitrose-live-${RUN_SUFFIX}`).create({});
+    using project = await itx.projects.get(`waitrose-live-${runSuffix}`).create({});
     await project.__describe();
 
     // The connection secret: the account credential and NOTHING token-shaped.

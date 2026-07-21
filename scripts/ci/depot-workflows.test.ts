@@ -27,6 +27,7 @@ type Workflow = {
   jobs: Record<string, WorkflowJob>;
   on?: {
     push?: {
+      branches?: string[];
       paths?: string[];
     };
   };
@@ -126,6 +127,21 @@ describe("Depot deployment safety", () => {
 });
 
 describe("Depot validation capacity", () => {
+  it("refreshes the baked workspace when dependency inputs land on main", () => {
+    const workflow = loadWorkflow(".depot/workflows/build-preview-ci-image.yml");
+
+    expect(workflow.on?.push?.branches).toEqual(["main"]);
+    expect(workflow.on?.push?.paths).toEqual(
+      expect.arrayContaining([
+        "**/package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "scripts/depot-ci/bake-preview-ci-image.sh",
+        ".depot/workflows/build-preview-ci-image.yml",
+      ]),
+    );
+  });
+
   it("starts preview deploy/e2e from the baked workspace", () => {
     const workflow = loadWorkflow(".depot/workflows/cloudflare-previews.yml");
     const job = workflow.jobs.preview;
