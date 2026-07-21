@@ -239,7 +239,7 @@ message-parsing.
 
 ### B9. Contract `examples` volume (LOW priority)
 
-**Status:** in-pr.
+**Status:** in-pr #2180.
 
 ~1,080 lines of `examples:` across the 8 largest contracts (repo 266/832
 lines = 32% of the file, project 226/767, agent 167/1,039, email 121/468).
