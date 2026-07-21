@@ -2,7 +2,7 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig([
   {
-    entry: ["src/index.ts", "src/preview-proof.ts", "src/stream-tui/agent-chat-terminal.tsx"],
+    entry: ["src/index.ts", "src/stream-tui/agent-chat-terminal.tsx"],
     format: "esm",
     // The CLI + TUI are STANDALONE PROCESS artifacts (bin/iterate spawns the
     // TUI as its own bun process; nothing imports these files in-process). The

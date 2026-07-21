@@ -71,7 +71,7 @@ test("template gets the platform sdk and preview proof from iterate, not committ
   // main), and the RUNTIME imports are satisfied at build time by the
   // platform-injected virtual module (worker-loader.ts), never by npm.
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
-  expect(templateFile("worker.ts")).toContain('from "iterate/preview-proof"');
+  expect(templateFile("worker.ts")).toContain('from "iterate"');
   expect(templateFile("worker.ts")).toContain("pkgPrNewPreviewProof()");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {

@@ -9,7 +9,7 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
-import { pkgPrNewPreviewProof } from "iterate/preview-proof";
+import { pkgPrNewPreviewProof } from "iterate";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
 

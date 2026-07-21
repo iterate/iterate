@@ -32,7 +32,6 @@
     "./processors": "./src/processors/index.ts",
     "./processors/cloudflare": "./src/processors/cloudflare.ts",
     "./processors/testing": "./src/processors/testing.ts",
-    "./preview-proof": "./src/preview-proof.ts",
     "./react": "./src/react.ts",
     "./sdk": "./src/sdk.ts",
     "./worker": "./src/worker.ts"
@@ -74,11 +73,6 @@
         "types": "./dist/processors/testing.d.ts",
         "import": "./dist/processors-testing.mjs",
         "default": "./dist/processors-testing.mjs"
-      },
-      "./preview-proof": {
-        "types": "./dist/preview-proof.d.mts",
-        "import": "./dist/preview-proof.mjs",
-        "default": "./dist/preview-proof.mjs"
       },
       "./react": {
         "types": "./dist/react.d.ts",

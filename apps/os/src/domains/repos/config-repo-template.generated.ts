@@ -706,7 +706,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
-      "import { pkgPrNewPreviewProof } from \"iterate/preview-proof\";\n" +
+      "import { pkgPrNewPreviewProof } from \"iterate\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
       "\n" +
