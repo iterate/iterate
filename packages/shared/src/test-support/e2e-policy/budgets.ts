@@ -52,8 +52,12 @@ export const SPEC_ACTION_TIMEOUT_MS = 750;
 /** Playwright `expect` polling budget — one UI assertion, not a whole flow. */
 export const SPEC_EXPECT_TIMEOUT_MS = 15_000;
 
-/** Microsoft TUI Test per-spec budget for one real-PTY product flow. */
-export const TUI_TEST_TIMEOUT_MS = 45_000;
+/**
+ * Microsoft TUI Test hard watchdog for one real-PTY product flow. Assertions
+ * fail at 15–30s, leaving at least 10s for terminal diagnostics and trace
+ * persistence before this process-killing backstop fires.
+ */
+export const TUI_TEST_TIMEOUT_MS = 55_000;
 
 /** Playwright per-spec budget: a full product flow against a deployed slot. */
 export const SPEC_TEST_TIMEOUT_MS = 90_000;
@@ -81,9 +85,10 @@ export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
 export const OS_ONBOARDING_SMOKE_TIMEOUT_SECS = 240;
 
 /**
- * Watchdog on the built Iterate CLI's PTY lane. One 45s spec plus its single
- * CI retry, package build, and disposable-project setup fits comfortably;
- * expiry is a visible lane failure and is never retried here.
+ * Watchdog on the built Iterate CLI's PTY lane. The independent 55s workflows
+ * run concurrently; one case may retry in a fresh process/project after a 5s
+ * pause. Package build and project setup still fit comfortably. Expiry is a
+ * visible lane failure and is never retried here.
  */
 export const OS_TUI_LANE_TIMEOUT_SECS = 180;
 

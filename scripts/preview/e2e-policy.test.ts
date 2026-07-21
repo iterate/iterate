@@ -75,7 +75,6 @@ describe("retries live in exactly one layer", () => {
     expect(E2E_CI_RETRIES).toBe(1);
     const configs = [
       "playwright.config.ts",
-      "apps/os/e2e/tui-test/tui-test.config.ts",
       "apps/os/e2e/vitest.config.ts",
       "apps/semaphore/e2e/vitest.config.ts",
       "apps/streams-example-app/vitest.config.ts",
@@ -88,6 +87,23 @@ describe("retries live in exactly one layer", () => {
         /retr(?:y|ies):\s*(?:process\.env\.CI|ci)\s*\?\s*\d/,
       );
     }
+  });
+
+  it("retries each TUI workflow outside the framework in a fresh attempt", () => {
+    const config = readFileSync(
+      resolve(repoRoot, "apps/os/e2e/tui-test/tui-test.config.ts"),
+      "utf8",
+    );
+    const runner = readFileSync(resolve(repoRoot, "apps/os/e2e/tui-test/run.ts"), "utf8");
+
+    expect(config).toContain("retries: 0");
+    expect(config).not.toContain("E2E_CI_RETRIES");
+    expect(runner).toContain("runTuiCaseWithRetry");
+    expect(runner).toContain("E2E_CI_RETRIES + 1");
+    expect(runner).toContain("Promise.all(cases.map");
+    expect(runner).toContain("const project = await createTestProject");
+    expect(runner).toContain('join(thisDir, ".tui-test", "case-runs")');
+    expect(runner).toContain("OS_E2E_TUI_TRACE_FOLDER: traceFolder");
   });
 
   it("the os preview lane wraps all four sub-lanes in plain watchdogs — no lane retry", () => {

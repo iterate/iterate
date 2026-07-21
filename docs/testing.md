@@ -241,7 +241,7 @@ streaming or WebSocket behavior.
 
 The rule: **one name per control, and no variable without a real setter**.
 `APP_CONFIG_*` variables come from the Doppler config and describe the
-deployment under test — tests never invent parallel names for them. The two
+deployment under test — tests never invent parallel names for them. The four
 `OS_E2E_TUI_*` variables and `E2E_RETRY_TELEMETRY_FILE` are the only harness
 knobs. Nothing else exists (the root Playwright config additionally honors
 the Playwright-conventional `CI` and `VIDEO_MODE`).
@@ -253,8 +253,10 @@ the Playwright-conventional `CI` and `VIDEO_MODE`).
 | `APP_CONFIG_INTEGRATIONS__SLACK` | Doppler                                                 | Gates the slack-agent e2e suite (provides the Slack signing secret)                                                     | Unset → suite skips                 |
 | `SLACK_CI_BOT_TOKEN`             | Doppler (`os/*`, `_shared/prd`)                         | **Inbound message actor** for real Slack smokes (Niterate). Not the product bot — see [Slack testing](slack-testing.md) | Unset → scripted smokes cannot post |
 | `E2E_RETRY_TELEMETRY_FILE`       | The preview lane (`scripts/preview/preview.ts`), or you | Where the Vitest or TUI runner writes retry JSON (see [Retries and timeouts](#retries-and-timeouts))                    | Unset → log line only, no file      |
-| `OS_E2E_TUI_PROJECT_ID`          | `e2e/tui-test/run.ts` (internal; passed to the spec)    | The disposable project the TUI spec chats against                                                                       | Unset → TUI spec skips              |
+| `OS_E2E_TUI_ITERATE_BIN`         | `e2e/tui-test/run.ts` (internal; passed to TUI Test)    | Absolute built CLI entrypoint for the isolated per-case TUI Test project                                                | Unset → contract error              |
+| `OS_E2E_TUI_PROJECT_ID`          | `e2e/tui-test/run.ts` (internal; passed to the spec)    | The disposable project the TUI spec chats against                                                                       | Unset → contract error              |
 | `OS_E2E_TUI_SNAPSHOT`            | You                                                     | `"1"` opts into the manual aesthetic TUI snapshot test                                                                  | Skipped                             |
+| `OS_E2E_TUI_TRACE_FOLDER`        | `e2e/tui-test/run.ts` (internal; passed to TUI Test)    | Isolates traces by workflow and external attempt                                                                        | `tui-traces`                        |
 | `GITHUB_SHA`                     | GitHub Actions (ambient)                                | Labels the preview-smoke seed project slug in CI                                                                        | `"manual"`                          |
 | `CI`                             | GitHub Actions                                          | Playwright: `forbidOnly`, one retry, trace on first retry, never reuse an existing dev server                           | Unset locally                       |
 | `VIDEO_MODE`                     | You                                                     | `"1"` records spec demo videos with relaxed timeouts — see [Video mode](#video-mode-recorded-spec-demos-for-prs)        | Video only retained on failure      |
@@ -393,7 +395,7 @@ only on genuine infra wedges).
 | --------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------- |
 | One UI action               | `actionTimeout` + spinner-waiter      | `playwright.config.ts` ← `SPEC_ACTION_TIMEOUT_MS`                                                           | 750ms (→ ~30s with spinner)                       | fail the attempt                                            |
 | One assertion               | `expect.timeout`                      | `playwright.config.ts` ← `SPEC_EXPECT_TIMEOUT_MS`                                                           | 15s                                               | fail the attempt                                            |
-| One TUI workflow spec       | `timeout`                             | `apps/os/e2e/tui-test/tui-test.config.ts` ← `TUI_TEST_TIMEOUT_MS`                                           | 45s                                               | retry once (CI)                                             |
+| One TUI workflow spec       | assertion deadlines + `timeout`       | `apps/os/e2e/tui-test/` ← `SPEC_EXPECT_TIMEOUT_MS` / `TUI_TEST_TIMEOUT_MS`                                  | 15–30s assertions; 55s hard watchdog              | wrapper retries once in a fresh process/project (CI)        |
 | One Playwright spec         | `timeout`                             | `playwright.config.ts` ← `SPEC_TEST_TIMEOUT_MS`                                                             | 90s                                               | retry once (CI)                                             |
 | One vitest e2e test/hook    | `testTimeout` / `hookTimeout`         | `apps/os/e2e/vitest.config.ts` ← `E2E_TEST_TIMEOUT_MS`                                                      | 120s                                              | retry once (CI)                                             |
 | The built-package TUI lane  | `timeout N <lane command>`            | `scripts/preview/preview.ts` ← `OS_TUI_LANE_TIMEOUT_SECS`                                                   | 180s                                              | **fail — never retry**                                      |

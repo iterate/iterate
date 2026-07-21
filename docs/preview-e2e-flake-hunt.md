@@ -45,6 +45,23 @@ visible in the ledger and investigated.
 Progress and failure diagnoses live in the active PR's comments; this section
 is updated with the final run IDs and outcome once the proof completes.
 
+The first marathon attempt (`wzg4nbj1j7`) stopped on run 1 after both TUI
+workflows hit their 45s watchdog. TUI Test 0.0.4 then reported an immediate
+`Worker terminated` for each retry and wrote no trace. Source inspection found
+two deterministic test-harness defects. The dynamic agent-path suffix made the
+header long enough to clip the literal `live` label while the terminal was in
+fact connected and fully rendered, so both tests waited on absent layout text.
+Then the framework timeout terminated the per-file worker, but its retry loop
+reused that same dead worker; trace persistence also runs inside the worker
+after the test returns. The agent path is now a short constant within each
+fresh project. The TUI lane launches its two independent workflows concurrently
+in separate processes/projects, retries only the failed workflow at the wrapper
+boundary with a new process/project, and uses assertion deadlines below the 55s
+hard watchdog so ordinary failures persist terminal diagnostics and
+per-attempt traces before process teardown. A direct preview-7 proof completed
+both workflows on their first attempt in 8.6s max (19s including the one-time
+package build and project setup).
+
 ## Round 4 (2026-07-13/14, PR #1938)
 
 Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
