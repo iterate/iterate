@@ -160,12 +160,12 @@ function AdminSidebar() {
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton size="lg" tooltip="Iterate Admin" render={<Link to="/admin" />}>
+              <SidebarMenuButton size="lg" tooltip="iterate admin" render={<Link to="/admin" />}>
                 <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
                   <ShieldIcon aria-hidden="true" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">Iterate Admin</span>
+                  <span className="truncate font-medium">iterate admin</span>
                   <span className="truncate text-xs text-sidebar-foreground/70">
                     Platform tools
                   </span>

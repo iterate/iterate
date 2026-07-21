@@ -26,7 +26,7 @@ test("project ingress serves the static seeded homepage at the root", async () =
   const pageResponse = await fetch(buildUrl({ path: `/${projectId}` }));
   expect(pageResponse).toMatchObject({ status: 200 });
   const homepage = await pageResponse.text();
-  expect(homepage).toContain("Hello from your Iterate project worker");
+  expect(homepage).toContain("Hello from your iterate project worker");
   // The homepage links to each seeded app on its own host: the current host
   // prefixed with "<app>--".
   const requestHost = new URL(buildUrl({ path: "/" })).host;

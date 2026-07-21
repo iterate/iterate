@@ -54,7 +54,7 @@ describe("email OTP", () => {
     });
 
     assert.deepEqual(sentMessage, {
-      from: { email: "noreply+auth@nustom.com", name: "Iterate" },
+      from: { email: "noreply+auth@nustom.com", name: "iterate" },
       to: "alice@nustom.com",
       subject: "Your verification code: 123456",
       text: "Your verification code is: 123456\n\nThis code expires in 5 minutes.",
@@ -94,18 +94,18 @@ describe("organization invitation email", () => {
     });
 
     assert.deepEqual(sentMessage, {
-      from: { email: "noreply+auth@nustom.com", name: "Iterate" },
+      from: { email: "noreply+auth@nustom.com", name: "iterate" },
       to: "alice@nustom.com",
-      subject: "Sam Inviter invited you to Nustom on Iterate",
+      subject: "Sam Inviter invited you to Nustom on iterate",
       text: [
-        "Sam Inviter (sam@nustom.com) invited you to join Nustom on Iterate as admin.",
+        "Sam Inviter (sam@nustom.com) invited you to join Nustom on iterate as admin.",
         "",
         "Accept the invitation: https://auth.iterate.com/invitations/inv_123",
         "",
         "You need to sign in with this email address before accepting.",
       ].join("\n"),
       html: [
-        "<p>Sam Inviter (sam@nustom.com) invited you to join <strong>Nustom</strong> on Iterate as admin.</p>",
+        "<p>Sam Inviter (sam@nustom.com) invited you to join <strong>Nustom</strong> on iterate as admin.</p>",
         '<p><a href="https://auth.iterate.com/invitations/inv_123">Accept the invitation</a></p>',
         "<p>You need to sign in with this email address before accepting.</p>",
       ].join(""),

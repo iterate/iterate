@@ -9,7 +9,7 @@ export const Route = createRootRouteWithContext<TanstackRouterContext>()({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Auth | Iterate" },
+      { title: "Auth | iterate" },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),

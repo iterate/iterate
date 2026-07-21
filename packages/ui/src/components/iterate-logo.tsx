@@ -3,7 +3,7 @@ import iterateLogoAsset from "../assets/iterate-logo.svg";
 import { cn } from "../lib/utils.ts";
 
 export function IterateLogo({
-  alt = "Iterate",
+  alt = "iterate",
   className,
   ...props
 }: Omit<ComponentProps<"img">, "src">) {
