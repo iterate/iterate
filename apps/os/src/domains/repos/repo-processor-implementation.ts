@@ -9,8 +9,7 @@ import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
 import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
-  type RepoCommittedFileChange,
-} from "./repo-task-events.ts";
+} from "./repo-push-events.ts";
 import { isRepoNotSeededError } from "./utils.ts";
 
 /**
@@ -40,15 +39,12 @@ import { isRepoNotSeededError } from "./utils.ts";
  * is projected into the in-memory branch-head cache (including ref
  * DELETIONS, which produce no commit facts but must still evict a warm head)
  * and, when it carries a commit, normalized into `repo/commit-completed`,
- * idempotency-keyed on the (before, after, branch) coordinates. Each
- * commit-completed event on the default branch is then diffed for Markdown
- * task files, producing `repo/task-created|updated|deleted` facts keyed on
- * the same coordinates plus the path — all per-event `blockProcessorWhile`
- * work: each fact derives from an event that is delivered once, so a dropped
- * append would lose it forever, and the stable keys collapse redeliveries.
- * The default branch is known from the moment create-requested reduces
- * (every creation mode targets main), so a push racing the terminal
- * certificate still lands its facts.
+ * idempotency-keyed on the (before, after, branch) coordinates — per-event
+ * `blockProcessorWhile` work: each fact derives from an event that is
+ * delivered once, so a dropped append would lose it forever, and the stable
+ * keys collapse redeliveries. The default branch is known from the moment
+ * create-requested reduces (every creation mode targets main), so a push
+ * racing the terminal certificate still lands its facts.
  *
  * GitHub is an ingress lane, not a second source of commit facts. A
  * cross-posted `github/webhook-received` push delivery — provenance-checked
@@ -64,15 +60,15 @@ import { isRepoNotSeededError } from "./utils.ts";
  * fast-forward — out-of-order deliveries are satisfied by any newer head),
  * then settle with `github-import-completed` or `github-import-failed`. A
  * failure closes the obligation instead of wedging later repo events; the
- * resulting Artifacts queue event remains the ONLY source of
- * commit-completed/task facts.
+ * resulting Artifacts queue event remains the ONLY source of commit-completed
+ * facts.
  *
  * RECOVERY is the same code path as normal operation: an incarnation that
  * dies owing work gets the keepalive's `stream/processor-revived` fact
- * appended, whose ordinary delivery lands at head and re-runs the at-head
- * pass — an open creation request with no live attempt is re-driven, an
- * import with no live driver (fresh incarnations have empty runtime sets) is
- * re-driven under the same request identity, so a zombie attempt racing the
+ * appended; its wake produces the eventless at-head pass — an open creation
+ * request with no live attempt is re-driven, and an import with no live driver
+ * (fresh incarnations have empty runtime sets) is re-driven under the same
+ * request identity, so a zombie attempt racing the
  * successor collapses on the shared idempotency keys.
  */
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
@@ -98,7 +94,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   // Synchronous. The side-effect lanes are chosen HERE, at the dispatch site,
   // never inside helpers:
   //
-  // - PER-EVENT consequences (commit/task facts, the import request) use
+  // - PER-EVENT consequences (commit facts, the import request) use
   //   `blockProcessorWhile`: each derives from an event delivered once, so a
   //   dropped append loses the fact forever.
   // - STATE-DERIVED consequences run after the switch, at head only, in
@@ -145,36 +141,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         );
         break;
       }
-      case "events.iterate.com/repo/commit-completed": {
-        if (state.defaultBranch === null || event.payload.branch !== state.defaultBranch) break;
-        blockProcessorWhile(async () => {
-          // The tree diff is deterministic from the commit coordinates, so a
-          // redelivery re-appends identical bodies and dedupes on the keys.
-          const taskChanges = await this.deps.taskChangesForArtifactPush({
-            afterCommitOid: event.payload.commitOid,
-            beforeCommitOid: event.payload.beforeCommitOid,
-            branch: event.payload.branch,
-          });
-          if (taskChanges.length === 0) return;
-          await append(
-            ...taskChanges.map((change) => ({
-              type: `events.iterate.com/repo/task-${change.kind}` as
-                | "events.iterate.com/repo/task-created"
-                | "events.iterate.com/repo/task-updated"
-                | "events.iterate.com/repo/task-deleted",
-              idempotencyKey: this.idempotencyKey(
-                `task-${change.kind}:${event.payload.beforeCommitOid ?? "none"}:${event.payload.commitOid}:${change.path}`,
-              ),
-              payload: {
-                branch: event.payload.branch,
-                commitOid: event.payload.commitOid,
-                path: change.path,
-              },
-            })),
-          );
-        });
-        break;
-      }
       case "events.iterate.com/github/webhook-received": {
         const push = repoGithubPushFromWebhookPayload(event.payload);
         const origin = event.source?.crossPostedFrom?.at(-1);
@@ -195,7 +161,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         // GitHub is an ingress lane, not a second source of commit facts: the
         // webhook opens an obligation; the at-head pass below imports GitHub
         // without holding the cursor. The resulting Artifacts queue event
-        // remains the ONLY source of commit-completed/task facts.
+        // remains the ONLY source of commit-completed facts.
         blockProcessorWhile(() =>
           append({
             type: "events.iterate.com/repo/github-import-requested",
@@ -368,7 +334,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           createRequest: event.payload,
           // Every creation mode targets main. Record that invariant with the
           // intent so an Artifact push racing the terminal certificate is
-          // still normalized into durable commit/task facts.
+          // still normalized into durable commit facts.
           defaultBranch: REPO_DEFAULT_BRANCH,
         };
       case "events.iterate.com/repos/created":
@@ -438,9 +404,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       case "events.iterate.com/stream/created":
         return { ...state, initialized: true };
       default:
-        // commit-completed, task facts, webhook deliveries, and
-        // processor-revived: consumed for their delivery turn (per-event
-        // facts or a guaranteed at-head pass), no state change.
+        // commit-completed and webhook deliveries are consumed for their
+        // per-event delivery turn; no state change.
         return state;
     }
   }
@@ -482,13 +447,6 @@ type RepoProcessorDeps = {
     beforeCommitOid: string | null;
     branch: string;
   }): void;
-  /** Diff the task-file trees between two commits — deterministic from the
-   * commit coordinates, so redelivered appends dedupe. */
-  taskChangesForArtifactPush(input: {
-    afterCommitOid: string | null;
-    beforeCommitOid: string | null;
-    branch: string;
-  }): Promise<RepoCommittedFileChange[]>;
   /** Adopt the CURRENT GitHub default-branch head into Artifacts (idempotent
    * fast-forward; a newer head than requested also satisfies the request —
    * GitHub webhooks may arrive out of order). */

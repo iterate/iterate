@@ -17,9 +17,11 @@ one hostname/path routing decision (shared logic in `src/ingress.ts`):
 Durable Object classes (all same-script bindings — declared by class name in
 wrangler.jsonc, no namespace IDs, no cross-script anything): Agent,
 AgentCollection, CapabilityHost, Device, Project, Repo, Scheduler, Secret,
-Stream, StatefulWorker, WorkspaceV2, and one container-backed CloudflareSandbox
-class per supported instance size (`sandbox/Dockerfile`, built by `wrangler
-deploy`).
+Stream, StatefulWorker, WorkerBuildCoordinator, WorkspaceV2, and one
+container-backed CloudflareSandbox class per supported instance size
+(`sandbox/Dockerfile`, built by `wrangler deploy`). WorkerBuildCoordinator is
+sharded by immutable build key and holds only live single-flight state; build
+artifacts remain in KV.
 
 ## Compiler sidecars (the "+2")
 

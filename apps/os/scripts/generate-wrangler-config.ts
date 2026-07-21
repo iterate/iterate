@@ -106,6 +106,7 @@ export const RETIRED_WORKER_SECRETS = [
 export function envShapedVars(env: DeployedEnv) {
   return {
     APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_ENVIRONMENT_NAME: env.dopplerConfig,
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
@@ -182,6 +183,7 @@ const DO_CLASSES = {
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
+  WORKER_BUILD_COORDINATOR: "WorkerBuildCoordinatorDurableObject",
   WORKER: "StatefulWorkerDurableObject",
   // Deliberately NOT "WorkspaceDurableObject": declarative exports key
   // namespaces by class name, and the retired single-parent-overlay workspace
@@ -513,6 +515,7 @@ function localDevBindings() {
     ...bindings,
     vars: {
       ...bindings.vars,
+      APP_CONFIG_ENVIRONMENT_NAME: process.env.DOPPLER_CONFIG?.trim() || "dev",
       // Local dev rides the BYOK lane with the response cache, same as the
       // preview slots: agent-loop iteration replays yesterday's answers for
       // free. In envShapedVars for deployed envs; spelled out here because

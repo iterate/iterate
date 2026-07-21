@@ -4,7 +4,7 @@
 // THE GAP THIS CLOSES. Stream-side delivery is already durable (the spine's
 // cursor rows + the stream DO's alarm retry/park machinery,
 // stream-subscribers.ts). What nothing covered is the ZERO-LAG wedge: a
-// processor journals an obligation (`llm-request-requested`,
+// processor records an obligation (`llm-request-requested`,
 // `script-run-requested`), its checkpoint advances, and the in-flight
 // attempt dies with the incarnation — a deploy evicts every DO. The stream
 // sees no lag, arms no retry, and nothing ever dials anything again. The
@@ -15,13 +15,12 @@
 // and `runInBackground` both count), keep a durable DO alarm parked a few
 // seconds ahead. Work settles cleanly → a confirmation fire finds quiet and
 // disarms. The incarnation dies mid-work → the alarm survives it, fires in a
-// fresh incarnation, and REVIVES: append one journaled revival fact to the
+// fresh incarnation, and REVIVES: append one persisted revival fact to the
 // stream (which cold-boots the stream DO — its `woken` fan-out restores the
-// spine) and pull every hosted processor through its pending events. The
-// batch that delivers the revival fact is an ordinary batch, so every
-// processor's end-of-batch reconciliation runs and settles whatever the dead
-// incarnation left behind. Recovery has ONE entrypoint — batch delivery — and
-// the journal narrates the whole episode: requested → revived → failure
+// spine). Its delivery reaches head for the processor: a consumer receives the
+// fact, while a non-consumer receives the runner's eventless at-head pass.
+// Either path can settle whatever the dead incarnation left behind. Recovery
+// has ONE entrypoint — batch delivery — and the stream records the whole episode: requested → revived → failure
 // completion → reschedule.
 //
 // THE IMPOSSIBILITY GUARANTEE. A bug must never keep a DO awake forever, so

@@ -26,7 +26,7 @@ export function posthogSubscriptionEvent() {
     idempotencyKey: "iterate-platform-posthog-subscription-v2",
     payload: {
       subscriptionKey: "iterate-platform-posthog",
-      description: "Iterate's first-party durable-event PostHog feed",
+      description: "iterate's first-party durable-event PostHog feed",
       delivery: {
         mode: "push",
         expression: ["integrations", "posthog", "processEventBatch"],

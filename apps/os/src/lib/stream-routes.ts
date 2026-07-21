@@ -20,7 +20,8 @@ export function linkOptionsForStreamPath(projectSlug: string, path: string) {
   const params = { projectSlug };
 
   if (streamPath === "/") {
-    return linkOptions({ to: "/projects/$projectSlug", params, search: {} });
+    // Root stream + project settings panel (dashboard is not a stream view).
+    return linkOptions({ to: "/projects/$projectSlug/settings", params, search: {} });
   }
   if (streamPath === "/secrets") {
     return linkOptions({ to: "/projects/$projectSlug/secrets", params, search: {} });

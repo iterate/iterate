@@ -2,9 +2,9 @@
 // agent stream (`/agents/email/t<threadId>`). It owns NO event types of its
 // own — everything it consumes and emits belongs to the email router
 // (email-processor-contract.ts, including this facet's own birth certificate,
-// which the ROUTER appends into the creation batch), the agent contract, or
-// the core stream contract — so its schemas are reach-throughs into those
-// contracts plus a few inline state fields.
+// which the ROUTER appends into the creation batch) or the agent contract — so
+// its schemas are reach-throughs into those contracts plus a few inline state
+// fields.
 //
 // The upstream `email` router has already routed inbound mail to this stream.
 // This processor owns the email-specific in-thread behavior: recording thread
@@ -15,7 +15,6 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
-import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { EmailProcessorContract } from "./email-processor-contract.ts";
 
@@ -61,22 +60,14 @@ export const EmailAgentProcessorContract = defineProcessorContract({
     }),
   }),
   events: {},
-  // CoreProcessorContract brings the platform revival fact into scope (see
-  // `consumes`).
-  processorDeps: [AgentProcessorContract, EmailProcessorContract, CoreProcessorContract],
+  processorDeps: [AgentProcessorContract, EmailProcessorContract],
   consumes: [
     "events.iterate.com/email-agent/created",
     "events.iterate.com/email/thread-route-configured",
     "events.iterate.com/email/received",
-    // The platform revival fact (core-owned, ONE type for every recovery-wired
-    // processor; the payload's processorSlug names which). MUST be consumed
-    // (the runner throws at construction otherwise): appended when an
-    // incarnation died owing work — a blocking inbound-mail transcription lost
-    // to a simultaneous Agent+Stream DO death — the append cold-boots the
-    // Stream DO so the unacknowledged frame redelivers and the blocking
-    // transcription re-runs. Never emitted by the processor: the recovery
-    // adapter appends it raw, as the runtime speaking.
-    "events.iterate.com/stream/processor-revived",
+    // The platform revival append cold-boots delivery after a simultaneous
+    // Agent+Stream DO death; recovery reaches head through the eventless pass
+    // without consuming the fact itself.
   ],
   emits: ["events.iterate.com/agents/context-added", "events.iterate.com/agent/binding-set"],
 });

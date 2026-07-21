@@ -1,8 +1,3 @@
-export type RepoCommittedFileChange = {
-  path: string;
-  kind: "created" | "updated" | "deleted";
-};
-
 const ZERO_COMMIT_OID = "0".repeat(40);
 
 /**
@@ -68,31 +63,6 @@ export function repoGithubPushFromWebhookPayload(payload: unknown): {
     return null;
   const branch = ref.slice("refs/heads/".length);
   return branch === "" ? null : { afterCommitOid, branch, installationId, repositoryId };
-}
-
-/** Markdown files below any directory segment named `tasks` are repo tasks. */
-export function isRepoTaskMarkdownPath(path: string): boolean {
-  const segments = path.split("/").filter(Boolean);
-  return /\.(?:md|markdown)$/i.test(segments.at(-1) ?? "") && segments.includes("tasks");
-}
-
-/** Classify task changes between two complete task-file snapshots. */
-export function diffRepoTaskFiles(
-  previous: Readonly<Record<string, string>>,
-  current: Readonly<Record<string, string>>,
-): RepoCommittedFileChange[] {
-  const paths = [...new Set([...Object.keys(previous), ...Object.keys(current)])].sort();
-  return paths.flatMap((path) => {
-    const before = previous[path];
-    const after = current[path];
-    if (before === after) return [];
-    return [
-      {
-        path,
-        kind: before === undefined ? "created" : after === undefined ? "deleted" : "updated",
-      },
-    ];
-  });
 }
 
 function record(value: unknown): Record<string, unknown> | null {

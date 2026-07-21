@@ -60,6 +60,7 @@ export { ProjectDurableObject } from "./domains/projects/project-durable-object.
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
+export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
@@ -222,7 +223,8 @@ async function apiFetch(
     });
     // The serve envelope (domains/workers/project-serve.ts) owns everything a
     // browser sees around the dispatch: cold-build budget, building /
-    // build-failed / serve-error stand-in pages, the @iterate overlay.
+    // build-failed / serve-error stand-in pages, the @iterate overlay, and
+    // the default user-space favicon.
     const { outcome, response } = await serveProjectResponse({
       fetchWorker: (buildBudgetMs) =>
         runner.fetch({
@@ -244,7 +246,13 @@ async function apiFetch(
           waitUntil: (promise) => ctx.waitUntil(promise),
         });
       },
-      request,
+      // Use the worker-visible URL so the /prj_<id>/... development lane
+      // recognizes reserved project paths after its prefix rewrite. Preserve
+      // the routed headers: serve policy only needs request metadata.
+      request: new Request(route.fetch.url, {
+        headers: route.fetch.headers,
+        method: route.fetch.method,
+      }),
     });
     if (outcome !== null) wideLogger.setOutcome(outcome);
     return response;

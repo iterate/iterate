@@ -42,7 +42,6 @@
     "@codemirror/merge": "^6.12.2",
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.16",
-    "@dnd-kit/react": "^0.5.0",
     "@iterate-com/auth": "workspace:*",
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",

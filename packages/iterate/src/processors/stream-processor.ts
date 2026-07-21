@@ -123,16 +123,16 @@ export type ReduceArgs<Contract> = {
  * - `runInBackground` — a DROPPABLE ATTEMPT. The cursor advances
  *   immediately; an eviction loses the closure silently. Every callsite must
  *   answer "what recovers the OUTCOME if this attempt drops?" — legitimate
- *   answers are "an at-head reconciliation (`processEvent` under
- *   `delivery.caughtUp`), via journaled requested/completed evidence" (LLM
+ *   answers are "an at-head pass (`processEvent` under
+ *   `delivery.caughtUp`), via stream-backed requested/completed evidence" (LLM
  *   calls, scripts, debounce timers) or
  *   "nothing, the outcome genuinely doesn't matter" (telemetry). A naked
- *   runInBackground around consequential work with no reconciler is the bug
+ *   runInBackground around consequential work with no recovery pass is the bug
  *   class the 2026-06-10 / 2026-07-07 incidents came from.
  *
  * Both are keepalive-backed: while either kind of work is in flight the
  * runner's recovery adapter parks a durable alarm ahead of it, so an
- * incarnation that dies owing work is revived and the reconcilers get their
+ * incarnation that dies owing work is revived and the processors get their
  * at-head pass (docs/writing-stream-processors.md has the full doctrine).
  */
 type SideEffectHelpers = {

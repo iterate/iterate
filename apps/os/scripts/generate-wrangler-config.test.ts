@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
-import { deploymentReadinessProjectProbes } from "../src/deployment-readiness.ts";
+import {
+  deploymentReadinessNamedProbes,
+  deploymentReadinessProjectProbes,
+} from "../src/deployment-readiness.ts";
 import {
   config,
   localDevAuthJwks,
@@ -64,6 +67,7 @@ it("probes every configured Durable Object namespace before preview tests", () =
   const probedBindings = [
     "CAPABILITY_HOST",
     "STREAM",
+    ...deploymentReadinessNamedProbes.map(([binding]) => binding),
     ...deploymentReadinessProjectProbes.map(([binding]) => binding),
   ].toSorted();
 
@@ -181,6 +185,12 @@ it("emits the AI response-cache key for every deployment while keeping productio
   expect(envShapedVars(envs.preview_6)).toMatchObject({
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
   });
+});
+
+it("exposes the selected environment name to browser-facing config", () => {
+  expect(config.vars.APP_CONFIG_ENVIRONMENT_NAME).toBe(process.env.DOPPLER_CONFIG?.trim() || "dev");
+  expect(envShapedVars(envs.prd).APP_CONFIG_ENVIRONMENT_NAME).toBe("prd");
+  expect(envShapedVars(envs.preview_6).APP_CONFIG_ENVIRONMENT_NAME).toBe("preview_6");
 });
 
 it("does not retain a reconciled Durable Object tombstone", () => {

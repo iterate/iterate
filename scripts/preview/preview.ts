@@ -13,7 +13,14 @@ import {
   deploymentReadinessProbeWaveCount,
 } from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
-import { dummyPetshopEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
+import {
+  authEnvs,
+  dummyPetshopEnvs,
+  envs as osEnvs,
+  previewEnvironmentSlotNumbers,
+  semaphoreEnvs,
+  streamsExampleEnvs,
+} from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -344,6 +351,7 @@ async function deployPreviewApps({
       async (app) => {
         return await deployPreviewAppWithStatus({
           app,
+          existingEntry: current.state.apps[app.slug] ?? null,
           commandEnvironment: {
             ...runtime.commandEnvironment,
             // apps/os/scripts/deploy.ts turns this into
@@ -1351,15 +1359,22 @@ export type CloudflarePreviewApp = {
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   /**
-   * Resolve non-secret public app config from the repo instead of Doppler.
-   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
-   * is the sole source of truth can opt into that source directly.
+   * Resolve non-secret public app config from envs.ts. Doppler supplies only
+   * secrets; readiness probes merge their bearer token into this config.
    */
-  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+  resolvePreviewAppConfig: (dopplerConfig: string) => {
     baseUrl: string;
     projectHostnameBases?: string[];
   };
   paths: string[];
+  /**
+   * Skip this app's deploy when the slot already serves an identical build: a
+   * prior recorded "deployed" entry whose publicUrl matches this slot and
+   * whose fingerprint (git object ids of these paths at HEAD) is unchanged.
+   * For fixture apps that almost never change (dummy-petshop) — the app's
+   * e2e smoke still runs against the existing worker.
+   */
+  contentFingerprintPaths?: string[];
   /** Apps co-selected so this app deploys and tests against one coherent head. */
   previewDependencies?: CloudflarePreviewAppSlug[];
   /**
@@ -1616,6 +1631,16 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = osEnvs[dopplerConfig as keyof typeof osEnvs];
+      if (!env) {
+        throw new Error(`Unknown OS environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return {
+        baseUrl: env.baseUrl,
+        projectHostnameBases: env.projectHostnameBases,
+      };
+    },
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
@@ -1657,7 +1682,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // retry-clean historical full-fleet deploys completed around 72s.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
-    previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestBaseUrlEnvVar: "APP_CONFIG_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
@@ -1740,6 +1765,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // self-cleans; there is nothing slot-scoped to erase on release.
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = semaphoreEnvs[dopplerConfig as keyof typeof semaphoreEnvs];
+      if (!env) {
+        throw new Error(`Unknown Semaphore environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.baseUrl };
+    },
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
@@ -1770,6 +1802,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "auth",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = authEnvs[dopplerConfig as keyof typeof authEnvs];
+      if (!env) {
+        throw new Error(`Unknown Auth environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.authBaseUrl };
+    },
     paths: ["apps/auth/**", "apps/auth-contract/**"],
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
@@ -1791,6 +1830,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = streamsExampleEnvs[dopplerConfig as keyof typeof streamsExampleEnvs];
+      if (!env) {
+        throw new Error(
+          `Unknown streams-example-app environment ${JSON.stringify(dopplerConfig)}.`,
+        );
+      }
+      return { baseUrl: env.baseUrl };
+    },
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
@@ -1866,6 +1914,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       return { baseUrl: env.baseUrl };
     },
     paths: ["apps/dummy-petshop/**"],
+    // The fixture's content barely ever changes; envs.ts rides along because
+    // it decides the generated wrangler routes.
+    contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e"],
@@ -1968,6 +2019,8 @@ export const CloudflarePreviewAppEntry = z.object({
   workerSizeKib: z.number().nonnegative().finite().nullable().optional(),
   /** Wrangler-reported gzip size of the deployed worker, in KiB. */
   workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
+  /** Content fingerprint of the deployed sources (contentFingerprintPaths). */
+  deployedFingerprint: z.string().trim().min(1).nullable().optional(),
   /**
    * Main's deployed gzip size in KiB at deploy time, read from the
    * `worker-size/<app>` commit status main deploys publish — the baseline for
@@ -3462,10 +3515,29 @@ async function releaseLeaseDespiteTeardownFailure(input: {
   }
 }
 
+/** Git object ids of the app's fingerprint paths at HEAD — content-addressed,
+ * so an unchanged fixture app can skip its deploy entirely. */
+function previewAppContentFingerprint(
+  app: PreviewAppRuntime,
+  repositoryRoot: string,
+): string | null {
+  if (!app.contentFingerprintPaths?.length) return null;
+  return execFileSync(
+    "git",
+    ["rev-parse", ...app.contentFingerprintPaths.map((path) => `HEAD:${path}`)],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  )
+    .trim()
+    .split("\n")
+    .join("+");
+}
+
 async function deployPreviewAppWithStatus(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  /** This app's entry from the PR's recorded state, for the unchanged-skip. */
+  existingEntry: CloudflarePreviewAppEntry | null;
   /** Main's published size baseline for this app, when one exists. */
   mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
@@ -3513,6 +3585,7 @@ async function deployPreviewApp(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  existingEntry: CloudflarePreviewAppEntry | null;
   mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
@@ -3535,6 +3608,41 @@ async function deployPreviewApp(input: {
     shortSha: input.pullRequestHeadSha.slice(0, 7),
     updatedAt: new Date().toISOString(),
   } as const;
+
+  const fingerprint = previewAppContentFingerprint(input.app, input.repositoryRoot);
+  if (
+    fingerprint !== null &&
+    input.existingEntry?.status === "deployed" &&
+    input.existingEntry.publicUrl === appConfig.baseUrl &&
+    input.existingEntry.deployedFingerprint === fingerprint &&
+    // The record alone is not proof the worker still answers — this app may
+    // be selected precisely because the not-serving sweep found it dead
+    // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
+    // when every readiness URL answers right now.
+    (
+      await Promise.all(
+        resolvePreviewReadinessUrls({
+          publicUrl: appConfig.baseUrl,
+          readyUrlPath: input.app.previewReadyUrlPath,
+        }).map((url) => probePreviewAppServingOnce(url)),
+      )
+    ).every((probe) => probe.ok)
+  ) {
+    // Same slot, same content, last run fully green, worker answering: what
+    // is serving is byte-identical to what this deploy would upload. Skip
+    // the wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
+    logPreview(
+      `deploy skipped: ${input.app.slug} unchanged since ${input.existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
+    );
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      deployedFingerprint: fingerprint,
+      workerSizeKib: input.existingEntry.workerSizeKib ?? null,
+      workerGzipKib: input.existingEntry.workerGzipKib ?? null,
+      mainWorkerGzipKib: input.existingEntry.mainWorkerGzipKib ?? null,
+      status: "awaiting-tests",
+    });
+  }
 
   const deployResult = await runPreviewDeployCommand({
     app: input.app,
@@ -3602,6 +3710,7 @@ async function deployPreviewApp(input: {
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
     ...sizeFields,
+    deployedFingerprint: fingerprint,
     status: "awaiting-tests",
   });
 }
@@ -3627,8 +3736,8 @@ async function readPreviewAppConfig(input: {
     }
     return parsed;
   };
-  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
-  if (repoConfig) {
+  const repoConfig = input.app.resolvePreviewAppConfig(input.dopplerConfig);
+  if (!input.app.previewReadyBearerTokenEnvVar) {
     return parsePreviewAppConfig(repoConfig);
   }
 
@@ -3679,7 +3788,20 @@ async function readPreviewAppConfig(input: {
     throw new Error("Failed to read preview app config.");
   }
 
-  return parsePreviewAppConfig(JSON.parse(result.stdout));
+  const dopplerConfig: unknown = JSON.parse(result.stdout);
+  return parsePreviewAppConfig(
+    typeof dopplerConfig === "object" && dopplerConfig !== null
+      ? {
+          ...dopplerConfig,
+          baseUrl: repoConfig.baseUrl,
+          projectHostnameBases:
+            repoConfig.projectHostnameBases ??
+            ("projectHostnameBases" in dopplerConfig
+              ? dopplerConfig.projectHostnameBases
+              : undefined),
+        }
+      : dopplerConfig,
+  );
 }
 
 async function runPreviewDeployCommand(input: {

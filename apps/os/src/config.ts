@@ -56,6 +56,12 @@ const DEFAULT_GOOGLE_OAUTH_SCOPES = [
  */
 export const AppConfig = z.object({
   baseUrl: publicValue(z.url().optional()),
+  /**
+   * Deployment identity used by small browser-facing environment cues. The
+   * deployed value is the envs.ts key (`prd`, `preview_N`); local dev inherits
+   * its Doppler config (`dev`, `dev_jonas`, ...).
+   */
+  environmentName: publicValue(z.string().trim().min(1).optional()),
   mcp: z
     .object({
       baseUrl: publicValue(z.url()),
@@ -214,7 +220,7 @@ export const AppConfig = z.object({
           oauthClientSecret: redacted(z.string().trim().min(1)),
         })
         .optional(),
-      /** First-party Parallel API access. This is an Iterate-owned API key,
+      /** First-party Parallel API access. This is an iterate-owned API key,
        * not a per-project connection secret. */
       parallel: z
         .object({

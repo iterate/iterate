@@ -140,9 +140,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
         // earlier unpainted fact is already stale.
         this.#unpaintedTypingFact = event;
         break;
-      // telegram-agent/created matters through reduce only;
-      // stream/processor-revived matters through its delivery turn alone
-      // (the redelivered frame re-runs the blocking send).
+      // telegram-agent/created matters through reduce only.
     }
     // The at-head typing repaint: after the per-event switch (so a
     // typing-worthy head event has already landed in the memo), once per
