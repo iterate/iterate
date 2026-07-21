@@ -30,6 +30,21 @@ test("retired leases are replaced before the slot is reused", async () => {
   replacement[Symbol.dispose]();
 });
 
+test("project slots are born lazily as concurrent leases need them", async () => {
+  const { createdProjectIds, session } = createSessionStub();
+  const pool = createTestProjectPool({ size: 2, slugPrefix: "pool-lazy" });
+
+  expect(createdProjectIds).toEqual([]);
+  const first = await pool.acquire(session);
+  expect(createdProjectIds).toEqual([first.projectId]);
+
+  const second = await pool.acquire(session);
+  expect(createdProjectIds).toEqual([first.projectId, second.projectId]);
+
+  first[Symbol.dispose]();
+  second[Symbol.dispose]();
+});
+
 function createSessionStub() {
   const createdProjectIds: string[] = [];
   const session = {

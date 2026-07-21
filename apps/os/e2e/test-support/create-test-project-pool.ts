@@ -30,22 +30,13 @@ export function createTestProjectPool(opts: { size: number; slugPrefix: string }
     throw new Error(`Project pool size must be a positive integer; received ${opts.size}.`);
   }
 
-  let statePromise: Promise<ProjectPoolState> | undefined;
   const slots = Array.from({ length: opts.size }, (_, index) =>
     createProjectSlot(`${opts.slugPrefix}-${index + 1}`),
   );
+  const state: ProjectPoolState = { availableSlots: [...slots], waiters: [] };
 
   return {
     async acquire(session: RpcStub<Session>): Promise<TestProjectLease> {
-      const current = (statePromise ??= createPoolState(session, slots));
-      let state: ProjectPoolState;
-      try {
-        state = await current;
-      } catch (error) {
-        if (statePromise === current) statePromise = undefined;
-        throw error;
-      }
-
       const slot = await checkout(state);
       let projectId: string;
       try {
@@ -93,16 +84,6 @@ function createProjectSlot(slugPrefix: string): ProjectSlot {
       projectIdPromise = undefined;
     },
   };
-}
-
-async function createPoolState(
-  session: RpcStub<Session>,
-  slots: ProjectSlot[],
-): Promise<ProjectPoolState> {
-  // Each slot memoizes independently. If one birth fails, the next acquire
-  // retries only that slot instead of losing successful project IDs.
-  await Promise.all(slots.map((slot) => slot.getProjectId(session)));
-  return { availableSlots: [...slots], waiters: [] };
 }
 
 function checkout(state: ProjectPoolState): Promise<ProjectSlot> {

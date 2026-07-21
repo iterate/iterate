@@ -613,10 +613,19 @@ export class InternalApp extends IterateWorkerEntrypoint {
                 setRefreshing(false);
                 refresh.onclick = () => {
                   setRefreshing(true);
-                  void session.refresh().catch((error) => {
-                    setRefreshing(false);
-                    showError(error);
-                  });
+                  void (async () => {
+                    try {
+                      await session.refresh();
+                      // LiveState deliberately suppresses no-op updates. Read
+                      // the settled snapshot explicitly so a successful no-op
+                      // refresh still renders and clears its pending state.
+                      await render();
+                    } catch (error) {
+                      showError(error);
+                    } finally {
+                      setRefreshing(false);
+                    }
+                  })();
                 };
                 addEventListener("pagehide", () => {
                   subscription[Symbol.dispose]();

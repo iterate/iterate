@@ -119,7 +119,9 @@ for (const example of MATRIX_EXAMPLES) {
   // remaining aggregate budget to each successive runtime. The project-worker
   // bake is part of that runtime's budget. Vitest gets 30s more for pool
   // acquisition, cleanup, and reporting, so its watchdog never pre-empts the
-  // more diagnostic runtime deadline first.
+  // more diagnostic runtime deadline first. Pool slots are born lazily, so a
+  // case pays for at most one project birth per runtime here; those births run
+  // concurrently rather than eagerly creating the entire shared pool.
   // A blanket 240s once let one stuck example consume both the lane and retry
   // without identifying the runtime that stalled.
   matrixTest(

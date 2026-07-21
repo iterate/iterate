@@ -1308,10 +1308,19 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                setRefreshing(false);\n" +
       "                refresh.onclick = () => {\n" +
       "                  setRefreshing(true);\n" +
-      "                  void session.refresh().catch((error) => {\n" +
-      "                    setRefreshing(false);\n" +
-      "                    showError(error);\n" +
-      "                  });\n" +
+      "                  void (async () => {\n" +
+      "                    try {\n" +
+      "                      await session.refresh();\n" +
+      "                      // LiveState deliberately suppresses no-op updates. Read\n" +
+      "                      // the settled snapshot explicitly so a successful no-op\n" +
+      "                      // refresh still renders and clears its pending state.\n" +
+      "                      await render();\n" +
+      "                    } catch (error) {\n" +
+      "                      showError(error);\n" +
+      "                    } finally {\n" +
+      "                      setRefreshing(false);\n" +
+      "                    }\n" +
+      "                  })();\n" +
       "                };\n" +
       "                addEventListener(\"pagehide\", () => {\n" +
       "                  subscription[Symbol.dispose]();\n" +
