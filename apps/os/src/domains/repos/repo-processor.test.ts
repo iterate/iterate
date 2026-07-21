@@ -7,11 +7,11 @@
 // fakes wired in createProcessor — swap `impl` mid-scenario or across
 // crashes; `calls` records every dial.
 //
-// The registry-level recovery suite (fake DurableObjectState, REAL registry +
-// keepalive alarm) lives in repo-recovery.test.ts.
+// The harness's real keepalive and recovery adapters drive the eviction
+// scenarios; repo-recovery.test.ts keeps the focused creation recovery proofs.
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -55,11 +55,6 @@ const GITHUB_LINK_CONFIGURED = {
     repo: "widgets",
     repositoryId: 101,
   },
-} satisfies RepoEventInput;
-
-const REVIVED = {
-  type: "events.iterate.com/stream/processor-revived",
-  payload: { processorSlug: "repo", revivals: 1, version: "test" },
 } satisfies RepoEventInput;
 
 /** A GitHub push delivery as the connection stream cross-posts it. Event
@@ -528,7 +523,7 @@ describe("RepoProcessor GitHub imports", () => {
 
   it("re-drives an import whose driving incarnation was evicted mid-sync, under the same request identity", async () => {
     const h = makeRepoHarness();
-    // Incarnation 1's sync HANGS: the started fact is journaled, the attempt
+    // Incarnation 1's sync HANGS: the started fact is in the stream, the attempt
     // parks forever.
     h.githubSync.impl = () => new Promise<never>(() => {});
     await h.play(
@@ -547,7 +542,7 @@ describe("RepoProcessor GitHub imports", () => {
       () => {
         h.githubSync.impl = async () => ({ commitOid: "current-github-head" });
       },
-      ["append", REVIVED],
+      ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1],
     );
 
     expect(h.githubSync.calls).toHaveLength(2);

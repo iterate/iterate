@@ -102,10 +102,10 @@ export function durableObjectProgressStore<State>(args: {
  * `processorSlug` and the idempotency key carry the per-processor identity)
  * to the stream and STOPS: the append wakes the stream's subscription spine (its
  * `woken` fan-out cold-boots the stream DO if the deploy evicted it too), and
- * the ordinary wake-mode delivery of that fact is the guaranteed turn that
- * runs the processor's own reconciliation — the runner's construction check
- * enforces that the contract consumes it. No self-driven catch-up here,
- * unlike the host's `catchUpInternal` loop: delivery has ONE entrypoint.
+ * wake-mode delivery reaches head and guarantees a turn: either the contract
+ * consumes the fact and receives it, or the runner supplies its eventless
+ * `processEvent(event: null, caughtUp: true)` pass. No self-driven catch-up
+ * here, unlike the host's `catchUpInternal` loop: delivery has ONE entrypoint.
  *
  * Construction re-issues a persisted armed desire through `armAlarm` (the
  * host's boot-time reconcile): a platform `setAlarm` that failed after the KV

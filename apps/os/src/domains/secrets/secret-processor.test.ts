@@ -11,7 +11,7 @@
 //    kept on its inline registry harness.
 
 import { describe, expect, it, test } from "vitest";
-import type { ConsumedInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -275,7 +275,7 @@ describe("SecretProcessor recovery", () => {
     // created event and the catalog fact lands — nothing was lost.
     h.network.get("/").failAppendsOfType = undefined;
     h.crash();
-    await h.settle();
+    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
     expect(h.catalog()).toMatchObject([
       { idempotencyKey: "secret/catalog-created@/secrets/example:1" },
     ]);

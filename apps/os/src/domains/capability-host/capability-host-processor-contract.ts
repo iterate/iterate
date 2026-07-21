@@ -34,9 +34,9 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
   version: "0.4.0",
   description: "A tiny dynamic capability table and script execution stream.",
-  // Brings the core `stream/*` lifecycle events into scope:
-  // `stream/processor-revived` is consumed as the guaranteed at-head delivery
-  // turn for the script-obligation pass (see `consumes`).
+  // Brings the core `stream/*` lifecycle events into scope. This contract
+  // currently consumes `stream/processor-revived`; the eventless at-head pass
+  // means consumption is not required for its script-obligation pass.
   processorDeps: [CoreProcessorContract],
   stateSchema: z.object({
     birthCertificate: capabilityHostBirthCertificateSchema()
@@ -355,12 +355,11 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
     // turn that retries a transiently failed settlement.
     // The platform revival fact (core-owned, ONE type for every
     // recovery-wired processor; the payload's processorSlug names which).
-    // MUST be consumed (the runner throws at construction otherwise): its
-    // ordinary delivery is the guaranteed at-head turn where `processEvent`
-    // under `delivery.caughtUp` re-drives open script obligations — fresh
-    // requested scripts start, orphaned started scripts settle as failures.
-    // Reduce ignores it, and it is absent from `emits`: the recovery adapter
-    // appends it raw, as the runtime speaking.
+    // This contract currently consumes it, but reduce and processEvent do not
+    // react to the fact itself; an unconsumed tail would receive the same
+    // eventless at-head turn that re-drives open script obligations. It is
+    // absent from `emits`: the recovery adapter appends it raw, as the runtime
+    // speaking.
     "events.iterate.com/stream/processor-revived",
   ],
   emits: [

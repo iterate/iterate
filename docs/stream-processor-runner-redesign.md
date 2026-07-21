@@ -76,9 +76,9 @@ type Progress<State> = {
 
 ### Revival
 
-- One core **`stream/processor-revived`** event, with `processorSlug` in its payload, is **declared explicitly in `consumes`** by processors wired for recovery. Simple processors never see it.
-- **`runInBackground` requires a recovery adapter.** The runner **throws at construction** if recovery is wired but `consumes` omits that exact core event. (Not a type-level generic — keeps trivial processors trivial.)
-- The keepalive alarm guarantees the revival delivery turn even at zero lag.
+- One core **`stream/processor-revived`** event, with `processorSlug` in its payload, is appended by the recovery adapter. Declaring it in `consumes` is optional and is only needed when the processor reacts to the fact itself.
+- **`runInBackground` requires a recovery adapter** when losing the work's outcome would matter. The revival append wakes delivery even when the fact is unconsumed.
+- Reaching head guarantees the revival turn at zero lag: a consumed event receives `caughtUp: true`; otherwise the runner supplies `processEvent(event: null, caughtUp: true)`.
 
 ### Waiting / snapshot
 
