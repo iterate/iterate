@@ -116,8 +116,8 @@ spent 38.93s in its deploy command, 61.29s in readiness, and 158.50s testing.
 This validates the baked runner as a small win while reinforcing that
 Cloudflare convergence and OS test execution remain the first-order work.
 
-The next selected experiment generalizes content-addressed deploy reuse to
-OS, but only for inputs that do not affect its deployed artifact. The reuse
+The first content-addressed experiment applies deploy reuse to OS, but only
+for changes that do not affect its deployed artifact. The reuse
 contract requires the same slot and Worker name, a conservative Git hash over
 OS runtime/build code plus workspace dependencies and generated-config inputs,
 an opaque hash of the complete Doppler config, a prior fully green entry, and
@@ -128,7 +128,10 @@ for another global Durable Object rollout. Any missing or mismatched proof
 falls through to the ordinary deploy. OS normally derives a head-pinned
 pkg.pr.new SDK URL; reuse deliberately retains its prior immutable URL only
 when the fingerprint also proves every SDK package and publishing input is
-unchanged.
+unchanged. The fingerprint also includes the exact Node runtime, platform, and
+architecture because the Depot snapshot tag is mutable; rebuilding that image
+with a newer Node patch must invalidate prior artifacts even when Git inputs
+are identical.
 
 The first recording run, Depot job
 [`hsvlw7vbq9`](https://depot.dev/orgs/0p91s0lz49/workflows/t8bx7lfm3d?job=hsvlw7vbq9),
@@ -150,6 +153,16 @@ then passed in 4m28s. OS deployment and readiness took 93.67s, OS tests took
 153.99s, and no test needed a retry. It recorded OS Worker version
 `92e30c6d-c9de-4afd-868e-723a4f196f73` and is the same-slot, same-input
 control for the following no-deploy arm.
+
+The no-deploy arm, Depot job
+[`zcrrj5v518`](https://depot.dev/orgs/0p91s0lz49/workflows/6g1nc7w1w5?job=zcrrj5v518),
+changed only OS e2e documentation and passed in 3m12s. The orchestrator proved
+and retained exact OS version `92e30c6d-c9de-4afd-868e-723a4f196f73` in
+0.82s instead of spending 93.67s on its deploy/readiness path. OS tests remained
+the same-sized work at 156.88s and again needed zero retries. End to end, the
+same-slot treatment saved 76 seconds (4m28s to 3m12s), matching the 77-second
+reduction in the fleet deploy barrier. This is causal evidence that proven
+reuse removes deployment time rather than merely shifting it into tests.
 
 ### Fresh-slot correctness baseline
 
@@ -285,6 +298,10 @@ the exploration is active.
 | 2026-07-21 22:52 | Merged `775f90d52` from `origin/main`.     | PR #2236 added exact-deployment focused test reuse. This immediately supplied the repeatable diagnostic loop; because the preview orchestrator is conservatively fingerprinted, the merge itself still requires one new OS deployment. |
 | 2026-07-21 22:57 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 23:05 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:13 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:16 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:23 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:27 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 
 ## Decision log
 
@@ -314,3 +331,4 @@ the exploration is active.
 | 2026-07-21 | Record the deployment-reuse control.         | Depot job `hsvlw7vbq9` passed in 4m45s, but OS deployment/readiness took 92.69s and the OS lane took 174.61s with six retries, including two code-update resets after readiness.                            | The readiness sample is not a convergence proof; use this exact slot and recorded version for the no-deploy arm.                     |
 | 2026-07-21 | Repeat the failed stream test after rollout. | The exact-deployment target runner passed 10/10 attempts with zero retries in 11.96–19.14s (15.54s median), without deploy or erase.                                                                        | Rollout contamination is the leading explanation; retain full-suite A/B and telemetry as the stronger acceptance test.               |
 | 2026-07-21 | Re-record after merging the latest main.     | Depot job `w6f1rkx69x` passed in 4m28s. OS deployment/readiness took 93.67s; OS tests took 153.99s with zero retries. It recorded version `92e30c6d-c9de-4afd-868e-723a4f196f73`.                           | Use this run as the same-slot control for an e2e-documentation-only revision that must reuse this exact OS version.                  |
+| 2026-07-21 | Reuse the proven OS deployment.              | Depot job `zcrrj5v518` passed in 3m12s. Exact-version and same-input proof took 0.82s versus the control's 93.67s deploy; OS tests took 156.88s with zero retries.                                          | Generalize fail-closed reuse to every app, then run an all-app test-only head to measure the full-fleet ceiling.                     |

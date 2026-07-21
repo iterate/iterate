@@ -46,7 +46,6 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
-  readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
@@ -226,6 +225,8 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-lock.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("pnpm-workspace.yaml");
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
+    expect(cloudflarePreviewSharedPaths).toContain(".pnpmfile.cjs");
+    expect(cloudflarePreviewSharedPaths).toContain("package.json");
   });
 
   test("reads every app's public preview origin from envs.ts", () => {
@@ -268,7 +269,9 @@ describe("preview workflow scope", () => {
     // ship silently (docs/testing.md#lanes).
     expect(cloudflarePreviewApps.auth).toMatchObject({
       appPath: "apps/auth",
-      previewReadyUrlPath: "/api/auth/ok",
+      fingerprintDopplerConfig: true,
+      previewReadyUrlPath: "/api/__internal/health",
+      previewReadyWorkerVersion: { stableForMs: 0 },
       previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
       previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
     });
@@ -279,21 +282,15 @@ describe("preview workflow scope", () => {
 
     expect(petshop).toMatchObject({
       appPath: "apps/dummy-petshop",
+      fingerprintDopplerConfig: true,
       paths: ["apps/dummy-petshop/**"],
       previewReadyUrlPath: "/",
+      previewReadyWorkerVersion: { stableForMs: 0 },
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
       previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
     });
-    await expect(
-      readPreviewAppConfig({
-        app: petshop,
-        commandEnvironment: {},
-        dopplerConfig: "preview_3",
-        repositoryRoot: repoRoot,
-      }),
-    ).resolves.toEqual({
+    expect(petshop.resolvePreviewAppConfig("preview_3")).toEqual({
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
-      projectHostnameBases: [],
       workerName: "dummy-petshop-preview-3",
     });
     // Only the deploy workflow is path-filtered; cleanup deliberately has no
@@ -323,6 +320,7 @@ describe("preview workflow scope", () => {
         "apps/mobile/**",
         "playwright.config.ts",
         "packages/iterate/**",
+        "packages/typm/**",
         "specs/**",
       ]),
       previewDependencies: ["auth", "dummy-petshop"],
@@ -333,10 +331,13 @@ describe("preview workflow scope", () => {
     expect(os.contentFingerprintPaths).not.toContain("apps/os/e2e");
     expect(os.contentFingerprintPaths).not.toContain("apps/mobile");
     expect(os.contentFingerprintPaths).not.toContain("specs");
-    expect(previewAppContentFingerprint(os, repoRoot)).toMatch(/^sha256-v2:[a-f0-9]{64}$/);
+    expect(previewAppContentFingerprint(os, repoRoot)).toMatch(/^sha256-v3:[a-f0-9]{64}$/);
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- packages/iterate/**");
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("- .github/workflows/pkg-pr-new.yml");
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- specs/**");
@@ -359,6 +360,38 @@ describe("preview workflow scope", () => {
       "APP_CONFIG_BASE_URL=https://os.iterate-preview-7.com",
       "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
     ]);
+  });
+
+  test("reuses every app only across a conservative deploy-input closure", () => {
+    const expectedInputs = {
+      auth: ["apps/auth/src", "apps/auth/scripts", "apps/auth-contract"],
+      semaphore: ["apps/semaphore/src", "apps/semaphore/migrations", "apps/auth/src"],
+      "streams-example-app": ["apps/streams-example-app/src", "apps/os/src", "packages/iterate"],
+      "dummy-petshop": ["apps/dummy-petshop/src", "apps/dummy-petshop/scripts"],
+    } as const;
+
+    for (const [slug, appInputs] of Object.entries(expectedInputs)) {
+      const app = cloudflarePreviewApps[slug as keyof typeof cloudflarePreviewApps];
+      expect(app.fingerprintDopplerConfig, slug).toBe(true);
+      expect(app.previewReadyWorkerVersion, slug).toBeDefined();
+      expect(app.contentFingerprintPaths, slug).toEqual(
+        expect.arrayContaining([
+          ...appInputs,
+          ".depot/workflows/cloudflare-previews.yml",
+          ".pnpmfile.cjs",
+          "scripts/lib",
+          "scripts/preview/deployment-epoch",
+          "scripts/preview/preview.ts",
+          "envs.ts",
+          "package.json",
+          "patches",
+          "pnpm-lock.yaml",
+          "pnpm-workspace.yaml",
+        ]),
+      );
+      expect(app.contentFingerprintPaths, slug).not.toContain(`${app.appPath}/e2e`);
+      expect(previewAppContentFingerprint(app, repoRoot), slug).toMatch(/^sha256-v3:[a-f0-9]{64}$/);
+    }
   });
 
   test("reuses OS only when source, Doppler config, slot, and recorded deployment match", () => {
@@ -408,7 +441,7 @@ describe("preview workflow scope", () => {
         app: os,
         appConfig,
         existingEntry,
-        fingerprint: `sha256-v2:${"c".repeat(64)}`,
+        fingerprint: `sha256-v3:${"c".repeat(64)}`,
       }),
     ).toBe(false);
   });
@@ -1417,7 +1450,7 @@ describe("preview deploy selection", () => {
     expect(apps).toEqual([]);
   });
 
-  test("selects OS and its dependencies for an iterate package-only change", async () => {
+  test("selects OS, Streams, and their dependencies for an iterate package-only change", async () => {
     const apps = await selectPreviewAppsForPullRequest({
       ...selectionInput,
       previousState: {
@@ -1432,6 +1465,52 @@ describe("preview deploy selection", () => {
           changedFilenames: ["packages/iterate/src/stream-tui/agent-chat-terminal.tsx"],
         };
       },
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
+  });
+
+  test("selects OS and Streams when their typm runtime dependency changes", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["packages/typm/src/index.ts"],
+      }),
+      probeAppServing: everythingServing,
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual([
+      "os",
+      "auth",
+      "streams-example-app",
+      "dummy-petshop",
+    ]);
+  });
+
+  test("selects OS when the head-pinned SDK publishing workflow changes", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      ...selectionInput,
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: [".github/workflows/pkg-pr-new.yml"],
+      }),
       probeAppServing: everythingServing,
     });
 

@@ -8,6 +8,8 @@ import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator
  * (src/lib/worker-env.d.ts) is this same interface.
  */
 export interface Env {
+  /** Immutable id of the Worker version serving this request. */
+  CF_VERSION_METADATA: { id: string };
   /** D1: lease inventory mirror (`<worker>-resources`). */
   DB: D1Database;
   /** One coordinator DO per resource type: active leases, waiters, expiry alarms. */

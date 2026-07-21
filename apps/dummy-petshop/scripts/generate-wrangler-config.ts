@@ -24,6 +24,7 @@ function workerBindings() {
       bindings: [{ name: "PETSHOP_STATE", class_name: "PetshopStateDurableObject" }],
     },
     observability: OBSERVABILITY,
+    version_metadata: { binding: "CF_VERSION_METADATA" },
   };
 }
 

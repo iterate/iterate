@@ -1761,8 +1761,7 @@ export type CloudflarePreviewApp = {
    * Skip this app's deploy when the slot already serves an identical build: a
    * prior recorded "deployed" entry whose publicUrl matches this slot and
    * whose fingerprint (git object ids of these paths at HEAD) is unchanged.
-   * For fixture apps that almost never change (dummy-petshop) — the app's
-   * e2e smoke still runs against the existing worker.
+   * The app's e2e smoke still runs against the existing immutable version.
    */
   contentFingerprintPaths?: string[];
   /**
@@ -2195,6 +2194,8 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
 // whole package rather than chasing individual subdirectories. Deploys are idempotent,
 // so over-triggering is safe; under-triggering means prod silently misses deploys.
 export const cloudflareAppSharedPaths = [
+  ".pnpmfile.cjs",
+  "package.json",
   "packages/shared/**",
   "packages/ui/**",
   // Dependency manifests: a lockfile bump, a catalog/patchedDependencies entry
@@ -2249,6 +2250,25 @@ const osContainerRolloutInputPaths = [
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
 export const cloudflarePreviewAdditionalTriggerPaths = ["apps/auth-example/**"] as const;
 
+/**
+ * Build/deploy inputs shared by every preview app. These paths deliberately
+ * include the workflow and deployment epoch: changing the runner contract or
+ * crossing a fleet compatibility boundary must rebuild artifacts even when
+ * the app's own source tree is unchanged.
+ */
+const previewDeploymentSharedInputPaths = [
+  ".depot/workflows/cloudflare-previews.yml",
+  ".pnpmfile.cjs",
+  "scripts/lib",
+  "scripts/preview/deployment-epoch",
+  "scripts/preview/preview.ts",
+  "envs.ts",
+  "package.json",
+  "patches",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+] as const;
+
 function requirePreviewEnvironment<T>(
   appSlug: CloudflarePreviewAppSlugType,
   dopplerConfig: string,
@@ -2302,6 +2322,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       // OS imports iterate/sdk, so a CLI/package-only change still needs
       // the OS deployment and its e2e proof.
       "packages/iterate/**",
+      "packages/typm/**",
+      // The deployed OS bakes this head's pkg.pr.new package URL; changing
+      // how that immutable package is built must select OS for evaluation.
+      ".github/workflows/pkg-pr-new.yml",
       "apps/auth/**",
       "apps/auth-contract/**",
       "apps/dummy-petshop/**",
@@ -2327,20 +2351,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/auth/tsconfig.json",
       "apps/auth-contract",
       ".github/workflows/pkg-pr-new.yml",
-      ".pnpmfile.cjs",
       "packages/iterate",
       "packages/shared",
       "packages/typm",
       "packages/ui",
-      "scripts/lib",
-      "envs.ts",
-      "package.json",
-      "patches",
-      "pnpm-lock.yaml",
-      "pnpm-workspace.yaml",
-      // This file chooses deploy-only environment overrides, including the
-      // head-pinned SDK package URL. Its tests/docs cannot affect deployment.
-      "scripts/preview/preview.ts",
+      ...previewDeploymentSharedInputPaths,
     ],
     fingerprintDopplerConfig: true,
     // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
@@ -2446,7 +2461,33 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       const environment = requirePreviewEnvironment("semaphore", dopplerConfig, semaphoreEnvs);
       return { baseUrl: environment.baseUrl, workerName: environment.workerName };
     },
-    paths: ["apps/semaphore/**"],
+    paths: [
+      "apps/semaphore/**",
+      "apps/auth/src/**",
+      "apps/auth/package.json",
+      "apps/auth/tsconfig.json",
+      "apps/auth-contract/**",
+    ],
+    contentFingerprintPaths: [
+      "apps/semaphore/src",
+      "apps/semaphore/scripts",
+      "apps/semaphore/migrations",
+      "apps/semaphore/sql",
+      "apps/semaphore/definitions.sql",
+      "apps/semaphore/sqlfu.config.ts",
+      "apps/semaphore/package.json",
+      "apps/semaphore/tsconfig.json",
+      "apps/semaphore/vite.config.ts",
+      "apps/auth/src",
+      "apps/auth/package.json",
+      "apps/auth/tsconfig.json",
+      "apps/auth-contract",
+      "packages/shared",
+      "packages/ui",
+      ...previewDeploymentSharedInputPaths,
+    ],
+    fingerprintDopplerConfig: true,
+    previewReadyWorkerVersion: { stableForMs: 0 },
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
@@ -2472,8 +2513,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         readVitestTestTelemetry(semaphoreVitestTelemetryFile, "vitest", repositoryRoot),
       ),
   },
-  // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
-  // so e2e starts from a completely clean, controlled slate. OAuth client
+  // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com).
+  // Its D1 migrations and declarative seeds are idempotent; they reconcile
+  // state rather than erasing the database. OAuth client
   // credentials are constants in Doppler (`preview provision-auth-preview-configs`);
   // the auth deploy reseeds them into its database on every run. Auth and its
   // relying parties share one Doppler signing key and can deploy concurrently.
@@ -2489,8 +2531,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       return { baseUrl: environment.authBaseUrl, workerName: environment.authWorkerName };
     },
     paths: ["apps/auth/**", "apps/auth-contract/**"],
-    // better-auth's liveness endpoint; auth has no /api/__internal/health.
-    previewReadyUrlPath: "/api/auth/ok",
+    contentFingerprintPaths: [
+      "apps/auth/src",
+      "apps/auth/scripts",
+      "apps/auth/package.json",
+      "apps/auth/tsconfig.json",
+      "apps/auth/vite.config.ts",
+      "apps/auth-contract",
+      "packages/shared",
+      "packages/ui",
+      ...previewDeploymentSharedInputPaths,
+    ],
+    fingerprintDopplerConfig: true,
+    // Dedicated dependency-free route carrying the immutable Worker version.
+    previewReadyUrlPath: "/api/__internal/health",
+    previewReadyWorkerVersion: { stableForMs: 0 },
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
     // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
     // dynamic registration, authorize → consent → code → token exchange with
@@ -2525,7 +2580,39 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       );
       return { baseUrl: environment.baseUrl, workerName: environment.workerName };
     },
-    paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
+    paths: [
+      "apps/streams-example-app/**",
+      "apps/os/src/**",
+      "apps/os/package.json",
+      "apps/os/tsconfig.json",
+      "apps/auth/src/**",
+      "apps/auth/package.json",
+      "apps/auth/tsconfig.json",
+      "apps/auth-contract/**",
+      "packages/iterate/**",
+      "packages/typm/**",
+    ],
+    contentFingerprintPaths: [
+      "apps/streams-example-app/src",
+      "apps/streams-example-app/scripts/deploy.ts",
+      "apps/streams-example-app/scripts/generate-wrangler-config.ts",
+      "apps/streams-example-app/package.json",
+      "apps/streams-example-app/tsconfig.json",
+      "apps/streams-example-app/vite.config.ts",
+      "apps/os/src",
+      "apps/os/package.json",
+      "apps/os/tsconfig.json",
+      "apps/auth/src",
+      "apps/auth/package.json",
+      "apps/auth/tsconfig.json",
+      "apps/auth-contract",
+      "packages/iterate",
+      "packages/shared",
+      "packages/typm",
+      "packages/ui",
+      ...previewDeploymentSharedInputPaths,
+    ],
+    fingerprintDopplerConfig: true,
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
     previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
@@ -2604,8 +2691,17 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/dummy-petshop/**"],
     // The fixture's content barely ever changes; envs.ts rides along because
     // it decides the generated wrangler routes.
-    contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
+    contentFingerprintPaths: [
+      "apps/dummy-petshop/src",
+      "apps/dummy-petshop/scripts",
+      "apps/dummy-petshop/package.json",
+      "apps/dummy-petshop/tsconfig.json",
+      "packages/shared",
+      ...previewDeploymentSharedInputPaths,
+    ],
+    fingerprintDopplerConfig: true,
     previewReadyUrlPath: "/",
+    previewReadyWorkerVersion: { stableForMs: 0 },
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
     previewTestCommandArgs: [
       "bash",
@@ -4224,9 +4320,12 @@ async function releaseLeaseDespiteTeardownFailure(input: {
   }
 }
 
-/** Hash the Git object ids of the app's fingerprint paths at HEAD. The path
- * names and a schema tag are included so changing the declared input closure
- * invalidates old records even when two entries happen to point at one blob. */
+/** Hash the Git object ids of the app's fingerprint paths at HEAD plus the
+ * runtime that executes its build. The path names and a schema tag are
+ * included so changing the declared input closure invalidates old records
+ * even when two entries happen to point at one blob. The CI snapshot tag is
+ * mutable; pinning the exact Node runtime prevents a weekly image refresh from
+ * silently reusing an artifact built by a different compiler host. */
 function previewAppContentFingerprint(
   app: PreviewAppRuntime,
   repositoryRoot: string,
@@ -4240,14 +4339,18 @@ function previewAppContentFingerprint(
     .trim()
     .split("\n");
   const fingerprint = createHash("sha256");
-  fingerprint.update("preview-deploy-inputs-v2\0");
+  fingerprint.update("preview-deploy-inputs-v3\0");
+  for (const runtimeFact of [process.version, process.platform, process.arch]) {
+    fingerprint.update(runtimeFact);
+    fingerprint.update("\0");
+  }
   for (const [index, path] of app.contentFingerprintPaths.entries()) {
     fingerprint.update(path);
     fingerprint.update("\0");
     fingerprint.update(objectIds[index] ?? "<missing>");
     fingerprint.update("\0");
   }
-  return `sha256-v2:${fingerprint.digest("hex")}`;
+  return `sha256-v3:${fingerprint.digest("hex")}`;
 }
 
 type ResolvedPreviewAppConfig = {
@@ -4375,25 +4478,31 @@ async function deployPreviewApp(input: {
     // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
     // when every readiness URL answers right now.
     const reuseProofStartedAt = Date.now();
-    const probes = await Promise.all(
-      resolvePreviewReadinessUrls({
-        publicUrl: appConfig.baseUrl,
-        readyUrlPath: input.app.previewReadyUrlPath,
-      }).map((url) =>
-        probePreviewAppServingOnce(
-          url,
-          input.app.previewReadyWorkerVersion ? recordedWorkerVersion : undefined,
-        ),
-      ),
-    );
+    const readiness = await waitForPreviewAppReadiness({
+      publicUrl: appConfig.baseUrl,
+      readyUrlPath: input.app.previewReadyUrlPath,
+      readinessBearerToken: appConfig.readinessBearerToken,
+      signal: input.signal,
+      timeoutMs: previewServingProbeTimeoutMs,
+      workerVersion: input.app.previewReadyWorkerVersion
+        ? {
+            expected: recordedWorkerVersion,
+            ...input.app.previewReadyWorkerVersion,
+            // Reuse initiates no rollout. Recheck the full bounded DO probe
+            // set twice, but do not add the fresh-deploy quiet interval.
+            stableForMs: 0,
+          }
+        : undefined,
+    });
     const deployReuseProofDurationMs = Date.now() - reuseProofStartedAt;
-    if (probes.every((probe) => probe.ok)) {
-      // Same slot, same runtime inputs/config, last run fully green, worker
-      // answering: a deploy cannot change application behavior. OS's only
-      // head-derived setting is the pkg.pr.new SDK URL; every input to that
-      // package is in the fingerprint, so retaining the previous immutable
-      // URL is content-equivalent on an e2e-only head. Skip the
-      // wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
+    if (readiness.ok) {
+      // Same slot, same runtime inputs/config, last run fully green, exact
+      // immutable Worker version answering (plus every bounded DO wave for
+      // stateful apps): a deploy cannot change application behavior. For OS,
+      // every source input to its head-derived pkg.pr.new SDK URL is in the
+      // fingerprint, so retaining the prior URL is content-equivalent on an
+      // e2e-only head. Skip the Wrangler/Cloudflare-API round trip; the live
+      // e2e suite still verifies the result.
       logPreview(
         `deploy skipped: ${input.app.slug} unchanged since ${existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
       );
@@ -4410,6 +4519,9 @@ async function deployPreviewApp(input: {
         status: "awaiting-tests",
       });
     }
+    logPreview(
+      `deploy reuse rejected: ${input.app.slug} no longer proves recorded version ${recordedWorkerVersion} live (${readiness.message}); falling back to a normal deploy`,
+    );
   }
 
   const commandStartedAt = Date.now();

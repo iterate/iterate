@@ -21,4 +21,15 @@ describe("auth wrangler config generation", () => {
       }
     }
   });
+
+  it("binds immutable Worker version metadata in local and deployed environments", () => {
+    assert.deepEqual(config.version_metadata, { binding: "CF_VERSION_METADATA" });
+    for (const [envName, env] of Object.entries(config.env)) {
+      assert.deepEqual(
+        env.version_metadata,
+        { binding: "CF_VERSION_METADATA" },
+        `${envName}: version metadata`,
+      );
+    }
+  });
 });

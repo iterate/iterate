@@ -74,6 +74,17 @@ app.get("/api/auth/.well-known/oauth-authorization-server", async (c) =>
 app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, async (c) =>
   makeAuthorizationResponseIssuerOptional(await oauthProviderAuthServerMetadata(auth)(c.req.raw)),
 );
+app.get(
+  "/api/__internal/health",
+  (c) =>
+    new Response("ok", {
+      headers: {
+        "cache-control": "no-store",
+        "content-type": "text/plain",
+        "x-iterate-worker-version": c.env.CF_VERSION_METADATA.id,
+      },
+    }),
+);
 app.all("/api/auth/oauth2/authorize", async (c) =>
   preserveOAuthResourceRedirect(c.req.raw, await auth.handler(c.req.raw)),
 );

@@ -128,6 +128,7 @@ function envBlock(env: AuthDeployedEnv) {
     // atomically through --secrets-file.
     secrets: { required: [...REQUIRED_SECRETS] },
     observability: OBSERVABILITY,
+    version_metadata: { binding: "CF_VERSION_METADATA" },
   };
 }
 
@@ -164,6 +165,7 @@ export const config = {
   // (deployed envs get it as a generated var instead).
   secrets: { required: [...REQUIRED_SECRETS, ...DERIVED_SECRETS, ...ENV_SHAPED_KEYS] },
   observability: OBSERVABILITY,
+  version_metadata: { binding: "CF_VERSION_METADATA" },
   env: Object.fromEntries(Object.entries(authEnvs).map(([name, env]) => [name, envBlock(env)])),
 };
 

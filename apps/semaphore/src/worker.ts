@@ -28,7 +28,17 @@ export async function handleSemaphoreRequest(
         db: env.DB,
         log,
       };
-      return handler.fetch(request, { context });
+      const response = await handler.fetch(request, { context });
+      if (new URL(request.url).pathname !== "/api/__internal/health") return response;
+
+      const headers = new Headers(response.headers);
+      headers.set("cache-control", "no-store");
+      headers.set("x-iterate-worker-version", env.CF_VERSION_METADATA.id);
+      return new Response(response.body, {
+        headers,
+        status: response.status,
+        statusText: response.statusText,
+      });
     },
   );
 }

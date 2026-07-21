@@ -13,6 +13,8 @@ import type { CloudflareEmailBinding } from "./email.ts";
  * and the config carrier keys are typed.
  */
 export interface CloudflareEnv {
+  /** Immutable id of the Worker version serving this request. */
+  CF_VERSION_METADATA: { id: string };
   /** The auth D1 database (identities, orgs, projects, OAuth clients). */
   DB: D1Database;
   /**

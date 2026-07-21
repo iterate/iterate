@@ -48,6 +48,8 @@ on:
       - unlabeled
     paths:
       - .depot/workflows/cloudflare-previews.yml
+      - .pnpmfile.cjs
+      - package.json
       - packages/shared/**
       - packages/ui/**
       - pnpm-lock.yaml
@@ -62,6 +64,8 @@ on:
       - playwright.config.ts
       - apps/mobile/**
       - packages/iterate/**
+      - packages/typm/**
+      - .github/workflows/pkg-pr-new.yml
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**

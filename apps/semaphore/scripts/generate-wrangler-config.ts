@@ -73,6 +73,7 @@ function workerBindings(input: { resourcesDbId: string }) {
     },
     secrets: { required: REQUIRED_SECRETS },
     observability: OBSERVABILITY,
+    version_metadata: { binding: "CF_VERSION_METADATA" },
   };
 }
 

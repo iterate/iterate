@@ -59,6 +59,8 @@ const INSTALLATION_TOKEN_TTL_SECONDS = 60;
 
 /** Bindings the worker runs with (wrangler.jsonc, generated from the root envs.ts). */
 export interface Env {
+  /** Immutable id of the Worker version serving this request. */
+  CF_VERSION_METADATA: { id: string };
   PETSHOP_STATE: DurableObjectNamespace<PetshopStateDurableObject>;
   /** Seals every code/token; 32 bytes base64. Deploy-minted unless pinned in Doppler (scripts/deploy.ts). */
   PETSHOP_SEAL_KEY: string;
@@ -1138,12 +1140,22 @@ export async function handlePetshopRequest(request: Request, deps: PetshopDeps):
 const petCatalogue = seedPets();
 
 export default {
-  fetch(request: Request, env: Env): Promise<Response> {
-    return handlePetshopRequest(request, {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const response = await handlePetshopRequest(request, {
       state: env.PETSHOP_STATE.get(env.PETSHOP_STATE.idFromName("global")),
       sealKey: env.PETSHOP_SEAL_KEY,
       backdoorSecret: env.PETSHOP_BACKDOOR_SECRET,
       pets: petCatalogue,
+    });
+    if (request.method !== "GET" || new URL(request.url).pathname !== "/") return response;
+
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "no-store");
+    headers.set("x-iterate-worker-version", env.CF_VERSION_METADATA.id);
+    return new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
     });
   },
 };
