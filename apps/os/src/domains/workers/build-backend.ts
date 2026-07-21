@@ -29,7 +29,7 @@ type PackageManifest = Record<string, unknown> &
  * pin replaces every declaration; the root declaration is always promoted to
  * a runtime dependency because worker-bundler deliberately ignores
  * devDependencies. The rewrite is build-local and never changes the repo. */
-export function applyIteratePackageSpecOverride(
+function applyIteratePackageSpecOverride(
   files: Record<string, string>,
   iteratePackageSpec: string | undefined,
 ): Record<string, string> {
