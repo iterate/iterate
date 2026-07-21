@@ -45,11 +45,11 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Keep enough workers to start the isolated catalogue promptly while it
-  // overlaps the other OS sub-lanes.
-  // Twelve workers previously completed this catalogue without connection
-  // churn; the slow browser-chat proof now contains only one LLM turn.
-  workers: process.env.CI ? 12 : 1,
+  // Eight workers start the isolated catalogue promptly while keeping total
+  // preview pressure bounded as Vitest and the other OS lanes overlap it.
+  // Higher counts did not shorten the measured lane and caused transient
+  // dynamic-worker connection loss under the full-fleet workload.
+  workers: process.env.CI ? 8 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],

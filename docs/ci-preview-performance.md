@@ -38,10 +38,10 @@ raise the budget automatically.
   or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
-- OS Vitest uses twelve file workers and at most two concurrent tests per file
+- OS Vitest uses eight file workers and at most two concurrent tests per file
   in CI. Its sequencer starts historically slow files first; the examples
   matrix then overlaps its isolated runtimes inside each case.
-- Root Playwright uses 12 fully parallel workers in CI. Preview runs queue the
+- Root Playwright uses eight fully parallel workers in CI. Preview runs queue the
   long reconnect/resume specs first so their fixed probe windows overlap the
   ordinary catalogue.
 - The job uses a 16-core Depot runner. A complete 32-core run peaked below ten
