@@ -169,9 +169,8 @@ export class EmailAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      // email-agent/created and stream/processor-revived: no per-event effect
-      // — birth matters through the reduction, and the revival fact's whole
-      // job is the redelivery of the unacknowledged frame that carries it.
+      // email-agent/created has no per-event effect; birth matters through the
+      // reduction.
     }
   }
 
@@ -219,7 +218,6 @@ export class EmailAgentProcessor extends StreamProcessor<
         };
       }
       default:
-        // stream/processor-revived: consumed only for its delivery turn.
         return state;
     }
   }

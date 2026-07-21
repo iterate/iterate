@@ -16,6 +16,7 @@ import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { projectsListQueryKey, projectsListStaleTime } from "~/lib/projects-query.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 type OrganizationSummary = {
   id: string;
@@ -30,6 +31,7 @@ const NO_ORGANIZATIONS: OrganizationSummary[] = [];
 // navigating here directly always shows the list — the sidebar's "All
 // projects" must not hijack single-project users back into their project.
 export const Route = createFileRoute("/_app/projects/")({
+  staticData: breadcrumbStaticData("Projects"),
   ssr: false,
   loader: async () => ({
     routeConfig: await getPublicRouteConfig(),
@@ -256,8 +258,9 @@ function ProjectNameCell({ project }: { project: ProjectListEntry }) {
     <div className="min-w-0 space-y-0.5">
       {project.deploymentStatus === "ready" ? (
         <Link
-          to="/projects/$projectSlug/agents/new"
+          to="/projects/$projectSlug"
           params={{ projectSlug: project.slug }}
+          search={{}}
           className="block truncate font-medium hover:underline"
         >
           {project.slug}
@@ -308,7 +311,7 @@ function ProjectActionsCell({
           variant="outline"
           size="sm"
           render={
-            <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug: project.slug }} />
+            <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} search={{}} />
           }
         >
           Open

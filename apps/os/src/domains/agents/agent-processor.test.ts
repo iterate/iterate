@@ -7,7 +7,8 @@
 // fake, defined here).
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput, StreamEvent } from "iterate/processors";
+import type { ConsumedInput, StreamEvent, StreamEventInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -33,8 +34,8 @@ type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 // -----------------------------------------------------------------------------
 // Event literals: the birth bundle and the recurring message shapes. These are
-// event BUILDERS (data), not append wrappers — every test appends through the
-// harness's typed append.
+// event BUILDERS (data), not append wrappers. Consumed inputs use the harness's
+// typed append; core recovery facts use the raw stream handle.
 // -----------------------------------------------------------------------------
 
 const NEW_AGENT_EVENTS = [
@@ -87,7 +88,7 @@ function agentLoopNote(content: string): AgentEventInput {
 const REVIVED = {
   type: "events.iterate.com/stream/processor-revived",
   payload: { processorSlug: "agent", revivals: 1, version: "test" },
-} satisfies AgentEventInput;
+} satisfies StreamEventInput;
 
 // -----------------------------------------------------------------------------
 // Scripted LLM transport: every call parks until the test settles it, and the
@@ -546,8 +547,7 @@ describe("AgentProcessor recovery", () => {
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello?")], // debounce sleep parked…
       ["crash"], // …and dies with the incarnation
-      ["advanceTime", 60_000],
-      ["append", REVIVED],
+      ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1],
     );
 
     // processEvent re-ran over the fold: trigger still pending, window long
@@ -566,9 +566,9 @@ describe("AgentProcessor recovery", () => {
     expect(h.llm.calls).toHaveLength(1); // the doomed attempt
     const requested = h.events(REQUESTED)[0]!;
 
-    await h.play(["crash"], ["advanceTime", 30_000], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
 
-    // No new requested event — the same journaled intent runs again.
+    // No new requested event — the same stream-backed intent runs again.
     expect(h.events(REQUESTED)).toHaveLength(1);
     expect(h.llm.calls).toHaveLength(2);
     await h.play(() => h.llm.respond("Adopted."));
@@ -585,7 +585,7 @@ describe("AgentProcessor recovery", () => {
 
     // The old incarnation's attempt (calls[0]) survives the crash as a zombie
     // closure; the successor adopts the same request as calls[1].
-    await h.play(["crash"], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
     expect(h.llm.calls).toHaveLength(2);
 
     await h.play(() => h.llm.calls[1]!.resolve({ text: "from-successor" }));
@@ -631,8 +631,12 @@ describe("AgentProcessor recovery", () => {
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
       ["advanceTime", 10_000],
       ["crash"],
-      ["advanceTime", 10 * 60_000 + 1],
-      ["append", REVIVED],
+      () => {
+        // Platform alarms may fire late. Move past the request horizon first,
+        // then let the already-due keepalive alarm wake the incarnation.
+        h.clock.now += 10 * 60_000 + 1;
+      },
+      ["advanceTime", 0],
     );
 
     expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt; never re-run
@@ -657,7 +661,7 @@ describe("AgentProcessor recovery", () => {
 
     // The atomic assistant+settled append hits a stream hiccup: nothing
     // commits (batches are atomic) and the incarnation's in-flight slot
-    // clears, so the request stays owed in the journal.
+    // clears, so the request stays owed in the stream.
     await h.play(
       () => {
         h.stream.failAppendsOfType = SETTLED;
@@ -667,7 +671,7 @@ describe("AgentProcessor recovery", () => {
         h.stream.failAppendsOfType = undefined;
       },
       // Any delivery at head finds the request unsettled → adoption re-dials.
-      ["append", REVIVED],
+      () => h.stream.append(REVIVED),
     );
     expect(h.events(SETTLED)).toHaveLength(0);
     expect(h.llm.calls).toHaveLength(2);
@@ -1377,13 +1381,13 @@ describe("AgentProcessor stream facts", () => {
       () => {
         h.stream.failAppendsOfType = undefined;
       },
-      ["append", REVIVED], // any delivery at head: the resume attempt now succeeds
+      () => h.stream.append(REVIVED), // any delivery at head: the resume attempt now succeeds
       ["advanceTime", 10_000], // the re-anchored trigger's window closes → fresh intent
     );
 
     expect(h.events("events.iterate.com/agent/resumed")).toHaveLength(1);
     expect(h.state().paused).toBeNull();
-    // The burned no-op intent is a journal fact; the re-anchored trigger got
+    // The burned no-op intent is a stream fact; the re-anchored trigger got
     // a FRESH key, so a second requested event committed and the turn ran.
     expect(h.events(REQUESTED)).toHaveLength(2);
     expect(h.state().openRequest).not.toBeNull();
@@ -1466,7 +1470,7 @@ describe("AgentProcessor stream facts", () => {
     // Evict: the in-flight attempt dies with the incarnation. The revived
     // incarnation, still paused, must adopt the open request rather than
     // returning early and stranding it.
-    await h.play(["crash"], ["advanceTime", 30_000], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
     expect(h.events(REQUESTED)).toHaveLength(1); // same request, not a new one
     expect(h.llm.calls).toHaveLength(2); // adopted and re-dialed despite the pause
 
@@ -1484,8 +1488,15 @@ describe("AgentProcessor stream facts", () => {
       "append",
       { type: "events.iterate.com/agent/paused", payload: { reason: "operator" } },
     ]);
-    // Crash, then let the request's whole expiry horizon lapse before revival.
-    await h.play(["crash"], ["advanceTime", 10 * 60_000 + 1], ["append", REVIVED]);
+    // Crash, let the request's whole expiry horizon lapse, then deliver the
+    // already-due keepalive alarm late.
+    await h.play(
+      ["crash"],
+      () => {
+        h.clock.now += 10 * 60_000 + 1;
+      },
+      ["advanceTime", 0],
+    );
     expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt; never re-dialed
     expect(h.events(SETTLED)).toMatchObject([
       { payload: { result: { status: "cancelled", reason: "expired" } } },

@@ -27,7 +27,7 @@ export const iterateAuthMiddleware = createMiddleware({ type: "request" }).serve
     const authHandlerResponse = (await auth?.fetch(request)) ?? null;
     if (authHandlerResponse) return authHandlerResponse;
     if (!auth && isAuthHandlerRequest(request)) {
-      return new Response("Iterate auth is not configured.", { status: 503 });
+      return new Response("iterate auth is not configured.", { status: 503 });
     }
 
     // Fingerprinted client-build files are public, yet requests for them can

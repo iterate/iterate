@@ -185,10 +185,10 @@ import type {
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
-  isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
-  retryStreamUnavailableOnce,
+  retryIdempotentDurableObjectOperation,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -261,6 +261,7 @@ import {
   capabilityHostCreationEvents,
   type CapabilityHostCreateInput,
 } from "./domains/capability-host/capability-host-defaults.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -437,7 +438,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
     {
       description: {
         instructions:
-          "Parallel API using Iterate's platform API key. Methods are raw OpenAPI operationIds discovered lazily from Parallel's OpenAPI spec.",
+          "Parallel API using iterate's platform API key. Methods are raw OpenAPI operationIds discovered lazily from Parallel's OpenAPI spec.",
         parent: input.parent,
         types: "export type Parallel = OpenApiRpc;",
       },
@@ -465,6 +466,25 @@ function detachPlainRpcResult(result: object): object {
       console.warn("stream plain-data RPC result dispose failed", { error });
     }
   }
+}
+
+/**
+ * One replay of an idempotent Durable Object call with the absorbed first
+ * failure logged — the single onRetry shape shared by every retrying door in
+ * this file (stream reads, keyed appends, workspace reads, script rejoins,
+ * the agent-create wait).
+ */
+function retryLoggedIdempotentOperation<Result>(input: {
+  context: Record<string, unknown>;
+  message: string;
+  operation: () => Promise<Result>;
+}): Promise<Result> {
+  return retryIdempotentDurableObjectOperation({
+    operation: input.operation,
+    onRetry: ({ error }) => {
+      console.info(input.message, { error, ...input.context });
+    },
+  });
 }
 
 /**
@@ -535,7 +555,18 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    const append = () => Promise.resolve(this.durableObjectStub.append(...events));
+    const result = await (
+      events.every(
+        (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
+      )
+        ? retryLoggedIdempotentOperation({
+            context: { path: this.props.path, projectId: this.props.projectId },
+            message: "keyed stream append retrying after Durable Object reset",
+            operation: append,
+          })
+        : append()
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -554,7 +585,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.#read("getEvent", () =>
+      Promise.resolve(this.durableObjectStub.getEvent(args)),
+    ).catch(rethrowStreamUnavailable);
     if (result === undefined) return undefined;
     return detachPlainRpcResult(result);
   }
@@ -567,7 +600,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    const result = await this.#read("getEvents", () =>
+      Promise.resolve(this.durableObjectStub.getEvents(args)),
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -690,9 +725,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    const result = await this.durableObjectStub
-      .getProcessorRuntimeState(args)
-      .catch(rethrowStreamUnavailable);
+    const result = await this.#read("getProcessorRuntimeState", () =>
+      Promise.resolve(this.durableObjectStub.getProcessorRuntimeState(args)),
+    ).catch(rethrowStreamUnavailable);
     return result === null ? null : detachPlainRpcResult(result);
   }
 
@@ -708,8 +743,18 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   async runtimeState(): Promise<StreamRuntimeDebugState> {
-    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.#read("runtimeState", () =>
+      Promise.resolve(this.durableObjectStub.runtimeState()),
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryLoggedIdempotentOperation({
+      context: { operation, path: this.props.path, projectId: this.props.projectId },
+      message: "stream read retrying after Durable Object reset",
+      operation: call,
+    });
   }
 
   /** Push-driven stream runtime state for polling-free debug surfaces. */
@@ -1075,8 +1120,6 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks cross-post in.",
         listFiles: "List file paths.",
-        listTaskFiles:
-          "Every task markdown file's contents at HEAD ({ commitOid, files }) in one read — the task board's bulk load, cheaper than listFiles + a readFile per task.",
         log: "Commit history, newest first ({ limit?, branch? }); per-commit file stats live on commitDetails.",
         pushToGithub:
           "Push the branch head to the linked GitHub repository now (repair verb; { force } to overwrite GitHub).",
@@ -1219,16 +1262,6 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   }
 
   /**
-   * Every task markdown file's contents at HEAD, keyed by path, in a single
-   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a
-   * `readFile()` per task: the task include mask is applied before contents
-   * are read, so cost scales with the number of tasks, not the repo size.
-   */
-  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }> {
-    return this.#durableObjectStub.listTaskFiles();
-  }
-
-  /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
    * stats (those cost tree checkouts per commit); fetch them lazily per
@@ -1310,7 +1343,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
    *
    * The history transfers in-process. `depth` requests a bounded history
    * window, but fast-forward syncs always retain the previous Artifacts head
-   * as well so queue-derived task diffs can read both sides. GitHub retains
+   * as well so queue-derived commit diffs can read both sides. GitHub retains
    * the full history, and a later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean } = {}): Promise<GithubSyncResult> {
@@ -1888,7 +1921,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   whoami(): Promise<string> {
-    return Promise.resolve(this.durableObjectStub.whoami());
+    return this.#read("whoami", () => Promise.resolve(this.durableObjectStub.whoami()));
   }
 
   /** Restart the workspace's server-side object; the next request boots it fresh. */
@@ -1906,7 +1939,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** The folded configuration (birth certificate + configured patches). */
   getConfig(): Promise<WorkspaceConfig> {
-    return this.durableObjectStub.getConfig();
+    return this.#read("getConfig", () => this.durableObjectStub.getConfig());
   }
 
   /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
@@ -1916,7 +1949,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null> {
-    return this.durableObjectStub.readFile(path);
+    return this.#read("readFile", () => this.durableObjectStub.readFile(path));
   }
 
   /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
@@ -1936,12 +1969,12 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null> {
-    return this.durableObjectStub.readFileBytes(path);
+    return this.#read("readFileBytes", () => this.durableObjectStub.readFileBytes(path));
   }
 
   /** Whether a path exists in the merged view. */
   exists(path: string): Promise<boolean> {
-    return this.durableObjectStub.exists(path);
+    return this.#read("exists", () => this.durableObjectStub.exists(path));
   }
 
   /** Write one file into the private overlay. */
@@ -1966,12 +1999,12 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
   listAllFiles(): Promise<string[]> {
-    return this.durableObjectStub.listAllFiles();
+    return this.#read("listAllFiles", () => this.durableObjectStub.listAllFiles());
   }
 
   /** Merged file paths matching a glob pattern. */
   glob(pattern: string): Promise<string[]> {
-    return this.durableObjectStub.glob(pattern);
+    return this.#read("glob", () => this.durableObjectStub.glob(pattern));
   }
 
   /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
@@ -1987,6 +2020,14 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /** Per-mount git surface. */
   get git(): WorkspaceGitRpcTarget {
     return new WorkspaceGitRpcTarget(this.props);
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryLoggedIdempotentOperation({
+      context: { operation, path: this.props.path, projectId: this.props.projectId },
+      message: "workspace read retrying after Durable Object reset",
+      operation: call,
+    });
   }
 }
 
@@ -2029,7 +2070,7 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Changes grouped by owning mount, plus the unmounted local scratch. */
   status(): Promise<WorkspaceStatus> {
-    return this.durableObjectStub.gitStatus();
+    return this.#read("git.status", () => this.durableObjectStub.gitStatus());
   }
 
   /** Commit one mount's changes to its repo's main branch. */
@@ -2039,7 +2080,15 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]> {
-    return this.durableObjectStub.gitLog(input);
+    return this.#read("git.log", () => this.durableObjectStub.gitLog(input));
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryLoggedIdempotentOperation({
+      context: { operation, path: this.props.path, projectId: this.props.projectId },
+      message: "workspace read retrying after Durable Object reset",
+      operation: call,
+    });
   }
 }
 
@@ -2824,7 +2873,7 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
   }
 }
 
-/** Iterate's fixed first-party PostHog stream receiver. */
+/** iterate's fixed first-party PostHog stream receiver. */
 class PostHogIntegrationRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
@@ -2940,7 +2989,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return this.#family("waitrose") as unknown as IntegrationFamily<WaitroseConnection>;
   }
 
-  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
       egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
@@ -2948,7 +2997,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
-  /** @internal Iterate's fixed first-party event feed. */
+  /** @internal iterate's fixed first-party event feed. */
   get posthog(): PostHogIntegrationRpcTarget {
     return new PostHogIntegrationRpcTarget({
       auth: this.props.auth,
@@ -3117,7 +3166,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           connection,
           example: `await itx.integrations.github.get(${JSON.stringify(connection)}).octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
+          sdk: "the all-in-one Octokit exported by octokit, with iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
           slug: "github",
           types: 'export type GithubConnection = { octokit: import("octokit").Octokit };',
         });
@@ -3267,7 +3316,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'For every connection family, get() selects the first connected account; pass get("<connection>") only when a specific account matters.',
         "Slack: await itx.integrations.slack.get().chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.",
         'Gmail: await itx.integrations.gmail.get().request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
+        'GitHub: itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
         "Telegram: await itx.integrations.telegram.get().sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).",
         'Waitrose: await itx.integrations.waitrose.get().searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
@@ -3286,7 +3335,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "interface GmailConnection {",
         "  request<T = unknown>(input: GmailRequestInput): Promise<{ data: T; headers: Record<string, string>; status: number; statusText: string }>;",
         "}",
-        "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
+        "// Exact package type; iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
         'type GithubConnection = { octokit: import("octokit").Octokit };',
         "// itx.integrations.slack.get() IS a wrapped Slack WebClient",
         "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
@@ -3316,7 +3365,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         gmail:
           'Connected Google accounts: gmail.get().request({ path: "/users/me/messages", query }); pass a slug only for an exact account.',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
-        parallel: "Parallel API RPC target using Iterate's platform API key.",
+        parallel: "Parallel API RPC target using iterate's platform API key.",
         slack:
           "Wrapped Slack WebClient: slack.get().chat.postMessage({ channel, text }); pass a slug only for an exact workspace.",
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
@@ -4119,12 +4168,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (birthOffset === 0) throw new Error("agent create committed no events");
 
-    const agentCollection = env.AGENT_COLLECTION.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.#props.projectId,
-        path: AGENT_COLLECTION_PATH,
-      }),
-    );
+    const agentCollectionName = DurableObjectNameCodec.stringify({
+      projectId: this.#props.projectId,
+      path: AGENT_COLLECTION_PATH,
+    });
+    const agentCollectionDeadline = Date.now() + PROCESSOR_BIRTH_WAIT_TIMEOUT_MS;
     await Promise.all([
       this.processor.waitUntilProcessed({
         offset: birthOffset,
@@ -4134,9 +4182,19 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
-      agentCollection.waitUntilAgentCreated({
-        path: this.#path,
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      retryLoggedIdempotentOperation({
+        context: { path: this.#path },
+        message: "agent collection call restarting after Durable Object reset",
+        operation: async () => {
+          const timeoutMs = Math.ceil(agentCollectionDeadline - Date.now());
+          if (timeoutMs <= 0) {
+            throw new Error(`agent collection creation barrier timed out for ${this.#path}`);
+          }
+          await env.AGENT_COLLECTION.getByName(agentCollectionName).waitUntilAgentCreated({
+            path: this.#path,
+            timeoutMs,
+          });
+        },
       }),
       workspaceReady,
     ]);
@@ -4825,7 +4883,20 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     executionId: string;
     result: unknown;
   }> {
-    return await this.#durableObject.runScript(code);
+    const command = {
+      code,
+      executionId: crypto.randomUUID(),
+      expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+    };
+    return await retryLoggedIdempotentOperation({
+      context: {
+        executionId: command.executionId,
+        path: this.#props.path,
+        projectId: this.#props.projectId,
+      },
+      message: "script run rejoining after Durable Object reset",
+      operation: async () => await this.#durableObject.runScript(command),
+    });
   }
 
   /** Restart this scope's server-side object; the next request boots it fresh. */
@@ -4951,7 +5022,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   kv: "Durable project key-value store for small policy knobs: get(key), set(key, value), delete(key), list({ prefix? }).",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
-  parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
+  parallel: "Parallel API: preconfigured OpenAPI client using iterate's platform API key.",
   processEventBatch:
     "The project's event-batch dispatch point: streams' birth-certificate feeds deliver here; delegates to worker.processEventBatch.",
   processor: "The project stream processor (snapshot/state).",
@@ -5137,27 +5208,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
+    // Every birth event carries an idempotency key, so the keyed-append door
+    // retry in StreamRpcTarget.append is the single deploy-reset recovery.
     const committed = await timedStep("create-timing", timing, "root-append", () =>
-      retryStreamUnavailableOnce(
-        () =>
-          rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
-            ...projectCreationEvents({
-              projectId: registered.projectId,
-              payload: {
-                config: {
-                  onboardingActive: true,
-                  slug: registered.slug,
-                  ...(creatorEmail === undefined ? {} : { creatorEmail }),
-                },
-              },
-            }),
-          ),
-        (error) => {
-          console.info("project create: root stream lifecycle reset; replaying birth batch once", {
-            projectId: registered.projectId,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        },
+      rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
+        ...projectCreationEvents({
+          projectId: registered.projectId,
+          payload: {
+            config: {
+              onboardingActive: true,
+              slug: registered.slug,
+              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+            },
+          },
+        }),
       ),
     );
     const maxOffset = Math.max(...committed.map((event) => event.offset));
@@ -5593,7 +5657,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Parallel API, preconfigured with Iterate's platform API key. */
+  /** Parallel API, preconfigured with iterate's platform API key. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
       egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
@@ -6638,7 +6702,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
         return acquired;
       }
       if (acquired.status === "rejected") {
-        if (attempt === 1 && isDurableObjectLifecycleError(acquired.error)) {
+        if (attempt === 1 && isRetryableDurableObjectAvailabilityError(acquired.error)) {
           console.info("processor relay retrying after Durable Object lifecycle reset");
           continue;
         }
@@ -6663,7 +6727,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       if (
         outcome.status === "rejected" &&
         attempt === 1 &&
-        isDurableObjectLifecycleError(outcome.error)
+        isRetryableDurableObjectAvailabilityError(outcome.error)
       ) {
         // Deploys and evictions may reset a processor-hosting DO while its
         // facade property or method call is in flight. A fresh host stub

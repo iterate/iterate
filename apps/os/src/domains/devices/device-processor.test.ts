@@ -7,7 +7,7 @@
 // repoints.
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS, type ConsumedInput } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -59,11 +59,6 @@ function notificationRequested(overrides?: {
     },
   };
 }
-
-const REVIVED = {
-  type: "events.iterate.com/stream/processor-revived",
-  payload: { processorSlug: "device", revivals: 1, version: "test" },
-} satisfies DeviceEventInput;
 
 const SETTLED = "events.iterate.com/device/notification-settled";
 const TICKET = "events.iterate.com/device/notification-ticket-observed";
@@ -370,7 +365,7 @@ describe("DeviceProcessor settlements", () => {
     // The incarnation dies mid-dial; the successor's revival turn finds a
     // started obligation nobody is driving. Expo may have accepted the push,
     // so it settles uncertain instead of ringing the phone twice.
-    await h.play(["crash"], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
 
     expect(h.sent).toHaveLength(1); // no second dial, ever
     expect(h.events(SETTLED)).toMatchObject([

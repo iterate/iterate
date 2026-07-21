@@ -203,7 +203,7 @@ const INDEX = dedent`
   POST /__backdoor/expire-tokens           {clientId} → invalidate that client's outstanding access tokens
   POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
   POST /__backdoor/rotate-signing-secret   new webhook HMAC secret
-  POST /__backdoor/fail-token-endpoint     {times} → next N POST /oauth/token calls return 500
+  POST /__backdoor/fail-token-endpoint     {clientId,times} → that client's next N token calls return 500
   POST /__backdoor/webhooks/fire           {url, event?, badSignature?} → POST a signed webhook there now
   POST /__backdoor/apps                    {publicKeyPem, appId?, installationId?, webhookSecret?} → register/replace a GitHub-App installation (public key only)
   POST /__backdoor/apps/fire-webhook       {installationId?, url?, event?, badSignature?} → deliver (or, with no url, echo) a webhook signed x-hub-signature-256 with the app's webhookSecret
@@ -450,7 +450,12 @@ async function issueTokens(input: {
 }
 
 async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Response> {
-  if (await deps.state.consumeTokenEndpointFailure()) {
+  const form = new URLSearchParams(await request.text());
+  const state = await deps.state.getState();
+  const auth = authenticateTokenClient(request, form, state);
+  if (auth instanceof Response) return auth;
+  const { clientId, client } = auth;
+  if (await deps.state.consumeTokenEndpointFailure(clientId)) {
     return json(
       {
         error: "temporarily_unavailable",
@@ -459,11 +464,6 @@ async function tokenEndpoint(request: Request, deps: PetshopDeps): Promise<Respo
       500,
     );
   }
-  const form = new URLSearchParams(await request.text());
-  const state = await deps.state.getState();
-  const auth = authenticateTokenClient(request, form, state);
-  if (auth instanceof Response) return auth;
-  const { clientId, client } = auth;
   const grantType = form.get("grant_type");
   if (grantType === "authorization_code") {
     const code = await unseal<CodePayload>(form.get("code") ?? "", deps.sealKey);
@@ -761,15 +761,26 @@ async function backdoor(key: string, request: Request, deps: PetshopDeps): Promi
     return json({ webhookSigningSecret: await deps.state.rotateSigningSecret() });
   }
   if (key === "POST /__backdoor/fail-token-endpoint") {
-    const times = (await readJson(request)).times;
+    const body = await readJson(request);
+    const clientId = body.clientId;
+    const times = body.times;
+    if (typeof clientId !== "string" || clientId.length === 0) {
+      return json(
+        {
+          error: "invalid_request",
+          error_description: "clientId is required so failures cannot affect unrelated tests",
+        },
+        400,
+      );
+    }
     if (typeof times !== "number" || !Number.isInteger(times) || times < 0) {
       return json(
         { error: "invalid_request", error_description: "times must be a non-negative integer" },
         400,
       );
     }
-    await deps.state.setTokenEndpointFailures(times);
-    return json({ tokenEndpointFailuresRemaining: times });
+    await deps.state.setTokenEndpointFailures(clientId, times);
+    return json({ clientId, tokenEndpointFailuresRemaining: times });
   }
   if (key === "POST /__backdoor/webhooks/fire") {
     const body = await readJson(request);

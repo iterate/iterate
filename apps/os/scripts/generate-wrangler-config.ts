@@ -29,7 +29,6 @@ import {
   SANDBOX_INSTANCE_TYPES,
   type SandboxInstanceType,
 } from "../src/domains/sandboxes/instance-types.ts";
-import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -183,6 +182,7 @@ const DO_CLASSES = {
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
+  WORKER_BUILD_COORDINATOR: "WorkerBuildCoordinatorDurableObject",
   WORKER: "StatefulWorkerDurableObject",
   // Deliberately NOT "WorkspaceDurableObject": declarative exports key
   // namespaces by class name, and the retired single-parent-overlay workspace
@@ -226,7 +226,6 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
-  WorkerBuilderDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -337,17 +336,6 @@ function workerBindings(input: {
     version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
-    queues: {
-      consumers: [
-        {
-          queue: workerEventsQueueName(input.workerName),
-          max_batch_size: 10,
-          max_batch_timeout: 5,
-          max_retries: 3,
-          retry_delay: 30,
-        },
-      ],
-    },
     // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
     // sandbox DO snapshots /workspace here on idle and restores on start).
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from

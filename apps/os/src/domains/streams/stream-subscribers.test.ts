@@ -12,7 +12,10 @@ import type {
   StreamSubscriberWakeRequest,
   StreamWebhookDelivery,
 } from "iterate/processors";
-import { StreamReceiverUnavailableError } from "iterate/processors";
+import {
+  STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
@@ -739,6 +742,54 @@ describe("StreamSubscribers", () => {
     expect(h.pokes).toHaveLength(2);
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(second.batches[0].events.map((event) => event.offset)).toEqual([4]);
+  });
+
+  it("wake selectors turn unconsumed revival facts into eventless caught-up deliveries", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    const firstRevival = evt(1, STREAM_PROCESSOR_REVIVED_EVENT_TYPE);
+    h.append(firstRevival);
+    const { sink, batches } = makeSink();
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink,
+      subscriber: {
+        processor: {
+          announcement: {
+            slug: "recovery-test",
+            version: "0.0.1",
+            description: "Does not consume processor revival facts.",
+            consumes: ["events.iterate.com/recovery-test/requested"],
+            emits: [],
+            ownedEvents: [],
+          },
+        },
+      },
+    });
+
+    h.subscribers.wake([{ event: firstRevival, byteLength: 64 }]);
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(batches[0]).toMatchObject({
+      events: [],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 1,
+      streamMaxOffset: 1,
+    });
+
+    const secondRevival = evt(2, STREAM_PROCESSOR_REVIVED_EVENT_TYPE);
+    h.append(secondRevival);
+    h.subscribers.wake([{ event: secondRevival, byteLength: 64 }]);
+    await h.settle();
+
+    expect(h.pokes).toHaveLength(1);
+    expect(batches[1]).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+    });
   });
 
   it("schedules idle teardown on the DO alarm without retaining the current turn", async () => {

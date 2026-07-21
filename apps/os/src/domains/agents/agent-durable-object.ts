@@ -43,13 +43,13 @@ export class AgentDurableObject extends DurableObject<Env> {
   // The DO constructs its processors — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery: LLM turns are consequential `runInBackground`
-  // work (journaled requested/started obligations whose OUTCOME matters), and
+  // work (stream-committed requested/started obligations whose OUTCOME matters), and
   // the debounce timer is a droppable attempt whose loss must not strand a
   // scheduled turn. An incarnation that dies owing either must be revived —
-  // the keepalive alarm appends the `stream/processor-revived` fact, whose ordinary delivery
-  // lands at head and `processEvent`'s at-head reconcile (`delivery.caughtUp`)
-  // settles/re-drives the open obligations (see the registry module doc's
-  // recovery rule).
+  // the keepalive alarm appends the `stream/processor-revived` fact, whose wake
+  // produces the eventless at-head pass (`delivery.caughtUp`) that settles or
+  // re-drives the open obligations (see the registry module doc's recovery
+  // rule).
   readonly #agentProcessor = this.#registry.register(
     new AgentProcessor({
       stream: this.#stream,

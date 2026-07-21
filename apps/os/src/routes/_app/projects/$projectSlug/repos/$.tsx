@@ -12,13 +12,12 @@ import {
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 /** The stream-view params plus the IDE's own view state (open file, diff,
- * markdown/html preview, tasks/source-control/GitHub sidebar, history sidebar
- * + expanded commit). */
+ * markdown/html preview, source-control/GitHub sidebar, history sidebar +
+ * expanded commit). */
 const RepoDetailSearch = StreamViewSearch.extend({
   file: z.string().optional().catch(undefined),
   diff: z.boolean().optional().catch(undefined),
   preview: z.boolean().optional().catch(undefined),
-  tasks: z.boolean().optional().catch(undefined),
   scm: z.boolean().optional().catch(undefined),
   gh: z.boolean().optional().catch(undefined),
   staged: z.boolean().optional().catch(undefined),
@@ -61,12 +60,7 @@ function ProjectRepoDetailContent() {
         Loading repo…
       </div>
     ) : state.initialized ? (
-      <RepoIde
-        key={`${project.id}:${repoPath}`}
-        projectId={project.id}
-        projectSlug={project.slug}
-        repoPath={repoPath}
-      />
+      <RepoIde key={`${project.id}:${repoPath}`} projectId={project.id} repoPath={repoPath} />
     ) : (
       // data-spinner: this panel is live bootstrap progress (the processor
       // pushes each step in), and right after repo creation it can also show a

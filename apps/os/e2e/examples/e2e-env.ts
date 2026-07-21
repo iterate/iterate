@@ -3,6 +3,7 @@
 
 import { fileURLToPath } from "node:url";
 import type { RpcStub } from "capnweb";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { connectItx } from "iterate/node";
 import type { Project as ProjectRpcTarget, Session } from "../../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "../test-support/dev-server.ts";
@@ -30,6 +31,7 @@ export function connectGlobal(): RpcStub<Session> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
 }
 
@@ -38,6 +40,7 @@ export function connectProject(projectId: string): RpcStub<ProjectRpcTarget> {
   return connectItx({
     auth: { secret: adminApiSecret(), type: "admin-secret" },
     baseUrl: baseUrl(),
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
     projectId,
   });
 }
