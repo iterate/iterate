@@ -94,6 +94,7 @@ export const getRootProjectRedirectServerFn: (input?: {
       const decision = chooseRootProjectRedirect({
         preferredProjectSlug:
           data.preferredProjectSlug ?? getCookie("iterate_recent_project") ?? null,
+        preferredProjectOnboarding: data.preferredProjectSlug == null,
         projects: await projects.list({ scope: "mine" }),
       });
 
