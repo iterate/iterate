@@ -18,7 +18,11 @@ export const Route = createFileRoute("/api/$")({
           return await handleProjectAuthStart({
             request,
             session: context.iterateAuthSession
-              ? { userId: context.iterateAuthSession.user.id }
+              ? {
+                  userId: context.iterateAuthSession.user.id,
+                  email: context.iterateAuthSession.user.email || undefined,
+                  name: context.iterateAuthSession.user.name || undefined,
+                }
               : null,
             mintSession: (input) => itxEnv.AUTH.mintProjectAppSession(input),
             resolveProjectId: async (targetUrl) => {

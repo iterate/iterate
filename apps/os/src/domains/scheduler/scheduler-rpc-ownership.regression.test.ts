@@ -1,84 +1,34 @@
 import { expect, test, vi } from "vitest";
 import {
-  StreamProcessorRunner,
-  type ProcessorProgress,
-  type ProcessorProgressStore,
-} from "iterate/processors";
-import { MemoryStream } from "iterate/processors/testing";
+  makeMemoryProgressStore,
+  makeProcessorHarness,
+  MemoryStream,
+} from "iterate/processors/testing";
 import {
   SchedulerProcessor,
   type SchedulerProcessorDeps,
 } from "./scheduler-processor-implementation.ts";
-import {
-  SchedulerProcessorContract,
-  type SchedulerProcessorState,
-} from "./scheduler-processor-contract.ts";
+import { SchedulerProcessorContract } from "./scheduler-processor-contract.ts";
 
 const T0 = Date.parse("2026-01-15T12:00:00Z");
 const COMPLETED_TYPE = "events.iterate.com/scheduler/trigger-completed";
-
-function makeProgressStore(): ProcessorProgressStore<SchedulerProcessorState> {
-  let record: ProcessorProgress<SchedulerProcessorState> | undefined;
-  return {
-    read: () => (record === undefined ? undefined : structuredClone(record)),
-    commit: (progress, options) => {
-      const persistedRevision = record?.processing.cursorRevision ?? 0;
-      if (options.expectedCursorRevision !== persistedRevision) {
-        throw new Error(
-          `progress commit fenced: expected ${options.expectedCursorRevision}, persisted ${persistedRevision}`,
-        );
-      }
-      record = structuredClone(progress);
-    },
-  };
-}
 
 function makeHarness(
   invokeCapability: SchedulerProcessorDeps["dynamicWorkers"]["invokeCapability"],
 ) {
   const clock = { now: T0 };
   const stream = new MemoryStream("/scheduler/primary");
-  stream.now = () => clock.now;
-  stream.events.push({
-    type: "events.iterate.com/scheduler/created",
-    idempotencyKey: "scheduler/created:rpc-ownership-regression",
-    payload: { config: {} },
-    createdAt: new Date(clock.now).toISOString(),
-    offset: 1,
-    path: stream.path,
+  return makeProcessorHarness<typeof SchedulerProcessorContract, SchedulerProcessor>({
+    createProcessor: (deps) =>
+      new SchedulerProcessor({
+        ...deps,
+        dynamicWorkers: { invokeCapability },
+        readAlarm: async () => null,
+        repointAlarm: async () => {},
+        reads: deps.reads,
+      }),
+    substrate: { clock, stream, progress: makeMemoryProgressStore() },
   });
-
-  let runner!: StreamProcessorRunner<typeof SchedulerProcessorContract, SchedulerProcessorDeps>;
-  const processor = new SchedulerProcessor({
-    stream,
-    path: stream.path,
-    projectId: null,
-    dynamicWorkers: { invokeCapability },
-    now: () => clock.now,
-    readAlarm: async () => null,
-    repointAlarm: async () => {},
-    reads: {
-      snapshot: () => runner.snapshot(),
-      waitUntilEvent: (input) => runner.waitUntilEvent(input),
-    },
-  });
-  runner = new StreamProcessorRunner({
-    processor,
-    stream,
-    durability: { progress: makeProgressStore() },
-    now: () => clock.now,
-  });
-
-  const deliver = async () => {
-    for (;;) {
-      const head = stream.events.at(-1)?.offset ?? 0;
-      const { offset } = await runner.snapshot();
-      if (offset >= head) return;
-      await runner.catchUp();
-    }
-  };
-
-  return { clock, deliver, processor, stream };
 }
 
 function setEvent() {
@@ -89,23 +39,25 @@ function setEvent() {
       key: "report",
       recurrence: { every: 60 },
     },
-  };
+  } as const;
 }
 
 async function runOneAction(
   invokeCapability: SchedulerProcessorDeps["dynamicWorkers"]["invokeCapability"],
 ) {
-  const harness = makeHarness(invokeCapability);
-  await harness.stream.append(setEvent());
-  await harness.deliver();
-  harness.clock.now = T0 + 61_000;
-  await harness.processor.triggerDue();
-  await harness.deliver();
-  await vi.waitFor(() => {
-    expect(harness.stream.events.some((event) => event.type === COMPLETED_TYPE)).toBe(true);
-  });
-  await harness.deliver();
-  return harness.stream.events.find((event) => event.type === COMPLETED_TYPE)!;
+  const h = makeHarness(invokeCapability);
+  await h.append(
+    {
+      type: "events.iterate.com/scheduler/created",
+      idempotencyKey: "scheduler/created:rpc-ownership-regression",
+      payload: { config: {} },
+    },
+    setEvent(),
+  );
+  h.clock.now = T0 + 61_000;
+  await h.processor().triggerDue();
+  await h.settle();
+  return h.events(COMPLETED_TYPE)[0]!;
 }
 
 test.fails("DESIRED: a scheduler action disposes its RPC result after detaching the JSON value", async () => {
