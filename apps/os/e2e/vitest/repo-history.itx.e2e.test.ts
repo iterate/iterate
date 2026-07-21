@@ -8,7 +8,7 @@ test("log, commitDetails and pinned readFile over a few commits", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `repo-history-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`repo-history-${crypto.randomUUID()}`).create({});
 
   // The project repo seeds asynchronously after project creation; readFile
   // THROWS (not null) until the repo artifact exists, so swallow errors

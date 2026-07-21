@@ -20,11 +20,7 @@
 import { itxEnv } from "../../env.ts";
 import { timingSafeStringEqual } from "../secrets/utils.ts";
 import { routeIntegrationWebhook } from "./integration-streams.ts";
-import {
-  TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE,
-  parseJsonRecord,
-  telegramWebhookSecretToken,
-} from "./utils.ts";
+import { parseJsonRecord, telegramWebhookSecretToken } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH_PREFIX = "/api/integrations/telegram/webhook/";
@@ -74,7 +70,7 @@ export function createTelegramWebhookFetch(deps: TelegramWebhookDeps) {
         idempotencyKey: `telegram-webhook:${botId}:${updateId}`,
         // The exact shape the telegram router + agent processors read.
         payload: { body: update, botId },
-        type: TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE,
+        type: "events.iterate.com/telegram/webhook-received",
       },
       externalId: botId,
       routerCreatedEventType: "events.iterate.com/telegram/created",

@@ -43,8 +43,6 @@ import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.
 import {
   buildApprovalMessage,
   evaluateGrant,
-  HumanApprovalGrantedPayload,
-  HumanApprovalRejectedPayload,
   matchEgressRule,
   sha256Hex,
   type EgressRule,
@@ -64,6 +62,11 @@ import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a catch-up — bounds rules staleness to ~5s.
@@ -555,14 +558,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     },
   ): Promise<"granted" | "rejected" | null> {
     if (event.type === "events.iterate.com/project/human-approval-rejected") {
-      const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+      const rejection = ProjectProcessorContract.events[
+        "events.iterate.com/project/human-approval-rejected"
+      ].payloadSchema.safeParse(event.payload);
       return rejection.success &&
         rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
         ? "rejected"
         : null;
     }
 
-    const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
+    const grant = ProjectProcessorContract.events[
+      "events.iterate.com/project/human-approval-granted"
+    ].payloadSchema.safeParse(event.payload);
     if (
       !grant.success ||
       grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset

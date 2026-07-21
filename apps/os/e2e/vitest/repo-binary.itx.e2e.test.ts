@@ -8,7 +8,7 @@ test("commitFiles contentBase64 and readFile base64 round-trip bytes exactly", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `repo-binary-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`repo-binary-${crypto.randomUUID()}`).create({});
 
   // The project repo seeds asynchronously after project creation; readFile
   // THROWS (not null) until the repo artifact exists, so swallow errors

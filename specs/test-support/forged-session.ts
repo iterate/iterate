@@ -26,7 +26,7 @@ const OsPlaywrightAuthEnv = z.object({
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
   /** Auth issuer used for both forged access and id tokens. */
   APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
-  /** Private half of the forge key baked into dev/preview OS JWKS. */
+  /** Private half of the Auth signing key whose public half OS trusts. */
   AUTH_FORGE_PRIVATE_JWK: z
     .string()
     .min(1)
@@ -134,7 +134,7 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,
   });
-  using created = session.projects.create({ slug: input.slug });
+  using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 

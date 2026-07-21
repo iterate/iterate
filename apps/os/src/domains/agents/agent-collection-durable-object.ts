@@ -12,7 +12,6 @@ import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts"
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
-  AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AgentCollectionProcessorContract,
   type AgentCollectionProcessorState,
 } from "./agent-collection-processor-contract.ts";
@@ -20,6 +19,11 @@ import { AgentCollectionStreamProcessor } from "./agent-collection-processor-imp
 import { AgentPath } from "./agent-presence.ts";
 
 export class AgentCollectionDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
@@ -128,7 +132,7 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
     const durableObjectName = DurableObjectNameCodec.stringify(this.#name);
     await this.#stream.append(
       AgentCollectionProcessorContract.buildEvent({
-        type: AGENT_COLLECTION_CREATED_EVENT_TYPE,
+        type: "events.iterate.com/agent-collection/created",
         idempotencyKey: `agent-collection/created:${durableObjectName}`,
         payload: {},
       }),

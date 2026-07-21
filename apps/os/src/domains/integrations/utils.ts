@@ -14,12 +14,6 @@ import type { BuiltinIntegrationSlug } from "./types.ts";
  */
 export const INTEGRATION_DIRECTORY_STREAM_PATH = "/integrations/_directory";
 
-/** Directory claim/unclaim facts, payload `{ slug, externalId, projectId,
- * connection }` — see `foldConnectionDirectory`. */
-export const CONNECTION_CLAIMED_EVENT_TYPE = "events.iterate.com/integration/connection-claimed";
-export const CONNECTION_UNCLAIMED_EVENT_TYPE =
-  "events.iterate.com/integration/connection-unclaimed";
-
 /**
  * The integration slugs whose call surfaces ship with the OS deployment. ONE
  * constant on purpose — the collection's dispatch, list()'s source labeling,
@@ -40,32 +34,14 @@ export function isBuiltinIntegrationSlug(slug: string): slug is BuiltinIntegrati
   return BUILTIN_INTEGRATION_SLUGS.has(slug);
 }
 
-export const SLACK_CONNECTED_EVENT_TYPE = "events.iterate.com/slack/connected";
-export const SLACK_DISCONNECTED_EVENT_TYPE = "events.iterate.com/slack/disconnected";
-export const SLACK_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/slack/webhook-received";
-
-export const GOOGLE_CONNECTED_EVENT_TYPE = "events.iterate.com/google/connected";
-export const GOOGLE_DISCONNECTED_EVENT_TYPE = "events.iterate.com/google/disconnected";
-
-export const GITHUB_CONNECTED_EVENT_TYPE = "events.iterate.com/github/connected";
-export const GITHUB_DISCONNECTED_EVENT_TYPE = "events.iterate.com/github/disconnected";
-export const GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/github/webhook-received";
-
-export const TELEGRAM_CONNECTED_EVENT_TYPE = "events.iterate.com/telegram/connected";
-export const TELEGRAM_DISCONNECTED_EVENT_TYPE = "events.iterate.com/telegram/disconnected";
-export const TELEGRAM_WEBHOOK_RECEIVED_EVENT_TYPE = "events.iterate.com/telegram/webhook-received";
-// The journaled-send pair (`telegram/send-requested` → `telegram/message-sent`)
-// is declared on the telegram processor contracts, not here: contract event
-// catalogs need literal keys, and no door-side code composes those strings.
-
 /**
  * How old a webhook may be and still deserve its user-visible acknowledgement
  * (the 👀 reaction, the assistant status). Acks mean "your message was just
- * picked up" — they are only meaningful near arrival. A full journal refold
+ * picked up" — they are only meaningful near arrival. A full stream replay
  * (the normal aftermath of deploying a state-schema change) or a late wake
  * replays historical webhooks; re-acking those would resurrect reactions on
  * old messages, and a burst of them is a Slack rate-limit crash-loop
- * (docs/writing-stream-processors.md, "Refold safety").
+ * (docs/writing-stream-processors.md, "Reprocessing safety").
  */
 const WEBHOOK_ACK_FRESHNESS_MS = 15 * 60_000;
 

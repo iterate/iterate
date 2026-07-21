@@ -28,7 +28,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
       type: "admin-secret",
       secret: adminSecret(),
     });
-    using project = itx.projects.create({ slug: `ocado-${RUN_SUFFIX}` });
+    using project = await itx.projects.get(`ocado-${RUN_SUFFIX}`).create({});
     await project.__describe();
     const integrations = project.integrations as any;
 
@@ -190,7 +190,7 @@ test("a project mounts ocado into the collection; connections + secret confineme
 test("builtin waitrose: grammar, __describe, and method-miss stay loud", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `waitrose-builtin-${RUN_SUFFIX}` });
+  using project = await itx.projects.get(`waitrose-builtin-${RUN_SUFFIX}`).create({});
   await project.__describe();
   const integrations = project.integrations as any;
 
@@ -243,7 +243,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `waitrose-live-${RUN_SUFFIX}` });
+    using project = await itx.projects.get(`waitrose-live-${RUN_SUFFIX}`).create({});
     await project.__describe();
 
     // The connection secret: the account credential and NOTHING token-shaped.

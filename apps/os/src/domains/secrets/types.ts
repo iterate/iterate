@@ -1,7 +1,7 @@
 /**
  * Public secret capability data shapes. A secret's public live state IS its
  * {@link SecretDescription}: there is deliberately no separate secret processor
- * state type — the internal fold carries the encrypted material, and the DO's
+ * state type — the internal reduced state carries the encrypted material, and the DO's
  * processor facade projects it away (write-only material) before anything
  * crosses the RPC boundary.
  */
@@ -156,7 +156,7 @@ export type SecretDescription = {
     usedCount: number;
   };
   egress: { urls: string[] };
-  /** Whether the secret processor has folded its birth certificate. */
+  /** Whether the secret processor has reduced its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
   /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */

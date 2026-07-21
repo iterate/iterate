@@ -107,7 +107,7 @@ function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
     path.endsWith("/domains/workers/worker-runner.ts") ||
     // The platform's builder-sandbox get-or-create (dynamic worker builds)
     // mints sandbox + catalogue-stream stubs with the same claim discipline
-    // as itx.sandboxes.create in rpc-targets.ts.
+    // as itx.sandboxes.get(path).create in rpc-targets.ts.
     path.endsWith("/domains/sandboxes/builder-sandbox.ts") ||
     // Engine loopback/egress seams that mint project/stream stubs.
     path.endsWith("/domains/itx/itx-entrypoint.ts") ||

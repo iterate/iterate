@@ -5,6 +5,7 @@ import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/share
 import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { config, env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
+import { authJwt } from "./auth-jwt.ts";
 
 const LOCAL_OAUTH_CLIENT_ORIGINS = [
   "http://localhost:6274",
@@ -54,6 +55,7 @@ export const auth = betterAuth({
   baseURL: config.authAppOrigin,
   plugins: getAuthPlugins({
     authAppOrigin: config.authAppOrigin,
+    jwtPlugin: authJwt(config.authSigningPrivateJwk.exposeSecret()),
     emailOtpEnabled: config.emailOtpEnabled,
     fixedTestOtpEnabled: config.fixedTestOtpEnabled,
     emailBinding: env.EMAIL,

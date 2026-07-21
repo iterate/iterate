@@ -49,13 +49,12 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   Personal `dev_<you>` configs may still carry personal integration secrets,
   but they should not carry app/MCP/project-host URL overrides.
 
-  Don't add old flat auth OAuth/JWKS vars in these configs. Local dev derives
-  its forge JWKS binding from `AUTH_FORGE_PRIVATE_JWK`, and deployed OS fetches
-  the live auth worker JWKS during deploy. Doppler
-  `APP_CONFIG_ITERATE_AUTH__JWKS` snapshots should be absent: a stale one makes
-  older worker/dev paths reject every session — login just bounces back to
-  `/sign-in` with no error. This broke all `dev_<user>` and preview logins
-  once; the stale keys were cleaned out on 2026-06-12.
+  Don't add old flat auth OAuth/JWKS vars in these configs. Auth signs JWTs
+  with `AUTH_FORGE_PRIVATE_JWK`; local and deployed relying parties derive its
+  public JWKS locally from the same Doppler value. Doppler
+  `APP_CONFIG_ITERATE_AUTH__JWKS` snapshots should be absent: generated config
+  and deploy scripts own that derived binding, so a manually pinned copy can
+  only drift.
 
 - The chosen port is recorded in **`apps/os/.dev-server/dev-server.json`**
   (`{pid, port, baseUrl, startedAt}`).
@@ -143,9 +142,10 @@ use:
 ALLOW_REMOTE_PRODUCTION_AUTH_RPC=1 pnpm run deploy --env prd
 ```
 
-Preview CI deploys auth before every selected dependent (`os` and
-`semaphore`). Production uses the coordinated `Deploy Auth + OS` workflow;
-the dedicated auth workflow deploys only `auth-dev-global`.
+Preview CI deploys every selected app concurrently. Auth and its relying
+parties use the same Doppler-owned signing key, so JWT verification creates no
+deployment dependency. Production uses the coordinated `Deploy Auth + OS`
+workflow; the dedicated auth workflow deploys only `auth-dev-global`.
 
 ## Acting as users and admins
 
@@ -171,11 +171,11 @@ security model. The forge-key flow below remains useful in non-production when
 testing the real OAuth-session shape, arbitrary organization claims, or auth UI
 behavior.
 
-OS trusts JWTs signed by any key in its baked JWKS. Deploys merge the **forge**
-public key into that baked JWKS; local dev derives the same public key from the
-private half in Doppler (`AUTH_FORGE_PRIVATE_JWK`, inherited from `_shared/dev`
-/ `_shared/preview`) when generating Wrangler config. Minting is offline and
-instant — no auth worker involved:
+Auth signs JWTs with one Doppler-owned Ed25519 key. OS and the other relying
+workers trust only its public half, derived locally during config generation or
+deploy from `AUTH_FORGE_PRIVATE_JWK` (inherited from `_shared/dev` /
+`_shared/preview` / `_shared/prd`). The same private key powers offline
+identity minting, so minting is instant and does not call the auth worker:
 
 `pnpm auth:mint` lives in the **repo root** package (`pnpm cli` lives in
 `apps/os` — don't mix them up; pnpm's "command not found" error when you run
@@ -216,7 +216,7 @@ The working recipe to browse OS as a minted identity:
 # 1. create a project via the operator path (admin API secret)
 (cd apps/os && doppler run --project os --config dev -- pnpm cli itx run \
   --base-url http://localhost:<port> \
-  --eval 'return await itx.projects.create({ slug: "my-proj" }).__describe()' # note the returned projectId
+  --eval 'const project = await itx.projects.get("my-proj").create({}); return await project.__describe()' # note the returned projectId
 )
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —
@@ -307,13 +307,13 @@ audit trail yet — an audited mint endpoint on the auth worker is the planned
 replacement. Until then, guard that Doppler value like any production secret
 and prefer minting a scoped (non-admin) identity when you can.
 
-Because the prd forge key is god-mode, the deploy refuses to bake its public
-key into the worker unless you opt in explicitly: `os/prd` must carry **both**
-`AUTH_FORGE_PRIVATE_JWK` and `AUTH_FORGE_ALLOW_PRODUCTION=true`. A forge key
+Because the prd signing key is god-mode, Auth and relying-party deploys refuse
+to use it unless you opt in explicitly: their prd Doppler configs must resolve
+both `AUTH_FORGE_PRIVATE_JWK` and `AUTH_FORGE_ALLOW_PRODUCTION=true`. A key
 that lands in a prod config without the flag fails the deploy loudly rather
-than silently arming minting (each environment also uses its own key id —
-`iterate-forge-dev`/`-preview`/`-prd` — so a leak is scoped to one
-environment). Generate a fresh forge key with
+than silently arming Auth signing and offline minting (each environment also
+uses its own key id — `iterate-forge-dev`/`-preview`/`-prd` — so a leak is
+scoped to one environment). Generate a fresh forge key with
 `pnpm tsx scripts/auth/generate-forge-key.ts --kid iterate-forge-<env>`.
 
 ## Browsers: the golden path for agents
@@ -476,9 +476,10 @@ doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    #
 # if preview-9 is taken you'll be told who holds it; --force evicts them (their
 # deployment gets clobbered by whatever you deploy next — only for stale holds)
 
-# Deploy (auth first because the OS deploy bakes its JWKS):
-(cd apps/auth && pnpm run deploy --env preview_9)
-(cd apps/os   && pnpm run deploy --env preview_9)
+# Deploy concurrently; both derive the same signing key from Doppler:
+(cd apps/auth && pnpm run deploy --env preview_9) &
+(cd apps/os   && pnpm run deploy --env preview_9) &
+wait
 
 # Point a browser at it (same org-claims requirement as local dev — see
 # "Acting as users" above; bare --admin lands on the auth login page):
@@ -543,12 +544,10 @@ into its database, so the DB can never drift from Doppler and the two apps
 need no deploy-time coordination. Provisioning/rotation:
 `doppler run --project _shared --config prd -- pnpm preview provision-auth-preview-configs --rotate`.
 
-That rotation command also clears the preview slot's Better Auth `jwks` rows.
-Those rows are encrypted with `APP_CONFIG_BETTER_AUTH_SECRET`; rotating the
-secret without clearing them makes email OTP succeed but OAuth authorize fail
-with `Failed to decrypt private key`. If someone changes a preview auth secret
-manually, clear the matching slot before redeploying:
-`doppler run --project auth --config preview_N -- pnpm --dir apps/auth exec wrangler d1 execute auth-preview-N-auth-db --remote --command 'delete from jwks;'`.
+JWT signing is independent of `APP_CONFIG_BETTER_AUTH_SECRET`: the Better Auth
+JWT adapter reads the fixed `AUTH_FORGE_PRIVATE_JWK` from Doppler and does not
+store generated signing keys in D1. Rotating the Better Auth secret therefore
+needs no JWKS cleanup.
 
 More detail on the semaphore primitive:
 [devops-cloudflare-doppler.md](devops-cloudflare-doppler.md).

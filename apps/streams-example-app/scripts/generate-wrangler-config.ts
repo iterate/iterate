@@ -54,6 +54,7 @@ function workerBindings() {
       bindings: [{ name: "STREAM", class_name: "StreamDurableObject" }],
     },
     observability: OBSERVABILITY,
+    version_metadata: { binding: "CF_VERSION_METADATA" },
   };
 }
 

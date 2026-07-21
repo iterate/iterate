@@ -184,7 +184,7 @@ function SandboxRow({
   projectSlug: string;
 }) {
   const sandboxState = useLiveState(
-    (itx) => itx.sandboxes.liveState(path),
+    (itx) => itx.sandboxes.get(path).liveState,
     (state) => state,
     [path],
   );

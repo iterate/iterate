@@ -43,13 +43,14 @@ Key consequences:
 - **The path is the identity; the journal routes.** The instance type is
   configuration, not a path segment (a type segment would materialize
   meaningless intermediate folder streams like `/sandboxes/lite`).
-  `itx.sandboxes.create` claims the name by appending `create-requested` to
+  `itx.sandboxes.get(path).create` claims the name by appending `create-requested` to
   the `/sandboxes` catalogue stream (idempotency-keyed by path — atomic), and
   `itx.sandboxes.get(path)` reads the claim back to pick the namespace, then
   mints the DO stub from `{projectId}:{path}`. Same path → same sandbox (and
   its snapshot lineage). The catalogue stream _is_ the directory — no separate
   registry, and lookups never materialize per-path streams.
-- **Existence is explicit.** A stub only answers once `itx.sandboxes.create`
+- **Existence is explicit.** A handle's SDK surface only answers once
+  `itx.sandboxes.get(path).create`
   recorded the sandbox; addressing never creates (unlike stock `getSandbox`).
 - Per-class settings (`instance_type`, `max_instances`, `ssh`,
   `authorized_keys`) are set per instance type in

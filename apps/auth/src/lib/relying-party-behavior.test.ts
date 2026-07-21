@@ -20,6 +20,7 @@ const config = {
   issuer: "https://auth.iterate-dev.com/api/auth",
   clientId: "os-local-dev",
   clientSecret: "secret",
+  jwks: { keys: [] },
   redirectURI: "http://localhost:65455/api/iterate-auth/callback",
   resource: "http://localhost",
 } satisfies IterateAuthConfig;

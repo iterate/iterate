@@ -1,5 +1,9 @@
-import { describe, expect, test } from "vitest";
-import { chooseRootProjectRedirect, type RootRedirectProject } from "./project-root-redirect.ts";
+import { describe, expect, test, vi } from "vitest";
+import {
+  chooseRootProjectRedirect,
+  createMissingRootRedirectProject,
+  type RootRedirectProject,
+} from "./project-root-redirect.ts";
 
 const project = (
   overrides: Partial<RootRedirectProject> & Pick<RootRedirectProject, "id" | "slug">,
@@ -67,4 +71,18 @@ describe("chooseRootProjectRedirect", () => {
       }),
     ).toEqual({ kind: "projects" });
   });
+});
+
+test("the missing-project SSR bootstrap does not wait for project readiness", async () => {
+  const create = vi.fn(async () => ({}) as never);
+
+  await createMissingRootRedirectProject(
+    { create },
+    { organizationSlug: "acme", projectId: "prj_missing" },
+  );
+
+  expect(create).toHaveBeenCalledWith(
+    { organizationSlug: "acme", projectId: "prj_missing" },
+    { waitUntilReady: false },
+  );
 });

@@ -8,7 +8,7 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `workspace-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`workspace-${crypto.randomUUID()}`).create({});
 
   // The default mount table points at the config repo, which seeds
   // asynchronously after project creation — wait for the seed so fall-through
@@ -25,10 +25,13 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   const workspacePath = `/workspaces/agents/e2e-${crypto.randomUUID()}`;
   using workspace = project.workspaces.get(workspacePath);
 
-  // -- first touch births the workspace with the default mount table --------
+  // -- explicit birth with the default mount table --------------------------
 
-  // No explicit create: the first operation appends the workspace/created
-  // birth certificate with the config repo mounted at "/", committable.
+  await expect(workspace.readFile("/package.json")).rejects.toThrow(
+    /does not exist.*create it with itx\.workspaces\.get/s,
+  );
+  await workspace.create({});
+  await workspace.create({}); // identical birth retries dedupe
   const config = await workspace.getConfig();
   expect(config).toMatchObject({
     mounts: { "/": { policy: "commit-to-main", repoPath: "/repos/config" } },
@@ -220,35 +223,36 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   // — and an empty one has nothing to commit.
   const otherPath = `/workspaces/agents/e2e-${crypto.randomUUID()}`;
   using other = project.workspaces.get(otherPath);
+  await other.create({});
   expect(await other.readFile("/notes/e2e.md")).toBe("workspace hello world");
   await expect(other.git.commit({ message: "premature" })).rejects.toThrow(/Nothing to commit/);
 
-  // create() on an ALREADY-BORN workspace with a DIFFERENT table observes the
-  // birth certificate (a blind re-append would hit the stream's different-body
-  // idempotency rejection) and converges via one configured patch.
-  using otherRecreated = await project.workspaces.create({
-    path: otherPath,
-    mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+  // A second create with different birth configuration is a loud duplicate,
+  // not an ordinary reconfiguration. Use configure() after birth instead.
+  await expect(
+    other.create({
+      mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+    }),
+  ).rejects.toThrow();
+  expect(await other.getConfig()).toMatchObject({
+    mounts: { "/": { policy: "commit-to-main", repoPath: "/repos/config" } },
   });
-  expect(await otherRecreated.getConfig()).toMatchObject({
-    mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
-  });
-  expect(await otherRecreated.readFile("/cfg/package.json")).not.toBeNull();
 
-  // -- explicit create with a custom table is idempotent and converges ------
+  // -- explicit create merges custom mounts over the default table --------
 
   const customPath = `/workspaces/custom-${crypto.randomUUID()}`;
-  using custom = await project.workspaces.create({
-    path: customPath,
-    mounts: { "/cfg": { policy: "commit-to-main", repoPath: "/repos/config" } },
+  using custom = project.workspaces.get(customPath);
+  await custom.create({
+    mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
   });
   expect(await custom.getConfig()).toMatchObject({
-    mounts: { "/cfg": { policy: "commit-to-main", repoPath: "/repos/config" } },
+    mounts: {
+      "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+      "/cfg": { policy: "read-only", repoPath: "/repos/config" },
+    },
   });
   expect(await custom.readFile("/cfg/package.json")).not.toBeNull();
-  // Paths outside every mount are private scratch — readable, listable,
-  // never committable.
-  expect(await custom.readFile("/package.json")).toBeNull();
+  expect(await custom.readFile("/package.json")).not.toBeNull();
 
   // -- itx.files <-> workspace: the two file domains compose through bytes.
 

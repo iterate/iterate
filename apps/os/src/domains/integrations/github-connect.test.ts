@@ -7,13 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { completeConnect } from "./connect-flows.ts";
 import { createOAuthState } from "./oauth-state.ts";
-import {
-  CONNECTION_CLAIMED_EVENT_TYPE,
-  GITHUB_CONNECTED_EVENT_TYPE,
-  GITHUB_DISCONNECTED_EVENT_TYPE,
-  INTEGRATION_DIRECTORY_STREAM_PATH,
-  githubConnectionSecretPath,
-} from "./utils.ts";
+import { INTEGRATION_DIRECTORY_STREAM_PATH, githubConnectionSecretPath } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
 const network = await vi.hoisted(async () => {
@@ -119,7 +113,7 @@ describe("completeConnect (github App installation)", () => {
     });
     const connected = network.streams
       .get(journalName)
-      ?.find((event) => event.type === GITHUB_CONNECTED_EVENT_TYPE);
+      ?.find((event) => event.type === "events.iterate.com/github/connected");
     expect(connected?.payload).toMatchObject({
       connection: "install-789",
       externalId: "789",
@@ -130,7 +124,7 @@ describe("completeConnect (github App installation)", () => {
     // webhook door can route inbound App webhooks.
     const claim = [...network.streams.values()]
       .flat()
-      .find((event) => event.type === CONNECTION_CLAIMED_EVENT_TYPE);
+      .find((event) => event.type === "events.iterate.com/integration/connection-claimed");
     expect(claim?.payload).toMatchObject({
       connection: "install-789",
       externalId: "789",
@@ -195,7 +189,7 @@ describe("completeConnect (github App installation)", () => {
         projectId: "prj_other",
         slug: "github",
       },
-      type: CONNECTION_CLAIMED_EVENT_TYPE,
+      type: "events.iterate.com/integration/connection-claimed",
     });
     const state = await createOAuthState(
       { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
@@ -283,7 +277,7 @@ describe("completeConnect (github App installation)", () => {
           projectId: "prj_other",
           slug: "github",
         },
-        type: CONNECTION_CLAIMED_EVENT_TYPE,
+        type: "events.iterate.com/integration/connection-claimed",
       });
     });
 
@@ -312,7 +306,7 @@ describe("completeConnect (github App installation)", () => {
       path: "/integrations/github/install-789",
     });
     expect(network.streams.get(journalName)?.map((event) => event.type)).toContain(
-      GITHUB_DISCONNECTED_EVENT_TYPE,
+      "events.iterate.com/github/disconnected",
     );
   });
 

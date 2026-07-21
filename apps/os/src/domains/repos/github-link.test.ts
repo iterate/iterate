@@ -8,7 +8,6 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { GITHUB_CONNECTED_EVENT_TYPE } from "../integrations/utils.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./github-link.ts";
 
 const network = await vi.hoisted(async () => {
@@ -172,7 +171,7 @@ const CONNECTION_STREAM = DurableObjectNameCodec.stringify({
 
 function seedConnectedFact() {
   network.seedStream(CONNECTION_STREAM, {
-    type: GITHUB_CONNECTED_EVENT_TYPE,
+    type: "events.iterate.com/github/connected",
     payload: {
       connection: CONNECTION,
       externalId: "789",
@@ -349,7 +348,7 @@ describe("linkRepoToGithub", () => {
       path: `/integrations/github/${otherConnection}`,
     });
     network.seedStream(otherConnectionStream, {
-      type: GITHUB_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/connected",
       payload: {
         connection: otherConnection,
         externalId: "456",
@@ -394,7 +393,7 @@ describe("linkRepoToGithub", () => {
       path: `/integrations/github/${otherConnection}`,
     });
     network.seedStream(otherConnectionStream, {
-      type: GITHUB_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/connected",
       payload: {
         connection: otherConnection,
         externalId: "456",

@@ -70,7 +70,7 @@ export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutpu
   /**
    * FORCIBLY ephemeral: every append/parse lane built from this definition
    * defaults the envelope's `ephemeral` flag to `true` and REJECTS an explicit
-   * `ephemeral: false`. For events that must never become durable journal
+   * `ephemeral: false`. For events that must never become durable stream
    * facts (streaming chunks) — declaring it here makes forgetting the flag at
    * an append site impossible instead of a silent storage leak.
    */
@@ -310,7 +310,7 @@ export type ProcessorState<Contract> = Contract extends {
 // Authoring-time validation types for defineProcessorContract.
 // -----------------------------------------------------------------------------
 
-/** Reduced state must be object-shaped and must accept `{}` (the empty fold). */
+/** Reduced state must be object-shaped and must accept `{}` (the empty initial state). */
 type DefaultableObjectStateSchema<StateSchema extends z.ZodType> =
   z.output<StateSchema> extends Record<string, unknown>
     ? {} extends z.input<StateSchema>
@@ -434,7 +434,7 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
 /** The envelope `ephemeral` slot: for a definition marked `ephemeral: true`,
  * absent defaults to `true` and an explicit `false` FAILS the parse — the
  * contract, not the append site, decides that the event never becomes a
- * durable journal fact. */
+ * durable stream fact. */
 function ephemeralEnvelopeSchema(forced: boolean | undefined, standard: z.ZodType): z.ZodType {
   return forced === true ? z.literal(true).default(true) : standard;
 }
@@ -873,7 +873,7 @@ function getProcessorSlug(contract: unknown): string {
  * `processor-revived:<slug>@...` idempotency key, not the type string.
  * Recovery-wired contracts CONSUME it (the runner's construction check
  * requires that): its ordinary delivery is the guaranteed turn that lands at
- * the stream head, where `processEvent`'s at-head reconcile
+ * the stream head, where `processEvent`'s at-head pass
  * (`delivery.caughtUp`) re-drives the processor's open obligations. The
  * event DEFINITION (payload schema, examples) lives with the platform's core
  * stream contract; this constant is here so contracts and the runner agree on
@@ -916,7 +916,7 @@ export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnno
 export const PLATFORM_STREAM_EVENTS = {
   [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
     description:
-      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work, guaranteeing the revived processor an at-head reconcile turn.",
+      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work, guaranteeing the revived processor an at-head processEvent turn.",
     payloadSchema: z.looseObject({}),
   },
 };

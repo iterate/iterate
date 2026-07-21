@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- this regression test intentionally proves the one-shot HTTP batch shape.
 import { newHttpBatchRpcSession } from "capnweb";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
@@ -52,8 +53,8 @@ test("Authenticated internal auth itx can create project and append to stream", 
     secret: adminSecret(),
   });
 
-  // TODO project slug should be derived from tests etc as in apps/os
-  using project = itx.projects.create({ slug: "alice-project" });
+  const projectSlug = `alice-project-${crypto.randomUUID().slice(0, 8)}`;
+  using project = await itx.projects.get(projectSlug).create({});
   const description = await project.__describe();
   expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
   expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
@@ -61,18 +62,27 @@ test("Authenticated internal auth itx can create project and append to stream", 
   // projects.get accepts a slug OR a prj_ id — both resolve the SAME project
   // (the browser addresses by the URL slug; ids still work). An unknown slug is
   // a genuine miss and fails loudly instead of minting a phantom namespace.
-  expect(await itx.projects.get("alice-project").__describe()).toMatchObject({
+  expect(await itx.projects.get(projectSlug).__describe()).toMatchObject({
     projectId: description.projectId,
   });
   expect(await itx.projects.get(description.projectId).__describe()).toMatchObject({
     projectId: description.projectId,
   });
-  await expect(itx.projects.get("no-such-project-xyz").__describe()).rejects.toThrow(/no project/);
-  expect(messages).toContainEqual([
-    expect.any(Number),
-    "out",
-    ["push", ["pipeline", 1, ["projects", "create"], [{ slug: "alice-project" }]]],
-  ]);
+  await expect(itx.projects.get("no-such-project-xyz").__describe()).rejects.toThrow(
+    /does not exist/,
+  );
+  // Explicit creation is two pipelined operations: pure addressing on the
+  // collection, followed by create on the returned project handle.
+  expect(messages).toEqual(
+    expect.arrayContaining([
+      [
+        expect.any(Number),
+        "out",
+        ["push", ["pipeline", expect.any(Number), ["projects", "get"], [projectSlug]]],
+      ],
+      [expect.any(Number), "out", ["push", ["pipeline", expect.any(Number), ["create"], [{}]]]],
+    ]),
+  );
 
   using stream = project.streams.get("/");
 
@@ -253,7 +263,7 @@ test("Project describe exposes self-describing builtin capabilities", async () =
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "ai-builtin" });
+  using project = await itx.projects.get(uniqueFixtureSlug("ai-builtin")).create({});
   const description = await project.__describe();
 
   // Built-ins live in the children map (capabilities holds dynamic mounts
@@ -283,8 +293,7 @@ test("Trusted internal root can access global streams and repos", async () => {
     type: "events.iterate.test/global-stream",
   });
 
-  using repo = itx.repos.get(path);
-  await repo.create({ type: "empty" });
+  using repo = await itx.repos.get(path).create({ type: "empty" });
   expect(await repo.whoami()).toBe(`repo null:${path}`);
 });
 

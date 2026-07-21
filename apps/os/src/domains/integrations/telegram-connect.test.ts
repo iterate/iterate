@@ -10,11 +10,7 @@ import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-sa
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
-  CONNECTION_CLAIMED_EVENT_TYPE,
-  CONNECTION_UNCLAIMED_EVENT_TYPE,
   INTEGRATION_DIRECTORY_STREAM_PATH,
-  TELEGRAM_CONNECTED_EVENT_TYPE,
-  TELEGRAM_DISCONNECTED_EVENT_TYPE,
   integrationConnectionStreamPath,
   telegramBotTokenSecretPath,
   telegramWebhookSecretToken,
@@ -73,7 +69,7 @@ describe("connectTelegram", () => {
     await using api = await startFakeTelegramApi({
       onSetWebhook: () => {
         claimedAtSetWebhookTime = directoryEvents().filter(
-          (event) => event.type === CONNECTION_CLAIMED_EVENT_TYPE,
+          (event) => event.type === "events.iterate.com/integration/connection-claimed",
         ).length;
       },
     });
@@ -137,7 +133,7 @@ describe("connectTelegram", () => {
     expect(journal?.map((event) => event.type)).toEqual([
       "events.iterate.com/telegram/created",
       "events.iterate.com/stream/subscription-configured",
-      TELEGRAM_CONNECTED_EVENT_TYPE,
+      "events.iterate.com/telegram/connected",
     ]);
     expect(journal?.[2]).toMatchObject({
       payload: {
@@ -156,7 +152,7 @@ describe("connectTelegram", () => {
     );
     expect(claims).toHaveLength(1);
     expect(claims?.[0]).toMatchObject({
-      type: CONNECTION_CLAIMED_EVENT_TYPE,
+      type: "events.iterate.com/integration/connection-claimed",
       payload: {
         connection: "mishashelperbot",
         externalId: BOT_ID,
@@ -244,7 +240,7 @@ describe("connectTelegram", () => {
       }),
     );
     expect(oldJournal?.at(-1)).toMatchObject({
-      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/disconnected",
       payload: {
         connection: "their-bot",
         projectId: "prj_other",
@@ -268,9 +264,9 @@ describe("connectTelegram", () => {
       ),
     );
     expect(directory?.map((event) => event.type)).toEqual([
-      CONNECTION_CLAIMED_EVENT_TYPE,
-      CONNECTION_UNCLAIMED_EVENT_TYPE,
-      CONNECTION_CLAIMED_EVENT_TYPE,
+      "events.iterate.com/integration/connection-claimed",
+      "events.iterate.com/integration/connection-unclaimed",
+      "events.iterate.com/integration/connection-claimed",
     ]);
     // The swap is ATOMIC: old-unclaim + new-claim in ONE directory append —
     // a stolen bot has live traffic throughout, and any window between the
@@ -281,10 +277,14 @@ describe("connectTelegram", () => {
     );
     const swapBatch = network.appendBatches.find(
       (batch) =>
-        batch.name === directoryName && batch.types.includes(CONNECTION_UNCLAIMED_EVENT_TYPE),
+        batch.name === directoryName &&
+        batch.types.includes("events.iterate.com/integration/connection-unclaimed"),
     );
     expect(swapBatch).toMatchObject({
-      types: [CONNECTION_UNCLAIMED_EVENT_TYPE, CONNECTION_CLAIMED_EVENT_TYPE],
+      types: [
+        "events.iterate.com/integration/connection-unclaimed",
+        "events.iterate.com/integration/connection-claimed",
+      ],
     });
     // And the ordering around the swap eliminates every broken window: the
     // NEW connection is fully prepared (connected fact + arm) BEFORE routing
@@ -296,12 +296,13 @@ describe("connectTelegram", () => {
     const newConnectedIndex = batchIndex(
       (batch) =>
         batch.name.includes("mishashelperbot") &&
-        batch.types.includes(TELEGRAM_CONNECTED_EVENT_TYPE),
+        batch.types.includes("events.iterate.com/telegram/connected"),
     );
     const swapIndex = batchIndex((batch) => batch === swapBatch);
     const oldDisconnectedIndex = batchIndex(
       (batch) =>
-        batch.name.includes("their-bot") && batch.types.includes(TELEGRAM_DISCONNECTED_EVENT_TYPE),
+        batch.name.includes("their-bot") &&
+        batch.types.includes("events.iterate.com/telegram/disconnected"),
     );
     expect(newConnectedIndex).toBeGreaterThanOrEqual(0);
     expect(newConnectedIndex).toBeLessThan(swapIndex);
@@ -318,7 +319,7 @@ describe("connectTelegram", () => {
       }),
     );
     expect(newJournal?.at(-1)).toMatchObject({
-      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/connected",
       payload: { connection: "mishashelperbot", projectId: PROJECT_ID },
     });
   });
@@ -351,7 +352,9 @@ describe("connectTelegram", () => {
       `/bot${BOT_TOKEN}/setWebhook`,
       `/bot${BOT_TOKEN}/setMyCommands`,
     ]);
-    expect(directoryEvents().map((event) => event.type)).toEqual([CONNECTION_CLAIMED_EVENT_TYPE]);
+    expect(directoryEvents().map((event) => event.type)).toEqual([
+      "events.iterate.com/integration/connection-claimed",
+    ]);
     expect(
       await getConnectionStatus({
         connection: "mishashelperbot",
@@ -381,8 +384,8 @@ describe("connectTelegram", () => {
     // unclaims it, so the fold nets to nobody holding the bot and a retry
     // re-runs cleanly.
     expect(directoryEvents().map((event) => event.type)).toEqual([
-      CONNECTION_CLAIMED_EVENT_TYPE,
-      CONNECTION_UNCLAIMED_EVENT_TYPE,
+      "events.iterate.com/integration/connection-claimed",
+      "events.iterate.com/integration/connection-unclaimed",
     ]);
     // The dashboard sees reality (never a half-connected bot whose webhook
     // was never registered)…
@@ -482,8 +485,8 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
       ),
     );
     expect(claims?.map((event) => event.type)).toEqual([
-      CONNECTION_CLAIMED_EVENT_TYPE,
-      CONNECTION_UNCLAIMED_EVENT_TYPE,
+      "events.iterate.com/integration/connection-claimed",
+      "events.iterate.com/integration/connection-unclaimed",
     ]);
     expect(claims?.[1]).toMatchObject({
       payload: { externalId: BOT_ID, projectId: PROJECT_ID, slug: "telegram" },
@@ -497,7 +500,7 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
       }),
     );
     expect(journal?.at(-1)).toMatchObject({
-      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/disconnected",
       payload: { botId: BOT_ID, connection: "mishashelperbot", projectId: PROJECT_ID },
     });
   });
@@ -536,7 +539,7 @@ async function seedDirectoryClaim(input: { connection: string; projectId: string
       { allowNullProjectId: true },
     ),
   ).append({
-    type: CONNECTION_CLAIMED_EVENT_TYPE,
+    type: "events.iterate.com/integration/connection-claimed",
     payload: {
       connection: input.connection,
       externalId: BOT_ID,

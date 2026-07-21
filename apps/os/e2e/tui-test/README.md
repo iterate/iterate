@@ -26,9 +26,9 @@ checked-in regression snapshots for now.
 OS_E2E_TUI_SNAPSHOT=1 pnpm --dir apps/os exec tsx ./e2e/tui-test/run.ts -u
 ```
 
-The TUI runner creates a disposable project for each run and passes its ID to the spec as
-`OS_E2E_TUI_PROJECT_ID`. `ITERATE_FORCE_BUILT_PACKAGE` is an internal wrapper-to-bin contract; do
-not set it for normal development.
+The TUI runner creates a disposable project with an explicit collision-resistant ID for each run
+and passes it to the spec as `OS_E2E_TUI_PROJECT_ID`. `ITERATE_FORCE_BUILT_PACKAGE` is an internal
+wrapper-to-bin contract; do not set it for normal development.
 
 There is also a headless smoke of the TUI's data layer (shared itx client + shared agent-ui
 reducer, no PTY) that drives a full assistant round trip against a disposable project:

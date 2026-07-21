@@ -56,16 +56,12 @@
 import { ITX_EXAMPLES } from "../../src/itx/examples.ts";
 
 export type ExampleRunContext = {
-  /** Unique per example × runtime, for stream/event payload assertions. */
+  /** Unique per example × runtime, for resource and payload isolation. */
   marker: string;
   /**
-   * Unique per test ATTEMPT, shared across the runtimes within it. For
-   * resources where the attempt should share one instance (the first runtime
-   * pays the cold path, the rest reuse it warm) but a RETRY must get a fresh
-   * one — a vitest retry that reuses the previous attempt's stuck resource
-   * can never recover (the sandbox container stall, marathons of
-   * 2026-07-10: the REPL spec's retry healed on a fresh placement while the
-   * matrix retry waited on the same stuck container).
+   * Unique per test attempt. Cases that explicitly run runtimes serially also
+   * share one project, so this can name one warm resource across those
+   * runtimes while a retry still gets a fresh placement.
    */
   attemptSalt: string;
   projectId: string;
@@ -80,6 +76,8 @@ export type ExampleCase = {
    * tens of seconds; that is expected latency, not a hang.
    */
   completionTimeoutMs?: number;
+  /** Runtimes execute concurrently unless they intentionally share a resource. */
+  runtimeExecution?: "parallel" | "serial";
   /**
    * Post-assertion teardown, run by every runner with a project-scoped itx.
    * For examples that create real slot-level resources (sandbox containers):
@@ -102,8 +100,7 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set(
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "stream-cross-post": {
-    // Matrix runtimes share a project; per-runtime paths keep the cross-post
-    // subscription and its copies from colliding with a sibling runtime's.
+    // Project pools are reused; per-runtime paths keep every lease independent.
     vars: ({ marker }) => ({
       source: `/examples/cross-post/source-${marker}`,
       target: `/examples/cross-post/target-${marker}`,
@@ -122,8 +119,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "scheduler-basics": {
-    // Matrix runtimes can share a project; a per-runtime key keeps the
-    // set/list/cancel dance from racing a sibling runtime's copy.
+    // A per-runtime key keeps sequential reuse of a pooled project independent.
     vars: ({ marker }) => ({ schedulerKey: `examples/daily-report-${marker}` }),
     assert: (result, _ctx, expect) => {
       const shaped = result as { found: boolean; nextTriggerAt: string | null };
@@ -144,8 +140,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, { projectId }, expect) => {
       expect(result).toMatchObject({ projectId });
       // Built-ins ARE the children map; `capabilities` holds dynamic mounts
-      // only. The matrix shares one fixture project, so sibling examples may
-      // have left durable mounts — assert the shape, not emptiness.
+      // only. Matrix projects are reused, so earlier examples may have left
+      // durable mounts — assert the shape, not emptiness.
       const builtins = (result as { builtins: string[] }).builtins;
       expect(builtins).toEqual(
         expect.arrayContaining([
@@ -288,7 +284,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "sandbox-exec": {
-    // One shared sandbox name for the whole matrix: the first runtime pays
+    // One shared sandbox name for this serial case: the first runtime pays
     // the create + container cold boot, the rest reuse the warm container
     // (the example's get-or-create makes reuse natural), and the retry's
     // attemptSalt re-rolls the container placement. No marker on
@@ -299,6 +295,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     // their watchdogs (2026-07-10 marathon j3tqdhncb6 run 2: one 5.1m boot
     // stalled the spec AND examples-matrix; the retry passed in 14.8s).
     completionTimeoutMs: 150_000,
+    // Avoid four simultaneous cold boots; unrelated examples remain parallel.
+    runtimeExecution: "serial",
     vars: ({ attemptSalt }) => ({ sandboxName: `example-${attemptSalt}` }),
     assert: (result, _ctx, expect) => {
       expect(result).toMatchObject({ exitCode: 0, os: "Linux", marker: "hello" });
@@ -313,12 +311,9 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   },
   "workspace-edit-and-push": {
     // Unique workspace per example × runtime: the path is durable identity
-    // (one Durable Object), so sharing one across the matrix would make the
-    // second runtime's edit() fail (oldString already replaced) and commits
-    // race. Since #1831 git.commit lands on the config repo's MAIN (no
-    // workspace branches); each runtime writes a distinct file path, so the
-    // two main commits don't conflict. The budget covers the repo commit
-    // lane's cold tail.
+    // (one Durable Object). Exclusive project leases keep config-repo commits
+    // from racing; unique paths keep later pool reuse independent. The budget
+    // covers the repo commit lane's cold tail.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({ workspacePath: `/workspaces/examples/edit-${marker}` }),
     assert: (result, _ctx, expect) => {
@@ -345,9 +340,8 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "workspace-files-transfer": {
-    // Fresh workspace per run (same identity reasoning as above); the files
-    // paths are shared but every put() overwrites, and `note` makes each
-    // run's transferred content self-identifying.
+    // Fresh workspace per run; file paths are safe inside the exclusive
+    // project lease, and `note` makes transferred content self-identifying.
     completionTimeoutMs: 120_000,
     vars: ({ marker }) => ({
       note: `transfer-${marker}`,
@@ -366,8 +360,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-commit-files": {
-    // Unique content per run so the commit is never a no-op on the shared
-    // matrix project.
+    // Unique content per run so reuse of a pooled project is never a no-op.
     vars: ({ marker }) => ({ note: marker }),
     assert: (result, _ctx, expect) => {
       expect(result).toEqual({
@@ -388,14 +381,9 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     },
   },
   "repo-edit-file": {
-    // The matrix runs its runtimes sequentially, and the example seeds the
-    // known draft contents before every edit. Share one repo within an
-    // attempt: the first runtime proves first-use creation, the rest prove
-    // create() is idempotent without paying three redundant repo births. A
-    // vitest retry still gets a fresh repo through attemptSalt. Each of the
-    // four runtimes deliberately performs two real Artifacts commits plus
-    // read-your-writes; preview measurements put that healthy serialized work
-    // at ~120s, so its case-specific budget leaves one commit of headroom.
+    // Each runtime owns an exclusive project and attempt-scoped repo. The
+    // example deliberately performs two real Artifacts commits plus
+    // read-your-writes; its case-specific budget leaves cold-path headroom.
     completionTimeoutMs: 150_000,
     vars: ({ attemptSalt }) => ({
       path: "notes/edit-example.md",

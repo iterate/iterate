@@ -23,9 +23,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({
-      slug: `worker-alarm-${crypto.randomUUID().slice(0, 8)}`,
-    });
+    using project = await itx.projects
+      .get(`worker-alarm-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     await project.projectId;
 
     const ref: DynamicWorkerRef = {
