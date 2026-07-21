@@ -437,7 +437,7 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
     {
       description: {
         instructions:
-          "Parallel API using Iterate's platform API key. Methods are raw OpenAPI operationIds discovered lazily from Parallel's OpenAPI spec.",
+          "Parallel API using iterate's platform API key. Methods are raw OpenAPI operationIds discovered lazily from Parallel's OpenAPI spec.",
         parent: input.parent,
         types: "export type Parallel = OpenApiRpc;",
       },
@@ -2795,7 +2795,7 @@ class IntegrationFamilyRpcTarget extends RpcTarget {
   }
 }
 
-/** Iterate's fixed first-party PostHog stream receiver. */
+/** iterate's fixed first-party PostHog stream receiver. */
 class PostHogIntegrationRpcTarget extends RpcTarget {
   constructor(readonly props: { auth: ItxAuth; projectId: string }) {
     super();
@@ -2911,7 +2911,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     return this.#family("waitrose") as unknown as IntegrationFamily<WaitroseConnection>;
   }
 
-  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
       egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
@@ -2919,7 +2919,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     });
   }
 
-  /** @internal Iterate's fixed first-party event feed. */
+  /** @internal iterate's fixed first-party event feed. */
   get posthog(): PostHogIntegrationRpcTarget {
     return new PostHogIntegrationRpcTarget({
       auth: this.props.auth,
@@ -3088,7 +3088,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
           connection,
           example: `await itx.integrations.github.get(${JSON.stringify(connection)}).octokit.rest.apps.listReposAccessibleToInstallation({ per_page: 5 })`,
           grammar: GITHUB_CALL_GRAMMAR,
-          sdk: "the all-in-one Octokit exported by octokit, with Iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
+          sdk: "the all-in-one Octokit exported by octokit, with iterate supplying GitHub App installation auth and the request transport. Use the package's own types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work. Prefer REST for routine endpoints and GraphQL when its query shape or API coverage is useful. For pagination, RPC arguments must be serializable: call `.paginate(\"GET /...\", params)`; endpoint-function overloads, map callbacks, and `.paginate.iterator()` cannot cross the boundary. Installation-scoped calls work; user-scoped ...ForAuthenticatedUser endpoints answer 403. Octokit's retry and throttling plugins are disabled, so it does not replay 5xx, 429, or 408 responses; the secret transport may refresh credentials and repeat once after a 401. Inspect remote state before manually retrying an ambiguous failed write",
           slug: "github",
           types: 'export type GithubConnection = { octokit: import("octokit").Octokit };',
         });
@@ -3238,7 +3238,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         'For every connection family, get() selects the first connected account; pass get("<connection>") only when a specific account matters.',
         "Slack: await itx.integrations.slack.get().chat.postMessage({ channel, thread_ts, text }) — any Slack Web API method as a dotted path, always one body object.",
         'Gmail: await itx.integrations.gmail.get().request({ path: "/users/me/messages", query: { maxResults, q: "in:inbox" } }) — paths relative to https://gmail.googleapis.com/gmail/v1.',
-        'GitHub: itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
+        'GitHub: itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with iterate supplying installation auth and transport. Use its package types and https://github.com/octokit/octokit.js; normal `.rest`, `.graphql(...)`, and `.request(...)` calls work, while pagination uses the RPC-safe `.paginate("GET /...", params)` route-string form. The `.octokit` segment is mandatory.',
         "Telegram: await itx.integrations.telegram.get().sendMessage({ chat_id, text }) — any Bot API method as ONE dotted segment with one params object (sendPhoto, sendChatAction, getMe, …).",
         'Waitrose: await itx.integrations.waitrose.get().searchProducts("oat milk", { size: 5 }) — the vendored grocery client (shoppingContext, trolley, addToTrolley, removeFromTrolley, updateTrolleyItems). Connect by writing the connection secret at /secrets/integrations/waitrose/<connection>/session ({ username, password } + the waitrose-session refresh strategy); see the connection\'s __describe() for the exact recipe.',
         "Parallel: await itx.integrations.parallel.__describe() loads Parallel's OpenAPI spec and lists flat operationId methods. It is not a connection and is not returned by list().",
@@ -3257,7 +3257,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         "interface GmailConnection {",
         "  request<T = unknown>(input: GmailRequestInput): Promise<{ data: T; headers: Record<string, string>; status: number; statusText: string }>;",
         "}",
-        "// Exact package type; Iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
+        "// Exact package type; iterate supplies auth and transport. See https://github.com/octokit/octokit.js.",
         'type GithubConnection = { octokit: import("octokit").Octokit };',
         "// itx.integrations.slack.get() IS a wrapped Slack WebClient",
         "// (@slack/web-api): any Web API method as a dotted path, ONE body arg.",
@@ -3287,7 +3287,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         gmail:
           'Connected Google accounts: gmail.get().request({ path: "/users/me/messages", query }); pass a slug only for an exact account.',
         list: "Every connection the project holds (built-in journals plus provided mounts).",
-        parallel: "Parallel API RPC target using Iterate's platform API key.",
+        parallel: "Parallel API RPC target using iterate's platform API key.",
         slack:
           "Wrapped Slack WebClient: slack.get().chat.postMessage({ channel, text }); pass a slug only for an exact workspace.",
         startOAuthFlow: "Begin the OAuth connect flow; returns the authorization URL.",
@@ -4944,7 +4944,7 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
   kv: "Durable project key-value store for small policy knobs: get(key), set(key, value), delete(key), list({ prefix? }).",
   mcp: "Ad-hoc MCP clients: connect(url); itx.mcp.exa is the built-in Exa web search.",
   openapi: "Ad-hoc OpenAPI clients: connect(spec).",
-  parallel: "Parallel API: preconfigured OpenAPI client using Iterate's platform API key.",
+  parallel: "Parallel API: preconfigured OpenAPI client using iterate's platform API key.",
   processEventBatch:
     "The project's event-batch dispatch point: streams' birth-certificate feeds deliver here; delegates to worker.processEventBatch.",
   processor: "The project stream processor (snapshot/state).",
@@ -5579,7 +5579,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     });
   }
 
-  /** Parallel API, preconfigured with Iterate's platform API key. */
+  /** Parallel API, preconfigured with iterate's platform API key. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
       egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
