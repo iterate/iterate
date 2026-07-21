@@ -61,6 +61,9 @@ export interface CollabSessionStore extends CollabStore {
   endSession(path: string): void;
 }
 
+/** Attributed tracked changes since the last commit: author-tagged inserted
+ * spans and deleted-text markers in current-head coordinates, plus the ONE
+ * baseline both redline layers render against. */
 export interface CollabChangesResult {
   baseContent: string;
   baseVersion: number;

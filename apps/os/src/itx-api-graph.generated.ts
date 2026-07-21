@@ -1010,8 +1010,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CollabChangesResult",
     kind: "interface",
     sourceText:
-      "export interface CollabChangesResult {\n  baseContent: string;\n  baseVersion: number;\n  deleted: { at: number; clientId: string; text: string }[];\n  headVersion: number;\n  inserted: { clientId: string; from: number; to: number }[];\n}",
-    summary: "",
+      "/** Attributed tracked changes since the last commit: author-tagged inserted\n * spans and deleted-text markers in current-head coordinates, plus the ONE\n * baseline both redline layers render against. */\nexport interface CollabChangesResult {\n  baseContent: string;\n  baseVersion: number;\n  deleted: { at: number; clientId: string; text: string }[];\n  headVersion: number;\n  inserted: { clientId: string; from: number; to: number }[];\n}",
+    summary:
+      "Attributed tracked changes since the last commit: author-tagged inserted spans and deleted-text markers in current-head coordinates, plus the ONE baseline both redline layers render against.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
