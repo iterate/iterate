@@ -2,7 +2,7 @@ diff --git a/dist/installer-Ns4ivVf5.js b/dist/installer-Ns4ivVf5.js
 index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e82197805a 100644
 --- a/dist/installer-Ns4ivVf5.js
 +++ b/dist/installer-Ns4ivVf5.js
-@@ -75,20 +75,32 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+@@ -75,20 +75,40 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
  	if (existing) return existing;
  	const installPromise = (async () => {
  		try {
@@ -44,9 +44,18 @@ index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e8
  			result.installed.push(`${name}@${version}`);
 -			const packageFiles = await fetchPackageFiles(name, versionMetadata);
  			for (const [filePath, content] of Object.entries(packageFiles)) fileSystem.write(`node_modules/${name}/${filePath}`, content);
- 			const deps = versionMetadata.dependencies ?? {};
+-			const deps = versionMetadata.dependencies ?? {};
++			// Temporary until Iterate publishes its SDK separately: userspace workers
++			// must not install the CLI dependency graph for SDK-only imports.
++			const dependencies = versionMetadata.dependencies ?? {};
++			const deps = name === "iterate" ? Object.fromEntries(Object.entries(dependencies).filter(([dependency]) => [
++				"@iterate-com/capnweb",
++				"@tanstack/react-query",
++				"react",
++				"zod"
++			].includes(dependency))) : dependencies;
  			await Promise.all(Object.entries(deps).map(([depName, depVersion]) => installPackage(depName, depVersion, result, fileSystem, installedPackages, inProgress, registry)));
-@@ -104,6 +116,25 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+@@ -104,6 +124,25 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
  		inProgress.delete(name);
  	}
  }

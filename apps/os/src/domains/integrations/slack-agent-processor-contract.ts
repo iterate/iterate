@@ -107,13 +107,12 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/summary-updated",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
-    // processor; the payload's processorSlug names which). MUST be consumed
-    // (the runner throws at construction otherwise): appended when an
-    // incarnation died owing in-flight work — a frame's blocking Slack
-    // paints/acks lost to a simultaneous Agent+Stream DO death — its delivery
-    // guarantees a caught-up pass whose at-head repaint re-derives the
-    // assistant status from the reduced summary. Never emitted by the
-    // processor: the recovery adapter appends it raw, as the runtime speaking.
+    // processor; the payload's processorSlug names which). Consumption is
+    // optional in general, but intentional here: processEvent reacts to this
+    // fact by clearing or restoring presentation left by the dead incarnation,
+    // then its at-head repaint re-derives assistant status from the reduced
+    // summary. Never emitted by the processor: the recovery adapter appends it
+    // raw, as the runtime speaking.
     "events.iterate.com/stream/processor-revived",
   ],
   emits: [

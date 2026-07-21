@@ -88,11 +88,11 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested",
     "events.iterate.com/capability-host/script-run-requested",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
-    // processor; the payload's processorSlug names which). MUST be consumed
-    // (the runner throws at construction otherwise): appended when an
-    // incarnation died owing work — a journaled send lost to a simultaneous
-    // Agent+Stream DO death — the append cold-boots the Stream DO so the
-    // unacknowledged frame redelivers and the blocking send re-runs.
+    // processor; the payload's processorSlug names which). This contract
+    // currently consumes it, but does not react to the fact itself; an
+    // unconsumed tail would receive the same eventless at-head turn. Its append
+    // cold-boots the Stream DO so an unacknowledged send frame redelivers after
+    // a simultaneous Agent+Stream DO death and the blocking send re-runs.
     // At-least-once at the Telegram boundary is the accepted caveat
     // (sendMessage has no idempotency key — the stream is exactly-once, the
     // send is not). Never emitted by the processor: the recovery adapter

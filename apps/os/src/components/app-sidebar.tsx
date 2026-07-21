@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useMatches, useMatchRoute, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -72,6 +73,7 @@ import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import type { AppConfig } from "~/config.ts";
 import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
+import { getProjectCustomHostnames } from "~/lib/project-custom-hostnames.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
@@ -532,11 +534,22 @@ function ProjectSidebarGroup({
       fuzzy: false,
     }) && routeSearch.tasks === true,
   );
-  const projectWorkerUrl = buildProjectWorkerUrl({
-    projectSlug,
-    projectHostnameBases,
-    appBaseUrl,
+  // A registered custom domain (garple.com) is the project's real address —
+  // the Homepage link prefers it over the platform host (<slug>.<base>).
+  const customHostnames = useQuery({
+    enabled: projectId !== null,
+    queryKey: ["project-custom-hostnames", projectId],
+    queryFn: () => getProjectCustomHostnames({ data: { projectId: projectId ?? "" } }),
+    staleTime: 5 * 60_000,
   });
+  // A malformed directory entry must not cost the link entirely: take the
+  // first registered hostname that passes validation, then the platform host.
+  const projectWorkerUrl = [...(customHostnames.data ?? []), null].reduce<string | null>(
+    (url, customHostname) =>
+      url ??
+      buildProjectWorkerUrl({ projectSlug, customHostname, projectHostnameBases, appBaseUrl }),
+    null,
+  );
   const showAgentRows = sidebarAgentRowsVisible({
     isMobile,
     openMobile,
