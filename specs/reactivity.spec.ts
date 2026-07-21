@@ -70,12 +70,7 @@ test("reactivity page appends a batch and renders every delivered marker", async
     .waitFor(DELIVERY_WAIT);
 });
 
-// Quarantined by tasks/quarantined-reactivity-replay-e2e.md after the shared
-// project-ready stream waiter timed out before this test reached its assertion.
-test.skip("reactivity page replays already appended events after reload", async ({
-  helpers,
-  page,
-}) => {
+test("reactivity page replays already appended events after reload", async ({ helpers, page }) => {
   await using projectFixture = await helpers.createFixture("reactivity-replay");
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
