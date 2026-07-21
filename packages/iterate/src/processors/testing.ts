@@ -4,10 +4,13 @@
 // in-memory stream.
 // Step tuples form scenario spines; `h.append`/`h.advanceTime` settle single
 // actions, while `h.stream.append` commits without driving delivery.
-// Registry-level harnesses (fake DurableObjectState, virtual clock, alarm
-// cell, crash-as-eviction) live inline in the suites that need them
-// (stream-processor-registry.test.ts, the per-domain *-recovery tests).
+// Opt-in recovery adds the production DO durability adapters over in-memory
+// KV + alarm substrate; the default runner-only path stays unchanged.
 
+import {
+  durableObjectProgressStore,
+  durableObjectRecovery,
+} from "./durable-object-processor-durability.ts";
 import { idempotencyConflictMessage, sameIdempotentEvent } from "./idempotency.ts";
 import type { StreamEvent, StreamEventInput } from "./schemas.ts";
 import type { StreamEventReadInput } from "./rpc-types.ts";
@@ -275,6 +278,37 @@ export type HarnessSubstrate = {
   progress: ProcessorProgressStore<unknown>;
 };
 
+type RecoveryHarnessSubstrate = {
+  storage: DurableObjectStorage;
+  alarm: { at: number | null };
+};
+
+// Recovery substrate is intentionally not public API. Passing the exact
+// `h.substrate` object to another recovery harness still shares its DO KV and
+// alarm, preserving the existing zombie-twin recipe without exporting a
+// second collection of substrate primitives.
+const recoverySubstrates = new WeakMap<HarnessSubstrate, RecoveryHarnessSubstrate>();
+
+function makeRecoverySubstrate(): RecoveryHarnessSubstrate {
+  const kv = new Map<string, unknown>();
+  const alarm = { at: null as number | null };
+  const storage = {
+    kv: {
+      get: <T = unknown>(key: string): T | undefined =>
+        kv.has(key) ? (structuredClone(kv.get(key)) as T) : undefined,
+      put: (key: string, value: unknown) => void kv.set(key, structuredClone(value)),
+    },
+    getAlarm: async () => alarm.at,
+    setAlarm: async (at: number) => {
+      alarm.at = at;
+    },
+    deleteAlarm: async () => {
+      alarm.at = null;
+    },
+  } as unknown as DurableObjectStorage;
+  return { storage, alarm };
+}
+
 /** What {@link makeProcessorHarness}'s factory receives: base deps plus the
  * harness's virtual clock/sleep, for processors that take injectable time. */
 export type HarnessProcessorDeps<Contract extends StreamProcessorContract> = {
@@ -342,13 +376,228 @@ export function makeMemoryProgressStore(): ProcessorProgressStore<unknown> {
   };
 }
 
+function makeRecoveryProcessorHarness<
+  Contract extends StreamProcessorContract,
+  Processor extends StreamProcessor<Contract, object>,
+>(args: {
+  createProcessor: (deps: HarnessProcessorDeps<Contract>) => Processor;
+  path?: string;
+  substrate?: HarnessSubstrate;
+  recovery: true;
+}): ProcessorHarness<Contract, Processor> {
+  const path = args.substrate?.stream.path ?? args.path ?? "/harness/processor";
+  const clock = args.substrate?.clock ?? { now: 1_000_000 };
+  const stream = args.substrate?.stream ?? new MemoryStream(path);
+  stream.now = () => clock.now;
+  const inheritedRecoverySubstrate =
+    args.substrate === undefined ? undefined : recoverySubstrates.get(args.substrate);
+  const recoverySubstrate = inheritedRecoverySubstrate ?? makeRecoverySubstrate();
+
+  let progress = args.substrate?.progress as
+    | ProcessorProgressStore<ProcessorState<Contract>>
+    | undefined;
+  let pendingSleeps: { dueAt: number; resolve: () => void }[] = [];
+  let pendingWaitUntil: Promise<unknown>[] = [];
+  const releaseDueSleeps = () => {
+    const due = pendingSleeps.filter((sleep) => sleep.dueAt <= clock.now);
+    pendingSleeps = pendingSleeps.filter((sleep) => sleep.dueAt > clock.now);
+    for (const sleep of due) sleep.resolve();
+    return due.length;
+  };
+
+  let processor!: Processor;
+  let runner!: StreamProcessorRunner<Contract>;
+  let recovery!: ReturnType<typeof durableObjectRecovery>;
+  let incarnation = 0;
+  let deliveryEnabled = true;
+  let deliveryAttempt: Promise<void> | undefined;
+  let deliveryError: unknown;
+
+  const keepAlive = (work: Promise<unknown>) => {
+    pendingWaitUntil.push(work.catch(() => undefined));
+  };
+  const incarnate = () => {
+    processor = args.createProcessor({
+      stream,
+      path,
+      projectId: "proj_harness",
+      now: () => clock.now,
+      sleep: (ms) =>
+        new Promise<void>((resolve) => pendingSleeps.push({ dueAt: clock.now + ms, resolve })),
+      reads: {
+        snapshot: () => runner.snapshot(),
+        waitUntilEvent: (input) =>
+          "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
+      },
+    });
+    progress ??= durableObjectProgressStore<ProcessorState<Contract>>({
+      storage: recoverySubstrate.storage,
+      slug: processor.contract.slug,
+    });
+    recovery = durableObjectRecovery({
+      storage: recoverySubstrate.storage,
+      slug: processor.contract.slug,
+      stream,
+      version: "test-harness",
+      armAlarm: (atMs) => {
+        if (atMs === null) void recoverySubstrate.storage.deleteAlarm();
+        else void recoverySubstrate.storage.setAlarm(atMs);
+      },
+      waitUntil: keepAlive,
+      now: () => clock.now,
+    });
+    runner = new StreamProcessorRunner({
+      processor,
+      stream,
+      durability: { progress, recovery },
+      keepAlive: (work) => keepAlive(work()),
+      now: () => clock.now,
+      readPageSize: 5,
+    });
+  };
+  incarnate();
+
+  const substrate: HarnessSubstrate = {
+    clock,
+    stream,
+    progress: progress as ProcessorProgressStore<unknown>,
+  };
+  if (args.substrate !== undefined) recoverySubstrates.set(args.substrate, recoverySubstrate);
+  recoverySubstrates.set(substrate, recoverySubstrate);
+
+  const startDelivery = () => {
+    if (deliveryAttempt !== undefined) return;
+    const deliveryIncarnation = incarnation;
+    const attempt = runner.catchUp();
+    deliveryAttempt = attempt;
+    void attempt.then(
+      () => {
+        if (deliveryIncarnation === incarnation) deliveryAttempt = undefined;
+      },
+      (error: unknown) => {
+        if (deliveryIncarnation !== incarnation) return;
+        deliveryAttempt = undefined;
+        deliveryError = error;
+      },
+    );
+  };
+
+  const settle = async () => {
+    let quietRounds = 0;
+    let lastAppendedTypes: string[] = [];
+    for (let round = 0; round < 50; round++) {
+      const headBefore = stream.events.at(-1)?.offset ?? 0;
+      const releasedSleeps = releaseDueSleeps();
+      if (deliveryEnabled) startDelivery();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (deliveryError !== undefined) {
+        const error = deliveryError;
+        deliveryError = undefined;
+        throw error;
+      }
+      const headAfter = stream.events.at(-1)?.offset ?? 0;
+      lastAppendedTypes = stream.events
+        .filter((event) => event.offset > headBefore)
+        .map((event) => event.type);
+      quietRounds = headAfter === headBefore && releasedSleeps === 0 ? quietRounds + 1 : 0;
+      // An alarm-backed attempt may be intentionally hung so the next crash
+      // can evict it. Once the stream is quiet and its durable recovery alarm
+      // is armed, that parked attempt is a stable scenario boundary.
+      if (
+        quietRounds === 3 &&
+        (!deliveryEnabled || deliveryAttempt === undefined || recoverySubstrate.alarm.at !== null)
+      ) {
+        return;
+      }
+    }
+    const headOffset = stream.events.at(-1)?.offset ?? 0;
+    throw new Error(
+      `recovery harness settle() did not reach a fixpoint in 50 rounds; ` +
+        `last round appended event types: ${lastAppendedTypes.join(", ") || "none"}; ` +
+        `head offset: ${headOffset}`,
+    );
+  };
+
+  const append = async (...events: ConsumedInput<Contract>[]) => {
+    await stream.append(...(events as StreamEventInput[]));
+    deliveryEnabled = true;
+    await settle();
+  };
+
+  const advanceTime = async (ms: number) => {
+    const target = clock.now + ms;
+    while (recoverySubstrate.alarm.at !== null && recoverySubstrate.alarm.at <= target) {
+      clock.now = Math.max(clock.now, recoverySubstrate.alarm.at);
+      recoverySubstrate.alarm.at = null;
+      await recovery.handleAlarm();
+      deliveryEnabled = true;
+      await settle();
+    }
+    clock.now = target;
+    await settle();
+  };
+
+  const crash = () => {
+    runner.dispose();
+    incarnation += 1;
+    deliveryEnabled = false;
+    deliveryAttempt = undefined;
+    deliveryError = undefined;
+    pendingSleeps = [];
+    pendingWaitUntil = [];
+    incarnate();
+  };
+
+  return {
+    clock,
+    stream,
+    substrate,
+    runner: () => runner,
+    processor: () => processor,
+    append,
+    advanceTime,
+    crash,
+    settle,
+    state: () => runner.currentState,
+    events: ((type?: string) =>
+      type === undefined
+        ? [...stream.events]
+        : stream.events.filter((row) => row.type === type)) as ProcessorHarness<
+      Contract,
+      Processor
+    >["events"],
+    async play(...steps: HarnessStep<Contract>[]) {
+      for (const [index, step] of steps.entries()) {
+        const kind = typeof step === "function" ? "function" : step[0];
+        try {
+          if (typeof step === "function") {
+            await step();
+            await settle();
+          } else if (step[0] === "append") {
+            const [, ...events] = step;
+            await append(...events);
+          } else if (step[0] === "advanceTime") {
+            await advanceTime(step[1]);
+          } else {
+            crash();
+          }
+        } catch (error) {
+          throw new Error(`harness play() step ${index} (${kind}) failed`, { cause: error });
+        }
+      }
+    },
+  };
+}
+
 /**
  * Build a {@link ProcessorHarness}: REAL runner drive over the in-memory
  * substrate, with virtual time and eviction-faithful `crash()`. Knows nothing
  * about the processor under test — construct it in `createProcessor` from the
  * supplied base deps plus whatever fakes the suite owns (LLM transports,
  * capability hosts). Pass another harness's `substrate` to run a second
- * incarnation over the SAME stream (the zombie-race setup).
+ * incarnation over the SAME stream (the zombie-race setup). Opt into the
+ * production keepalive + DO durability adapters with `recovery: true`; its
+ * fixed deploy version is `test-harness`.
  */
 export function makeProcessorHarness<
   Contract extends StreamProcessorContract,
@@ -357,7 +606,10 @@ export function makeProcessorHarness<
   createProcessor: (deps: HarnessProcessorDeps<Contract>) => Processor;
   path?: string;
   substrate?: HarnessSubstrate;
+  recovery?: true;
 }): ProcessorHarness<Contract, Processor> {
+  if (args.recovery === true) return makeRecoveryProcessorHarness({ ...args, recovery: true });
+
   const path = args.substrate?.stream.path ?? args.path ?? "/harness/processor";
   const clock = args.substrate?.clock ?? { now: 1_000_000 };
   const stream = args.substrate?.stream ?? new MemoryStream(path);
