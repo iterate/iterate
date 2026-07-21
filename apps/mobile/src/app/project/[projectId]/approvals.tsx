@@ -23,6 +23,7 @@ import { CodeBlock } from "../../../components/activity-card.tsx";
 import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
 import {
   deriveOpenRequests,
+  deriveRecentResolvedRequests,
   EVENT,
   focusOpenRequest,
   approvalBodyForDisplay,
@@ -31,6 +32,8 @@ import {
   safeHost,
   scriptCodeForApproval,
   type OpenRequest,
+  type RequestedPayload,
+  type ResolvedRequest,
 } from "../../../lib/approvals.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -92,12 +95,10 @@ export default function ApprovalsScreen() {
     () => focusOpenRequest(deriveOpenRequests(events.data || []), targetOffset),
     [events.data, targetOffset],
   );
-  const recentOutcomes = useMemo(() => {
-    const outcomes = (events.data || []).filter(
-      (event) => event.type === EVENT.settled || event.type === EVENT.rejected,
-    );
-    return outcomes.slice(-5).reverse();
-  }, [events.data]);
+  const recentResolved = useMemo(
+    () => deriveRecentResolvedRequests(events.data || [], 5),
+    [events.data],
+  );
 
   const respond = useMutation({
     mutationFn: async (input: { request: OpenRequest; decision: "grant" | "reject" }) => {
@@ -173,9 +174,13 @@ export default function ApprovalsScreen() {
             return (
               <ApprovalCard
                 baseUrl={baseUrl!}
-                canApprove={Boolean(key.data)}
-                onRespond={(decision) => respond.mutate({ request, decision })}
-                pending={pending}
+                interaction={{
+                  kind: "pending",
+                  canApprove: Boolean(key.data),
+                  onRespond: (decision) => respond.mutate({ request, decision }),
+                  pending,
+                  submitted: request.submitted,
+                }}
                 projectId={projectId}
                 projectSlug={slug || ""}
                 request={request}
@@ -184,15 +189,19 @@ export default function ApprovalsScreen() {
             );
           }}
           ListFooterComponent={
-            recentOutcomes.length === 0 ? null : (
+            recentResolved.length === 0 ? null : (
               <View style={styles.recent}>
                 <Text style={styles.recentTitle}>Recent</Text>
-                {recentOutcomes.map((event) => (
-                  <Text key={event.offset} style={styles.recentLine}>
-                    {event.type === EVENT.settled
-                      ? `#${(event.payload as { approvalRequestEventOffset: number }).approvalRequestEventOffset} released — upstream ${(event.payload as { status?: number }).status ?? "?"}`
-                      : `#${(event.payload as { approvalRequestEventOffset: number }).approvalRequestEventOffset} rejected`}
-                  </Text>
+                {recentResolved.map((request) => (
+                  <ApprovalCard
+                    baseUrl={baseUrl!}
+                    interaction={{ kind: "resolved", outcome: request.outcome }}
+                    key={request.offset}
+                    projectId={projectId}
+                    projectSlug={slug || ""}
+                    request={request}
+                    targeted={request.offset === targetOffset}
+                  />
                 ))}
               </View>
             )
@@ -205,21 +214,25 @@ export default function ApprovalsScreen() {
 
 function ApprovalCard({
   baseUrl,
-  canApprove,
-  onRespond,
-  pending,
+  interaction,
   projectId,
   projectSlug,
   request,
   targeted,
 }: {
   baseUrl: string;
-  canApprove: boolean;
-  onRespond(decision: "grant" | "reject"): void;
-  pending: boolean;
+  interaction:
+    | {
+        kind: "pending";
+        canApprove: boolean;
+        onRespond(decision: "grant" | "reject"): void;
+        pending: boolean;
+        submitted: boolean;
+      }
+    | { kind: "resolved"; outcome: ResolvedRequest["outcome"] };
   projectId: string;
   projectSlug: string;
-  request: OpenRequest;
+  request: { offset: number; payload: RequestedPayload };
   targeted: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -266,6 +279,27 @@ function ApprovalCard({
         <Text style={styles.targetedLabel}>
           Opened from notification · request #{request.offset}
         </Text>
+      ) : null}
+      {interaction.kind === "resolved" ? (
+        <View style={styles.outcomeRow}>
+          <Text
+            style={[
+              styles.outcomeBadge,
+              interaction.outcome.decision === "approved"
+                ? styles.approvedBadge
+                : styles.rejectedBadge,
+            ]}
+          >
+            {interaction.outcome.decision === "approved" ? "Approved" : "Rejected"}
+          </Text>
+          <Text style={styles.outcomeDetail}>
+            {interaction.outcome.decision === "rejected"
+              ? interaction.outcome.reason
+              : interaction.outcome.deliveryError
+                ? `Delivery failed · ${interaction.outcome.deliveryError}`
+                : `Upstream ${interaction.outcome.upstreamStatus || "status unavailable"}`}
+          </Text>
+        </View>
       ) : null}
       <Text style={styles.method}>
         {request.payload.method} {safeHost(request.payload.url)}
@@ -329,7 +363,7 @@ function ApprovalCard({
                 }
                 style={styles.threadLink}
               >
-                <Text style={styles.threadLinkText}>Open thread</Text>
+                <Text style={styles.threadLinkText}>Show thread</Text>
               </Pressable>
             ) : null}
           </View>
@@ -368,24 +402,32 @@ function ApprovalCard({
         </Text>
       </View>
 
-      {request.submitted ? (
+      {interaction.kind === "resolved" ? null : interaction.submitted ? (
         <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
       ) : (
         <View style={styles.actions}>
           <Pressable
             style={[styles.button, styles.reject]}
-            disabled={pending}
-            onPress={() => onRespond("reject")}
+            disabled={interaction.pending}
+            onPress={() => interaction.onRespond("reject")}
           >
             <Text style={styles.rejectText}>Reject</Text>
           </Pressable>
           <Pressable
-            style={[styles.button, styles.approve, !canApprove && styles.buttonDisabled]}
-            disabled={pending || !canApprove}
-            onPress={() => onRespond("grant")}
+            style={[
+              styles.button,
+              styles.approve,
+              !interaction.canApprove && styles.buttonDisabled,
+            ]}
+            disabled={interaction.pending || !interaction.canApprove}
+            onPress={() => interaction.onRespond("grant")}
           >
             <Text style={styles.approveText}>
-              {pending ? "Signing…" : canApprove ? "Approve (Face ID)" : "Enroll to approve"}
+              {interaction.pending
+                ? "Signing…"
+                : interaction.canApprove
+                  ? "Approve (Face ID)"
+                  : "Enroll to approve"}
             </Text>
           </Pressable>
         </View>
@@ -429,6 +471,19 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textTransform: "uppercase",
   },
+  outcomeRow: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
+  outcomeBadge: {
+    borderRadius: radius.full,
+    borderWidth: 1,
+    fontSize: 11,
+    fontWeight: "700",
+    overflow: "hidden",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+  },
+  approvedBadge: { borderColor: colors.accent, color: colors.accent },
+  rejectedBadge: { borderColor: colors.danger, color: colors.danger },
+  outcomeDetail: { color: colors.textMuted, flex: 1, fontSize: 11 },
   method: { color: colors.text, fontSize: 15, fontWeight: "600" },
   url: { color: colors.textMuted, fontSize: 12, fontFamily: "Menlo", flexShrink: 1 },
   secretLine: { color: colors.working, fontSize: 12 },
@@ -499,9 +554,8 @@ const styles = StyleSheet.create({
   approve: { backgroundColor: colors.accent },
   buttonDisabled: { opacity: 0.4 },
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
-  recent: { marginTop: spacing.lg, gap: 2 },
+  recent: { marginTop: spacing.lg, gap: spacing.sm },
   recentTitle: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
-  recentLine: { color: colors.textMuted, fontSize: 12 },
   empty: { color: colors.textMuted, fontSize: 14 },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
   retry: {

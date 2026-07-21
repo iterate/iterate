@@ -3,6 +3,7 @@ import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   approvalBodyForDisplay,
   deriveOpenRequests,
+  deriveRecentResolvedRequests,
   EVENT,
   focusOpenRequest,
   safeHost,
@@ -30,6 +31,44 @@ test("a settled request is no longer open", () => {
 test("a rejected request is no longer open", () => {
   const open = deriveOpenRequests([requested(1, "post-echo"), rejected(2, 1)]);
   expect(open).toEqual([]);
+});
+
+test("recent resolved requests retain their request details and decision", () => {
+  const events = [
+    requested(1, "approved-rule"),
+    requested(2, "rejected-rule"),
+    granted(3, 1),
+    rejected(4, 2),
+    settled(5, 1, 200),
+  ];
+
+  expect(deriveRecentResolvedRequests(events, 5)).toEqual([
+    {
+      offset: 1,
+      payload: expect.objectContaining({ ruleKey: "approved-rule" }),
+      outcome: { decision: "approved", deliveryError: null, upstreamStatus: 200 },
+      resolutionEventOffset: 5,
+    },
+    {
+      offset: 2,
+      payload: expect.objectContaining({ ruleKey: "rejected-rule" }),
+      outcome: { decision: "rejected", reason: "human" },
+      resolutionEventOffset: 4,
+    },
+  ]);
+});
+
+test("recent resolved requests are limited by newest outcome, not request order", () => {
+  const events = [
+    requested(1, "resolved-last"),
+    requested(2, "resolved-first"),
+    rejected(3, 2),
+    rejected(4, 1),
+  ];
+
+  expect(deriveRecentResolvedRequests(events, 1)).toMatchObject([
+    { offset: 1, outcome: { decision: "rejected" }, resolutionEventOffset: 4 },
+  ]);
 });
 
 test("an expired request is no longer open even with no resolution event", () => {
