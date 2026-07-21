@@ -75,7 +75,7 @@ export function StreamFeedView({
   projectSlug,
 }: {
   database: StreamBrowserDatabase;
-  emptyLabel?: string;
+  emptyLabel?: string | null;
   /** Which kind families (and constraints within them) this mode shows. */
   filter: StreamFeedQueryInput;
   isPending?: boolean;
@@ -240,7 +240,7 @@ export function StreamFeedView({
             <EmptyHeader>
               <Spinner className="size-4" />
               <EmptyTitle>{isPending ? pendingLabel : "Waiting for events…"}</EmptyTitle>
-              {isPending ? null : (
+              {isPending || (!filtersNarrow && emptyLabel === null) ? null : (
                 <EmptyDescription>
                   {filtersNarrow ? "No feed items match the current filters." : emptyLabel}
                 </EmptyDescription>

@@ -32,6 +32,7 @@ test("an empty agent feed waits for matching events after subscribing", async ({
 
     await page.getByText("Waiting for events…", { exact: true }).waitFor({ timeout: 5_000 });
     await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+    await page.getByText("No events on this agent stream yet.").waitFor({ state: "hidden" });
 
     await agent.create();
     await agent.chat.sendMessage("The agent is ready.");
