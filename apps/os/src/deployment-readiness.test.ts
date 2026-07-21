@@ -92,20 +92,35 @@ describe("deploymentReadinessResponse", () => {
   });
 
   it("does not hide an arbitrary Durable Object exception as rollout settling", async () => {
-    await expect(
-      deploymentReadinessResponse({
-        app: "os",
-        probes: [
-          {
-            name: "PROJECT",
-            readVersion: async () => {
-              throw new Error("application bug");
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        deploymentReadinessResponse({
+          app: "os",
+          probes: [
+            {
+              name: "PROJECT",
+              readVersion: async () => {
+                throw new Error("application bug");
+              },
             },
-          },
-        ],
-        version: "new-version",
-        wave: 0,
-      }),
-    ).rejects.toThrow("application bug");
+          ],
+          version: "new-version",
+          wave: 0,
+        }),
+      ).rejects.toThrow("application bug");
+      expect(error).toHaveBeenCalledWith(
+        "Durable Object deployment readiness probe failed unexpectedly",
+        {
+          app: "os",
+          errorMessage: "application bug",
+          errorName: "Error",
+          probe: "PROJECT",
+          wave: 0,
+        },
+      );
+    } finally {
+      error.mockRestore();
+    }
   });
 });

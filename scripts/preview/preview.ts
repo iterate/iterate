@@ -5155,9 +5155,16 @@ async function probeWorkerVersionWaves(params: {
             response.settlingReason === "durable-object-lifecycle" ||
             response.settlingReason === "probe-timeout" ||
             response.settlingReason === "version-mismatch";
+          // During edge rollout the previous Worker can answer with its older
+          // response schema, before settlingReason existed. Its version header
+          // is still authoritative: retry that old code, but never normalize an
+          // unexplained 5xx from the exact Worker version we just deployed.
+          const servedByPreviousWorker =
+            response.workerVersion !== null &&
+            response.workerVersion !== params.expectedWorkerVersion;
           const terminal =
             [400, 401, 403].includes(response.status) ||
-            (response.status >= 500 && !recognizedSettlingResponse);
+            (response.status >= 500 && !recognizedSettlingResponse && !servedByPreviousWorker);
           return {
             failure:
               `wave ${wave} returned HTTP ${response.status}` +

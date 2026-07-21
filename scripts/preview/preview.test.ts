@@ -710,6 +710,54 @@ describe("preview readiness URLs", () => {
     }
   });
 
+  test("retries an old Worker's server response without requiring its newer settling schema", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: "old readiness response" },
+          {
+            status: 503,
+            headers: { "x-iterate-worker-version": "previous-version" },
+          },
+        ),
+      )
+      .mockImplementation(async (input) => {
+        const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
+        return Response.json(
+          { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
+          {
+            status: 200,
+            headers: { "x-iterate-worker-version": "expected-version" },
+          },
+        );
+      });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   test("cannot report ready when final wave validation finishes after the deadline", async () => {
     vi.useFakeTimers();
     let requestCount = 0;

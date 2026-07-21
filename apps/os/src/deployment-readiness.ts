@@ -78,7 +78,17 @@ export async function deploymentReadinessResponse(input: {
   const observations = settled.map((result, index) => {
     const probe = input.probes[index]!;
     if (result.status === "fulfilled") return { name: probe.name, version: result.value };
-    if (!isDurableObjectLifecycleError(result.reason)) throw result.reason;
+    if (!isDurableObjectLifecycleError(result.reason)) {
+      const error = result.reason;
+      console.error("Durable Object deployment readiness probe failed unexpectedly", {
+        app: input.app,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : typeof error,
+        probe: probe.name,
+        wave: input.wave,
+      });
+      throw error;
+    }
     console.info("Durable Object deployment readiness is still settling", {
       app: input.app,
       probe: probe.name,
