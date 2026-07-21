@@ -80,7 +80,14 @@ describe("project app sessions", () => {
   it("bakes optional display identity into the claims and still validates", async () => {
     const userCanAccessProject = async () => true;
     const issued = await mintProjectAppSession(
-      { audience, projectId, userId: "usr_one", email: "one@example.com", name: "One Person" },
+      {
+        audience,
+        projectId,
+        userId: "usr_one",
+        email: "one@example.com",
+        image: "https://example.com/one.png",
+        name: "One Person",
+      },
       { secret, userCanAccessProject },
     );
     assert.ok(issued);
@@ -89,6 +96,7 @@ describe("project app sessions", () => {
       Buffer.from(issued.token.split(".")[1]!, "base64url").toString("utf8"),
     ) as Record<string, unknown>;
     assert.equal(payload.email, "one@example.com");
+    assert.equal(payload.image, "https://example.com/one.png");
     assert.equal(payload.name, "One Person");
     assert.equal(payload.userId, "usr_one");
 
@@ -101,7 +109,7 @@ describe("project app sessions", () => {
 
     // …and blank display fields stay out of the claims entirely.
     const bare = await mintProjectAppSession(
-      { audience, projectId, userId: "usr_one", email: "", name: "  " },
+      { audience, projectId, userId: "usr_one", email: "", image: " ", name: "  " },
       { secret, userCanAccessProject },
     );
     assert.ok(bare);
@@ -109,6 +117,7 @@ describe("project app sessions", () => {
       Buffer.from(bare.token.split(".")[1]!, "base64url").toString("utf8"),
     ) as Record<string, unknown>;
     assert.equal("email" in bareClaims, false);
+    assert.equal("image" in bareClaims, false);
     assert.equal("name" in bareClaims, false);
   });
 });
