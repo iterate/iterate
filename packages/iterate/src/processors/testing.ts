@@ -84,6 +84,9 @@ export class MemoryStream implements ProcessorStream {
       if (input.type === this.failAppendsOfType) {
         throw new Error(`injected append failure for ${input.type}`);
       }
+      // The casts restate what the round-trip preserves: serializing a
+      // `Record<string, unknown>` yields a JSON object, so parsing it back
+      // yields one — `JSON.parse` just types as `any` and cannot say so.
       const detachedInput: StreamEventInput = {
         ...input,
         ...(input.payload === undefined
@@ -455,6 +458,11 @@ export function makeProcessorHarness<
     crash,
     settle,
     state: () => runner.currentState,
+    // TypeScript cannot check an implementation arrow against an overload
+    // pair, so the assertion is unavoidable. Soundness is the same claim
+    // the typed read surface makes everywhere: rows filtered to `type` carry
+    // that type's contract payload — committed rows are trusted, not
+    // re-parsed, exactly like production reads.
     events: ((type?: string) =>
       type === undefined
         ? [...stream.events]
