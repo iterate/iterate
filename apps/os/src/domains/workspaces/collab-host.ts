@@ -76,6 +76,9 @@ const WAIT_TIMEOUT_MS = 20_000;
 const IDLE_END_MS = 5 * 60_000;
 /** Sweeps are periodic housekeeping, not per-keystroke work. */
 const SWEEP_INTERVAL_MS = 60_000;
+/** Ops retained since the last commit; past this, pushes refuse until a
+ * commit prunes (redline work and storage stay bounded). */
+const MAX_UNCOMMITTED_OPS = 10_000;
 
 export class CollabHost {
   readonly #fs: CollabSettledFs;
@@ -177,12 +180,36 @@ export class CollabHost {
     const input = { ...raw, path: CollabHost.canonical(raw.path) };
     this.#touch(input.path);
     this.#assertLive(input.path);
-    await this.#opened(input.path);
+    const head = await this.#opened(input.path);
+    // "Bounded by commit cadence" needs an actual bound: past the quota the
+    // session refuses new ops until a commit advances the baseline (which
+    // prunes). Typed and loud — never silent unbounded growth.
+    const base = this.#store.getBase(input.path);
+    if (base !== null && head.version - base.version >= MAX_UNCOMMITTED_OPS) {
+      throw new Error(
+        `retention quota: ${input.path} has ${head.version - base.version} uncommitted ops — commit to continue`,
+      );
+    }
     return this.#engine.push(input);
   }
 
   /** Long-poll: resolves when ops land past afterVersion (or ~20s). */
-  async wait(rawPath: string, epoch: string, afterVersion: number): Promise<CollabPull> {
+  /** Head versions of every live session — the board's cheap change cursor. */
+  versions(): Record<string, number> {
+    const map: Record<string, number> = {};
+    for (const path of this.#store.livePaths()) {
+      const head = this.#engine.head(path);
+      if (head !== null) map[path] = head.version;
+    }
+    return map;
+  }
+
+  async wait(
+    rawPath: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+  ): Promise<CollabPull> {
     const path = CollabHost.canonical(rawPath);
     this.#assertLive(path);
     this.#lastActivity.set(path, Date.now()); // a parked watcher IS activity
@@ -201,14 +228,14 @@ export class CollabHost {
       const timer = setTimeout(finish, WAIT_TIMEOUT_MS);
       waiters.add(finish);
     });
-    const first = await this.#engine.pull(path, epoch, afterVersion);
+    const first = await this.#engine.pull(path, epoch, afterVersion, clientId);
     if (first.status !== "ops" || first.ops.length > 0) {
       this.#wake(path); // release our own registration
       return first;
     }
     await woke;
     if (!this.isLive(path)) return { status: "ended" };
-    return this.#engine.pull(path, epoch, afterVersion);
+    return this.#engine.pull(path, epoch, afterVersion, clientId);
   }
 
   // -- the live-file gateway (agent RPC routes through the session) ------------
@@ -327,6 +354,7 @@ export class CollabHost {
    * a pure fold of the retained op log over the stored baseline.
    */
   async changes(rawPath: string): Promise<{
+    baseContent: string;
     baseVersion: number;
     headVersion: number;
     segments: CollabChangeSegment[];
@@ -338,6 +366,10 @@ export class CollabHost {
     if (base === null) throw new Error(`no redline base recorded for ${path}`);
     const ops = await this.#store.readOps(path, head.epoch, base.version - 1);
     return {
+      // ONE baseline for both redline layers: the merge view diffs against
+      // the same content the attribution folded from — never two sources
+      // that can diverge under head motion or an interrupted commit.
+      baseContent: base.content,
       baseVersion: base.version,
       headVersion: head.version,
       segments: attributedChanges(Text.of(base.content.split("\n")), ops),

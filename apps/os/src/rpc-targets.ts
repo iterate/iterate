@@ -2091,8 +2091,13 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
 
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
    * snapshot when past the retained floor, or ended after a destructive op. */
-  wait(path: string, epoch: string, afterVersion: number) {
-    return this.durableObjectStub.collabWait(path, epoch, afterVersion);
+  wait(path: string, epoch: string, afterVersion: number, clientId?: string) {
+    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId);
+  }
+
+  /** Head versions of every live session (a cheap board change cursor). */
+  versions(): Promise<Record<string, number>> {
+    return this.durableObjectStub.collabVersions();
   }
 
   /** Attributed tracked changes since the last commit (redline segments). */

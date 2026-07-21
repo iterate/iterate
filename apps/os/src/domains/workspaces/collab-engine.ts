@@ -65,7 +65,13 @@ export type CollabPushResult =
 
 export type CollabPull =
   | { ops: { changes: unknown; clientId: string }[]; status: "ops" }
-  | { snapshot: { content: string; epoch: string; version: number }; status: "snapshot" }
+  /** ackedSeq: the highest clientSeq the server accepted from the REQUESTING
+   * client (-1 = none) — snapshot recovery drops exactly the acked prefix
+   * instead of guessing. */
+  | {
+      snapshot: { ackedSeq: number; content: string; epoch: string; version: number };
+      status: "snapshot";
+    }
   /** The session was durably ended (deleted/replaced/reset) — reopen to resume. */
   | { status: "ended" };
 
@@ -312,12 +318,22 @@ export class CollabEngine {
   }
 
   /** Catch-up lane: ops after a version, or a snapshot when past the floor. */
-  async pull(path: string, epoch: string, afterVersion: number): Promise<CollabPull> {
+  async pull(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+  ): Promise<CollabPull> {
     const file = await this.#live(path);
     const floor = file.version - file.recent.length;
     if (epoch !== file.epoch || afterVersion < floor) {
       return {
-        snapshot: { content: file.doc.toString(), epoch: file.epoch, version: file.version },
+        snapshot: {
+          ackedSeq: clientId === undefined ? -1 : (file.clientSeqs.get(clientId) ?? -1),
+          content: file.doc.toString(),
+          epoch: file.epoch,
+          version: file.version,
+        },
         status: "snapshot",
       };
     }

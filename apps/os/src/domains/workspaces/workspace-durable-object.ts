@@ -353,9 +353,20 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   }
 
   /** Long-poll lane: resolves when ops land past afterVersion (or ~20s). */
-  async collabWait(path: string, epoch: string, afterVersion: number): Promise<CollabPull> {
+  async collabWait(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+  ): Promise<CollabPull> {
     await this.#assertCreated();
-    return this.#collab.wait(path, epoch, afterVersion);
+    return this.#collab.wait(path, epoch, afterVersion, clientId);
+  }
+
+  /** Head versions of every live session (the board's change cursor). */
+  async collabVersions(): Promise<Record<string, number>> {
+    await this.#assertCreated();
+    return this.#collab.versions();
   }
 
   /** Attributed tracked changes since the last commit (redline segments). */
