@@ -18,12 +18,12 @@ const sqlite = (() => {
 
 /** The SQLite store against Node's real SQLite — the exact SQL that runs in
  * the Durable Object, exercised for real instead of via the in-memory fake. */
-function nodeSqliteStore(): CollabSessionStore {
+function nodeSqliteStorage() {
   const db = new (sqlite!.DatabaseSync as new (path: string) => {
     prepare(query: string): { all(...b: never[]): unknown[]; run(...b: never[]): unknown };
     exec(query: string): void;
   })(":memory:");
-  return sqliteCollabStore({
+  return {
     sql: {
       exec: (query: string, ...bindings: unknown[]) => {
         const statement = db.prepare(query);
@@ -46,7 +46,11 @@ function nodeSqliteStore(): CollabSessionStore {
         throw error;
       }
     },
-  });
+  };
+}
+
+function nodeSqliteStore(): CollabSessionStore {
+  return sqliteCollabStore(nodeSqliteStorage());
 }
 
 const PATH = "/tasks/x.md";
@@ -123,5 +127,31 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     expect(store.getBase(PATH)).toBeNull();
     expect(await store.getSnapshot(PATH)).toBeNull();
     expect(await store.readOps(PATH, EPOCH, -1)).toEqual([]);
+  });
+});
+
+// Live DOs created before the created_at column existed must keep working:
+// the bootstrap has to ALTER old tables, CREATE TABLE IF NOT EXISTS won't.
+(sqlite === null ? describe.skip : describe)("sqlite schema migration", () => {
+  test("append works on a database born with the pre-created_at schema", async () => {
+    const storage = nodeSqliteStorage();
+    storage.sql.exec(
+      `CREATE TABLE collab_ops(
+         path TEXT NOT NULL, epoch TEXT NOT NULL, version INTEGER NOT NULL,
+         client_id TEXT NOT NULL, client_seq INTEGER NOT NULL, changes TEXT NOT NULL,
+         PRIMARY KEY (path, epoch, version))`,
+    );
+    storage.sql.exec(
+      `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes)
+         VALUES (?, ?, 1, 'a', 1, '[1,"x"]')`,
+      PATH,
+      EPOCH,
+    );
+    const store = sqliteCollabStore(storage);
+    await store.putSnapshot(PATH, { clientSeqs: {}, content: "", epoch: EPOCH, version: 0 });
+    await store.append(PATH, EPOCH, [{ ...op(2), createdAt: 123 }]);
+    const ops = await store.readOps(PATH, EPOCH, 0);
+    expect(ops.map((entry) => entry.version)).toEqual([1, 2]);
+    expect(ops[1]?.createdAt).toBe(123);
   });
 });

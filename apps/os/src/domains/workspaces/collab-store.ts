@@ -33,6 +33,15 @@ export function sqliteCollabStore(storage: {
     `CREATE UNIQUE INDEX IF NOT EXISTS collab_ops_client_seq
        ON collab_ops(path, epoch, client_id, client_seq)`,
   );
+  // Live objects born before created_at existed: CREATE TABLE IF NOT EXISTS
+  // skips their table, so bring the schema forward explicitly.
+  const opsColumns = sql
+    .exec(`PRAGMA table_info('collab_ops')`)
+    .toArray()
+    .map((row) => row.name);
+  if (!opsColumns.includes("created_at")) {
+    sql.exec(`ALTER TABLE collab_ops ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`);
+  }
   return {
     // Every mutation is EPOCH-CONDITIONAL: a stale engine (whose session was
     // ended and reopened while its work sat on a queue) must fail loudly,
