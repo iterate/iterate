@@ -85,6 +85,10 @@ function ProjectHomePage() {
         projectId={project.id}
         streamPath="/"
         emptyLabel="No events in the project root stream yet."
+        // This route is not a stream page (no streamPageStaticData), so the
+        // shell renders its own header — suppress the stream view's or the
+        // checklist gets two stacked headers.
+        showHeader={false}
       />
     );
   }
