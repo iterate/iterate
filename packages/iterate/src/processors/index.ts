@@ -10,7 +10,6 @@ export * from "./schemas.ts";
 export * from "./rpc-types.ts";
 export * from "./stream-handle.ts";
 export * from "./idempotency.ts";
-export * from "./durable-object-availability.ts";
 export * from "./processor-contracts.ts";
 export * from "./stream-processor.ts";
 export * from "./stream-processor-runner.ts";

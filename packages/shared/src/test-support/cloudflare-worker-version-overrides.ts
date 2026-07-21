@@ -106,6 +106,9 @@ export function createCloudflareWorkerVersionOverrideFetch(
     const headers = new Headers(input instanceof Request ? input.headers : undefined);
     new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
     for (const [name, value] of Object.entries(versionHeaders)) headers.set(name, value);
+    if (input instanceof Request) {
+      return fetchImplementation(new Request(input, { ...init, headers }));
+    }
     return fetchImplementation(input, { ...init, headers });
   };
 }

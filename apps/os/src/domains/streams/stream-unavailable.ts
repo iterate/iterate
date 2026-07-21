@@ -1,7 +1,3 @@
-import { isDurableObjectLifecycleError } from "iterate/processors";
-
-export { isDurableObjectLifecycleError } from "iterate/processors";
-
 // The stream capability's availability-error contract, shared by the worker
 // door that MINTS the tag (StreamRpcTarget in rpc-targets.ts) and the clients
 // that CLASSIFY it (the browser mirror's appendBatch retry loop). Kept
@@ -32,6 +28,22 @@ export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
  * it must distinguish an exhausted internal slice from a predicate failure.
  */
 export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
+
+/**
+ * Whether workerd rejected a Durable Object stub call because the target
+ * incarnation disappeared or was temporarily unavailable, rather than
+ * because application code threw. Keep this classifier local and
+ * dependency-free: the browser mirror imports this module directly.
+ */
+export function isDurableObjectLifecycleError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const flags = error as {
+    durableObjectReset?: unknown;
+    overloaded?: unknown;
+    retryable?: unknown;
+  };
+  return flags.durableObjectReset === true || flags.overloaded === true || flags.retryable === true;
+}
 
 /**
  * Whether an idempotent caller may replay a Durable Object operation after

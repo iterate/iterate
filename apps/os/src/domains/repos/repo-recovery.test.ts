@@ -353,17 +353,17 @@ describe("RepoProcessor eviction recovery", () => {
     h.effects.createEmpty = async () => {
       calls += 1;
       if (calls === 1) {
-        throw Object.assign(new Error("Durable Object reset because its code was updated."), {
-          durableObjectReset: true,
-        });
+        const reset = Object.assign(
+          new Error("Durable Object reset because its code was updated."),
+          { durableObjectReset: true },
+        );
+        throw new Error("Artifact client could not create the repo", { cause: reset });
       }
       return CREATED_ARTIFACT;
     };
     await h.stream.append(EMPTY_REQUEST);
 
-    await expect(h.deliverPending()).rejects.toThrow(
-      "Durable Object reset because its code was updated.",
-    );
+    await expect(h.deliverPending()).rejects.toThrow("Artifact client could not create the repo");
     expect(
       h.stream.events.some((event) => event.type === "events.iterate.com/repos/create-failed"),
     ).toBe(false);

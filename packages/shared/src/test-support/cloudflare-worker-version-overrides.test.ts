@@ -61,10 +61,39 @@ describe("Cloudflare Worker version overrides", () => {
       headers: { authorization: "Bearer test" },
     });
 
-    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    const [request, init] = fetchMock.mock.calls[0] ?? [];
+    expect(request).toBeInstanceOf(Request);
+    expect(init).toBeUndefined();
+    const headers = (request as Request).headers;
     expect(headers.get("cookie")).toBe("a=b");
     expect(headers.get("authorization")).toBe("Bearer test");
     expect(headers.get(CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER)).toBe(value);
+  });
+
+  test("rebuilds a Request with a body instead of passing body-bearing input plus init", async () => {
+    const value = `os-preview-7="${osVersion}"`;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("ok"));
+    const overrideFetch = createCloudflareWorkerVersionOverrideFetch(fetchMock, {
+      [E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV]: value,
+    });
+
+    await overrideFetch(
+      new Request("https://os.example/api", {
+        body: JSON.stringify({ approved: true }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      }),
+    );
+
+    const [request, init] = fetchMock.mock.calls[0] ?? [];
+    expect(request).toBeInstanceOf(Request);
+    expect(init).toBeUndefined();
+    expect((request as Request).method).toBe("POST");
+    expect(await (request as Request).text()).toBe(JSON.stringify({ approved: true }));
+    expect((request as Request).headers.get("content-type")).toBe("application/json");
+    expect((request as Request).headers.get(CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER)).toBe(
+      value,
+    );
   });
 
   test("rejects a malformed non-empty environment value", () => {

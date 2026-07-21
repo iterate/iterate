@@ -1,6 +1,6 @@
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import { isDurableObjectLifecycleError } from "../streams/stream-unavailable.ts";
+import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import {
   RepoProcessorContract,
   type RepoCreateRequest,
@@ -287,7 +287,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         payload: { ...artifact, request },
       };
     } catch (error) {
-      if (isRepoNotSeededError(error) || isDurableObjectLifecycleError(error)) throw error;
+      if (isRepoNotSeededError(error) || isRetryableDurableObjectAvailabilityError(error)) {
+        throw error;
+      }
       return {
         type: "events.iterate.com/repos/create-failed",
         idempotencyKey: this.idempotencyKey("create-failed"),
