@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useLiveState } from "iterate/sdk/itx/react";
+import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectCustomDomainsSettings } from "~/components/project-custom-domains-settings.tsx";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
@@ -46,6 +47,10 @@ function ProjectSettingsPage() {
           <p className="text-sm text-muted-foreground" data-spinner="true">
             Loading project…
           </p>
+        ) : !lifecycle.value.ready ? (
+          // Same gate as project home: a not-yet-ready project shows the
+          // bootstrap checklist, never live settings forms.
+          <ProjectCreationProgress state={lifecycle.value} />
         ) : (
           <>
             <ProjectSettingsPanel project={project} routeConfig={routeConfig} />

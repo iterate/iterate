@@ -6,7 +6,6 @@ import { ProjectCreationProgress } from "~/components/project-creation-progress.
 import { ProjectDashboard } from "~/components/project-dashboard.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agent.ts";
-import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 const HomeSearch = StreamViewSearch.extend({
@@ -16,7 +15,9 @@ const HomeSearch = StreamViewSearch.extend({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
-  staticData: breadcrumbStaticData("Home"),
+  // Explicitly blank the label ("" suppresses the project layout's slug
+  // fallback): the dashboard header shows only the Navigate ⌘K control.
+  staticData: { breadcrumb: "" },
   validateSearch: HomeSearch,
   ssr: false,
   component: ProjectHomePage,

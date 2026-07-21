@@ -16,6 +16,7 @@ import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { projectsListQueryKey, projectsListStaleTime } from "~/lib/projects-query.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 type OrganizationSummary = {
   id: string;
@@ -30,6 +31,7 @@ const NO_ORGANIZATIONS: OrganizationSummary[] = [];
 // navigating here directly always shows the list — the sidebar's "All
 // projects" must not hijack single-project users back into their project.
 export const Route = createFileRoute("/_app/projects/")({
+  staticData: breadcrumbStaticData("Projects"),
   ssr: false,
   loader: async () => ({
     routeConfig: await getPublicRouteConfig(),

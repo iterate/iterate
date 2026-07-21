@@ -21,6 +21,7 @@ import {
   ScrollText,
   Settings2,
   Shield,
+  SquarePen,
   SquareTerminal,
   UserCircle,
   type LucideIcon,
@@ -561,6 +562,18 @@ function ProjectSidebarGroup({
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
+            <ProjectSidebarMenuItem
+              icon={SquarePen}
+              label="New agent"
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }),
+              )}
+            />
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
