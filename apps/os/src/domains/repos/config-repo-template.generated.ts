@@ -662,11 +662,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"description\": \"Iterate project worker. The iterate runtime dependency is a throwaway pkg.pr.new preview proof; other runtime modules are supplied by the platform and devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"dependencies\": {\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\"\n" +
+      "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"typescript\": \"^5.9.3\"\n" +
       "  }\n" +
       "}\n",
@@ -681,7 +683,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    \"target\": \"ES2024\",\n" +
       "    \"module\": \"ESNext\",\n" +
       "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"resolveJsonModule\": true,\n" +
       "    \"allowImportingTsExtensions\": true,\n" +
       "    \"noEmit\": true,\n" +
       "    \"lib\": [\"ES2024\", \"ESNext.Disposable\"],\n" +
@@ -705,9 +706,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  type StreamEvent,\n" +
       "  type StreamEventInput,\n" +
       "} from \"iterate/sdk\";\n" +
+      "import { pkgPrNewPreviewProof } from \"iterate/preview-proof\";\n" +
       "import { RpcTarget, newWorkersWebSocketRpcResponse } from \"@iterate-com/capnweb\";\n" +
       "import { LiveState, LiveStateRpcTarget } from \"iterate/live-state\";\n" +
-      "import projectPackage from \"./package.json\";\n" +
       "\n" +
       "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
       "const todoAppRef = {\n" +
@@ -888,7 +889,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          <body>\n" +
       "            <main>\n" +
       "              <p>Hello from your Iterate project worker.</p>\n" +
-      "              <p><strong>Seeded iterate package: ${projectPackage.devDependencies.iterate}</strong></p>\n" +
+      "              <p><strong>${pkgPrNewPreviewProof()}</strong></p>\n" +
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"hello\")}\">hello</a> (stateless)</li>\n" +
       "                <li><a href=\"${appUrl(\"internal\")}\">internal</a> (project members only)</li>\n" +

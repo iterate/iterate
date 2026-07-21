@@ -5,7 +5,6 @@
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "lib": ["ES2024", "ESNext.Disposable"],

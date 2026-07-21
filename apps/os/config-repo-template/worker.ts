@@ -9,9 +9,9 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "iterate/sdk";
+import { pkgPrNewPreviewProof } from "iterate/preview-proof";
 import { RpcTarget, newWorkersWebSocketRpcResponse } from "@iterate-com/capnweb";
 import { LiveState, LiveStateRpcTarget } from "iterate/live-state";
-import projectPackage from "./package.json";
 
 const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
 const todoAppRef = {
@@ -192,7 +192,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
           <body>
             <main>
               <p>Hello from your Iterate project worker.</p>
-              <p><strong>Seeded iterate package: ${projectPackage.devDependencies.iterate}</strong></p>
+              <p><strong>${pkgPrNewPreviewProof()}</strong></p>
               <ul>
                 <li><a href="${appUrl("hello")}">hello</a> (stateless)</li>
                 <li><a href="${appUrl("internal")}">internal</a> (project members only)</li>

@@ -34,9 +34,9 @@ test("template ships only the two deliberately basic app pairs", () => {
     dependencies?: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  // The seed needs no runtime packages because its root Worker uses platform
-  // virtual modules. This is a template choice, not a build restriction.
-  expect(templatePackageJson.dependencies).toBeUndefined();
+  expect(templatePackageJson.dependencies).toMatchObject({
+    iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+  });
   expect(templatePackageJson.devDependencies).toMatchObject({
     "@iterate-com/capnweb": expect.any(String),
   });
@@ -64,18 +64,20 @@ test("basic apps use one server entry, one client entry, and external browser im
   expect(worker).not.toContain("tanstack");
 });
 
-test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
+test("template gets the platform sdk and preview proof from iterate, not committed snapshots", () => {
   // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now
   // worker.ts imports straight from `iterate/sdk`: types resolve through the
   // published package (pkg.pr.new's @main URL tracks the latest build from
   // main), and the RUNTIME imports are satisfied at build time by the
   // platform-injected virtual module (worker-loader.ts), never by npm.
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/preview-proof"');
+  expect(templateFile("worker.ts")).toContain("pkgPrNewPreviewProof()");
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    devDependencies: Record<string, string>;
+    dependencies: Record<string, string>;
   };
-  expect(templatePackageJson.devDependencies).toMatchObject({
+  expect(templatePackageJson.dependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });
