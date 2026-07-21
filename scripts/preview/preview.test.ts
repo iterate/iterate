@@ -327,7 +327,7 @@ describe("preview workflow scope", () => {
         headSha,
       }),
     ).toEqual([
-      "OS_BASE_URL=https://os.iterate-preview-7.com",
+      "APP_CONFIG_BASE_URL=https://os.iterate-preview-7.com",
       "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
     ]);
   });

@@ -1673,7 +1673,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // retry-clean historical full-fleet deploys completed around 72s.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
-    previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestBaseUrlEnvVar: "APP_CONFIG_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
