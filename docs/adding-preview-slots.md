@@ -451,7 +451,8 @@ unclassified status such as 500 remains an immediate failure.
 
 Preview orchestration resolves every public app origin from `envs.ts`, the
 same source that generates Worker routes. It reads Doppler only for readiness
-bearer secrets and merges those with the repository-owned origin. Do not add
+bearer secrets, merges those with the repository-owned origin, and injects
+that origin as `APP_CONFIG_BASE_URL` into each app's e2e process. Do not add
 `APP_CONFIG_BASE_URL` duplicates to each Doppler child: OS and Semaphore
 intentionally never had them, and requiring them made a correctly provisioned
 slot fail before its deploy command started.

@@ -14,14 +14,12 @@ Slots 10–19 are provisioned, deployed, and published in Semaphore's nineteen-
 slot production pool. Google has persisted both callback types for every slot;
 GitHub App identity/webhooks and every Slack manifest URL are verified. Draft
 PR #2182 requested and claimed preview-14 through the normal `preview` label
-path. Two lifecycle attempts proved that the eager account-wide Worker-binding
-scan exceeds the shared Cloudflare API budget when preview jobs overlap; a
-five-minute cooldown did not help while other handovers were active. Cleanup
-now relies on Cloudflare's atomic rejection to name only actual binding owners,
-with focused fail-closed tests. Remaining work is deploying that fix, rerunning
-preview-14 after fixing its repository-owned URL lookup, real OS-side
-GitHub/Slack/Google canaries, and the separately
-approved shared-session-root migration.
+path. Its targeted cleanup completed in 14 seconds and all five apps deployed.
+Three app e2e lanes passed; OS exposed one last test-process URL duplication,
+and Semaphore exposed an unobserved sibling waiter only when a flaky attempt
+failed. Both regressions now have focused fixes. Remaining work is a green
+preview-14 rerun, real OS-side GitHub/Slack/Google canaries, lifecycle cleanup,
+and the separately approved shared-session-root migration.
 
 ## Goal
 
@@ -509,3 +507,11 @@ the recorded projection.
   current `main`; orchestration now resolves every public origin from `envs.ts`
   and merges only readiness bearer secrets from Doppler. Regression tests cover
   an origin absent from Doppler and the origin-plus-bearer combination.
+- 2026-07-21: The corrected run deployed all five preview-14 apps. Auth, Dummy
+  Petshop, and Streams e2e passed. OS e2e then showed that the repo-owned origin
+  also has to enter its test process as `APP_CONFIG_BASE_URL`; orchestration now
+  injects the recorded origin without duplicating it in Doppler. Semaphore's
+  twelve assertions passed, but a failed first attempt left its concurrent
+  sibling waiter unobserved long enough for Vitest to report a rejection; both
+  waiters now receive rejection handlers immediately and settle in `finally`.
+  The complete live Semaphore suite passes against preview-14.

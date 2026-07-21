@@ -299,33 +299,42 @@ describe.sequential("live semaphore E2E", () => {
       waitMs: 5_000,
       allowedSlugs: ["beta"],
     });
-    await sleep(250);
+    // Attach rejection handlers to both concurrent requests immediately. If
+    // one assertion/release fails, the sibling waiter can still reach its
+    // bounded timeout; leaving it unobserved makes Vitest report an unhandled
+    // rejection during the retry even when the retry itself passes.
+    const waiterSettlements = Promise.allSettled([waitingForAlpha, waitingForBeta]);
+    try {
+      await sleep(250);
 
-    await semaphore.resources.release({
-      type,
-      slug: "beta",
-      leaseId: betaLease!.leaseId,
-    });
-    leasedResources.splice(
-      leasedResources.findIndex((lease) => lease.leaseId === betaLease!.leaseId),
-      1,
-    );
-    const reassignedBeta = await waitingForBeta;
-    leasedResources.push({ type, slug: "beta", leaseId: reassignedBeta.leaseId });
-    expect(reassignedBeta.slug).toBe("beta");
+      await semaphore.resources.release({
+        type,
+        slug: "beta",
+        leaseId: betaLease!.leaseId,
+      });
+      leasedResources.splice(
+        leasedResources.findIndex((lease) => lease.leaseId === betaLease!.leaseId),
+        1,
+      );
+      const reassignedBeta = await waitingForBeta;
+      leasedResources.push({ type, slug: "beta", leaseId: reassignedBeta.leaseId });
+      expect(reassignedBeta.slug).toBe("beta");
 
-    await semaphore.resources.release({
-      type,
-      slug: "alpha",
-      leaseId: alphaLease!.leaseId,
-    });
-    leasedResources.splice(
-      leasedResources.findIndex((lease) => lease.leaseId === alphaLease!.leaseId),
-      1,
-    );
-    const reassignedAlpha = await waitingForAlpha;
-    leasedResources.push({ type, slug: "alpha", leaseId: reassignedAlpha.leaseId });
-    expect(reassignedAlpha.slug).toBe("alpha");
+      await semaphore.resources.release({
+        type,
+        slug: "alpha",
+        leaseId: alphaLease!.leaseId,
+      });
+      leasedResources.splice(
+        leasedResources.findIndex((lease) => lease.leaseId === alphaLease!.leaseId),
+        1,
+      );
+      const reassignedAlpha = await waitingForAlpha;
+      leasedResources.push({ type, slug: "alpha", leaseId: reassignedAlpha.leaseId });
+      expect(reassignedAlpha.slug).toBe("alpha");
+    } finally {
+      await waiterSettlements;
+    }
   }, 120_000);
 
   test("records the lease holder and honors force acquire/release", async () => {

@@ -435,7 +435,7 @@ function resolvePreviewTestBaseUrlEnvironment({
     }
   }
 
-  return [...requiredUrls].map(([appSlug, environmentVariable]) => {
+  const environment = [...requiredUrls].map(([appSlug, environmentVariable]) => {
     const entry = apps[appSlug];
     if (!entry?.publicUrl || entry.headSha !== headSha) {
       throw new Error(
@@ -444,6 +444,15 @@ function resolvePreviewTestBaseUrlEnvironment({
     }
     return `${environmentVariable}=${entry.publicUrl}`;
   });
+
+  // APP_CONFIG_BASE_URL is the common runtime contract used by app-level
+  // suites. Inject the same recorded origin here so tests do not reintroduce
+  // a Doppler copy of repository-owned route data.
+  const appEntry = apps[app.slug];
+  if (app.previewTestBaseUrlEnvVar !== "APP_CONFIG_BASE_URL") {
+    environment.splice(1, 0, `APP_CONFIG_BASE_URL=${appEntry!.publicUrl}`);
+  }
+  return environment;
 }
 
 async function testPreviewApps({
@@ -1676,9 +1685,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
-    // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
-    // preview Doppler config. Root Playwright specs run alongside it, using
-    // the same preview Doppler config.
+    // APP_CONFIG_BASE_URL from the orchestrator's recorded envs.ts origin and
+    // APP_CONFIG_ADMIN_API_SECRET from the leased preview Doppler config.
+    // Root Playwright specs run alongside it with the same values.
     previewTestCommandArgs: [
       "bash",
       "-c",
