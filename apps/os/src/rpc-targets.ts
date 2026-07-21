@@ -189,7 +189,6 @@ import {
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
-  retryStreamUnavailableOnce,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -5152,27 +5151,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
     const timing = { projectId: registered.projectId };
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
+    // Every birth event carries an idempotency key, so the keyed-append door
+    // retry in StreamRpcTarget.append is the single deploy-reset recovery.
     const committed = await timedStep("create-timing", timing, "root-append", () =>
-      retryStreamUnavailableOnce(
-        () =>
-          rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
-            ...projectCreationEvents({
-              projectId: registered.projectId,
-              payload: {
-                config: {
-                  onboardingActive: true,
-                  slug: registered.slug,
-                  ...(creatorEmail === undefined ? {} : { creatorEmail }),
-                },
-              },
-            }),
-          ),
-        (error) => {
-          console.info("project create: root stream lifecycle reset; replaying birth batch once", {
-            projectId: registered.projectId,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        },
+      rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
+        ...projectCreationEvents({
+          projectId: registered.projectId,
+          payload: {
+            config: {
+              onboardingActive: true,
+              slug: registered.slug,
+              ...(creatorEmail === undefined ? {} : { creatorEmail }),
+            },
+          },
+        }),
       ),
     );
     const maxOffset = Math.max(...committed.map((event) => event.offset));

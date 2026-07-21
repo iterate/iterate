@@ -6,7 +6,6 @@ import {
   isStreamUnavailableError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
-  retryStreamUnavailableOnce,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./stream-unavailable.ts";
@@ -120,54 +119,6 @@ describe("isStreamUnavailableError", () => {
     ["unrelated app error", new Error('no capability "itx.streams.get"'), false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isStreamUnavailableError(error)).toBe(expected);
-  });
-});
-
-describe("retryStreamUnavailableOnce", () => {
-  it("replays one explicitly unavailable idempotent operation", async () => {
-    const lifecycleError = new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}code updated`);
-    let attempts = 0;
-    const observed: unknown[] = [];
-
-    const result = await retryStreamUnavailableOnce(
-      async () => {
-        attempts += 1;
-        if (attempts === 1) throw lifecycleError;
-        return "committed";
-      },
-      (error) => observed.push(error),
-    );
-
-    expect(result).toBe("committed");
-    expect(attempts).toBe(2);
-    expect(observed).toEqual([lifecycleError]);
-  });
-
-  it("is bounded to one replay and preserves the terminal rejection", async () => {
-    const first = new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}code updated`);
-    const terminal = new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}overloaded`);
-    let attempts = 0;
-
-    await expect(
-      retryStreamUnavailableOnce(async () => {
-        attempts += 1;
-        throw attempts === 1 ? first : terminal;
-      }),
-    ).rejects.toBe(terminal);
-    expect(attempts).toBe(2);
-  });
-
-  it("does not replay an application rejection", async () => {
-    const appError = new Error("invalid event");
-    let attempts = 0;
-
-    await expect(
-      retryStreamUnavailableOnce(async () => {
-        attempts += 1;
-        throw appError;
-      }),
-    ).rejects.toBe(appError);
-    expect(attempts).toBe(1);
   });
 });
 

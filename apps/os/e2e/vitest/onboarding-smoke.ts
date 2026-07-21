@@ -50,14 +50,7 @@ async function attemptOnboardingSmoke(): Promise<void> {
   using agent = project.agents.get("/agents/onboarding");
   // Match the dashboard's explicit onboarding flow: agent birth is generic,
   // then this caller appends the onboarding prompt and startup input.
-  await ensureOnboardingAgentReady({
-    agent,
-    onRetry: (error) => {
-      console.info("onboarding startup stream rolled; replaying its idempotent facts once", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    },
-  });
+  await ensureOnboardingAgentReady({ agent });
   const greeting = await waitForOnboardingGreeting({
     stream: agent.stream,
     timeoutMs: 90_000,

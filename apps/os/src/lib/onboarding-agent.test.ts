@@ -83,33 +83,6 @@ describe("onboardingStartEvent", () => {
     expect(append).toHaveBeenCalledWith(...onboardingAgentStartupEvents());
   });
 
-  test("replays the idempotent startup once when deployment rollover resets its stream", async () => {
-    const reset = new Error(
-      "stream-unavailable: Internal error in Durable Object storage caused object to be reset",
-    );
-    const calls: string[] = [];
-    const create = vi.fn(async () => {
-      calls.push("create");
-    });
-    const append = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        calls.push("append");
-        throw reset;
-      })
-      .mockImplementationOnce(async () => {
-        calls.push("append");
-        return [];
-      });
-    const onRetry = vi.fn();
-
-    await ensureOnboardingAgentReady({ agent: { append, create }, onRetry });
-
-    expect(calls).toEqual(["create", "append", "create", "append"]);
-    expect(onRetry).toHaveBeenCalledOnce();
-    expect(onRetry).toHaveBeenCalledWith(reset);
-  });
-
   test("recovers a rollover during the greeting wait without losing a committed greeting", async () => {
     const reset = new Error("stream-unavailable: deployment reset");
     const greeting = {
