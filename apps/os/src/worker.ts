@@ -257,6 +257,12 @@ async function apiFetch(
     return response;
   }
 
+  if (route.lane === "redirect") {
+    // 308 keeps the method across the hop (a 301 lets clients downgrade
+    // POST to GET) and is as permanently cacheable as www aliases deserve.
+    return new Response(null, { headers: { location: route.location }, status: 308 });
+  }
+
   if (route.lane === "notFound") {
     return Response.json({ error: "not found" }, { status: 404 });
   }

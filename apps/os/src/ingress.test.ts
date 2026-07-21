@@ -226,6 +226,20 @@ test.for([
     expected: { lane: "project", resolved: { projectId: "prj_custom", appSlug: "someapp" } },
   },
   {
+    name: "www. on a resolving custom hostname permanent-redirects to the apex",
+    config: PREVIEW_CONFIG,
+    resolvers: customHostnameResolvers(),
+    url: "https://www.bla.com/notes?tab=all",
+    expected: { lane: "redirect", location: "https://bla.com/notes?tab=all" },
+  },
+  {
+    name: "www. with nothing behind it still resolves normally",
+    config: PREVIEW_CONFIG,
+    resolvers: customHostnameResolvers(),
+    url: "https://www.unregistered.com/",
+    expected: { lane: "notFound" },
+  },
+  {
     name: "404s non-OS hosts that resolve to nothing",
     config: PREVIEW_CONFIG,
     resolvers: slugResolvers({}),

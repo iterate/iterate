@@ -46,6 +46,7 @@ type IngressRoute =
       fetch: { headers: Headers; method: string; url: string };
       resolved: { appSlug: string | null; projectId: string };
     }
+  | { lane: "redirect"; location: string }
   | { lane: "notFound" };
 
 export async function decideIngressRoute(input: {
@@ -97,6 +98,19 @@ export async function decideIngressRoute(input: {
       projectId,
       url: input.url,
     });
+  }
+
+  // `www.` on a custom hostname is an alias, never content: when the host
+  // minus its `www.` label resolves to a project, permanent-redirect there
+  // instead of serving the same pages on two origins (www.garple.com →
+  // garple.com, path and query preserved). Checked before the direct lookup
+  // so an exactly-registered `www.<apex>` also redirects.
+  if (host.startsWith("www.")) {
+    const apex = host.slice("www.".length);
+    const apexTarget = await input.resolvers.projectByHostname(apex);
+    if (apexTarget) {
+      return { lane: "redirect", location: `${url.protocol}//${apex}${url.pathname}${url.search}` };
+    }
   }
 
   const custom = await input.resolvers.projectByHostname(host);
