@@ -5,9 +5,10 @@
 > retry telemetry) lives in [testing.md → Retries and
 > timeouts](testing.md#retries-and-timeouts).
 
-Goal: run the full preview e2e lane against a real preview environment 50
-times in a row without a single flake, fixing and documenting every failure
-encountered along the way.
+Current goal: run the complete preview pipeline against a real preview
+environment 25 times in a row without a single failure, with every full-fleet
+deploy plus e2e run completing in under five minutes. Fix and document every
+failure or tail encountered along the way.
 
 Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
 Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
@@ -16,18 +17,33 @@ write serialization supersedes round 2's standalone flake-15 fix. Round 3
 (this PR) carries on toward 50 consecutive green runs, targeting the two
 pre-existing flakes still open after the round-2 merge (see "Round 3 targets").
 
-Method: deploy this PR's preview slot, then loop `pnpm preview test
---pull-request-number <N>`, failing fast on the first failure. Every failure
-gets a root-cause diagnosis and the smallest reliable fix, recorded below; a
-failure resets the consecutive-green counter. `scripts/preview/flake-hunt-loop.sh`
-drives the loop (preflight full-fleet deploy → optional warmup → counted runs).
+Method: loop a full-fleet `pnpm preview deploy --all-apps` followed by
+`pnpm preview test`, failing fast on the first functional failure or run at or
+above five minutes. Every failure gets a root-cause diagnosis and the smallest
+reliable fix, recorded below; a failure resets the consecutive-green counter.
+`scripts/preview/flake-hunt-loop.sh` drives the loop and writes a machine-readable
+per-run duration and retry ledger.
 
 The trustworthy count runs **in Depot CI, not on a workstation** (a laptop
 sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
 `.depot/workflows/preview-e2e-marathon.yml` runs that same loop on Depot infra,
-launched with `depot ci run --workflow .depot/workflows/preview-e2e-marathon.yml`.
-Local runs are for fast iteration while fixing a flake; the 50-consecutive-green
-bar is measured on Depot.
+launched with `depot ci dispatch --workflow preview-e2e-marathon.yml --ref
+<branch> --input pull-request-number=<pr>`.
+Local runs are for fast iteration while fixing a flake; the consecutive-green
+bar is measured on Depot's same 16-core runner shape as the normal preview job.
+
+## Round 5 (2026-07-21)
+
+This round starts from main after AI Search and sandbox-based worker building
+were removed. Its baseline is PR #2140's exact tested head `2d156e0c3`: the
+complete preview job passed in 4m05s with zero test retries. Deploys already
+start together, app e2e lanes start together, and OS starts smoke, TUI, Vitest,
+and Playwright together. The remaining proof is distributional: 25 consecutive
+full deploy-and-test runs, each under five minutes, with every absorbed retry
+visible in the ledger and investigated.
+
+Progress and failure diagnoses live in the active PR's comments; this section
+is updated with the final run IDs and outcome once the proof completes.
 
 ## Round 4 (2026-07-13/14, PR #1938)
 

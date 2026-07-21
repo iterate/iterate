@@ -125,11 +125,24 @@ describe("retries live in exactly one layer", () => {
 });
 
 describe("watchdogs the shell can't import stay in sync", () => {
-  it("flake-hunt-loop.sh defaults its run watchdog to PREVIEW_RUN_WATCHDOG_SECS", () => {
+  it("keeps the marathon on the real preview profile and its strict proof budget", () => {
     const source = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
     expect(source).toContain(
       `RUN_TIMEOUT_SECS="\${RUN_TIMEOUT_SECS:-${PREVIEW_RUN_WATCHDOG_SECS}}"`,
     );
+    expect(source).toContain('PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"');
+    expect(source).toContain('RUNS="${RUNS:-25}"');
+    expect(source).toContain('MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-300}"');
+    expect(source).toContain("pnpm preview deploy --all-apps --allow-draft");
+
+    const workflow = readFileSync(
+      resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
+      "utf8",
+    );
+    expect(workflow).toContain("runs-on: depot-ubuntu-24.04-16");
+    expect(workflow).toContain('default: "25"');
+    expect(workflow).toContain('default: "300"');
+    expect(workflow).not.toContain("warmup-runs");
   });
 });
 
