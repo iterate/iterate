@@ -1164,13 +1164,6 @@ export interface ProjectWorker {
   processEventBatch(batch: StreamPushEventBatch): Promise<void>;
 }
 
-/**
- * Durable event stream capability.
- *
- * Streams are the public coordination primitive, not an internal queue hidden
- * behind domain methods. Domain helpers can construct common event shapes, but
- * callers and processors still work with explicit events.
- */
 export interface Stream {
   __describe(): Promise<Description>;
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
