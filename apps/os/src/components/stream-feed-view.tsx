@@ -75,7 +75,7 @@ export function StreamFeedView({
   projectSlug,
 }: {
   database: StreamBrowserDatabase;
-  emptyLabel?: string;
+  emptyLabel?: string | null;
   /** Which kind families (and constraints within them) this mode shows. */
   filter: StreamFeedQueryInput;
   isPending?: boolean;
@@ -223,12 +223,13 @@ export function StreamFeedView({
   }, []);
 
   const filtersNarrow =
-    filter.raw != null &&
-    (filter.raw.eventTypes != null ||
-      filter.raw.components != null ||
-      filter.raw.searchQuery != null ||
-      filter.raw.offsetFrom != null ||
-      filter.raw.offsetTo != null);
+    (filter.agent?.searchQuery != null && filter.agent.searchQuery !== "") ||
+    (filter.raw != null &&
+      ((filter.raw.eventTypes?.length ?? 0) > 0 ||
+        (filter.raw.components?.length ?? 0) > 0 ||
+        (filter.raw.searchQuery != null && filter.raw.searchQuery !== "") ||
+        filter.raw.offsetFrom != null ||
+        filter.raw.offsetTo != null));
 
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -238,12 +239,16 @@ export function StreamFeedView({
         {totalCount === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
-              {isPending ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>{isPending ? pendingLabel : "Nothing here yet"}</EmptyTitle>
-              {isPending ? null : (
-                <EmptyDescription>
-                  {filtersNarrow ? "No feed items match the current filters." : emptyLabel}
-                </EmptyDescription>
+              {isPending || !filtersNarrow ? <Spinner className="size-4" /> : null}
+              <EmptyTitle>
+                {isPending
+                  ? pendingLabel
+                  : filtersNarrow
+                    ? "Nothing matches the current filters"
+                    : "Waiting for events…"}
+              </EmptyTitle>
+              {isPending || filtersNarrow || emptyLabel === null ? null : (
+                <EmptyDescription>{emptyLabel}</EmptyDescription>
               )}
             </EmptyHeader>
           </Empty>
