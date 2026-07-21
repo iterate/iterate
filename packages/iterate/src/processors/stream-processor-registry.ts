@@ -77,7 +77,6 @@ import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
-import { isDurableObjectLifecycleError } from "./durable-object-availability.ts";
 import {
   durableObjectProgressStore,
   durableObjectRecovery,
@@ -368,17 +367,6 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     );
   }
 
-  async function catchUp(name: string): Promise<void> {
-    const entry = requireEntry(name);
-    try {
-      await entry.runner.catchUp();
-    } catch (error) {
-      if (!isDurableObjectLifecycleError(error)) throw error;
-      console.info(`stream processor "${name}" catch-up replaying after lifecycle reset`);
-      await entry.runner.catchUp();
-    }
-  }
-
   // The node's live-state engine. Seeded empty; assembled from runner state
   // on the first `loadAndRefreshLive`
   // and kept fresh by each runner's committed-state observer. The empty seed
@@ -515,7 +503,13 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       );
     },
 
-    catchUp,
+    // Catch-up failures — availability and application alike — propagate to
+    // the caller unretried: the door that called into this DO owns the one
+    // idempotent replay, and a swallowed failure here would serve stale
+    // state as success.
+    async catchUp(name: string): Promise<void> {
+      await requireEntry(name).runner.catchUp();
+    },
 
     handleAlarm(alarmInfo) {
       return tracing.enterSpan("alarm processor keepalive", async (span) => {

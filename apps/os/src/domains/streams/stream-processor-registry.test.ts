@@ -251,23 +251,17 @@ describe("register", () => {
 });
 
 describe("catchUp", () => {
-  it("replays one direct lifecycle reset from the durable stream", async () => {
+  it("propagates a lifecycle reset unretried — the calling door owns the one replay", async () => {
     const h = makeHarness();
-    await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
-    const getEvents = h.stream.getEvents.bind(h.stream);
+    const reset = Object.assign(new Error("injected deploy reset"), { durableObjectReset: true });
     let calls = 0;
-    h.stream.getEvents = async (input) => {
+    h.stream.getEvents = async () => {
       calls += 1;
-      if (calls === 1) {
-        throw Object.assign(new Error("injected deploy reset"), { durableObjectReset: true });
-      }
-      return await getEvents(input);
+      throw reset;
     };
 
-    await h.registry.catchUp("alpha-proc");
-
-    expect((await h.wake("alpha-proc")).checkpointOffset).toBe(1);
-    expect(calls).toBeGreaterThan(1);
+    await expect(h.registry.catchUp("alpha-proc")).rejects.toBe(reset);
+    expect(calls).toBe(1);
   });
 
   it("does not replay or swallow application failures", async () => {
