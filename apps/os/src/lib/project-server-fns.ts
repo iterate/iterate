@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getCookie } from "@tanstack/react-start/server";
 import { env } from "cloudflare:workers";
 import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
 import { itxAuthFromPrincipal } from "~/auth.ts";
@@ -91,7 +92,8 @@ export const getRootProjectRedirectServerFn: (input?: {
         ctx: context.executionCtx,
       });
       const decision = chooseRootProjectRedirect({
-        preferredProjectSlug: data.preferredProjectSlug,
+        preferredProjectSlug:
+          data.preferredProjectSlug ?? getCookie("iterate_recent_project") ?? null,
         projects: await projects.list({ scope: "mine" }),
       });
 
