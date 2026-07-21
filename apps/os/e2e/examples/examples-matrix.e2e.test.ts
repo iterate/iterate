@@ -24,6 +24,7 @@ import { connectGlobal, connectProject } from "./e2e-env.ts";
 import {
   bakeProjectWorkerRunner,
   ExampleRuntimeDeadlineError,
+  finishBeforeRuntimeDeadline,
   MATRIX_RUNTIMES,
   runExampleCode,
   type MatrixRuntime,
@@ -115,9 +116,10 @@ for (const example of MATRIX_EXAMPLES) {
   const runtimeTimeoutMs = exampleCase.completionTimeoutMs ?? 90_000;
   // The case budget is shared wall time: parallel runtimes each get the full
   // remainder concurrently, while an explicitly serial case passes the
-  // remaining aggregate budget to each successive runtime. Vitest gets 30s
-  // more for pool acquisition, cleanup, and reporting, so its watchdog never
-  // pre-empts the more diagnostic runtime deadline first.
+  // remaining aggregate budget to each successive runtime. The project-worker
+  // bake is part of that runtime's budget. Vitest gets 30s more for pool
+  // acquisition, cleanup, and reporting, so its watchdog never pre-empts the
+  // more diagnostic runtime deadline first.
   // A blanket 240s once let one stuck example consume both the lane and retry
   // without identifying the runtime that stalled.
   matrixTest(
@@ -135,7 +137,7 @@ for (const example of MATRIX_EXAMPLES) {
         timeoutMs: number,
       ) => {
         const { projectId } = projectLease;
-        if (runtime === "project-worker") await ensureProjectWorkerRunner(projectId);
+        const runtimeDeadline = Date.now() + timeoutMs;
         const ctx = {
           attemptSalt,
           marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`,
@@ -143,11 +145,20 @@ for (const example of MATRIX_EXAMPLES) {
         };
         const vars = exampleCase.vars?.(ctx) ?? {};
         try {
+          if (runtime === "project-worker") {
+            await finishBeforeRuntimeDeadline(runtime, timeoutMs, () =>
+              ensureProjectWorkerRunner(projectId),
+            );
+          }
+          const remainingMs = runtimeDeadline - Date.now();
+          if (remainingMs <= 0) {
+            throw new ExampleRuntimeDeadlineError(runtime, timeoutMs);
+          }
           const result = await runExampleCode(runtime, {
             code: example.code,
             id: example.id,
             projectId,
-            timeoutMs,
+            timeoutMs: remainingMs,
             vars,
           });
           exampleCase.assert(result, ctx, expect);

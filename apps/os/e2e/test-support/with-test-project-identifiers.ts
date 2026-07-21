@@ -31,6 +31,13 @@ export function withTestProjectIdentifiers<T extends object>(stub: T): T {
         return (...args: unknown[]) => wrapReturnedStub(Reflect.apply(value, target, args));
       }
 
+      // Cap'n Web's disposer relies on the original session as its receiver.
+      // Returning the raw method makes `using wrapped = ...` invoke it with
+      // this Proxy instead, so the underlying WebSocket can survive teardown.
+      if (key === Symbol.dispose && typeof value === "function") {
+        return (...args: unknown[]) => Reflect.apply(value, target, args);
+      }
+
       return value;
     },
   });

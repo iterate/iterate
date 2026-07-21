@@ -68,6 +68,19 @@ describe("withTestProjectIdentifiers", () => {
     });
   });
 
+  test("disposes the underlying session with its original receiver", () => {
+    const { session } = createSession();
+    let disposeReceiver: unknown;
+    session[Symbol.dispose].mockImplementation(function (this: unknown) {
+      disposeReceiver = this;
+    });
+
+    withTestProjectIdentifiers(session)[Symbol.dispose]();
+
+    expect(session[Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(disposeReceiver).toBe(session);
+  });
+
   test("generates a new valid id for each call", () => {
     const first = freshTestProjectId();
     const second = freshTestProjectId();

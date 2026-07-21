@@ -149,7 +149,7 @@ async function runInProjectWorker(input: {
   );
 }
 
-async function finishBeforeRuntimeDeadline<Result>(
+export async function finishBeforeRuntimeDeadline<Result>(
   runtime: MatrixRuntime,
   timeoutMs: number,
   operation: () => Promise<Result>,
