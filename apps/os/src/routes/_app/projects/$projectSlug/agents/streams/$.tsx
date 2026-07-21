@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { connectItx, useLiveState } from "iterate/sdk/itx/react";
 import { AgentDetailsSheet } from "~/components/agents/agent-details-sheet.tsx";
+import { filesToAgentPayload } from "~/lib/web-agent.ts";
 import { ONBOARDING_AGENT_PATH, ensureOnboardingAgentReady } from "~/lib/onboarding-agent.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
@@ -123,13 +124,7 @@ function ProjectAgentDetailContent() {
     // One addFiles call → ONE input event carrying every attachment, so the
     // feed shows a single message and the agent gets one turn trigger.
     const { event } = await itx.agents.get(streamPath).addFiles({
-      files: await Promise.all(
-        files.map(async (file) => ({
-          contentType: file.type || "application/octet-stream",
-          data: new Uint8Array(await file.arrayBuffer()),
-          filename: file.name,
-        })),
-      ),
+      files: await filesToAgentPayload(files),
       ...(message ? { message } : {}),
     });
     return event;

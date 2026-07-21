@@ -550,11 +550,8 @@ export const AgentProcessorContract = defineProcessorContract({
     // Every error on the stream — the processor's own emissions, the runner's
     // poison skips, anything else — is transcribed into model-visible context.
     "events.iterate.com/stream/error-occurred",
-    // The platform revival fact. This contract currently consumes it, but does
-    // not react to the fact itself; an unconsumed tail would receive the same
-    // eventless at-head turn that finds and re-runs orphaned work after an
-    // eviction.
-    "events.iterate.com/stream/processor-revived",
+    // Recovery relies on the eventless at-head pass, not consumption of the
+    // platform revival fact, to find and re-run orphaned work after eviction.
   ],
   emits: [
     "events.iterate.com/agents/context-added",

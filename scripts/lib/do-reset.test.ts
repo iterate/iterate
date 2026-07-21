@@ -111,6 +111,54 @@ describe("detachExternalDurableObjectBindings", () => {
     expect(cf.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
   });
 
+  test("scans only the target's own slot family plus non-slot workers", async () => {
+    const scanned: string[] = [];
+    const cf = vi.fn(async (path: string) => {
+      scanned.push(path.split("/").at(-2) as string);
+      return { bindings: [] };
+    });
+
+    await detachExternalDurableObjectBindings({
+      ctx: { cf } as never,
+      targetWorkerName: "os-preview-4",
+      targetNamespaceIds: ["target-project"],
+      workerNames: [
+        "os-preview-4",
+        "os-preview-4-typechecker",
+        "auth-preview-4",
+        "os-preview-9",
+        "auth-preview-16-typechecker",
+        "dummy-petshop-preview-19",
+        "captun",
+        "cf-artifact-viewer-dev-jonas",
+      ],
+    });
+
+    expect(scanned.sort()).toEqual([
+      "auth-preview-4",
+      "captun",
+      "cf-artifact-viewer-dev-jonas",
+      "os-preview-4-typechecker",
+    ]);
+  });
+
+  test("a non-slot target still scans every other worker", async () => {
+    const scanned: string[] = [];
+    const cf = vi.fn(async (path: string) => {
+      scanned.push(path.split("/").at(-2) as string);
+      return { bindings: [] };
+    });
+
+    await detachExternalDurableObjectBindings({
+      ctx: { cf } as never,
+      targetWorkerName: "os-prd",
+      targetNamespaceIds: ["target-project"],
+      workerNames: ["os-prd", "os-prd-typechecker", "os-preview-4", "captun"],
+    });
+
+    expect(scanned.sort()).toEqual(["captun", "os-prd-typechecker", "os-preview-4"]);
+  });
+
   test("fails before reset can continue when Cloudflare keeps a target reference", async () => {
     const stale: Settings = {
       bindings: [

@@ -634,7 +634,8 @@ section; no code.
 
 ### F1. Recovery suites hand-roll ~120 lines of registry simulation each
 
-**Status:** in-pr #2202 (Jonas decision: one harness mode; revival-consumption throw dropped).
+**Status:** done #2202 (Jonas decision: one harness mode; revival-consumption throw dropped).
+**Follow-up:** in-pr #2215 — six contracts shed `processor-revived`; slack-agent kept it; wake delivery was already watermark-gated, so the selector was unchanged.
 
 `telegram-agent-recovery.test.ts:35-156` (harness) vs `:158-236` (the one
 test); the same fake `DurableObjectState` + alarm cell + `boot`/`wake`/

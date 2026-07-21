@@ -1,16 +1,15 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { parse as parseYaml } from "yaml";
-import { XIcon } from "lucide-react";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import { Button } from "@iterate-com/ui/components/button";
 import { StreamEventInput, type StreamEvent } from "iterate/processors";
 import type { StreamBrowserStore } from "~/domains/streams/client-libraries/browser/stream-browser-store.ts";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
+import { AttachmentChips, AttachmentFileInput } from "~/components/composer-attachments.tsx";
+import { useComposerAttachments } from "~/components/use-composer-attachments.ts";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
-const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 /**
  * How a domain page lets its stream view send chat messages (agents only).
@@ -71,12 +70,10 @@ export function StreamViewComposer({
     defaultMode ?? (messageComposer ? "message" : "raw"),
   );
   const [messageText, setMessageText] = useState("");
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const attachments = useComposerAttachments();
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
-  const [fileError, setFileError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function runSubmit(action: () => Promise<void>) {
     setIsSubmitting(true);
@@ -102,12 +99,11 @@ export function StreamViewComposer({
       const committed = await submit();
       store.noteExternalAppend({ maxCommittedOffset: committed.offset, t0 });
     };
-    if (selectedFiles.length > 0 && onSubmitFiles != null) {
+    if (attachments.files.length > 0 && onSubmitFiles != null) {
       await runSubmit(async () => {
-        await measured(() => onSubmitFiles({ files: selectedFiles, message: trimmed }));
+        await measured(() => onSubmitFiles({ files: attachments.files, message: trimmed }));
         setMessageText("");
-        setSelectedFiles([]);
-        setFileError(undefined);
+        attachments.clearFiles();
         onNudgeDeliveries();
       });
       return;
@@ -118,27 +114,6 @@ export function StreamViewComposer({
       setMessageText("");
       onNudgeDeliveries();
     });
-  }
-
-  function addSelectedFiles(fileList: FileList | null) {
-    const files = Array.from(fileList ?? []);
-    if (files.length === 0) return;
-    const accepted = files.filter((file) => file.size <= MAX_MESSAGE_FILE_SIZE_BYTES);
-    const rejected = files.filter((file) => file.size > MAX_MESSAGE_FILE_SIZE_BYTES);
-    if (rejected.length > 0) {
-      const label = rejected.length === 1 ? rejected[0]!.name : `${rejected.length} files`;
-      setFileError(`${label} must be ${formatFileSize(MAX_MESSAGE_FILE_SIZE_BYTES)} or smaller.`);
-    } else {
-      setFileError(undefined);
-    }
-    if (accepted.length > 0) {
-      setSelectedFiles((previous) => [...previous, ...accepted]);
-    }
-  }
-
-  function removeSelectedFile(index: number) {
-    setSelectedFiles((previous) => previous.filter((_, candidate) => candidate !== index));
-    setFileError(undefined);
   }
 
   async function submitRawEvents() {
@@ -162,47 +137,17 @@ export function StreamViewComposer({
 
   // File validation, submit, and interrupt failures have independent
   // lifecycles, so none may mask the others — show all active messages.
-  const error = [fileError, submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
+  const error =
+    [attachments.fileError, submitError, interrupt?.error].filter(Boolean).join(" · ") || undefined;
   const attachmentChips =
-    selectedFiles.length === 0 ? undefined : (
-      <div className="flex flex-wrap items-center gap-1.5">
-        {selectedFiles.map((file, index) => (
-          <span
-            key={`${file.name}-${file.lastModified}-${index}`}
-            className="inline-flex max-w-52 items-center gap-1.5 rounded-full border bg-muted/50 py-1 pl-2 pr-1 text-xs"
-          >
-            <span className="min-w-0 truncate">{file.name}</span>
-            <span className="shrink-0 font-mono text-muted-foreground">
-              {formatFileSize(file.size)}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              type="button"
-              title={`Remove ${file.name}`}
-              onClick={() => removeSelectedFile(index)}
-              className="size-5 rounded-full text-muted-foreground"
-            >
-              <XIcon className="size-3" />
-            </Button>
-          </span>
-        ))}
-      </div>
+    attachments.entries.length === 0 ? undefined : (
+      <AttachmentChips entries={attachments.entries} onRemove={attachments.removeFile} />
     );
 
   return (
     <>
       {messageComposer?.onSubmitFiles == null ? null : (
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(event) => {
-            addSelectedFiles(event.currentTarget.files);
-            event.currentTarget.value = "";
-          }}
-        />
+        <AttachmentFileInput attachments={attachments} />
       )}
       <AgentPillComposer
         mode={mode}
@@ -218,11 +163,14 @@ export function StreamViewComposer({
                 onSubmit: submitMessage,
                 canSubmit:
                   messageText.trim() !== "" ||
-                  (selectedFiles.length > 0 && messageComposer.onSubmitFiles != null),
+                  (attachments.files.length > 0 && messageComposer.onSubmitFiles != null),
                 ...(attachmentChips == null ? {} : { attachments: attachmentChips }),
                 ...(messageComposer.onSubmitFiles == null
                   ? {}
-                  : { onAttach: () => fileInputRef.current?.click() }),
+                  : {
+                      onAttach: attachments.openFilePicker,
+                      onAddFiles: attachments.addFiles,
+                    }),
                 ...(messageComposer.placeholder == null
                   ? {}
                   : { placeholder: messageComposer.placeholder }),
@@ -242,11 +190,4 @@ export function StreamViewComposer({
       />
     </>
   );
-}
-
-function formatFileSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const kilobytes = size / 1024;
-  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
-  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
 }

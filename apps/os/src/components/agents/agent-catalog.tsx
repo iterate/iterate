@@ -78,9 +78,7 @@ export function AgentCatalog({
           <Button
             nativeButton={false}
             size="sm"
-            render={
-              <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
-            }
+            render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
           >
             New agent
           </Button>

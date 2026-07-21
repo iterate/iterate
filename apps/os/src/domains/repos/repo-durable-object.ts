@@ -119,11 +119,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery: creation and GitHub imports are consequential
-  // `runInBackground` work (journaled requested/started obligations whose
+  // `runInBackground` work (stream-committed requested/started obligations whose
   // OUTCOME matters). An incarnation that dies owing either must be revived.
-  // The keepalive alarm appends the `stream/processor-revived` fact, whose
-  // ordinary delivery lands at head and lets the at-head reconcile re-drive
-  // the obligations (see the registry module doc's recovery rule).
+  // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
+  // produces the eventless at-head pass that re-drives the obligations (see the
+  // registry module doc's recovery rule).
   readonly #repoProcessor = this.#registry.register(
     new RepoProcessor({
       stream: this.#stream,
