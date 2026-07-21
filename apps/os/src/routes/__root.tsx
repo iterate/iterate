@@ -21,7 +21,6 @@ import appCss from "../styles.css?url";
 import { PosthogContextSync } from "~/components/posthog-context.tsx";
 import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
 import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
-import { vitePreloadRecoveryScript } from "~/lib/vite-preload-recovery.ts";
 import type { RouterContext } from "~/router-context.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
@@ -93,7 +92,6 @@ function RootDocument({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: vitePreloadRecoveryScript }} />
         <HeadContent />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased" data-hydrated={isHydrated}>
