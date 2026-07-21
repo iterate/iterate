@@ -94,6 +94,19 @@ function ProjectHomePage() {
     );
   }
 
+  // Before the first LiveState push we can't tell ready from mid-create:
+  // hold a loading state rather than flashing a live composer at a project
+  // that may still be bootstrapping.
+  if (lifecycle.value === undefined) {
+    return (
+      <main className="flex min-h-full flex-1 items-center justify-center p-4">
+        <p className="text-sm text-muted-foreground" data-spinner="true">
+          Loading project…
+        </p>
+      </main>
+    );
+  }
+
   return (
     <ProjectDashboard
       projectId={project.id}
