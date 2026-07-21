@@ -3,7 +3,6 @@ import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Stack, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, Text, View } from "react-native";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { initialWindowMetrics, SafeAreaProvider } from "react-native-safe-area-context";
 import { BUILD_TIMESTAMP } from "../lib/build-info.ts";
 import { queryClient } from "../lib/query.ts";
@@ -12,13 +11,11 @@ import { colors } from "../lib/theme.ts";
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-        <QueryClientProvider client={queryClient}>
-          <RootStack />
-        </QueryClientProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <QueryClientProvider client={queryClient}>
+        <RootStack />
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }
 
