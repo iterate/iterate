@@ -167,6 +167,9 @@ describe("watchdogs the shell can't import stay in sync", () => {
       "group: cloudflare-previews-${{ inputs.pull-request-number }}",
     );
     expect(marathonWorkflow).toContain("cancel-in-progress: false");
+    expect(normalWorkflow).toContain("uses: oven-sh/setup-bun@v2");
+    expect(marathonWorkflow).toContain("uses: oven-sh/setup-bun@v2");
+    expect(marathonWorkflow).toContain("bun-version-file: .bun-version");
     expect(osVitestConfig).toContain("maxWorkers: ci ? 64 : 1");
     expect(osVitestConfig).not.toContain("sequencer:");
     expect(marathonWorkflow).toContain('default: "25"');

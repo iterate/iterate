@@ -1,3 +1,7 @@
+import { isDurableObjectLifecycleError } from "iterate/processors";
+
+export { isDurableObjectLifecycleError } from "iterate/processors";
+
 // The stream capability's availability-error contract, shared by the worker
 // door that MINTS the tag (StreamRpcTarget in rpc-targets.ts) and the clients
 // that CLASSIFY it (the browser mirror's appendBatch retry loop). Kept
@@ -28,25 +32,6 @@ export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
  * it must distinguish an exhausted internal slice from a predicate failure.
  */
 export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
-
-/**
- * Whether a Durable Object stub rejection is a DO-lifecycle failure (the
- * incarnation died mid-call / is overloaded) as opposed to an app-level throw
- * from the DO's own code. These property flags are workerd's error contract;
- * an in-flight call rejected by `ctx.abort()` carries
- * `durableObjectReset: true` (empirically verified — see the PR that
- * introduced this module), evictions and deploy resets ride the same flag,
- * and overload/network families carry `overloaded`/`retryable`.
- */
-export function isDurableObjectLifecycleError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const flags = error as {
-    durableObjectReset?: unknown;
-    retryable?: unknown;
-    overloaded?: unknown;
-  };
-  return flags.durableObjectReset === true || flags.retryable === true || flags.overloaded === true;
-}
 
 /**
  * Whether an idempotent caller may replay a Durable Object operation after

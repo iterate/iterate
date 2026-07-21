@@ -250,6 +250,40 @@ describe("register", () => {
   });
 });
 
+describe("catchUp", () => {
+  it("replays one direct lifecycle reset from the durable stream", async () => {
+    const h = makeHarness();
+    await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
+    const getEvents = h.stream.getEvents.bind(h.stream);
+    let calls = 0;
+    h.stream.getEvents = async (input) => {
+      calls += 1;
+      if (calls === 1) {
+        throw Object.assign(new Error("injected deploy reset"), { durableObjectReset: true });
+      }
+      return await getEvents(input);
+    };
+
+    await h.registry.catchUp("alpha-proc");
+
+    expect((await h.wake("alpha-proc")).checkpointOffset).toBe(1);
+    expect(calls).toBeGreaterThan(1);
+  });
+
+  it("does not replay or swallow application failures", async () => {
+    const h = makeHarness();
+    const failure = new Error("invalid processor input");
+    let calls = 0;
+    h.stream.getEvents = async () => {
+      calls += 1;
+      throw failure;
+    };
+
+    await expect(h.registry.catchUp("alpha-proc")).rejects.toBe(failure);
+    expect(calls).toBe(1);
+  });
+});
+
 // =============================================================================
 // The single-DO-alarm multiplex
 // =============================================================================
