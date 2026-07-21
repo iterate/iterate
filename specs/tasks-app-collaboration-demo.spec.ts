@@ -3,8 +3,9 @@ import { mintProjectAppSession } from "../apps/auth/src/server/project-app-sessi
 import { test } from "./test-support/test.ts";
 
 const APP_URL = "https://tasks--task-demo.iterate.app";
-const GITHUB_API_URL = "https://api.github.com/repos/jonastemplestein/iterate-test-5";
+const GITHUB_API_URL = "https://api.github.com/repos/mmkal/iterate-tasks-demo";
 const PROJECT_ID = "prj_958f07c0fbb8428693364d55977b24ea";
+const TYPING_DELAY_MS = 20;
 const JONAS = {
   email: "jonas@nustom.com",
   name: "Jonas Templestein",
@@ -73,7 +74,10 @@ test("demo the tasks app from checkout through collaboration and GitHub", async 
 
   const commitMessage = "Dig two holes together";
   await page.getByRole("button", { name: /^Commit \(\d+\)/ }).click();
-  await page.getByPlaceholder("Commit message").fill(commitMessage);
+  await page.getByPlaceholder("Commit message").type(commitMessage, {
+    delay: TYPING_DELAY_MS,
+    timeout: 5_000,
+  });
   await page.getByRole("button", { exact: true, name: "Commit" }).click();
 
   // Mirroring to GitHub is asynchronous, so poll the public branch head with
@@ -92,9 +96,13 @@ test("demo the tasks app from checkout through collaboration and GitHub", async 
 
 async function createTask(page: Page, input: { description: string; title: string }) {
   await page.getByRole("button", { name: "New task" }).first().click();
-  await page.locator(".cm-content").click();
+  const editor = page.locator(".cm-content");
+  await editor.click();
   await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.insertText(taskMarkdown({ ...input, state: "todo" }));
+  await page.keyboard.press("Backspace");
+  const markdown = taskMarkdown({ ...input, state: "todo" });
+  await typeIntoCodeMirror(page, markdown);
+  await replaceCodeMirrorContents(page, markdown);
   await page.getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: new RegExp(input.title) }).waitFor();
 }
@@ -112,10 +120,32 @@ async function rewriteTask(
   input: { description: string; state: string; title: string },
 ) {
   await page.getByRole("button", { name: new RegExp(input.title) }).click({ timeout: 10_000 });
+  const editor = page.locator(".cm-content");
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+  const markdown = taskMarkdown(input);
+  await typeIntoCodeMirror(page, markdown);
+  await replaceCodeMirrorContents(page, markdown);
+  await page.getByRole("button", { name: "Close" }).click();
+}
+
+async function typeIntoCodeMirror(page: Page, text: string) {
+  const lines = text.split("\n");
+  for (const [index, line] of lines.entries()) {
+    await page.locator(".cm-content").click();
+    await page.keyboard.press("ControlOrMeta+End");
+    await page.keyboard.type(line, { delay: TYPING_DELAY_MS });
+    if (index < lines.length - 1) await page.keyboard.press("Enter");
+  }
+}
+
+async function replaceCodeMirrorContents(page: Page, text: string) {
+  // CodeMirror visibly auto-indents the keystroke pass. Normalize the saved
+  // document after the demonstration so the YAML remains canonical.
   await page.locator(".cm-content").click();
   await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.insertText(taskMarkdown(input));
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.keyboard.insertText(text);
 }
 
 function taskMarkdown(input: { description: string; state: string; title: string }) {
