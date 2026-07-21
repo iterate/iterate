@@ -317,7 +317,8 @@ function MirroredProjectStreamView({
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={agentUiState == null && !streamIsConnected}
+      isPending={caps.agentFeed ? agentUiState == null : !streamIsConnected}
+      pendingLabel={caps.agentFeed ? "Initializing agent" : undefined}
     />
   );
 

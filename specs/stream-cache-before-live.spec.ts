@@ -1,6 +1,41 @@
 import { expect, type WebSocketRoute } from "@playwright/test";
+import { spinnerWaiter } from "middlewright";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
+
+test("a new agent stream stays initializing while its connection opens", async ({
+  baseURL,
+  helpers,
+  page,
+}) => {
+  await using fixture = await helpers.createFixture("agent-initializing");
+  using admin = await connectAdminItx(baseURL!);
+  using project = admin.projects.get(fixture.project.id);
+  const agentPath = `/agents/initializing-${crypto.randomUUID().slice(0, 8)}`;
+  await project.agents.get(agentPath).create();
+
+  let restoreConnections = false;
+  const stalledSockets: WebSocketRoute[] = [];
+  await page.routeWebSocket(
+    (url) => url.pathname === "/api",
+    (socket) => {
+      if (restoreConnections) socket.connectToServer();
+      else stalledSockets.push(socket);
+    },
+  );
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
+    await page.getByText("Initializing agent", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+    await expect.poll(() => stalledSockets.length).toBeGreaterThan(0);
+
+    restoreConnections = true;
+    await Promise.all(stalledSockets.map((socket) => socket.close({ code: 1012 })));
+    await page
+      .getByText("Initializing agent", { exact: true })
+      .waitFor({ state: "hidden", timeout: 30_000 });
+  });
+});
 
 test("a cached stream opens before its live connection", async ({ baseURL, helpers, page }) => {
   await using fixture = await helpers.createFixture("stream-cache");
@@ -37,7 +72,7 @@ test("a cached stream opens before its live connection", async ({ baseURL, helpe
   await cachedRow.waitFor({ timeout: 5_000 });
   await page.getByTestId("stream-cache-status").waitFor();
   await page.getByRole("button", { name: "Append events (⌘↵)", disabled: true }).waitFor();
-  expect(stalledSockets.length).toBeGreaterThan(0);
+  await expect.poll(() => stalledSockets.length).toBeGreaterThan(0);
 
   restoreConnections = true;
   await Promise.all(
