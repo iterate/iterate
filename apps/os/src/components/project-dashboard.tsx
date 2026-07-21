@@ -3,16 +3,14 @@ import { Link } from "@tanstack/react-router";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { ArrowRightIcon } from "lucide-react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { NewAgentComposer } from "~/components/new-agent-composer.tsx";
 import {
   AGENT_DISPLAY_STATE_PRESENTATION,
   bindingIcon,
 } from "~/components/agents/agent-presentation.ts";
 import { agentTitle } from "~/components/agents/agent-tree.ts";
-import {
-  RECENTLY_ACTIVE_AGENTS_LIMIT,
-  selectRecentlyActiveAgents,
-} from "~/components/agents/recent-agents.ts";
+import { selectRecentlyActiveAgents } from "~/components/agents/recent-agents.ts";
 import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { ONBOARDING_AGENT_PATH } from "~/lib/onboarding-agent.ts";
@@ -22,7 +20,8 @@ const CLOCK_TICK_MS = 15_000;
 
 /**
  * Project home for ready projects: start a new thread, continue from a few
- * recent agents. Keeps copy short on purpose.
+ * recent agents. No page title — the shell breadcrumb carries context, the
+ * composer placeholder says what to do.
  */
 export function ProjectDashboard({
   projectId,
@@ -40,21 +39,15 @@ export function ProjectDashboard({
     { slug: projectId },
   ).value;
   const recent = useMemo(
-    () =>
-      agentsState === undefined
-        ? []
-        : selectRecentlyActiveAgents(agentsState, RECENTLY_ACTIVE_AGENTS_LIMIT),
+    () => (agentsState === undefined ? [] : selectRecentlyActiveAgents(agentsState)),
     [agentsState],
   );
   const nowMs = useTickingNowMs(CLOCK_TICK_MS);
   const agentsLoading = agentsState === undefined;
 
   return (
-    <main
-      className="flex min-h-full flex-1 flex-col px-4 py-8 sm:px-6 sm:py-10"
-      data-testid="project-dashboard"
-    >
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-10">
+    <main className="flex min-h-full flex-1 flex-col p-4 md:p-8" data-testid="project-dashboard">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 pt-4 md:pt-8">
         {showContinueOnboarding ? (
           <Link
             to="/projects/$projectSlug/agents/streams/$"
@@ -67,18 +60,7 @@ export function ProjectDashboard({
           </Link>
         ) : null}
 
-        <section className="flex flex-col gap-4" aria-labelledby="start-thread-heading">
-          <div className="space-y-1">
-            <h1
-              id="start-thread-heading"
-              className="text-2xl font-semibold tracking-tight sm:text-3xl"
-            >
-              Start a new thread
-            </h1>
-            <p className="text-sm text-muted-foreground">Say what you need. We’ll open an agent.</p>
-          </div>
-          <NewAgentComposer projectId={projectId} projectSlug={projectSlug} />
-        </section>
+        <NewAgentComposer projectId={projectId} projectSlug={projectSlug} />
 
         <section className="flex flex-col gap-3" aria-labelledby="recent-agents-heading">
           <div className="flex items-baseline justify-between gap-3">
@@ -98,9 +80,12 @@ export function ProjectDashboard({
           {agentsLoading ? (
             <p className="py-6 text-sm text-muted-foreground">Loading agents…</p>
           ) : recent.length === 0 ? (
-            <p className="rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-              No agents yet — start one above.
-            </p>
+            <Empty>
+              <EmptyHeader>
+                <EmptyTitle>No agents yet</EmptyTitle>
+                <EmptyDescription>Message a new agent above to start one.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <ul className="grid gap-2 sm:grid-cols-2" data-testid="recent-agents-list">
               {recent.map((agent) => (

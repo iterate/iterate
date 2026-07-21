@@ -45,12 +45,13 @@ function ProjectHomePage() {
   // onboarding agent so the user watches the saga rather than waiting on the
   // create button.
   const handOffToOnboarding = welcome === true && ready && inOnboarding;
-  // Only the create/welcome flow shows the bootstrap checklist. Once ready and
-  // onboarding is done (or never started), fall through to the dashboard even
-  // if a stale `?welcome` is still on the URL.
-  const showWelcomeChecklist =
-    welcome === true &&
-    (lifecycle.value === undefined || !ready || inOnboarding || handOffToOnboarding);
+  // The checklist gates on the PROJECT's state, not the URL: any visit to a
+  // not-yet-ready project (second tab, bookmark) sees the creation saga, never
+  // a live dashboard. Before the first push we only know we're mid-create when
+  // the create flow's `?welcome` says so; the handoff case keeps the checklist
+  // up while its navigation is in flight.
+  const showChecklist =
+    lifecycle.value === undefined ? welcome === true : !ready || handOffToOnboarding;
 
   useEffect(() => {
     if (!handOffToOnboarding) return;
@@ -65,17 +66,19 @@ function ProjectHomePage() {
   }, [handOffToOnboarding, navigate, params.projectSlug]);
 
   // Drop a leftover `?welcome` once the checklist is no longer the right UI.
+  // A client-side effect (not beforeLoad) because the decision needs live
+  // project state that only exists after the LiveState push arrives.
   useEffect(() => {
-    if (welcome !== true || showWelcomeChecklist) return;
+    if (welcome !== true || showChecklist) return;
     void navigate({
       to: "/projects/$projectSlug",
       params: { projectSlug: params.projectSlug },
       search: {},
       replace: true,
     });
-  }, [navigate, params.projectSlug, showWelcomeChecklist, welcome]);
+  }, [navigate, params.projectSlug, showChecklist, welcome]);
 
-  if (showWelcomeChecklist) {
+  if (showChecklist) {
     return (
       <ProjectStreamView
         panel={<ProjectCreationProgress state={lifecycle.value} />}

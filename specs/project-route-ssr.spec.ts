@@ -13,8 +13,13 @@ test("project home hydrates the dashboard and REPL still server-renders", async 
   // hydrates after load rather than embedding the composer in the initial HTML.
   await page.goto(`/projects/${fixture.project.slug}`);
   await page.getByTestId("project-dashboard").waitFor();
-  await page.getByRole("heading", { name: "Start a new thread" }).waitFor();
-  await page.getByRole("textbox", { name: "Start a new thread" }).fill("Hello from dashboard");
+  await page.getByRole("textbox", { name: "Message a new agent" }).fill("Hello from dashboard");
+
+  // The legacy new-agent URL is a router redirect (server-side 3xx on a
+  // direct hit) to the project home.
+  await page.goto(`/projects/${fixture.project.slug}/agents/new`);
+  await page.getByTestId("project-dashboard").waitFor();
+  expect(new URL(page.url())).toMatchObject({ pathname: `/projects/${fixture.project.slug}` });
 
   const replResponse = await page.goto(`/projects/${fixture.project.slug}/repl`);
   if (replResponse === null) throw new Error("Direct project REPL navigation returned no response");

@@ -12,8 +12,9 @@ import {
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 /**
- * Former project-home surface: root stream + project settings side panel.
- * The lightweight dashboard now owns `/projects/$slug`.
+ * Project settings over the root stream, in the standard full-panel layout
+ * (like repos): the forms get the page, the root stream's events live in the
+ * header's Events sheet.
  */
 export const Route = createFileRoute("/_app/projects/$projectSlug/settings")({
   staticData: streamPageStaticData(),
@@ -38,24 +39,30 @@ function ProjectSettingsPage() {
     { slug: project.id },
   );
 
-  const panel =
-    lifecycle.value === undefined ? (
-      <div className="rounded-lg border p-4 text-sm text-muted-foreground" data-spinner="true">
-        Loading project…
+  const panel = (
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 p-4 md:p-8">
+        {lifecycle.value === undefined ? (
+          <p className="text-sm text-muted-foreground" data-spinner="true">
+            Loading project…
+          </p>
+        ) : (
+          <>
+            <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
+            <ProjectCustomDomainsSettings
+              projectId={project.id}
+              projectState={lifecycle.value}
+              routeConfig={routeConfig}
+            />
+          </>
+        )}
       </div>
-    ) : (
-      <>
-        <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
-        <ProjectCustomDomainsSettings
-          projectId={project.id}
-          projectState={lifecycle.value}
-          routeConfig={routeConfig}
-        />
-      </>
-    );
+    </div>
+  );
 
   return (
     <ProjectStreamView
+      layout="fullPanel"
       panel={panel}
       projectId={project.id}
       streamPath="/"

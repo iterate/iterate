@@ -39,7 +39,11 @@ import {
   type StreamInterrupt,
   type StreamMessageComposer,
 } from "~/components/stream-view-composer.tsx";
-import { StreamModeTabs, StreamViewHeader } from "~/components/stream-view-header.tsx";
+import {
+  StreamModeTabs,
+  StreamStateButton,
+  StreamViewHeader,
+} from "~/components/stream-view-header.tsx";
 import { feedItemsFilterFromSearch } from "~/lib/stream-feed-filters.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { useBrowserStreamMetrics, type BrowserStreamMetricsView } from "~/lib/stream-presence.ts";
@@ -324,9 +328,9 @@ function MirroredProjectStreamView({
     ? (presentedAgentUiState?.queuedUserMessages ?? [])
     : [];
 
-  // The feed column — mode body with inspectors on top, composer below. One JSX
-  // value so the split layout and the fullPanel Events sheet render the same
-  // thing.
+  // The feed column — mode body with inspectors on top. The composer joins it
+  // only in the split layout: the fullPanel Events sheet is an inspection
+  // surface, so it gets no composer at all.
   const feedColumn = (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -339,34 +343,36 @@ function MirroredProjectStreamView({
         />
       </div>
 
-      <div className="shrink-0 px-4 pb-2.5 pt-2.5">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          <div>
-            {/* Queued messages are part of the composer: the panel tucks
+      {layout === "fullPanel" ? null : (
+        <div className="shrink-0 px-4 pb-2.5 pt-2.5">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
+            <div>
+              {/* Queued messages are part of the composer: the panel tucks
                 behind the pill (painted first, overlapped via its negative
                 bottom margin) and grows the composer column, which the feed's
                 stick-to-bottom already follows on viewport resize. */}
-            <QueuedMessagesPanel
-              messages={queuedUserMessages}
-              isInterrupting={interrupt?.isInterrupting ?? false}
-              {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
-            />
-            <StreamViewComposer
-              autoFocusMessage={autoFocusMessageComposer}
-              {...(defaultComposerMode == null
-                ? caps.agentFeed
-                  ? { defaultMode: "message" as const }
-                  : { defaultMode: "raw" as const }
-                : { defaultMode: defaultComposerMode })}
-              interrupt={interrupt}
-              {...(messageComposer == null ? {} : { messageComposer })}
-              onNudgeDeliveries={nudgeDeliveries}
-              presence={presence}
-              store={store}
-            />
+              <QueuedMessagesPanel
+                messages={queuedUserMessages}
+                isInterrupting={interrupt?.isInterrupting ?? false}
+                {...(interrupt == null ? {} : { onInterrupt: interrupt.run })}
+              />
+              <StreamViewComposer
+                autoFocusMessage={autoFocusMessageComposer}
+                {...(defaultComposerMode == null
+                  ? caps.agentFeed
+                    ? { defaultMode: "message" as const }
+                    : { defaultMode: "raw" as const }
+                  : { defaultMode: defaultComposerMode })}
+                interrupt={interrupt}
+                {...(messageComposer == null ? {} : { messageComposer })}
+                onNudgeDeliveries={nudgeDeliveries}
+                presence={presence}
+                store={store}
+              />
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 
@@ -396,7 +402,7 @@ function MirroredProjectStreamView({
     return (
       <>
         {streamStateSheet}
-        <StreamEventsSheet streamPath={streamPath}>
+        <StreamEventsSheet streamPath={streamPath} metrics={metrics}>
           {filterRow}
           {feedColumn}
         </StreamEventsSheet>
@@ -655,9 +661,19 @@ function StreamInspectorSheet({
 /**
  * Full-panel layouts relegate the feed to this right-edge sheet behind the
  * header's Events button (`?events=true`). Children are the filter row +
- * feed column the split layout renders inline.
+ * feed column the split layout renders inline. The strip carries the same
+ * stream-state/latency button as the page header — the processors sheet
+ * stacks on top of this one.
  */
-function StreamEventsSheet({ children, streamPath }: { children: ReactNode; streamPath: string }) {
+function StreamEventsSheet({
+  children,
+  metrics,
+  streamPath,
+}: {
+  children: ReactNode;
+  metrics: BrowserStreamMetricsView;
+  streamPath: string;
+}) {
   const { search, setSearch } = useStreamViewSearch();
   const { eventsSheetOpen, openEventsSheet, closeEventsSheet } = useStreamViewPanels();
   return (
@@ -676,6 +692,7 @@ function StreamEventsSheet({ children, streamPath }: { children: ReactNode; stre
             {streamPath}
           </span>
           <div className="ml-auto flex items-center gap-1">
+            <StreamStateButton metrics={metrics} />
             <StreamModeTabs streamPath={streamPath} />
             <Button
               variant="ghost"
