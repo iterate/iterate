@@ -662,11 +662,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"private\": true,\n" +
       "  \"version\": \"0.0.0\",\n" +
       "  \"type\": \"module\",\n" +
-      "  \"description\": \"Iterate project worker. Runtime modules imported by worker.ts are supplied by the platform; devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"description\": \"Iterate project worker. The iterate runtime dependency is a throwaway pkg.pr.new preview proof; other runtime modules are supplied by the platform and devDependencies are only for local typechecking and editor support.\",\n" +
+      "  \"dependencies\": {\n" +
+      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\"\n" +
+      "  },\n" +
       "  \"devDependencies\": {\n" +
       "    \"@cloudflare/workers-types\": \"^4.20250620.0\",\n" +
       "    \"@iterate-com/capnweb\": \"0.10.0\",\n" +
-      "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"typescript\": \"^5.9.3\"\n" +
       "  }\n" +
       "}\n",

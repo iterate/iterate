@@ -34,9 +34,11 @@ test("template ships only the two deliberately basic app pairs", () => {
     dependencies?: Record<string, string>;
     devDependencies: Record<string, string>;
   };
-  // The seed needs no runtime packages because its root Worker uses platform
-  // virtual modules. This is a template choice, not a build restriction.
-  expect(templatePackageJson.dependencies).toBeUndefined();
+  // Throwaway PR #2175 adds only the package-installation proof dependency;
+  // normal seeded runtime surfaces still use platform virtual modules.
+  expect(templatePackageJson.dependencies).toEqual({
+    iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+  });
   expect(templatePackageJson.devDependencies).toMatchObject({
     "@iterate-com/capnweb": expect.any(String),
   });
@@ -73,9 +75,11 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
-    devDependencies: Record<string, string>;
+    dependencies: Record<string, string>;
   };
-  expect(templatePackageJson.devDependencies).toMatchObject({
+  // Throwaway PR #2175 deliberately makes this a runtime dependency so its
+  // non-virtual proof export must install before the homepage can render.
+  expect(templatePackageJson.dependencies).toMatchObject({
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });
