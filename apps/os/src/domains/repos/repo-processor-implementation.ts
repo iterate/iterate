@@ -130,54 +130,49 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         });
         const commitOid = push.afterCommitOid;
         if (commitOid === null || commitOid === undefined) break;
-        blockProcessorWhile(
-          "the commit fact derives from this one artifact push; a dropped append would lose the commit from the repo stream",
-          () =>
-            append({
-              type: "events.iterate.com/repo/commit-completed",
-              idempotencyKey: this.idempotencyKey(
-                `commit-completed:${push.beforeCommitOid ?? "none"}:${commitOid}:${push.branch}`,
-              ),
-              payload: {
-                beforeCommitOid: push.beforeCommitOid,
-                branch: push.branch,
-                commitOid,
-              },
-            }),
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/repo/commit-completed",
+            idempotencyKey: this.idempotencyKey(
+              `commit-completed:${push.beforeCommitOid ?? "none"}:${commitOid}:${push.branch}`,
+            ),
+            payload: {
+              beforeCommitOid: push.beforeCommitOid,
+              branch: push.branch,
+              commitOid,
+            },
+          }),
         );
         break;
       }
       case "events.iterate.com/repo/commit-completed": {
         if (state.defaultBranch === null || event.payload.branch !== state.defaultBranch) break;
-        blockProcessorWhile(
-          "task facts derive from this one commit event; a dropped append would silently lose the commit's task changes",
-          async () => {
-            // The tree diff is deterministic from the commit coordinates, so a
-            // redelivery re-appends identical bodies and dedupes on the keys.
-            const taskChanges = await this.deps.taskChangesForArtifactPush({
-              afterCommitOid: event.payload.commitOid,
-              beforeCommitOid: event.payload.beforeCommitOid,
-              branch: event.payload.branch,
-            });
-            if (taskChanges.length === 0) return;
-            await append(
-              ...taskChanges.map((change) => ({
-                type: `events.iterate.com/repo/task-${change.kind}` as
-                  | "events.iterate.com/repo/task-created"
-                  | "events.iterate.com/repo/task-updated"
-                  | "events.iterate.com/repo/task-deleted",
-                idempotencyKey: this.idempotencyKey(
-                  `task-${change.kind}:${event.payload.beforeCommitOid ?? "none"}:${event.payload.commitOid}:${change.path}`,
-                ),
-                payload: {
-                  branch: event.payload.branch,
-                  commitOid: event.payload.commitOid,
-                  path: change.path,
-                },
-              })),
-            );
-          },
-        );
+        blockProcessorWhile(async () => {
+          // The tree diff is deterministic from the commit coordinates, so a
+          // redelivery re-appends identical bodies and dedupes on the keys.
+          const taskChanges = await this.deps.taskChangesForArtifactPush({
+            afterCommitOid: event.payload.commitOid,
+            beforeCommitOid: event.payload.beforeCommitOid,
+            branch: event.payload.branch,
+          });
+          if (taskChanges.length === 0) return;
+          await append(
+            ...taskChanges.map((change) => ({
+              type: `events.iterate.com/repo/task-${change.kind}` as
+                | "events.iterate.com/repo/task-created"
+                | "events.iterate.com/repo/task-updated"
+                | "events.iterate.com/repo/task-deleted",
+              idempotencyKey: this.idempotencyKey(
+                `task-${change.kind}:${event.payload.beforeCommitOid ?? "none"}:${event.payload.commitOid}:${change.path}`,
+              ),
+              payload: {
+                branch: event.payload.branch,
+                commitOid: event.payload.commitOid,
+                path: change.path,
+              },
+            })),
+          );
+        });
         break;
       }
       case "events.iterate.com/github/webhook-received": {
@@ -201,18 +196,16 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         // webhook opens an obligation; the at-head pass below imports GitHub
         // without holding the cursor. The resulting Artifacts queue event
         // remains the ONLY source of commit-completed/task facts.
-        blockProcessorWhile(
-          "the webhook is delivered once; a dropped import request would lose the push's only trigger",
-          () =>
-            append({
-              type: "events.iterate.com/repo/github-import-requested",
-              idempotencyKey: this.idempotencyKey("github-import-requested", event),
-              payload: {
-                branch: push.branch,
-                requestId: `${event.path}:${event.offset}`,
-                requestedCommitOid: push.afterCommitOid,
-              },
-            }),
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/repo/github-import-requested",
+            idempotencyKey: this.idempotencyKey("github-import-requested", event),
+            payload: {
+              branch: push.branch,
+              requestId: `${event.path}:${event.offset}`,
+              requestedCommitOid: push.afterCommitOid,
+            },
+          }),
         );
         break;
       }

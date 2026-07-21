@@ -655,8 +655,8 @@ export class StreamProcessorRunner<
             previousState: reduction.previousState,
             state: reduction.state,
             delivery,
-            blockProcessorWhile: (reason, work) => {
-              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work, reason));
+            blockProcessorWhile: (work) => {
+              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work, true));
               eventChain = attempt;
               startedBlockers.push(attempt);
             },
@@ -705,8 +705,8 @@ export class StreamProcessorRunner<
           previousState: ctx.state,
           state: ctx.state,
           delivery,
-          blockProcessorWhile: (reason, work) => {
-            const attempt = passChain.then(() => this.#keepAliveBackedWork(work, reason));
+          blockProcessorWhile: (work) => {
+            const attempt = passChain.then(() => this.#keepAliveBackedWork(work, true));
             passChain = attempt;
             startedBlockers.push(attempt);
           },
@@ -1020,7 +1020,7 @@ export class StreamProcessorRunner<
    * plain `keepAlive` hook, else run directly. Same fire-and-forget→promise
    * bridge as the legacy `#runKeepAliveBackedWork`.
    */
-  async #keepAliveBackedWork(work: () => Promise<unknown>, blockReason?: string): Promise<unknown> {
+  async #keepAliveBackedWork(work: () => Promise<unknown>, isBlocked = false): Promise<unknown> {
     const keepAliveWhile = this.durability?.recovery?.keepAliveWhile ?? this.keepAlive;
     try {
       if (keepAliveWhile === undefined) return await work();
@@ -1037,13 +1037,9 @@ export class StreamProcessorRunner<
         });
       });
     } catch (error) {
-      // Name WHICH blocker failed (the frame-level error cannot); the frame
-      // still fails and retries — this log adds context, not handling.
-      if (blockReason !== undefined) {
-        console.error(
-          `stream processor blocked work failed (${this.driver.contract.slug}: ${blockReason})`,
-          error,
-        );
+      // The frame still fails and retries — this log adds context, not handling.
+      if (isBlocked) {
+        console.error(`stream processor blocked work failed (${this.driver.contract.slug})`, error);
       }
       throw error;
     }

@@ -55,7 +55,7 @@ class EchoExampleProcessor extends StreamProcessor<EchoExampleContract> {
   ): undefined {
     const event = args.event;
     if (event === null) return;
-    args.blockProcessorWhile("test echo append", () =>
+    args.blockProcessorWhile(() =>
       args.append({
         type: "events.iterate.com/echo-example/output-echoed",
         payload: { echoedOffset: event.offset },

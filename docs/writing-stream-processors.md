@@ -89,19 +89,19 @@ different settle policy).
 ## Two primitives, two guarantees
 
 This is the normal delivery-semantics trade-off, spelled as two helpers.
-`blockProcessorWhile(reason, work)` gives the work **at-least-once** semantics
+`blockProcessorWhile(work)` gives the work **at-least-once** semantics
 (the checkpoint is held; a crash means redelivery; idempotency keys collapse
-the re-run). The `reason` is a required one-sentence justification for why the
-next event must wait — blocking is the exception, so name the per-event
-consequence that would be lost forever if the append were dropped.
+the re-run). Blocking is the exception, so justify it in a call-site comment:
+name the per-event consequence that would be lost forever if the append were
+dropped.
 `runInBackground` alone gives **at-most-once**: the checkpoint
 advances immediately and an eviction loses the closure. Every side effect in
 a `process*` hook must pick one deliberately:
 
-| Primitive                           | Guarantee                                                                              | On eviction                                                   | Use for                                            |
-| ----------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
-| `blockProcessorWhile(reason, work)` | at-least-once: checkpoint held, crash ⇒ redelivery, idempotency keys dedupe the re-run | batch redelivered by the spine (lag is visible stream-side)   | **short** must-happen work: appends, forwards      |
-| `runInBackground(work)`             | a **droppable attempt**: checkpoint advances, eviction loses the closure silently      | gone — no evidence, no retry, unless _you_ wrote the recovery | attempts whose _outcome_ something else guarantees |
+| Primitive                   | Guarantee                                                                              | On eviction                                                   | Use for                                            |
+| --------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+| `blockProcessorWhile(work)` | at-least-once: checkpoint held, crash ⇒ redelivery, idempotency keys dedupe the re-run | batch redelivered by the spine (lag is visible stream-side)   | **short** must-happen work: appends, forwards      |
+| `runInBackground(work)`     | a **droppable attempt**: checkpoint advances, eviction loses the closure silently      | gone — no evidence, no retry, unless _you_ wrote the recovery | attempts whose _outcome_ something else guarantees |
 
 `blockProcessorWhile` is not for long work: it head-of-line-blocks every later
 event — including the cancellation the user is frantically sending.
