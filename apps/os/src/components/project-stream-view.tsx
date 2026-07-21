@@ -266,11 +266,10 @@ function MirroredProjectStreamView({
     streamPath,
   });
 
-  const streamIsLive =
-    snapshot.connectionStatus === "subscribed" ||
-    (snapshot.connectionStatus === "connected" && snapshot.subscriptionStatus === "follower");
+  const streamIsConnected =
+    snapshot.connectionStatus === "connected" || snapshot.connectionStatus === "subscribed";
   const connectionLabel =
-    snapshot.connectionError ?? (streamIsLive ? emptyLabel : snapshot.connectionStatus);
+    snapshot.connectionError ?? (streamIsConnected ? emptyLabel : snapshot.connectionStatus);
   // Busy = work is actively running, independent of chat-message timing.
   const agentBusy = isAgentUiActivityWorking(presentedAgentUiState?.live ?? null, agentRuntime);
   const presence = presentedAgentUiState?.presence ?? [];
@@ -318,7 +317,7 @@ function MirroredProjectStreamView({
       {...(caps.agentFeed ? { onInspectScriptExecution: panels.inspectScriptExecution } : {})}
       emptyLabel={connectionLabel}
       projectSlug={projectSlug}
-      isPending={agentUiState == null && !streamIsLive}
+      isPending={agentUiState == null && !streamIsConnected}
     />
   );
 
@@ -343,7 +342,7 @@ function MirroredProjectStreamView({
 
       <div className="shrink-0 px-4 pb-2.5 pt-2.5">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
-          {eventCount > 0 && !streamIsLive ? (
+          {eventCount > 0 && !streamIsConnected ? (
             <p
               className="px-4 text-xs text-muted-foreground"
               data-testid="stream-cache-status"
@@ -363,7 +362,7 @@ function MirroredProjectStreamView({
             <QueuedMessagesPanel
               messages={queuedUserMessages}
               isInterrupting={interrupt?.isInterrupting ?? false}
-              {...(interrupt == null || !streamIsLive ? {} : { onInterrupt: interrupt.run })}
+              {...(interrupt == null || !streamIsConnected ? {} : { onInterrupt: interrupt.run })}
             />
             <StreamViewComposer
               autoFocusMessage={autoFocusMessageComposer}
@@ -377,7 +376,7 @@ function MirroredProjectStreamView({
               onNudgeDeliveries={nudgeDeliveries}
               presence={presence}
               store={store}
-              disabled={!streamIsLive}
+              disabled={!streamIsConnected}
             />
           </div>
         </div>
