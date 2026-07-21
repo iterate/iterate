@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   isStreamUnavailableError,
   rethrowStreamUnavailable,
+  retryIdempotentDurableObjectOperation,
   retryStreamUnavailableOnce,
   STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
@@ -27,6 +29,53 @@ describe("isDurableObjectLifecycleError", () => {
     ["undefined", undefined, false],
   ])("%s → %s", (_name, error, expected) => {
     expect(isDurableObjectLifecycleError(error)).toBe(expected);
+  });
+});
+
+describe("retryIdempotentDurableObjectOperation", () => {
+  it("retries one locally wrapped lifecycle failure", async () => {
+    const reset = withFlag("durableObjectReset");
+    const wrapped = new Error("agent collection could not catch up", { cause: reset });
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(wrapped)
+      .mockResolvedValueOnce("recovered");
+    const onRetry = vi.fn();
+
+    await expect(retryIdempotentDurableObjectOperation({ operation, onRetry })).resolves.toBe(
+      "recovered",
+    );
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledWith({ attempt: 1, error: wrapped, maxAttempts: 2 });
+  });
+
+  it("recognises the stream wire tag and stops after one retry", async () => {
+    const first = new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}code updated`);
+    const terminal = withFlag("overloaded");
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(first)
+      .mockRejectedValueOnce(terminal);
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).rejects.toBe(terminal);
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(isRetryableDurableObjectAvailabilityError(first)).toBe(true);
+  });
+
+  it("never retries an application failure or loops over cyclic causes", async () => {
+    const applicationError = new Error("invalid event");
+    const operation = vi.fn(async () => {
+      throw applicationError;
+    });
+    const first = new Error("first");
+    const second = new Error("second", { cause: first });
+    Object.defineProperty(first, "cause", { value: second });
+
+    await expect(retryIdempotentDurableObjectOperation({ operation })).rejects.toBe(
+      applicationError,
+    );
+    expect(operation).toHaveBeenCalledOnce();
+    expect(isRetryableDurableObjectAvailabilityError(first)).toBe(false);
   });
 });
 

@@ -745,6 +745,7 @@ function subscriptionConfiguredEvent(input: {
   // Stream Durable Object itself is the trust boundary.
   return {
     type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `test/subscription-configured:${input.subscriptionKey}`,
     payload: {
       subscriptionKey: input.subscriptionKey,
       delivery: input.delivery,

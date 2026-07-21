@@ -225,7 +225,6 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
-  WorkerBuilderDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**

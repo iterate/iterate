@@ -49,6 +49,47 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
 }
 
 /**
+ * Whether an idempotent caller may replay a Durable Object operation after
+ * either a direct workerd lifecycle rejection or a nested Stream rejection
+ * that crossed RPC with the explicit stream-unavailable tag.
+ *
+ * Domain code commonly wraps infrastructure failures with useful context, so
+ * inspect the local cause chain as well. Cycles are rejected rather than
+ * turning classification into unbounded work.
+ */
+export function isRetryableDurableObjectAvailabilityError(error: unknown): boolean {
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null) {
+    if (isDurableObjectLifecycleError(candidate) || isStreamUnavailableError(candidate)) {
+      return true;
+    }
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Replay one explicitly idempotent Durable Object operation on a fresh
+ * incarnation. The operation gets exactly one retry; a second availability
+ * failure is authoritative and application failures are never replayed.
+ */
+export async function retryIdempotentDurableObjectOperation<Result>(args: {
+  operation: () => Promise<Result>;
+  onRetry?: (context: { attempt: number; error: unknown; maxAttempts: 2 }) => void;
+}): Promise<Result> {
+  try {
+    return await args.operation();
+  } catch (error) {
+    if (!isRetryableDurableObjectAvailabilityError(error)) throw error;
+    args.onRetry?.({ attempt: 1, error, maxAttempts: 2 });
+    return await args.operation();
+  }
+}
+
+/**
  * Rethrow `error` tagged with {@link STREAM_UNAVAILABLE_MESSAGE_PREFIX} when
  * it is a DO-lifecycle failure, unchanged otherwise. `.catch` this onto stream
  * stub calls that return plain data promises — never onto ones returning

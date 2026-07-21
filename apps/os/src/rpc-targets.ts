@@ -185,9 +185,10 @@ import type {
 } from "./domains/workers/schemas.ts";
 import { retainProcessEventBatch } from "./domains/streams/subscriber-sinks.ts";
 import {
-  isDurableObjectLifecycleError,
+  isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
+  retryIdempotentDurableObjectOperation,
   retryStreamUnavailableOnce,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
@@ -261,6 +262,7 @@ import {
   capabilityHostCreationEvents,
   type CapabilityHostCreateInput,
 } from "./domains/capability-host/capability-host-defaults.ts";
+import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -534,7 +536,23 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    const result = await this.durableObjectStub.append(...events).catch(rethrowStreamUnavailable);
+    const append = () => Promise.resolve(this.durableObjectStub.append(...events));
+    const result = await (
+      events.every(
+        (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
+      )
+        ? retryIdempotentDurableObjectOperation({
+            operation: append,
+            onRetry: ({ error }) => {
+              console.info("keyed stream append retrying after Durable Object reset", {
+                error,
+                path: this.props.path,
+                projectId: this.props.projectId,
+              });
+            },
+          })
+        : append()
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -553,7 +571,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
-    const result = await this.durableObjectStub.getEvent(args).catch(rethrowStreamUnavailable);
+    const result = await this.#read("getEvent", () =>
+      Promise.resolve(this.durableObjectStub.getEvent(args)),
+    ).catch(rethrowStreamUnavailable);
     if (result === undefined) return undefined;
     return detachPlainRpcResult(result);
   }
@@ -566,7 +586,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * shows you the beginning, not the head.
    */
   async getEvents(args?: StreamEventReadInput): Promise<StreamEvent[]> {
-    const result = await this.durableObjectStub.getEvents(args).catch(rethrowStreamUnavailable);
+    const result = await this.#read("getEvents", () =>
+      Promise.resolve(this.durableObjectStub.getEvents(args)),
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
   }
 
@@ -689,9 +711,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async getProcessorRuntimeState(args: {
     subscriptionKey: string;
   }): Promise<ProcessorRuntimeState | null> {
-    const result = await this.durableObjectStub
-      .getProcessorRuntimeState(args)
-      .catch(rethrowStreamUnavailable);
+    const result = await this.#read("getProcessorRuntimeState", () =>
+      Promise.resolve(this.durableObjectStub.getProcessorRuntimeState(args)),
+    ).catch(rethrowStreamUnavailable);
     return result === null ? null : detachPlainRpcResult(result);
   }
 
@@ -707,8 +729,24 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   async runtimeState(): Promise<StreamRuntimeDebugState> {
-    const result = await this.durableObjectStub.runtimeState().catch(rethrowStreamUnavailable);
+    const result = await this.#read("runtimeState", () =>
+      Promise.resolve(this.durableObjectStub.runtimeState()),
+    ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryIdempotentDurableObjectOperation({
+      operation: call,
+      onRetry: ({ error }) => {
+        console.info("stream read retrying after Durable Object reset", {
+          error,
+          operation,
+          path: this.props.path,
+          projectId: this.props.projectId,
+        });
+      },
+    });
   }
 
   /** Push-driven stream runtime state for polling-free debug surfaces. */
@@ -1883,7 +1921,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   }
 
   whoami(): Promise<string> {
-    return Promise.resolve(this.durableObjectStub.whoami());
+    return this.#read("whoami", () => Promise.resolve(this.durableObjectStub.whoami()));
   }
 
   /** Restart the workspace's server-side object; the next request boots it fresh. */
@@ -1901,7 +1939,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** The folded configuration (birth certificate + configured patches). */
   getConfig(): Promise<WorkspaceConfig> {
-    return this.durableObjectStub.getConfig();
+    return this.#read("getConfig", () => this.durableObjectStub.getConfig());
   }
 
   /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */
@@ -1911,17 +1949,17 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null> {
-    return this.durableObjectStub.readFile(path);
+    return this.#read("readFile", () => this.durableObjectStub.readFile(path));
   }
 
   /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null> {
-    return this.durableObjectStub.readFileBytes(path);
+    return this.#read("readFileBytes", () => this.durableObjectStub.readFileBytes(path));
   }
 
   /** Whether a path exists in the merged view. */
   exists(path: string): Promise<boolean> {
-    return this.durableObjectStub.exists(path);
+    return this.#read("exists", () => this.durableObjectStub.exists(path));
   }
 
   /** Write one file into the private overlay. */
@@ -1946,12 +1984,12 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
 
   /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */
   listAllFiles(): Promise<string[]> {
-    return this.durableObjectStub.listAllFiles();
+    return this.#read("listAllFiles", () => this.durableObjectStub.listAllFiles());
   }
 
   /** Merged file paths matching a glob pattern. */
   glob(pattern: string): Promise<string[]> {
-    return this.durableObjectStub.glob(pattern);
+    return this.#read("glob", () => this.durableObjectStub.glob(pattern));
   }
 
   /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */
@@ -1967,6 +2005,15 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /** Per-mount git surface. */
   get git(): WorkspaceGitRpcTarget {
     return new WorkspaceGitRpcTarget(this.props);
+  }
+
+  #read<Result>(operation: string, call: () => Promise<Result>): Promise<Result> {
+    return retryIdempotentWorkspaceRead({
+      call,
+      operation,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 }
 
@@ -2009,7 +2056,12 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** Changes grouped by owning mount, plus the unmounted local scratch. */
   status(): Promise<WorkspaceStatus> {
-    return this.durableObjectStub.gitStatus();
+    return retryIdempotentWorkspaceRead({
+      call: () => this.durableObjectStub.gitStatus(),
+      operation: "git.status",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
 
   /** Commit one mount's changes to its repo's main branch. */
@@ -2019,8 +2071,32 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
 
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]> {
-    return this.durableObjectStub.gitLog(input);
+    return retryIdempotentWorkspaceRead({
+      call: () => this.durableObjectStub.gitLog(input),
+      operation: "git.log",
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
   }
+}
+
+function retryIdempotentWorkspaceRead<Result>(input: {
+  call: () => Promise<Result>;
+  operation: string;
+  path: string;
+  projectId: string;
+}): Promise<Result> {
+  return retryIdempotentDurableObjectOperation({
+    operation: input.call,
+    onRetry: ({ error }) => {
+      console.info("workspace read retrying after Durable Object reset", {
+        error,
+        operation: input.operation,
+        path: input.path,
+        projectId: input.projectId,
+      });
+    },
+  });
 }
 
 /** Secret catalog within one project. */
@@ -4036,12 +4112,11 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     const birthOffset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
     if (birthOffset === 0) throw new Error("agent create committed no events");
 
-    const agentCollection = env.AGENT_COLLECTION.getByName(
-      DurableObjectNameCodec.stringify({
-        projectId: this.#props.projectId,
-        path: AGENT_COLLECTION_PATH,
-      }),
-    );
+    const agentCollectionName = DurableObjectNameCodec.stringify({
+      projectId: this.#props.projectId,
+      path: AGENT_COLLECTION_PATH,
+    });
+    const agentCollectionDeadline = Date.now() + PROCESSOR_BIRTH_WAIT_TIMEOUT_MS;
     await Promise.all([
       this.processor.waitUntilProcessed({
         offset: birthOffset,
@@ -4051,9 +4126,23 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         offset: birthOffset,
         timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
       }),
-      agentCollection.waitUntilAgentCreated({
-        path: this.#path,
-        timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+      retryIdempotentDurableObjectOperation({
+        operation: async () => {
+          const timeoutMs = Math.ceil(agentCollectionDeadline - Date.now());
+          if (timeoutMs <= 0) {
+            throw new Error(`agent collection creation barrier timed out for ${this.#path}`);
+          }
+          await env.AGENT_COLLECTION.getByName(agentCollectionName).waitUntilAgentCreated({
+            path: this.#path,
+            timeoutMs,
+          });
+        },
+        onRetry: ({ error }) => {
+          console.warn("agent collection call restarting after Durable Object reset", {
+            error,
+            path: this.#path,
+          });
+        },
       }),
       workspaceReady,
     ]);
@@ -4742,7 +4831,22 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
     executionId: string;
     result: unknown;
   }> {
-    return await this.#durableObject.runScript(code);
+    const command = {
+      code,
+      executionId: crypto.randomUUID(),
+      expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
+    };
+    return await retryIdempotentDurableObjectOperation({
+      operation: async () => await this.#durableObject.runScript(command),
+      onRetry: ({ error }) => {
+        console.info("script run rejoining after Durable Object reset", {
+          error,
+          executionId: command.executionId,
+          path: this.#props.path,
+          projectId: this.#props.projectId,
+        });
+      },
+    });
   }
 
   /** Restart this scope's server-side object; the next request boots it fresh. */
@@ -6523,7 +6627,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
         return acquired;
       }
       if (acquired.status === "rejected") {
-        if (attempt === 1 && isDurableObjectLifecycleError(acquired.error)) {
+        if (attempt === 1 && isRetryableDurableObjectAvailabilityError(acquired.error)) {
           console.info("processor relay retrying after Durable Object lifecycle reset");
           continue;
         }
@@ -6548,7 +6652,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       if (
         outcome.status === "rejected" &&
         attempt === 1 &&
-        isDurableObjectLifecycleError(outcome.error)
+        isRetryableDurableObjectAvailabilityError(outcome.error)
       ) {
         // Deploys and evictions may reset a processor-hosting DO while its
         // facade property or method call is in flight. A fresh host stub

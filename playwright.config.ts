@@ -64,7 +64,9 @@ export default defineConfig({
     actionTimeout: videoMode ? 10_000 : SPEC_ACTION_TIMEOUT_MS,
     baseURL: osBaseUrl,
     screenshot: "only-on-failure",
-    trace: process.env.CI ? "on-first-retry" : "retain-on-failure",
+    // Preserve the original failure's network evidence; successful attempts
+    // still discard their traces.
+    trace: "retain-on-failure",
     video: videoMode ? "on" : videoArtifactsEnabled ? "retain-on-failure" : "off",
   },
   projects: [
