@@ -21,6 +21,7 @@ export const Route = createFileRoute("/api/$")({
               ? {
                   userId: context.iterateAuthSession.user.id,
                   email: context.iterateAuthSession.user.email || undefined,
+                  image: context.iterateAuthSession.user.picture || undefined,
                   name: context.iterateAuthSession.user.name || undefined,
                 }
               : null,

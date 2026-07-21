@@ -16,6 +16,7 @@ const ProjectAppSessionClaims = z
     email: z.string().trim().min(1).max(320).optional(),
     exp: z.number().int(),
     iat: z.number().int(),
+    image: z.string().trim().min(1).max(2048).optional(),
     name: z.string().trim().min(1).max(256).optional(),
     projectId: z.string().trim().min(1).max(256),
     type: z.literal("project-app-session"),
@@ -48,6 +49,7 @@ export async function mintProjectAppSession(
       {
         audience: input.audience,
         ...(input.email === undefined ? {} : { email: input.email }),
+        ...(input.image === undefined ? {} : { image: input.image }),
         ...(input.name === undefined ? {} : { name: input.name }),
         projectId: input.projectId,
         type: "project-app-session",
@@ -92,6 +94,7 @@ function parseMintInput(input: MintProjectAppSessionInput) {
   return {
     audience: parseAudience(input.audience),
     email: optionalDisplayField(input.email, 320),
+    image: optionalDisplayField(input.image, 2048),
     name: optionalDisplayField(input.name, 256),
     projectId: z.string().trim().min(1).max(256).parse(input.projectId),
     userId: z.string().trim().min(1).max(256).parse(input.userId),
