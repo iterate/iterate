@@ -6,6 +6,7 @@
 
 import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
+import { isIdempotencyConflict } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/sdk";
 import {
   e2eStreamPath,
@@ -309,7 +310,7 @@ describe("stream capnweb protocol", () => {
         ...event,
         payload: { n: 2 },
       }),
-    ).rejects.toThrow('idempotency key "same-batch" already names a different event');
+    ).rejects.toSatisfy(isIdempotencyConflict);
     await expect(
       stream.stream
         .getEvents({ afterOffset: 0 })

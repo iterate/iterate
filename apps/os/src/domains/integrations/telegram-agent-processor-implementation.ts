@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { ConsumedEvent, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "../capability-host/capability-host-processor-contract.ts";
 import {
@@ -426,8 +426,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
     try {
       await append(...events);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+      if (!isIdempotencyConflict(error)) throw error;
     }
   }
 
