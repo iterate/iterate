@@ -4983,11 +4983,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /**
    * Register (for a prospective slug), append the complete root birth batch,
-   * drive both armed processors through it, wait for `project/ready`, and
-   * return this same handle. Addressing an unknown slug is side-effect free.
+   * and drive both armed processors through it. By default, also wait for
+   * `project/ready`; pass `waitUntilReady: false` when the caller renders
+   * bootstrap progress itself. Either lane returns this same handle, and
+   * addressing an unknown slug is side-effect free.
    */
   async create(
     args: { organizationSlug?: string; projectId?: string } = {},
+    options?: { waitUntilReady?: boolean },
   ): Promise<ProjectRpcTarget> {
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
@@ -5107,7 +5110,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         }),
       ]),
     );
-    await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
+    if (options?.waitUntilReady !== false) {
+      await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
+    }
     return this;
   }
 
@@ -5174,8 +5179,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Resolve once the bootstrap saga has committed `project/ready`. Replays
    * stream history first, so an already-ready project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
-   * observing. `create()` already waits here; this remains useful when a
-   * caller receives an existing handle while a bootstrap is in flight.
+   * observing. `create()` waits here by default; this remains useful after a
+   * non-blocking create or when a caller receives an existing handle while a
+   * bootstrap is in flight.
    */
   async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
     // snapshot() pulls the journal through the registry's catch-up, so this

@@ -82,10 +82,15 @@ export interface Project {
   projectId: string;
   /**
    * Register (for a prospective slug), append the complete root birth batch,
-   * drive both armed processors through it, wait for `project/ready`, and
-   * return this same handle. Addressing an unknown slug is side-effect free.
+   * and drive both armed processors through it. By default, also wait for
+   * `project/ready`; pass `waitUntilReady: false` when the caller renders
+   * bootstrap progress itself. Either lane returns this same handle, and
+   * addressing an unknown slug is side-effect free.
    */
-  create(args: { organizationSlug?: string; projectId?: string }): Promise<Project>;
+  create(
+    args: { organizationSlug?: string; projectId?: string },
+    options?: { waitUntilReady?: boolean },
+  ): Promise<Project>;
   /**
    * Canonical identity from the project directory: id, slug (the auth
    * worker's normalized form — what URLs and ingress hostnames use),
@@ -98,8 +103,9 @@ export interface Project {
    * Resolve once the bootstrap saga has committed `project/ready`. Replays
    * stream history first, so an already-ready project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
-   * observing. `create()` already waits here; this remains useful when a
-   * caller receives an existing handle while a bootstrap is in flight.
+   * observing. `create()` waits here by default; this remains useful after a
+   * non-blocking create or when a caller receives an existing handle while a
+   * bootstrap is in flight.
    */
   waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
   /**

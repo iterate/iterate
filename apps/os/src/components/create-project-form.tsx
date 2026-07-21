@@ -52,12 +52,14 @@ export function CreateProjectForm({
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
       const session = await connectIterateSession();
-      // Create registers the slug, appends the atomic birth batch, drives both
-      // root processors, and resolves only after project/ready, returning the
-      // same addressed handle.
-      const project = await session.projects.get(input.slug).create({
-        ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
-      });
+      // The project page renders bootstrap progress, so wait through the
+      // atomic birth and both root processors but not project/ready.
+      const project = await session.projects.get(input.slug).create(
+        {
+          ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
+        },
+        { waitUntilReady: false },
+      );
       // Navigate to the server's canonical slug, not the form's: auth may
       // normalize it (reserved names, all-numeric).
       const identity = await project.identity();
@@ -65,7 +67,8 @@ export function CreateProjectForm({
     },
     onSuccess: ({ slug }) => {
       setNavigatingAway(true);
-      // The project is ready; `welcome` hands the new owner into onboarding.
+      // The project home plays bootstrap progress from live state, then
+      // `welcome` hands the new owner into onboarding once ready.
       void router.navigate({
         to: "/projects/$projectSlug",
         params: { projectSlug: slug },

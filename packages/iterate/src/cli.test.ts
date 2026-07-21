@@ -47,7 +47,7 @@ const createFakeSession = (input: {
   listError?: unknown;
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
   description?: { principal: string };
-  onProjectCreate?: (args: unknown) => void;
+  onProjectCreate?: (args: unknown, options: unknown) => void;
   projects?: Array<{
     deploymentStatus: "missing" | "ready" | "unknown";
     id: string;
@@ -71,8 +71,8 @@ const createFakeSession = (input: {
       }),
       projects: {
         get: (_slug: string) => ({
-          create: async (args: unknown) => {
-            input.onProjectCreate?.(args);
+          create: async (args: unknown, options: unknown) => {
+            input.onProjectCreate?.(args, options);
             return {
               [Symbol.dispose]: disposeProject,
             };
@@ -407,9 +407,11 @@ describe("resolveChatProject", () => {
 
   test("sets up the only missing accessible project before selecting it for chat", async () => {
     let createArgs: unknown;
+    let createOptions: unknown;
     const fake = createFakeSession({
-      onProjectCreate: (args) => {
+      onProjectCreate: (args, options) => {
         createArgs = args;
+        createOptions = options;
       },
       projects: [
         {
@@ -436,14 +438,17 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_missing",
     });
+    expect(createOptions).toEqual({ waitUntilReady: false });
     expect(fake.disposeProject).toHaveBeenCalledOnce();
   });
 
   test("resolves and sets up a configured project slug when it is missing", async () => {
     let createArgs: unknown;
+    let createOptions: unknown;
     const fake = createFakeSession({
-      onProjectCreate: (args) => {
+      onProjectCreate: (args, options) => {
         createArgs = args;
+        createOptions = options;
       },
       projects: [
         {
@@ -471,13 +476,16 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_default",
     });
+    expect(createOptions).toEqual({ waitUntilReady: false });
   });
 
   test("passes the organization slug when setting up a missing project", async () => {
     let createArgs: unknown;
+    let createOptions: unknown;
     const fake = createFakeSession({
-      onProjectCreate: (args) => {
+      onProjectCreate: (args, options) => {
         createArgs = args;
+        createOptions = options;
       },
       projects: [
         {
@@ -505,6 +513,7 @@ describe("resolveChatProject", () => {
       organizationSlug: "acme",
       projectId: "prj_org_project",
     });
+    expect(createOptions).toEqual({ waitUntilReady: false });
   });
 
   test("rejects a configured project slug that is not accessible", async () => {
