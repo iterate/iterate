@@ -549,7 +549,7 @@ ever wanted.
 
 ### E1. `docs/writing-stream-processors.md` teaches the pre-#2168 contract
 
-**Status:** in-pr. **Urgent and free.**
+**Status:** in-pr #2188. **Urgent and free.**
 
 - `:199-201` and `:290-292` narrate `llm-request-scheduled` and
   `llm-request-completed {failure: orphaned}` — both deleted by #2168 (the
@@ -622,7 +622,7 @@ three files become greppable checks of each other.
 
 ### E6. At-head memo repaint pattern
 
-**Status:** in-pr (one sentence).
+**Status:** in-pr #2188 (one sentence).
 
 slack-agent `#unpaintedPresenceFact` (`:91-109,525-588`) and telegram-agent
 `#unpaintedTypingFact` (`:75-79,296-308`) deliberately mirror each other with
