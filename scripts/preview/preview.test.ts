@@ -54,6 +54,7 @@ const {
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestTargetPlan,
   resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
@@ -603,6 +604,45 @@ describe("auth preview root secrets", () => {
 });
 
 describe("preview test commands", () => {
+  test("builds a focused Vitest invocation from the OS app", () => {
+    expect(
+      resolvePreviewTestTargetPlan({
+        grep: "Agent scripts can send web-chat messages",
+        repositoryRoot: repoRoot,
+        runner: "vitest",
+        target: "e2e/vitest/itx-agents.e2e.test.ts",
+      }),
+    ).toEqual({
+      args: [
+        "e2e",
+        "--project",
+        "node",
+        "e2e/vitest/itx-agents.e2e.test.ts",
+        "--testNamePattern",
+        "Agent scripts can send web-chat messages",
+      ],
+      command: "pnpm",
+      telemetryFile: resolve(repoRoot, "test-results/preview-target-vitest.json"),
+      workingDirectory: resolve(repoRoot, "apps/os"),
+    });
+  });
+
+  test("builds a focused Playwright invocation from the repository root", () => {
+    expect(
+      resolvePreviewTestTargetPlan({
+        grep: "discarding a new file",
+        repositoryRoot: repoRoot,
+        runner: "playwright",
+        target: "specs/repo-ide.spec.ts",
+      }),
+    ).toEqual({
+      args: ["spec", "specs/repo-ide.spec.ts", "--grep", "discarding a new file"],
+      command: "pnpm",
+      telemetryFile: resolve(repoRoot, "test-results/playwright-results.json"),
+      workingDirectory: repoRoot,
+    });
+  });
+
   test("normalizes OS preview artifacts before Depot upload", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
