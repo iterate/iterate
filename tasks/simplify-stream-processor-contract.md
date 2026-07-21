@@ -163,7 +163,8 @@ clean tests. See the last section.
   transcriptions — the event is delivered once and never again) use
   `blockProcessorWhile`; state-derived consequences (anything under
   `delivery.caughtUp` that a later delivery would re-derive) use
-  `runInBackground`. Don't block without stating the reason at the site.
+  `runInBackground`. `blockProcessorWhile` takes only the work function; don't
+  block without justifying it in a call-site comment.
 - **Events that must never be durable declare `ephemeral: true` in the
   contract** (EventDefinition flag): every append/parse lane then defaults
   the envelope flag to true and rejects `ephemeral: false`.

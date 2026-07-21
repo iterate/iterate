@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { useAuthClient } from "@iterate-com/auth/client";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
 import {
@@ -48,6 +49,7 @@ import {
   useStreamViewPanels,
   useStreamViewSearch,
 } from "~/lib/stream-view-search.ts";
+import type { BrowserStreamSubscriberUser } from "~/domains/streams/client-libraries/browser/browser-subscriber.ts";
 
 type ItxStreamSource = (streamPath: string) => Stream | Promise<Stream>;
 
@@ -170,9 +172,22 @@ function MirroredProjectStreamView({
   streamSource,
   streamPath,
 }: ProjectStreamViewProps) {
+  const { session: authSession } = useAuthClient();
+  const subscriberUser = useMemo<BrowserStreamSubscriberUser | undefined>(() => {
+    if (!authSession?.authenticated) return undefined;
+    const name = authSession.user.name?.trim();
+    const picture = authSession.user.picture?.trim();
+    return {
+      id: authSession.user.id,
+      email: authSession.user.email,
+      ...(name === undefined || name === "" ? {} : { name }),
+      ...(picture === undefined || picture === "" ? {} : { picture }),
+    };
+  }, [authSession]);
   const { resolvedStreamSource, store, snapshot } = useProjectStreamMirror({
     projectId,
     resetStreamSourceTransport,
+    subscriberUser,
     streamSource,
     streamPath,
   });
@@ -422,11 +437,12 @@ function useProjectStreamMirror({
   projectId,
   resetStreamSourceTransport,
   streamSource,
+  subscriberUser,
   streamPath,
 }: Pick<
   ProjectStreamViewProps,
   "projectId" | "resetStreamSourceTransport" | "streamSource" | "streamPath"
->) {
+> & { subscriberUser?: BrowserStreamSubscriberUser }) {
   const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   // The stream mirror rides the ONE shared session socket — the same connection
   // the page's ordinary queries use. It can page tens of thousands of historical
@@ -479,6 +495,7 @@ function useProjectStreamMirror({
     createStreamClient: streamClientFactory,
     ...(resetTransport === undefined ? {} : { resetTransport }),
     projectId: streamRuntimeProjectKey,
+    ...(subscriberUser === undefined ? {} : { subscriberUser }),
     streamPath,
   });
   return { resolvedStreamSource, ...mirror };

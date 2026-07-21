@@ -97,10 +97,7 @@ export class TelegramAgentProcessor extends StreamProcessor<
         if (target?.fromIsBot === true) break;
         const messageText = readRecord(readRecord(event.payload.body)?.message)?.text;
         if (target?.kind === "message" && isTelegramDebugCommand(messageText)) {
-          blockProcessorWhile(
-            "the /debug script request derives from this one webhook; a dropped append would silently swallow the command",
-            () => this.#requestDebugScript({ append, event }),
-          );
+          blockProcessorWhile(() => this.#requestDebugScript({ append, event }));
           break;
         }
         const newCommand = target?.kind === "message" ? telegramNewCommand(messageText) : null;
@@ -113,17 +110,13 @@ export class TelegramAgentProcessor extends StreamProcessor<
           newCommand !== null
             ? newCommand.trailingText !== null
             : target?.kind === "message" || target?.kind === "callback_query";
-        blockProcessorWhile(
-          "the transcription (and any /new ack) is the message's only copy on its way to the agent; a dropped append loses it",
-          () => this.#transcribeWebhook({ append, event, newCommand, state, target, triggers }),
+        blockProcessorWhile(() =>
+          this.#transcribeWebhook({ append, event, newCommand, state, target, triggers }),
         );
         break;
       }
       case "events.iterate.com/telegram/send-requested": {
-        blockProcessorWhile(
-          "any send failure must hold the checkpoint so the host replays this request until a sent marker exists",
-          () => this.#satisfySendObligation({ append, appendTo, event, state }),
-        );
+        blockProcessorWhile(() => this.#satisfySendObligation({ append, appendTo, event, state }));
         break;
       }
       case "events.iterate.com/agent/llm-request-requested":

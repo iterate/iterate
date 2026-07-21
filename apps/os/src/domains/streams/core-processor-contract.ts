@@ -246,6 +246,19 @@ const latestConfiguredEvent = <const Type extends string, Payload extends z.ZodT
 export const StreamSubscriberDescriptor = z.object({
   /** Human-readable label, e.g. "browser" or "orpc-bridge". */
   description: z.string().optional(),
+  /**
+   * Self-reported display identity for an authenticated human client. This is
+   * presence metadata, not authorization input; authority remains on the RPC
+   * session that opened the subscription.
+   */
+  user: z
+    .object({
+      id: z.string().trim().min(1).optional(),
+      email: z.string().trim().min(1),
+      name: z.string().trim().min(1).optional(),
+      picture: z.string().trim().min(1).optional(),
+    })
+    .optional(),
   /** Present when the subscriber is a stream processor. */
   processor: z
     .object({

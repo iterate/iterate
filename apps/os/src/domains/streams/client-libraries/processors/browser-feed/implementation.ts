@@ -137,17 +137,14 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
           activityHasDurableExecution(op.data, executionId),
       );
     if (executionId !== null && !alreadyCorrected) {
-      args.blockProcessorWhile(
-        "the async correction lookup must append this event's ops before the next event's, or feed rows land out of order",
-        async () => {
-          const correction = await this.#findPrunedActivityCorrection(event, executionId);
-          this.#appendOps(
-            event.offset,
-            correction === null ? ops : [...ops, correction],
-            args.state.open,
-          );
-        },
-      );
+      args.blockProcessorWhile(async () => {
+        const correction = await this.#findPrunedActivityCorrection(event, executionId);
+        this.#appendOps(
+          event.offset,
+          correction === null ? ops : [...ops, correction],
+          args.state.open,
+        );
+      });
       return;
     }
     this.#appendOps(event.offset, ops, args.state.open);
