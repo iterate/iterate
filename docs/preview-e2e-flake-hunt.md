@@ -54,10 +54,38 @@ layer or test-specific exception has been added.
 
 Round-7 run ledger:
 
-| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                    |
-| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------ |
-| Pre-round normal preview | `220ab10c9fd2ea51d4cd15ac4a0659fdf7562ed1` |             1 |       1 | Passed in 4m59s; Node transport-open retry |
-| Round-7 marathon 1       | _pending_                                  |          0/25 |       0 | Pending                                    |
+| Proof                        | Revision                                   | Accepted runs | Retries | Outcome                                        |
+| ---------------------------- | ------------------------------------------ | ------------: | ------: | ---------------------------------------------- |
+| Pre-round normal preview     | `220ab10c9fd2ea51d4cd15ac4a0659fdf7562ed1` |             1 |       1 | Passed in 4m59s; Node transport-open retry     |
+| Round-7 marathon 1           | `210f7ef88d6d8170daaf893380bd54f0da0cb8c2` |          0/25 |       1 | Functional pass; rejected at 318s              |
+| Round-7 exact-head preview 1 | `210f7ef88d6d8170daaf893380bd54f0da0cb8c2` |             1 |       1 | Passed in 4m34s; example-app event-count retry |
+
+The first round-7 marathon was [Depot run
+`glfbndtvnx`](https://depot.dev/orgs/0p91s0lz49/workflows/glfbndtvnx).
+Every test passed, but the proof correctly stopped because deploy plus tests
+took 318 seconds. OS was the critical app: deployment took 127.6 seconds and
+tests took 162.2 seconds. Playwright dominated the test lane at 155 seconds;
+Vitest took 77 seconds. The eight Playwright workers each performed between
+133.6 and 150.0 seconds of work, so the queue was already balanced: merely
+reordering files cannot materially shorten this lane. Depot's 16-core runner
+also peaked at only 41.7% CPU and 15.0% memory, which does not support a larger
+runner as the first optimization.
+
+One Vitest case, `MCP built-in connects directly and mounts as a described
+capability`, passed on retry after Cloudflare reported `Durable Object storage
+operation exceeded timeout which caused object to be reset.` The same Durable
+Object startup-reset class occurred on unrelated PRs #2224 and #2231, so this
+is classified as a shared Cloudflare transient rather than a defect in the
+victim test. Its one repository-level retry remains bounded and visible.
+
+The unchanged head then passed its normal preview check on [Depot run
+`r62fmqfqp5`](https://depot.dev/orgs/0p91s0lz49/workflows/r62fmqfqp5) in
+4m34s. OS deployed in 94.6 seconds and its tests took 154.6 seconds, confirming
+that rollout/readiness variance accounted for most of the rejected marathon's
+33-second overrun. The streams example app absorbed one Playwright retry after
+its scroll-away counter expected 83 events but observed 84; the retry passed.
+This first occurrence is recorded rather than quarantined. Recurrence will be
+fixed or quarantined with a tracking task under the normal testing policy.
 
 ## Round 6 (2026-07-21, post-#2169)
 
