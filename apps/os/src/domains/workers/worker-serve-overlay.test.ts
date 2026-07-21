@@ -140,6 +140,9 @@ describe("workerServeErrorResponse", () => {
     expect(body).toContain(WORKER_SERVE_ERROR_HEADER);
     expect(body).toContain('<noscript><meta http-equiv="refresh"');
     expect(body).toContain('data-kind="serveError"');
+    // An error pops its details open immediately; nothing spins on it.
+    expect(body).toContain('<div id="panel">');
+    expect(body).toContain('[data-kind="serveError"] #ring rect { stroke-dasharray: none');
   });
 });
 
