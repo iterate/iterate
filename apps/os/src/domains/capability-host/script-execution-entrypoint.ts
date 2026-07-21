@@ -155,11 +155,22 @@ export function scriptWorkerRef(input: {
     const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS};
     const sandboxExecTimeout = ${sandboxExecTimeoutSource};
 
-    function receiverBoundProperty(target, property) {
+    function receiverSafeProperty(target, property) {
       const value = Reflect.get(target, property, target);
-      return typeof value === "function"
-        ? (...args) => Reflect.apply(value, target, args)
-        : value;
+      if (typeof value !== "function") return value;
+      // Cap'n Web path handles are callable Proxies: a value such as
+      // itx.agents must retain both its call surface and child properties such
+      // as .get. Replacing every function with a bound arrow preserves calls
+      // but collapses those paths into plain functions. Proxy apply instead,
+      // and recursively preserve the real receiver for any child method.
+      return new Proxy(value, {
+        apply(callable, _receiver, args) {
+          return Reflect.apply(callable, target, args);
+        },
+        get(callable, childProperty) {
+          return receiverSafeProperty(callable, childProperty);
+        },
+      });
     }
 
     function sandboxWithExecutionDeadline(sandbox, resolved = false) {
@@ -189,7 +200,7 @@ export function scriptWorkerRef(input: {
               );
             };
           }
-          if (property !== "exec") return receiverBoundProperty(target, property);
+          if (property !== "exec") return receiverSafeProperty(target, property);
           const exec = Reflect.get(target, property, target);
           return (command, options = {}) => {
             const timeout = sandboxExecTimeout({
@@ -208,7 +219,7 @@ export function scriptWorkerRef(input: {
       const sandboxes = itx.sandboxes;
       const guardedSandboxes = new Proxy(sandboxes, {
         get(target, property) {
-          if (property !== "get") return receiverBoundProperty(target, property);
+          if (property !== "get") return receiverSafeProperty(target, property);
           // Collection.get() is deliberately synchronous: capnweb returns a
           // pipelined handle whose methods (including create) can be called
           // before any round trip. Awaiting it here turns that handle into a
@@ -222,7 +233,7 @@ export function scriptWorkerRef(input: {
         get(target, property) {
           return property === "sandboxes"
             ? guardedSandboxes
-            : receiverBoundProperty(target, property);
+            : receiverSafeProperty(target, property);
         },
       });
     }

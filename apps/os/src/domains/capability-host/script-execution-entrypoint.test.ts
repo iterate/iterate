@@ -49,8 +49,10 @@ describe("scriptWorkerRef", () => {
     expect(main).toContain(`const executionDeadline = ${expiresAt}`);
     expect(main).toContain(`const externalCleanupGraceMs = ${SCRIPT_EXTERNAL_CLEANUP_GRACE_MS}`);
     expect(main).toContain("const sandboxExecTimeout = ");
-    expect(main).toContain("function receiverBoundProperty(target, property)");
-    expect(main).toContain("Reflect.apply(value, target, args)");
+    expect(main).toContain("function receiverSafeProperty(target, property)");
+    expect(main).toContain("return new Proxy(value");
+    expect(main).toContain("Reflect.apply(callable, target, args)");
+    expect(main).toContain("receiverSafeProperty(callable, childProperty)");
     expect(main).toContain('if (property === "then")');
     expect(main).toContain("if (resolved) return undefined");
     expect(main).toContain("onFulfilled(sandboxWithExecutionDeadline(value, true))");
