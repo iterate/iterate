@@ -634,7 +634,7 @@ section; no code.
 
 ### F1. Recovery suites hand-roll ~120 lines of registry simulation each
 
-**Status:** needs decision (mode vs exported substrate).
+**Status:** in-pr #2202 (spike/proposal).
 
 `telegram-agent-recovery.test.ts:35-156` (harness) vs `:158-236` (the one
 test); the same fake `DurableObjectState` + alarm cell + `boot`/`wake`/
