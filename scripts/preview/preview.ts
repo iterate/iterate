@@ -3614,13 +3614,25 @@ async function deployPreviewApp(input: {
     fingerprint !== null &&
     input.existingEntry?.status === "deployed" &&
     input.existingEntry.publicUrl === appConfig.baseUrl &&
-    input.existingEntry.deployedFingerprint === fingerprint
+    input.existingEntry.deployedFingerprint === fingerprint &&
+    // The record alone is not proof the worker still answers — this app may
+    // be selected precisely because the not-serving sweep found it dead
+    // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
+    // when every readiness URL answers right now.
+    (
+      await Promise.all(
+        resolvePreviewReadinessUrls({
+          publicUrl: appConfig.baseUrl,
+          readyUrlPath: input.app.previewReadyUrlPath,
+        }).map((url) => probePreviewAppServingOnce(url)),
+      )
+    ).every((probe) => probe.ok)
   ) {
-    // Same slot, same content, last run fully green: the worker already
-    // serving is byte-identical to what this deploy would upload. Skip the
-    // wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
+    // Same slot, same content, last run fully green, worker answering: what
+    // is serving is byte-identical to what this deploy would upload. Skip
+    // the wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
     logPreview(
-      `deploy skipped: ${input.app.slug} unchanged since ${input.existingEntry.shortSha ?? "the recorded deploy"} on this slot (fingerprint ${fingerprint.slice(0, 12)}…)`,
+      `deploy skipped: ${input.app.slug} unchanged since ${input.existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
     );
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
