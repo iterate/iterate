@@ -174,6 +174,9 @@ describe("workerServeErrorResponse", () => {
     expect(body).toContain(WORKER_SERVE_ERROR_HEADER);
     expect(body).toContain('<noscript><meta http-equiv="refresh"');
     expect(body).toContain('data-kind="serveError"');
+    // The retry loop periodically hard-reloads to escape a poisoned
+    // connection-pinned isolate; the building page deliberately does not.
+    expect(body).toContain("polls % 15");
     // An error pops its details open immediately; nothing spins on it.
     expect(body).toContain('<div id="panel">');
     expect(body).toContain('[data-kind="serveError"] #ring rect { stroke-dasharray: none');
