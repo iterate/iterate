@@ -1,13 +1,10 @@
 /** Shared attachment limits and helpers for chat + new-agent composers. */
 
-export const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+import { formatFileSize } from "~/lib/feed-format.ts";
 
-export function formatFileSize(size: number): string {
-  if (size < 1024) return `${size} B`;
-  const kilobytes = size / 1024;
-  if (kilobytes < 1024) return `${kilobytes.toFixed(1).replace(/\.0$/, "")} KB`;
-  return `${(kilobytes / 1024).toFixed(1).replace(/\.0$/, "")} MB`;
-}
+export { formatFileSize };
+
+export const MAX_MESSAGE_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 
 export function partitionFilesBySize(
   files: readonly File[],

@@ -1,19 +1,20 @@
 import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
-test("server-renders project routes before the itx client connects", async ({ helpers, page }) => {
+test("project home hydrates the dashboard and REPL still server-renders", async ({
+  helpers,
+  page,
+}) => {
   await using fixture = await helpers.createFixture("project-route-ssr");
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
 
-  const response = await page.goto(`/projects/${fixture.project.slug}`);
-  if (response === null) throw new Error("Direct project navigation returned no document response");
-
-  const initialHtml = await response.text();
-  expect(initialHtml).toContain('placeholder="Message a new agent"');
-  expect(initialHtml).toContain("New agent");
-
-  await page.getByRole("textbox", { name: "Message a new agent" }).fill("Hello from SSR");
+  // Project home is client-only (`ssr: false`) — the new-agent dashboard
+  // hydrates after load rather than embedding the composer in the initial HTML.
+  await page.goto(`/projects/${fixture.project.slug}`);
+  await page.getByTestId("project-dashboard").waitFor();
+  await page.getByRole("heading", { name: "Start a new thread" }).waitFor();
+  await page.getByRole("textbox", { name: "Start a new thread" }).fill("Hello from dashboard");
 
   const replResponse = await page.goto(`/projects/${fixture.project.slug}/repl`);
   if (replResponse === null) throw new Error("Direct project REPL navigation returned no response");

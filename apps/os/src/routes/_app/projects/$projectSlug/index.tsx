@@ -44,7 +44,12 @@ function ProjectHomePage() {
   // onboarding agent so the user watches the saga rather than waiting on the
   // create button.
   const handOffToOnboarding = welcome === true && ready && inOnboarding;
-  const showWelcomeChecklist = welcome === true;
+  // Only the create/welcome flow shows the bootstrap checklist. Once ready and
+  // onboarding is done (or never started), fall through to the dashboard even
+  // if a stale `?welcome` is still on the URL.
+  const showWelcomeChecklist =
+    welcome === true &&
+    (lifecycle.value === undefined || !ready || inOnboarding || handOffToOnboarding);
 
   useEffect(() => {
     if (!handOffToOnboarding) return;
@@ -57,6 +62,17 @@ function ProjectHomePage() {
       replace: true,
     });
   }, [handOffToOnboarding, navigate, params.projectSlug]);
+
+  // Drop a leftover `?welcome` once the checklist is no longer the right UI.
+  useEffect(() => {
+    if (welcome !== true || showWelcomeChecklist) return;
+    void navigate({
+      to: "/projects/$projectSlug",
+      params: { projectSlug: params.projectSlug },
+      search: {},
+      replace: true,
+    });
+  }, [navigate, params.projectSlug, showWelcomeChecklist, welcome]);
 
   if (showWelcomeChecklist) {
     return (

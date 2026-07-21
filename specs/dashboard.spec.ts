@@ -16,10 +16,13 @@ test("loads project navigation only when it opens", async ({ helpers, page }) =>
   });
 
   await page.goto(`/projects/${fixture.project.slug}`);
+  await page.getByTestId("project-dashboard").waitFor();
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
   expect(dialogRequests).toEqual([]);
 
-  await page.getByRole("button", { name: "/ ⌘K" }).click();
+  // Non-stream pages (the dashboard) use the shell "Navigate ⌘K" control;
+  // stream pages expose a path pill like "/ ⌘K" instead.
+  await page.getByRole("button", { name: /Navigate/ }).click();
   await page.getByRole("dialog", { name: "Project navigation" }).waitFor();
 
   expect(dialogRequests).toHaveLength(1);
