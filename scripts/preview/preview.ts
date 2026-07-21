@@ -16,7 +16,7 @@ import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import {
   authEnvs,
   dummyPetshopEnvs,
-  envs,
+  envs as osEnvs,
   previewEnvironmentSlotNumbers,
   semaphoreEnvs,
   streamsExampleEnvs,
@@ -1367,11 +1367,10 @@ export type CloudflarePreviewApp = {
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   /**
-   * Resolve non-secret public app config from the repo instead of Doppler.
-   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
-   * is the sole source of truth can opt into that source directly.
+   * Resolve non-secret public app config from envs.ts. Doppler supplies only
+   * secrets; readiness probes merge their bearer token into this config.
    */
-  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+  resolvePreviewAppConfig: (dopplerConfig: string) => {
     baseUrl: string;
     projectHostnameBases?: string[];
   };
@@ -1633,9 +1632,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = envs[dopplerConfig as keyof typeof envs];
-      if (!env) throw new Error(`Unknown OS environment ${JSON.stringify(dopplerConfig)}.`);
-      return { baseUrl: env.baseUrl, projectHostnameBases: env.projectHostnameBases };
+      const env = osEnvs[dopplerConfig as keyof typeof osEnvs];
+      if (!env) {
+        throw new Error(`Unknown OS environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return {
+        baseUrl: env.baseUrl,
+        projectHostnameBases: env.projectHostnameBases,
+      };
     },
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
     // probes the plain /api/health route that replaced it. Without this, the
@@ -1678,7 +1682,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // retry-clean historical full-fleet deploys completed around 72s.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
-    previewTestBaseUrlEnvVar: "OS_BASE_URL",
+    previewTestBaseUrlEnvVar: "APP_CONFIG_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
@@ -1763,7 +1767,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "semaphore",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const env = semaphoreEnvs[dopplerConfig as keyof typeof semaphoreEnvs];
-      if (!env) throw new Error(`Unknown Semaphore environment ${JSON.stringify(dopplerConfig)}.`);
+      if (!env) {
+        throw new Error(`Unknown Semaphore environment ${JSON.stringify(dopplerConfig)}.`);
+      }
       return { baseUrl: env.baseUrl };
     },
     paths: ["apps/semaphore/**"],
@@ -1798,7 +1804,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "auth",
     resolvePreviewAppConfig: (dopplerConfig) => {
       const env = authEnvs[dopplerConfig as keyof typeof authEnvs];
-      if (!env) throw new Error(`Unknown Auth environment ${JSON.stringify(dopplerConfig)}.`);
+      if (!env) {
+        throw new Error(`Unknown Auth environment ${JSON.stringify(dopplerConfig)}.`);
+      }
       return { baseUrl: env.authBaseUrl };
     },
     paths: ["apps/auth/**", "apps/auth-contract/**"],
@@ -1825,7 +1833,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     resolvePreviewAppConfig: (dopplerConfig) => {
       const env = streamsExampleEnvs[dopplerConfig as keyof typeof streamsExampleEnvs];
       if (!env) {
-        throw new Error(`Unknown Streams environment ${JSON.stringify(dopplerConfig)}.`);
+        throw new Error(
+          `Unknown streams-example-app environment ${JSON.stringify(dopplerConfig)}.`,
+        );
       }
       return { baseUrl: env.baseUrl };
     },
@@ -3721,8 +3731,8 @@ async function readPreviewAppConfig(input: {
     }
     return parsed;
   };
-  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
-  if (repoConfig && !input.app.previewReadyBearerTokenEnvVar) {
+  const repoConfig = input.app.resolvePreviewAppConfig(input.dopplerConfig);
+  if (!input.app.previewReadyBearerTokenEnvVar) {
     return parsePreviewAppConfig(repoConfig);
   }
 
@@ -3773,23 +3783,28 @@ async function readPreviewAppConfig(input: {
     throw new Error("Failed to read preview app config.");
   }
 
+  const dopplerConfig: unknown = JSON.parse(result.stdout);
   return parsePreviewAppConfig(
-    mergePreviewAppConfig({
-      dopplerConfig: JSON.parse(result.stdout),
-      repositoryConfig: repoConfig,
-    }),
+    mergePreviewAppConfig({ dopplerConfig, repositoryConfig: repoConfig }),
   );
 }
 
 function mergePreviewAppConfig(input: {
   dopplerConfig: unknown;
-  repositoryConfig: { baseUrl: string; projectHostnameBases?: string[] } | undefined;
+  repositoryConfig: { baseUrl: string; projectHostnameBases?: string[] };
 }) {
-  const dopplerConfig =
-    typeof input.dopplerConfig === "object" && input.dopplerConfig !== null
-      ? input.dopplerConfig
-      : {};
-  return { ...dopplerConfig, ...input.repositoryConfig };
+  if (typeof input.dopplerConfig !== "object" || input.dopplerConfig === null) {
+    return input.dopplerConfig;
+  }
+  return {
+    ...input.dopplerConfig,
+    baseUrl: input.repositoryConfig.baseUrl,
+    projectHostnameBases:
+      input.repositoryConfig.projectHostnameBases ??
+      ("projectHostnameBases" in input.dopplerConfig
+        ? input.dopplerConfig.projectHostnameBases
+        : undefined),
+  };
 }
 
 async function runPreviewDeployCommand(input: {

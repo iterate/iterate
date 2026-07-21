@@ -88,8 +88,8 @@ export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
 /** The one cold-build response every fetch-lane hop answers with: a polling
  * page for browsers (meta refresh for no-JS clients), retry-after + the
  * marker header for programmatic clients. */
-export function workerBuildingResponse(): Response {
-  return new Response(workerBuildingPageHtml(WORKER_BUILDING_HEADER), {
+export function workerBuildingResponse(urlPrefix = ""): Response {
+  return new Response(workerBuildingPageHtml(WORKER_BUILDING_HEADER, urlPrefix), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "retry-after": "2",
@@ -111,6 +111,7 @@ export function workerBuildingResponse(): Response {
  */
 export function workerBuildStatus(
   error: unknown,
+  urlPrefix = "",
 ): { outcome: "worker_build_failed" | "worker_building"; response: Response } | null {
   // RepoNotSeededError: a browser can reach a project host inside the
   // project's BIRTH window — the config repo's stream exists before its seed
@@ -120,10 +121,13 @@ export function workerBuildStatus(
   // Cloudflare 1101 on a fresh project's first app request (observed live on
   // preview e2e, 2026-07-17).
   if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
-    return { outcome: "worker_building", response: workerBuildingResponse() };
+    return { outcome: "worker_building", response: workerBuildingResponse(urlPrefix) };
   }
   if (isWorkerBuildFailedError(error)) {
-    return { outcome: "worker_build_failed", response: workerBuildFailedResponse(error) };
+    return {
+      outcome: "worker_build_failed",
+      response: workerBuildFailedResponse(error, urlPrefix),
+    };
   }
   return null;
 }

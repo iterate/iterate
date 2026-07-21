@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { serveProjectResponse } from "./project-serve.ts";
 import { workerBuildingResponse } from "./worker-fetch-dispatch.ts";
 import { WORKER_SERVE_ERROR_HEADER } from "./worker-serve-info.ts";
+import { WORKER_DEFAULT_FAVICON_PATH } from "./worker-serve-overlay.ts";
 
 // The overlay's HTMLRewriter injection is workerd-only and e2e-proven
 // (worker-build-overlay.e2e.test.ts); these responses all pass the overlay
@@ -26,6 +27,20 @@ test("a healthy response passes through with no outcome", async () => {
   });
   expect(served.outcome).toBeNull();
   expect(served.response).toBe(upstream);
+});
+
+test("the reserved user-space favicon bypasses the dynamic worker", async () => {
+  const served = await serveProjectResponse({
+    fetchWorker: async () => {
+      throw new Error("favicon must not dispatch to user code");
+    },
+    onError: failOnError,
+    request: new Request(`https://app.example.com${WORKER_DEFAULT_FAVICON_PATH}`),
+  });
+  expect(served.outcome).toBeNull();
+  expect(served.response.status).toBe(200);
+  expect(served.response.headers.get("content-type")).toContain("image/svg+xml");
+  expect(await served.response.text()).toContain('fill="white"');
 });
 
 test("document navigations get the short cold-build race, other requests the long one", async () => {

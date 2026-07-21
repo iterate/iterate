@@ -222,7 +222,8 @@ async function apiFetch(
     });
     // The serve envelope (domains/workers/project-serve.ts) owns everything a
     // browser sees around the dispatch: cold-build budget, building /
-    // build-failed / serve-error stand-in pages, the @iterate overlay.
+    // build-failed / serve-error stand-in pages, the @iterate overlay, and
+    // the default user-space favicon.
     const { outcome, response } = await serveProjectResponse({
       fetchWorker: (buildBudgetMs) =>
         runner.fetch({
@@ -244,7 +245,13 @@ async function apiFetch(
           waitUntil: (promise) => ctx.waitUntil(promise),
         });
       },
-      request,
+      // Use the worker-visible URL so the /prj_<id>/... development lane
+      // recognizes reserved project paths after its prefix rewrite. Preserve
+      // the routed headers: serve policy only needs request metadata.
+      request: new Request(route.fetch.url, {
+        headers: route.fetch.headers,
+        method: route.fetch.method,
+      }),
     });
     if (outcome !== null) wideLogger.setOutcome(outcome);
     return response;

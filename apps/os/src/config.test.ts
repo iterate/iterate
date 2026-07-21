@@ -14,6 +14,19 @@ const baseConfig = {
 };
 
 describe("AppConfig", () => {
+  it("exposes the non-secret deployment name", () => {
+    const parsed = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: {
+        APP_CONFIG: JSON.stringify(baseConfig),
+        APP_CONFIG_ENVIRONMENT_NAME: "preview_4",
+      },
+    });
+
+    expect(parsed.environmentName).toBe("preview_4");
+  });
+
   it("treats an empty response-cache TTL binding as explicitly disabled", () => {
     const parsed = parseAppConfigFromEnv({
       configSchema: AppConfig,
