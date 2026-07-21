@@ -7,6 +7,7 @@ import type {
 } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { minimatch } from "minimatch";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
@@ -29,14 +30,17 @@ import {
   mergeWorkspaceConfigPatch,
   WorkspaceProcessor,
 } from "./workspace-processor-implementation.ts";
-import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
+import {
+  isVirtualDirectoryPath,
+  routeMount,
+  WorkspaceCore,
+  type MountRepoAccess,
+} from "./workspace-core.ts";
 import { normalizeWorkspaceMountKeys } from "./utils.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
 import { CollabHost } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
-import { minimatch } from "minimatch";
 import { resolveAbsolutePath } from "./paths.ts";
-import { isVirtualDirectoryPath, routeMount } from "./workspace-core.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
 // Configuration appends assert their exact stream offset (no interleaved
