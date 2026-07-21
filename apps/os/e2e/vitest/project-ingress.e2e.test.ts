@@ -31,7 +31,9 @@ test("project ingress serves the static seeded homepage at the root", async () =
   expect(homepage).toContain("Hello from your iterate project worker");
   // The seeded homepage intentionally omits <head>; ingress still places the
   // default user-space icon before its body (the browser's implied head).
-  expect(homepage).toContain("data-iterate-default-favicon");
+  expect(homepage).toContain(
+    `href="/${projectId}/.iterate/favicon.svg" data-iterate-default-favicon`,
+  );
   const favicon = await fetch(buildUrl({ path: `/${projectId}/.iterate/favicon.svg` }));
   expect(favicon).toMatchObject({ status: 200 });
   expect(favicon.headers.get("content-type")).toContain("image/svg+xml");

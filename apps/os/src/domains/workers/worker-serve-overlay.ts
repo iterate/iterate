@@ -38,8 +38,9 @@ export const ITERATE_MARK_SVG = iterateMarkSvg("black", "white");
 const USERSPACE_FAVICON_SVG = iterateMarkSvg("white", "black");
 export const WORKER_DEFAULT_FAVICON_PATH = "/.iterate/favicon.svg";
 
-export function workerDefaultFaviconHtml(): string {
-  return `<link rel="icon" type="image/svg+xml" href="${WORKER_DEFAULT_FAVICON_PATH}" data-iterate-default-favicon>`;
+export function workerDefaultFaviconHtml(urlPrefix = ""): string {
+  const href = escapeHtml(`${urlPrefix}${WORKER_DEFAULT_FAVICON_PATH}`);
+  return `<link rel="icon" type="image/svg+xml" href="${href}" data-iterate-default-favicon>`;
 }
 
 /** The same-origin asset referenced by the injected link. Keeping this out of
@@ -193,6 +194,7 @@ function standInPageHtml(input: {
   script?: string;
   state: WorkerOverlayState;
   title: string;
+  urlPrefix?: string;
 }): string {
   return `<!doctype html>
 <html>
@@ -200,7 +202,7 @@ function standInPageHtml(input: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>${escapeHtml(input.title)}</title>
-    ${workerDefaultFaviconHtml()}
+    ${workerDefaultFaviconHtml(input.urlPrefix)}
     ${input.head ?? ""}
     <style>
       body { margin: 0; min-height: 100vh; background: #fff; }
@@ -232,12 +234,13 @@ function reloadWhenHeaderClearsScript(headerName: string, intervalMs: number): s
  * 503/WORKER_BUILDING_HEADER contract by workerBuildingResponse, which also
  * owns that header's name — passed in here to keep the dependency one-way.
  */
-export function workerBuildingPageHtml(buildingHeader: string): string {
+export function workerBuildingPageHtml(buildingHeader: string, urlPrefix = ""): string {
   return standInPageHtml({
     head: `<noscript><meta http-equiv="refresh" content="3" /></noscript>`,
     script: `<script>${reloadWhenHeaderClearsScript(buildingHeader, 1_500)}</script>`,
     state: { kind: "building" },
     title: "Building…",
+    urlPrefix,
   });
 }
 
@@ -246,11 +249,12 @@ export function workerBuildingPageHtml(buildingHeader: string): string {
  * error waits in the click-open menu. No automatic retry of a potentially
  * broken source — fixing it and reloading heals.
  */
-export function workerBuildFailedResponse(error: unknown): Response {
+export function workerBuildFailedResponse(error: unknown, urlPrefix = ""): Response {
   return new Response(
     standInPageHtml({
       state: { kind: "buildFailed", message: buildFailureMessageFromError(error) },
       title: "Worker build failed",
+      urlPrefix,
     }),
     {
       headers: {
@@ -270,13 +274,14 @@ export function workerBuildFailedResponse(error: unknown): Response {
  * dependency hiccup), so the red ring keeps spinning and the page polls its
  * way back into the app; internals stay in the logs.
  */
-export function workerServeErrorResponse(): Response {
+export function workerServeErrorResponse(urlPrefix = ""): Response {
   return new Response(
     standInPageHtml({
       head: `<noscript><meta http-equiv="refresh" content="5" /></noscript>`,
       script: `<script>${reloadWhenHeaderClearsScript(WORKER_SERVE_ERROR_HEADER, 3_000)}</script>`,
       state: { kind: "serveError" },
       title: "Something went wrong",
+      urlPrefix,
     }),
     {
       headers: {
@@ -308,10 +313,6 @@ function workerHtmlDocumentCommit(request: Request, response: Response): string 
   return raw.length > 0 ? raw : null;
 }
 
-export function workerFaviconDecision(request: Request, response: Response): boolean {
-  return workerHtmlDocumentCommit(request, response) !== null;
-}
-
 export function workerOverlayDecision(request: Request, response: Response): string | null {
   const commitOid = workerHtmlDocumentCommit(request, response);
   if (commitOid === null) return null;
@@ -330,8 +331,9 @@ export function workerOverlayDecision(request: Request, response: Response): str
  * through untouched.
  */
 export function applyProjectWorkerOverlay(request: Request, response: Response): Response {
-  if (!workerFaviconDecision(request, response)) return response;
+  if (workerHtmlDocumentCommit(request, response) === null) return response;
   const commitOid = workerOverlayDecision(request, response);
+  const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
   let hasFavicon = false;
   let insertedFavicon = false;
   let sawHead = false;
@@ -346,7 +348,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
         sawHead = true;
         element.onEndTag((endTag) => {
           if (!hasFavicon) {
-            endTag.before(workerDefaultFaviconHtml(), { html: true });
+            endTag.before(workerDefaultFaviconHtml(urlPrefix), { html: true });
             insertedFavicon = true;
           }
         });
@@ -358,7 +360,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
         // the link immediately before body lets the browser put it in the
         // implied head without buffering the document.
         if (!sawHead && !hasFavicon) {
-          element.before(workerDefaultFaviconHtml(), { html: true });
+          element.before(workerDefaultFaviconHtml(urlPrefix), { html: true });
           insertedFavicon = true;
         }
         if (commitOid !== null) {
@@ -371,7 +373,7 @@ export function applyProjectWorkerOverlay(request: Request, response: Response):
         // Keep even malformed/minimal HTML branded when it has neither an
         // explicit head nor body. Browsers accept rel=icon at document end.
         if (!hasFavicon && !insertedFavicon) {
-          end.append(workerDefaultFaviconHtml(), { html: true });
+          end.append(workerDefaultFaviconHtml(urlPrefix), { html: true });
         }
       },
     });

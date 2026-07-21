@@ -147,9 +147,10 @@ the floating corner mark remains visible. The same streaming transform adds
 an inverted Iterate favicon before `</head>` when the app has no `rel=icon`
 link of its own. Its reserved same-origin asset lives at
 `/.iterate/favicon.svg`, so normal self-only CSPs accept it without embedding
-the full SVG in every document. CSP and overlay opt-out affect the script
-widget, not the favicon fallback; an app-provided icon always wins. See
-`worker-serve-overlay.ts`.
+the full SVG in every document. On the `/prj_<id>` path lane, the link keeps
+that browser-visible prefix while dispatch serves the rewritten project path.
+CSP and overlay opt-out affect the script widget, not the favicon fallback; an
+app-provided icon always wins. See `worker-serve-overlay.ts`.
 
 ## Live capabilities and WebSockets: the specification, and today's boundary
 

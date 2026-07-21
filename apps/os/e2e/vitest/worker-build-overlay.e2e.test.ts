@@ -76,7 +76,9 @@ test(
       "worker-bundler's build failure",
     );
     expect(failed.commitOid).toBeNull();
-    expect(await failed.response.text()).toContain("Worker build failed");
+    const failedHomepage = await failed.response.text();
+    expect(failedHomepage).toContain("Worker build failed");
+    expect(failedHomepage).toContain(`href="/${projectId}/.iterate/favicon.svg"`);
 
     const fixed = await project.repo.commitFiles({
       changes: [{ path: "worker.ts", content: original!.content }],

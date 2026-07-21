@@ -42,6 +42,7 @@ export async function serveProjectResponse({
   onError: (error: unknown) => void;
   request: Request;
 }): Promise<{ outcome: ProjectServeOutcome | null; response: Response }> {
+  const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
   const favicon = workerDefaultFaviconResponse(request);
   if (favicon !== null) return { outcome: null, response: favicon };
   try {
@@ -57,9 +58,9 @@ export async function serveProjectResponse({
         : null;
     return { outcome, response: applyProjectWorkerOverlay(request, response) };
   } catch (error) {
-    const buildStatus = workerBuildStatus(error);
+    const buildStatus = workerBuildStatus(error, urlPrefix);
     if (buildStatus !== null) return buildStatus;
     onError(error);
-    return { outcome: "worker_serve_error", response: workerServeErrorResponse() };
+    return { outcome: "worker_serve_error", response: workerServeErrorResponse(urlPrefix) };
   }
 }

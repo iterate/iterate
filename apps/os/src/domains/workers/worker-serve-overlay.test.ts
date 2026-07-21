@@ -12,7 +12,6 @@ import {
   workerDefaultFaviconHtml,
   workerDefaultFaviconResponse,
   workerBuildFailedResponse,
-  workerFaviconDecision,
   workerOverlayDecision,
   workerOverlayHtml,
   workerServeErrorResponse,
@@ -99,8 +98,6 @@ describe("workerOverlayDecision", () => {
 });
 
 describe("user-space favicon", () => {
-  const documentRequest = new Request("https://app.example.com/");
-
   test("recognizes icon as a case-insensitive rel token", () => {
     expect(relIncludesIcon("icon")).toBe(true);
     expect(relIncludesIcon("shortcut ICON")).toBe(true);
@@ -123,16 +120,10 @@ describe("user-space favicon", () => {
     expect(svg.match(/fill="black"/g)).toHaveLength(2);
   });
 
-  test("remains eligible when only the inline overlay is opted out", () => {
-    expect(
-      workerFaviconDecision(
-        documentRequest,
-        htmlResponse({
-          [OVERLAY_OPT_OUT_HEADER]: "1",
-          "content-security-policy": "default-src 'self'",
-        }),
-      ),
-    ).toBe(true);
+  test("includes the browser-visible project prefix on the path lane", () => {
+    expect(workerDefaultFaviconHtml("/prj_test")).toContain(
+      `href="/prj_test${WORKER_DEFAULT_FAVICON_PATH}"`,
+    );
   });
 });
 
@@ -173,7 +164,7 @@ describe("workerOverlayHtml", () => {
 
 describe("workerServeErrorResponse", () => {
   test("marked, self-retrying, overlay-exempt 500 that keeps internals in the logs", async () => {
-    const response = workerServeErrorResponse();
+    const response = workerServeErrorResponse("/prj_test");
     expect(response.status).toBe(500);
     expect(response.headers.get(WORKER_SERVE_ERROR_HEADER)).toBe("1");
     expect(response.headers.get(OVERLAY_OPT_OUT_HEADER)).toBe("1");
@@ -187,12 +178,16 @@ describe("workerServeErrorResponse", () => {
     expect(body).toContain('<div id="panel">');
     expect(body).toContain('[data-kind="serveError"] #ring rect { stroke-dasharray: none');
     expect(body).toContain("data-iterate-default-favicon");
+    expect(body).toContain(`href="/prj_test${WORKER_DEFAULT_FAVICON_PATH}"`);
   });
 });
 
 describe("workerBuildFailedResponse", () => {
   test("marked 500 with the bundler's error, script-inert, overlay-exempt", async () => {
-    const response = workerBuildFailedResponse(new Error('Could not resolve "<b>zod</b>"'));
+    const response = workerBuildFailedResponse(
+      new Error('Could not resolve "<b>zod</b>"'),
+      "/prj_test",
+    );
     expect(response.status).toBe(500);
     expect(response.headers.get(WORKER_BUILD_FAILED_HEADER)).toBe("1");
     expect(response.headers.get(OVERLAY_OPT_OUT_HEADER)).toBe("1");
@@ -204,5 +199,6 @@ describe("workerBuildFailedResponse", () => {
     expect(body).toContain("then reload this page");
     expect(body).not.toContain("const poll = async");
     expect(body).toContain("data-iterate-default-favicon");
+    expect(body).toContain(`href="/prj_test${WORKER_DEFAULT_FAVICON_PATH}"`);
   });
 });
