@@ -22,6 +22,16 @@ test("a second project's onboarding turn is served from the AI Gateway cache", a
   // birth turn must be served from the cache without touching OpenAI.
   const second = await runOnboardingBirthTurn(`aig-cache-b-${marker}`);
   expect(second).toMatchObject({ cacheStatus: "HIT", greeting: expect.stringMatching(/\S/) });
+
+  // A cache HIT's contract is a replay of a stored body, so when THIS test
+  // seeded the entry (first turn MISS) the second greeting is byte-identical.
+  // When the first turn already HIT, the seed belongs to some earlier or
+  // concurrent lane — the key is deliberately identity-masked and global — and
+  // a TTL-boundary reseed between the two turns can legally change the text,
+  // so equality would assert another lane's timing, not the cache contract.
+  if (first.cacheStatus === "MISS") {
+    expect(second).toMatchObject({ greeting: first.greeting });
+  }
 }, 300_000);
 
 type LlmCompletionEvidence = {
