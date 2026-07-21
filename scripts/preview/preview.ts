@@ -4496,7 +4496,7 @@ async function assignEnvironmentConfigLease(input: {
       }
       lease = toEnvironmentConfigLease(acquired);
     } catch (error) {
-      if (!heldLease) throw error;
+      if (!heldLease || heldLease.slug === input.recordedSlug) throw error;
       try {
         const released = await input.semaphore.release({
           type: heldLease.type,

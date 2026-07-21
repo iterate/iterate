@@ -17,7 +17,7 @@ is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
 verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Eight valid Bugbot findings now have regression
+ready for review against `main`. Nine valid Bugbot findings now have regression
 coverage: requested-slot adoption erases unknown-provenance data, seeded
 repository lookup no longer depends on Cloudflare subscription setup, and a
 server-side GitHub import records its initial commit even though the exact-repo
@@ -435,3 +435,7 @@ the recorded projection.
   ignores fenced Markdown examples and HTML comments while still accepting one
   actionable whole-line directive. All 190 scripts tests, scripts typecheck,
   and changed-file lint/format checks pass locally.
+- 2026-07-21: Corrected exact-slot failure cleanup test-first. A failed move now
+  preserves the PR's recorded working lease; only an unrelated lease adopted
+  during the attempt is released. All 191 scripts tests, scripts typecheck, and
+  changed-file lint/format checks pass locally.

@@ -2778,6 +2778,37 @@ describe("assignEnvironmentConfigLease", () => {
     });
   });
 
+  test("keeps the recorded current lease when the requested slot is unavailable", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async (input: { force?: boolean; slug: string }) =>
+        input.slug === "preview-2" && input.force
+          ? fakeLease({
+              slug: "preview-2",
+              leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+            })
+          : null,
+      ),
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-5", "pr-1601"),
+      ]),
+      release,
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedSlug: "preview-2",
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/preview-5 is leased by pr-1601/);
+    expect(release).not.toHaveBeenCalled();
+  });
+
   test("passes force through to evict the current holder", async () => {
     const acquireSpecific = vi.fn(async () =>
       fakeLease({ slug: "preview-5", data: { dopplerConfig: "preview_5" } }),
