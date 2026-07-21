@@ -865,7 +865,7 @@ describe("preview deploy selection", () => {
     expect(apps).toEqual([]);
   });
 
-  test("selects OS and its dependencies for an iterate TUI-only change", async () => {
+  test("selects OS and its dependencies for an iterate package-only change", async () => {
     const apps = await selectPreviewAppsForPullRequest({
       ...selectionInput,
       previousState: {

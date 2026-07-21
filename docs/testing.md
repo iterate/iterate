@@ -87,14 +87,14 @@ dummy-petshop first, then passes that same leased preview's recorded
 `PETSHOP_BASE_URL` into the OS e2e lane. The OS Petshop integration specs fail
 CI if that URL is absent; they cannot silently skip back out of preview CI.
 
-The TUI's colour snapshot remains a manual aesthetic-review test because its
-stream path and timestamps are dynamic; the stable workflow spec runs in
-preview CI. That workflow installs the exact Bun release in `.bun-version`
-before deploying, so the OpenTUI lane never relies on an ambient runner
-runtime. Any suite a CI lane does not run in full is a wiring bug unless the
-table names it as manual. A test that genuinely cannot run against a deployed
-target carries an explicit in-code skip with a named guard and a comment saying
-why, so exclusion is always visible where the test lives.
+The quarantined TUI specs and configuration remain as evidence and a starting
+point for the linked restoration task, but they are not active coverage. The
+preview lane invokes the explicit no-op `run.ts` stub so the skip is visible in
+the job log; it does not install Bun or run a hidden subset. Any suite a CI lane
+does not run in full is a wiring bug unless the table names the quarantine or
+manual status. A test that genuinely cannot run against a deployed target
+carries an explicit in-code skip with a named guard and a comment saying why,
+so exclusion is always visible where the test lives.
 
 Smoke-testing a deployment (what the deploy pipeline probes automatically,
 plus manual/agent recipes for production): [Smoke testing](smoke-testing.md).

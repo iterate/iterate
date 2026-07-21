@@ -15,8 +15,9 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-OS starts its onboarding smoke, built-package TUI, Vitest, and Playwright as
-four independent sub-lanes. Therefore, healthy wall time should approach:
+OS starts its onboarding smoke, explicit TUI quarantine marker, Vitest, and
+Playwright as four independent sub-lanes. Therefore, healthy wall time should
+approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -33,9 +34,9 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
-- OS smoke, TUI, Vitest, and Playwright run concurrently. Every background
-  process is joined even if another one fails, so a failure cannot orphan work
-  or discard another lane's result.
+- OS smoke, the explicit TUI quarantine marker, Vitest, and Playwright run
+  concurrently. Every background process is joined even if another one fails,
+  so a failure cannot orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
 - OS Vitest gives every current file a worker immediately and permits at most
@@ -47,8 +48,8 @@ raise the budget automatically.
   long reconnect/resume specs first so their fixed probe windows overlap the
   ordinary catalogue.
 - The job uses a 64-core Depot runner so the fully fanned-out Vitest catalogue,
-  eight Playwright workers, two TUI processes, deploy builds, and packaging do
-  not create a local CPU queue. The deployed Worker and Durable Objects remain
+  eight Playwright workers, deploy builds, and packaging do not create a local
+  CPU queue. The deployed Worker and Durable Objects remain
   the integration boundary; the marathon is the capacity and tail-latency
   proof for the resulting remote burst.
 
@@ -63,8 +64,9 @@ serially because they intentionally share one warm container.
 
 - **Retries live only at the individual-test layer.** CI permits one retry;
   app lanes and the whole workflow never retry automatically.
-- **Watchdogs fail rather than retry.** The TUI and Vitest/Playwright processes
-  retain their own bounded `timeout`s, inside the workflow backstop.
+- **Watchdogs fail rather than retry.** The TUI quarantine marker and
+  Vitest/Playwright processes retain their own bounded `timeout`s, inside the
+  workflow backstop.
 - **Readiness proves the uploaded edge version.** OS and the streams example
   report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
   final version to remain continuously visible for 10 seconds. The probe is a
@@ -77,8 +79,9 @@ serially because they intentionally share one warm container.
 - **Readiness retries are bounded and diagnostic.** Each request has a short
   watchdog, the overall deploy check has a hard deadline, and the final HTTP
   response body or transport error is retained in the failure message.
-- **Retries remain visible.** Vitest, TUI, and Playwright write compact retry
-  telemetry that is folded into the preview state in the PR description.
+- **Retries remain visible.** Vitest and Playwright write compact retry
+  telemetry that is folded into the preview state in the PR description. The
+  quarantined TUI marker writes an empty ledger and names its restoration task.
 - **Do not serialize around a product defect.** Repeated storage, RPC, stream,
   or project-birth tails require diagnosis. Parallel tests are allowed to
   expose real shared-capacity limits.
