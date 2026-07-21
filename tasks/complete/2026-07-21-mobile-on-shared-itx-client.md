@@ -11,7 +11,7 @@ tags: [mobile, itx, iterate-package, consolidation]
 **Status summary:** complete on `mobile-shared-itx-react`. Mobile now consumes
 the shared keeper and `useItxSubscription`; its local dialer and two watchdogs
 are deleted. Shared lifecycle coverage, native/web bundles, browser smoke, and
-deployment-backed mobile round trips pass. Production code is 59 lines smaller
+deployment-backed mobile round trips pass. Production code is 58 lines smaller
 overall, including the new reusable shared lifecycle contracts.
 
 Mobile is the codebase's last hand-rolled itx transport — the "third keeper"
@@ -114,7 +114,7 @@ description, `docs/frontend-development.md`.
 - App-owned connection/live-subscription code fell from 295 lines across
   `itx-core.ts`, `itx.ts`, `live-thread.ts`, and `live-approvals.ts` to 109 lines
   across the mobile binding and query-cache adapter. Including the reusable
-  shared contracts and Metro singleton rule, production code is net -59 lines.
+  shared contracts and Metro singleton rule, production code is net -58 lines.
 - Browser smoke initially failed before tests started. Diagnostic server logs
   showed a transient Playwright launch failure; an exact rerun brought up both
   servers and passed. Metro consistently waits 60 seconds for this worktree's
@@ -123,4 +123,4 @@ description, `docs/frontend-development.md`.
 - The first pushed implementation passed `tsgo --noEmit` but package declaration
   generation used stricter closure narrowing for the credential-provider union.
   Capturing the narrowed provider fixed the publish build without changing
-  runtime behavior; the exact `packages/iterate` build now passes locally.
+runtime behavior; the exact `packages/iterate` build now passes locally.
