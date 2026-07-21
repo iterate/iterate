@@ -12,15 +12,16 @@ test("a second project's onboarding turn is served from the AI Gateway cache", a
   const first = await runOnboardingBirthTurn(`aig-cache-a-${marker}`);
   // This env runs the BYOK lane with the response cache on (envs.ts /
   // local-dev vars); evidence missing means the lane regressed.
-  expect(first.cacheStatus).toMatch(/^(HIT|MISS)$/);
-  expect(first.greeting).not.toBe("");
+  expect(first).toMatchObject({
+    cacheStatus: expect.stringMatching(/^(HIT|MISS)$/),
+    greeting: expect.stringMatching(/\S/),
+  });
 
   // The second project differs ONLY in minted identity (project id, agent
   // path) — exactly what cloudflareAiGatewayResponseCacheKey masks — so its
   // birth turn must be served from the cache without touching OpenAI.
   const second = await runOnboardingBirthTurn(`aig-cache-b-${marker}`);
-  expect(second).toMatchObject({ cacheStatus: "HIT" });
-  expect(second.greeting).not.toBe("");
+  expect(second).toMatchObject({ cacheStatus: "HIT", greeting: expect.stringMatching(/\S/) });
 }, 300_000);
 
 type LlmCompletionEvidence = {
