@@ -34,9 +34,8 @@ test("the seeded hello, counter, and guestbook apps work after creating a projec
   await page.getByText('"app":"hello"').waitFor({ timeout: 120_000 });
   await page.getByText(fixture.project.id).waitFor();
 
-  // Counter: same repo source as hello (one worker.ts), so its artifact is
-  // already built — but keep the cold-build budget in case the stateful
-  // facet's first start is slow.
+  // Counter: separate createWorker entry under apps/counter — keep the
+  // cold-build budget in case the stateful facet's first start is slow.
   await page.goto(appUrl("counter", fixture.project.slug, baseURL!));
   await page.getByText("count:").waitFor({ timeout: 120_000 });
 
