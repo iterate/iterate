@@ -144,6 +144,13 @@ the same cause, but it supports the prediction that avoiding a behavior-
 equivalent rollout removes both the convergence delay and its correctness
 hazard.
 
+The merged-main recording run, Depot job
+[`w6f1rkx69x`](https://depot.dev/orgs/0p91s0lz49/workflows/17106btw54?job=w6f1rkx69x),
+then passed in 4m28s. OS deployment and readiness took 93.67s, OS tests took
+153.99s, and no test needed a retry. It recorded OS Worker version
+`92e30c6d-c9de-4afd-868e-723a4f196f73` and is the same-slot, same-input
+control for the following no-deploy arm.
+
 ### Fresh-slot correctness baseline
 
 Depot run [`jfq7cp9kfk`](https://depot.dev/orgs/0p91s0lz49/workflows/p5bl4dpj76?job=qr4sf7mn3h&attempt=hld2q92zdj)
@@ -276,7 +283,8 @@ the exploration is active.
 | 2026-07-21 22:42 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 22:45 | Already current at `ed36ba327`.            | No additional changes.                                                                                                                                                                                                                 |
 | 2026-07-21 22:52 | Merged `775f90d52` from `origin/main`.     | PR #2236 added exact-deployment focused test reuse. This immediately supplied the repeatable diagnostic loop; because the preview orchestrator is conservatively fingerprinted, the merge itself still requires one new OS deployment. |
-| 2026-07-21 23:57 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 22:57 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
+| 2026-07-21 23:05 | Already current at `775f90d52`.            | No additional changes.                                                                                                                                                                                                                 |
 
 ## Decision log
 
@@ -305,3 +313,4 @@ the exploration is active.
 | 2026-07-21 | Add fail-closed OS deployment reuse.         | Implemented source, full-Doppler-config, same-slot/name, prior-green, and live exact-version proofs. The first run records the new identity; a subsequent e2e-only revision is the A/B arm.                 | Measure before generalizing to other apps; any absent proof retains the full deploy.                                                 |
 | 2026-07-21 | Record the deployment-reuse control.         | Depot job `hsvlw7vbq9` passed in 4m45s, but OS deployment/readiness took 92.69s and the OS lane took 174.61s with six retries, including two code-update resets after readiness.                            | The readiness sample is not a convergence proof; use this exact slot and recorded version for the no-deploy arm.                     |
 | 2026-07-21 | Repeat the failed stream test after rollout. | The exact-deployment target runner passed 10/10 attempts with zero retries in 11.96–19.14s (15.54s median), without deploy or erase.                                                                        | Rollout contamination is the leading explanation; retain full-suite A/B and telemetry as the stronger acceptance test.               |
+| 2026-07-21 | Re-record after merging the latest main.     | Depot job `w6f1rkx69x` passed in 4m28s. OS deployment/readiness took 93.67s; OS tests took 153.99s with zero retries. It recorded version `92e30c6d-c9de-4afd-868e-723a4f196f73`.                           | Use this run as the same-slot control for an e2e-documentation-only revision that must reuse this exact OS version.                  |

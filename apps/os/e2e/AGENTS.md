@@ -36,6 +36,10 @@ in [docs/testing.md](../../../docs/testing.md).
 - Preview smoke: `pnpm e2e -t "OS preview smoke"` (`preview-smoke.e2e.test.ts`) exercises a
   deployed preview, including its project MCP route (it derives its project slug from
   `GITHUB_SHA` when set).
+- Focused preview diagnosis: use the root `pnpm preview test-target` command to repeat one Vitest
+  file or Playwright spec against the PR's exact recorded Worker versions without deploying or
+  erasing. See [Dev environments](../../../docs/dev-environments.md#story-2-run-what-ci-runs-locally)
+  for the fail-closed prerequisites and exact commands; this does not replace a full-suite run.
 - Stream TUI behavior specs: `tsx ./e2e/tui-test/run.ts` (see `tui-test/README.md`). The script
   builds the published Iterate package, creates a disposable OS project, and launches that built
   CLI through Microsoft TUI Test. Preview CI runs this lane whenever OS is selected (disposal is a
