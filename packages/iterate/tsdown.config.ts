@@ -74,7 +74,13 @@ export default defineConfig([
     // deliberate exception: a spawned-process artifact, never imported.) No
     // dts here for the same reason as sdk (the generated contract crashes
     // rolldown-plugin-dts); declarations come from `tsc -p tsconfig.sdk.json`.
-    entry: ["src/client.ts", "src/live-state.ts", "src/node.ts", "src/react.ts"],
+    entry: {
+      client: "src/client.ts",
+      node: "src/node.ts",
+      "sdk/capnweb": "src/sdk/capnweb/index.ts",
+      "sdk/capnweb/react": "src/sdk/capnweb/react.tsx",
+      "sdk/itx/react": "src/sdk/itx/react.ts",
+    },
     format: "esm",
     dts: false,
     sourcemap: true,

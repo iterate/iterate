@@ -64,9 +64,11 @@ import {
  *   acknowledges, AFTER it, so receipt is never signalled for a message that
  *   failed to commit.
  *
- * - PRESENCE PAINT (best-effort, latest-fact-wins): summary facts and the
- *   platform revival fact are memoized per delivery and painted ONCE per
- *   at-head pass (`delivery.caughtUp`) from the complete reduced state — the
+ * - PRESENCE PAINT (best-effort, latest-fact-wins, `runInBackground`):
+ *   summary facts and the platform revival fact are memoized per delivery
+ *   and painted ONCE per at-head pass (`delivery.caughtUp`) from the
+ *   complete reduced state — a droppable attempt, so a hanging Slack call
+ *   never head-of-line-blocks the durable lanes above. The paints: the
  *   thread title via `assistant.threads.setTitle` (durable current-state
  *   paint, repainted by a fresh incarnation), the activity text via the
  *   transient thread status (freshness-gated). A revival clears presentation
@@ -110,14 +112,20 @@ export class SlackAgentProcessor extends StreamProcessor<
   /** The title this incarnation painted, so repeated repaints of an unchanged
    * title cost no Slack calls. */
   #paintedTitle: string | undefined;
+  /** Serializes background repaint attempts: without it, a slow setTitle from
+   * an earlier at-head pass could finish AFTER a newer paint and leave Slack
+   * (and the memos) wearing the stale value. Ordering lives here, not in the
+   * durable pipeline — a hanging paint delays later paints, never delivery. */
+  #presenceRepaintChain = Promise.resolve();
 
   // ------------------------------------------------------------ processEvent
   // One flat switch. Early exits inside the webhook case `break` (never
   // `return`), so the at-head repaint registration below the switch always
-  // runs. Per-event blockers register FIRST: `blockProcessorWhile` runs in
-  // FIFO registration order, so the repaint sees their appends.
+  // runs. The repaint reads only the reduced state and the paint memos, so
+  // it does not depend on the frame's blockers having committed first.
   protected override processEvent(args: ProcessEventArgs<SlackAgentProcessorContract>): undefined {
-    const { append, blockProcessorWhile, delivery, event, previousState, state } = args;
+    const { append, blockProcessorWhile, delivery, event, previousState, runInBackground, state } =
+      args;
     const { birthCertificate } = state;
     if (birthCertificate === null) return;
 
@@ -340,13 +348,21 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     // AT-HEAD repaint: `delivery.caughtUp` means `state` is the whole observed
     // reduction. It rides the last consumed event or the runner's eventless
-    // pass. ONE blocking closure — the runner awaits it as this head event's
-    // own work before the frame's deferred commit. The paint owns Slack's
-    // outcome classification: idempotent outcomes are quiet success, while
-    // unexpected cosmetic failures are reported once and settled so they
-    // cannot wedge the durable agent pipeline.
+    // pass. A droppable background attempt — a hanging Slack call must never
+    // head-of-line-block transcription and sends. What recovers a dropped
+    // attempt: the title repaints on the next at-head pass (the painted-title
+    // memo dies with the incarnation, and a revival sets #titleRepaintDue);
+    // a lost transient status costs seconds of stale indicator until the next
+    // pass; a lost revival clear re-arms because dying while owing this
+    // keepalive-backed work produces another revival fact.
     if (delivery.caughtUp) {
-      blockProcessorWhile(() => this.#repaintPresence(args));
+      runInBackground(() => {
+        const attempt = this.#presenceRepaintChain.then(() => this.#repaintPresence(args));
+        // The chain survives a failed attempt (the failure still surfaces
+        // through runInBackground's own logging on `attempt`).
+        this.#presenceRepaintChain = attempt.catch(() => {});
+        return attempt;
+      });
     }
   }
 

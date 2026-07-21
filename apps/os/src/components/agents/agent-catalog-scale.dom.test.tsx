@@ -15,7 +15,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children?: React.ReactNode }) => <a href="#new-agent">{children}</a>,
 }));
 
-vi.mock("iterate/react", () => ({
+vi.mock("iterate/sdk/itx/react", () => ({
   useLiveState: (_node: unknown, _selector: unknown, deps: readonly string[]) => ({
     value: runtimeTransitions.get(deps[0] ?? ""),
   }),

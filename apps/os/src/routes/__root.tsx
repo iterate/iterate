@@ -20,6 +20,7 @@ import { AppConfig } from "../config.ts";
 import appCss from "../styles.css?url";
 import { PosthogContextSync } from "~/components/posthog-context.tsx";
 import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
+import { environmentFaviconHref } from "~/lib/environment-favicon.ts";
 import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
 import type { RouterContext } from "~/router-context.ts";
 
@@ -52,14 +53,22 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     };
   },
   staleTime: Number.POSITIVE_INFINITY,
-  head: () => ({
+  head: ({ loaderData }) => ({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "OS" },
     ],
     links: [
-      { rel: "icon", type: "image/svg+xml", href: iterateLogoAsset },
+      {
+        rel: "icon",
+        type: "image/svg+xml",
+        href: environmentFaviconHref({
+          environmentName: loaderData?.config.environmentName,
+          workerName: loaderData?.config.cloudflare?.workerName,
+          productionHref: iterateLogoAsset,
+        }),
+      },
       { rel: "stylesheet", href: appCss },
     ],
   }),

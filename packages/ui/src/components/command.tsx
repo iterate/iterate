@@ -44,7 +44,11 @@ function CommandDialog({
   return (
     <Dialog {...props}>
       <DialogContent
-        className={cn("top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0", className)}
+        // Inherit DialogContent's true center (`top-1/2 left-1/2 -translate-*`).
+        // A prior `top-1/3 translate-y-0` Spotlight offset stacked with the
+        // large ⌘K height (`sm:h-[66svh]`) and pinned the palette to the
+        // bottom of the viewport.
+        className={cn("overflow-hidden rounded-xl! p-0", className)}
         showCloseButton={showCloseButton}
       >
         <DialogHeader className="sr-only">

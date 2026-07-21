@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useLiveState } from "iterate/react";
+import { useLiveState } from "iterate/sdk/itx/react";
 import { AgentCatalog } from "~/components/agents/agent-catalog.tsx";
 import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";

@@ -24,12 +24,13 @@ The machinery itself — `StreamProcessor`, `defineProcessorContract`, the
 runner, the registry, keepalive/recovery durability — lives in the published
 package (`packages/iterate/src/processors`, imported as `iterate/processors`).
 apps/os hosts its domain processors on it, and a project's own worker can
-host processors on exactly the same code: the platform injects the module
-into every dynamic worker build, and the config-repo template's guestbook app
-(`apps/os/config-repo-template/apps/guestbook` — the processor in
-`src/guestbook.ts`, `GuestbookApp` hosting it in `src/guestbook-app.ts`, and
-the reduced state mirrored into Cap'n Web live state for its TanStack pages)
-is the reference for that userspace hosting shape.
+host processors on exactly the same code through the ordinary published
+dependency. The config-repo template's guestbook app
+(`apps/os/config-repo-template/apps/guestbook` — `processor.ts` plus the
+`GuestbookApp` server in `server.tsx`, bundled with its browser client by
+`createApp` and rendered via Cap'n Web + `useLiveState`) is the reference for
+that userspace hosting shape. Reduced state lives on the project stream at
+`/guestbook`.
 
 ## Expose the processor vocabulary directly
 

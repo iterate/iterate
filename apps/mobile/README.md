@@ -93,7 +93,7 @@ box — gets typed in and remembered as a recent.
 ## How chat works
 
 One capnweb WebSocket to `<server>/api` (`authenticate({type:"bearer"})` —
-owned by the shared `iterate/react` keeper and typed from its public contract).
+owned by the shared `iterate/sdk/itx/react` keeper and typed from its public contract).
 A chat is an agent stream: "new chat"
 mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
 (same lazy-seeding contract as the dashboard). The chat list is the unfiltered
@@ -160,7 +160,7 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 | Path                           | What                                                                                    |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
-| `src/lib/itx.ts`               | Mobile deployment/OAuth binding for the shared `iterate/react` keeper                   |
+| `src/lib/itx.ts`               | Mobile deployment/OAuth binding for the shared `iterate/sdk/itx/react` keeper           |
 | `src/lib/auth.ts`              | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
 | `src/lib/chat.ts`              | Pure: stream events → bubbles + working flag; agent path conventions                    |
 | `src/lib/use-live-events.ts`   | Initial stream reads + shared subscription hook feeding the TanStack Query cache        |

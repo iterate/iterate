@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { StreamEvent } from "../itx-api.generated.ts";
-import type { Itx } from "../itx/itx-react.ts";
+import type { Itx } from "../sdk/itx/react.ts";
 import { ensureAgentFeedReady, readAgentFeedHistory } from "./agent-feed-query.ts";
 
 const event = (offset: number): StreamEvent => ({

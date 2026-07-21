@@ -6,18 +6,20 @@
   "files": [
     "src/sdk.ts",
     "src/client.ts",
-    "src/live-state.ts",
     "src/node.ts",
     "src/processors/cloudflare.ts",
     "src/processors/index.ts",
     "src/processors/testing.ts",
-    "src/react.ts",
+    "src/sdk/capnweb/index.ts",
+    "src/sdk/capnweb/react.tsx",
+    "src/sdk/itx/react.ts",
     "src/cloudflare-workers.d.ts"
   ],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "jsx": "react-jsx",
     // The itx client sources use `.ts`-suffixed relative imports (the package
     // convention); legal under emitDeclarationOnly, and the emitted d.ts keeps
     // the .ts specifiers, which consumers resolve to the sibling .d.ts.

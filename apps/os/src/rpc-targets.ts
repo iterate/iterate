@@ -52,7 +52,7 @@ import {
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
-} from "iterate/live-state";
+} from "iterate/sdk/capnweb";
 import type {
   ValidateProjectAppSessionInput,
   ValidatedProjectAppSession,
@@ -4975,11 +4975,17 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * Register (for a prospective slug), append the complete root birth batch,
-   * and drive both armed processors through it. By default, also wait for
-   * `project/ready`; pass `waitUntilReady: false` when the caller renders
-   * bootstrap progress itself. Either lane returns this same handle, and
-   * addressing an unknown slug is side-effect free.
+   * Register (for a prospective slug) and append the complete root birth
+   * batch. By default this resolves once the bootstrap saga has committed
+   * `project/ready` — the right shape for scripts that use the project
+   * immediately. `waitUntilReady: false` resolves as soon as the project
+   * EXISTS (identity registered, directory primed, birth events appended):
+   * the caller renders bootstrap progress itself, so nobody is left waiting.
+   * The durable-delivery subscriptions committed in the birth batch are what
+   * guarantee the saga runs; create also nudges both root processors AFTER
+   * this response, and a failed nudge is telemetry, not a create failure —
+   * the checklist's stall detector covers the rest. Either lane returns this
+   * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
     args: { organizationSlug?: string; projectId?: string } = {},
@@ -5067,9 +5073,13 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const maxOffset = Math.max(...committed.map((event) => event.offset));
 
     // The ingress API key is a sibling Secret birth with its own atomic
-    // builder/create barrier. It remains outside the root stream batch because
-    // secret material never belongs in the project journal.
-    await timedStep("create-timing", timing, "seed-project-api-key", () =>
+    // builder/create barrier (offset-bound encryption inside the Secret DO).
+    // It remains outside the root stream batch because secret material never
+    // belongs in the project journal. The DO's create dedupes, so re-seeding
+    // is a no-op, and a lost seed heals: the documented pairing flow
+    // (docs/remote-apps.md) ensure-creates before reveal(). That is what
+    // makes the seed safe to run behind the fast-path response.
+    const seedProjectApiKey = () =>
       env.SECRET.getByName(
         DurableObjectNameCodec.stringify({
           projectId: registered.projectId,
@@ -5089,23 +5099,45 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
               message: error instanceof Error ? error.message : String(error),
             });
           },
-        ),
-    );
-    await timedStep("create-timing", timing, "wait-project-birth", () =>
-      Promise.all([
-        this.processor.waitUntilProcessed({
-          offset: maxOffset,
-          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-        }),
-        this.notificationProcessor.waitUntilProcessed({
-          offset: maxOffset,
-          timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
-        }),
-      ]),
-    );
-    if (options?.waitUntilReady !== false) {
-      await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
+        );
+    // Both lanes drive processor birth through the same wait; they differ
+    // only in who pays for it. A create must never leave its caller parked
+    // behind a wedged processor indefinitely: one project birth frame has a
+    // shared 60s sibling-barrier deadline; 75s leaves 15s for
+    // durable-delivery backoff and transport redial.
+    const driveBirth = (step: string) =>
+      timedStep("create-timing", timing, step, () =>
+        Promise.all([
+          this.processor.waitUntilProcessed({
+            offset: maxOffset,
+            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+          }),
+          this.notificationProcessor.waitUntilProcessed({
+            offset: maxOffset,
+            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+          }),
+        ]),
+      );
+    // Fast path: identity + directory + committed birth events are enough for
+    // callers that watch the saga as live state. The seed and the birth drive
+    // run behind the response: the durable-delivery subscriptions committed in
+    // the birth batch are what guarantee the saga runs; these nudges only
+    // accelerate it, so the caller no longer pays for either.
+    if (options?.waitUntilReady === false) {
+      const ctx = this.#props.ctx;
+      ctx.waitUntil(timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey));
+      ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
+      return this;
     }
+
+    // Ready lane: the birth events are already committed and durable delivery
+    // is already driving both processors, so the seed's own barrier and the
+    // birth wait overlap safely — sequencing them would only add latency.
+    await Promise.all([
+      timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
+      driveBirth("wait-project-birth"),
+    ]);
+    await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
     return this;
   }
 
@@ -5790,7 +5822,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
 // ---------------------------------------------------------------------------
 // Every OS-owned RpcTarget that defines or relays an itx contract lives in this
 // module. Transport primitives shared with userspace, such as the read-only
-// target from `iterate/live-state`, stay in that package; the local relay below
+// target from `iterate/sdk/capnweb`, stay in that package; the local relay below
 // only bridges that target across the Durable Object hop.
 // ---------------------------------------------------------------------------
 

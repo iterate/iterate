@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { unifiedMergeView } from "@codemirror/merge";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
-import { useItxQuery } from "iterate/react";
+import { useItxQuery } from "iterate/sdk/itx/react";
 import { repoFileKind } from "./repo-file-kinds.ts";
 import { EmptyPane, FileChrome } from "./repo-editor-pane.tsx";
 

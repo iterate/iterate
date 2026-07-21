@@ -21,7 +21,7 @@ import type { RequestContext } from "~/request-context.ts";
  *
  * These are deliberately minimal: the browser talks to the itx session
  * directly (`session.projects.list()` / `session.projects.get(slug).create()` — see
- * iterate/react consumers). What remains here is only what MUST run
+ * iterate/sdk/itx/react consumers). What remains here is only what MUST run
  * server-side:
  * - `getProjectBySlugServerFn` — the project layout's `beforeLoad` (SSR).
  * - `getRootProjectRedirectServerFn` — the root `/` redirect decision (SSR);
@@ -63,7 +63,8 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  * A brand-new auth signup creates the user/org/project records in auth before
  * OS has a project stream. When that single auth-known project is still
  * missing, this runs the OS bootstrap through the explicit project handle,
- * waiting for the atomic birth and processor catch-up but not `project/ready`.
+ * waiting only until the project exists (identity registered, directory
+ * primed, birth events appended) — the saga runs behind the handle.
  * Single-project users then enter the project home's welcome flow, which
  * renders the remaining bootstrap progress from live state before onboarding.
  *

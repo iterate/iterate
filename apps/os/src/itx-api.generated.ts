@@ -81,11 +81,17 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
-   * Register (for a prospective slug), append the complete root birth batch,
-   * and drive both armed processors through it. By default, also wait for
-   * `project/ready`; pass `waitUntilReady: false` when the caller renders
-   * bootstrap progress itself. Either lane returns this same handle, and
-   * addressing an unknown slug is side-effect free.
+   * Register (for a prospective slug) and append the complete root birth
+   * batch. By default this resolves once the bootstrap saga has committed
+   * `project/ready` — the right shape for scripts that use the project
+   * immediately. `waitUntilReady: false` resolves as soon as the project
+   * EXISTS (identity registered, directory primed, birth events appended):
+   * the caller renders bootstrap progress itself, so nobody is left waiting.
+   * The durable-delivery subscriptions committed in the birth batch are what
+   * guarantee the saga runs; create also nudges both root processors AFTER
+   * this response, and a failed nudge is telemetry, not a create failure —
+   * the checklist's stall detector covers the rest. Either lane returns this
+   * same handle, and addressing an unknown slug is side-effect free.
    */
   create(
     args: { organizationSlug?: string; projectId?: string },
@@ -252,20 +258,7 @@ export interface ProjectCollection {
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
-/**
- * A node's live state — a source-agnostic reactive value. `get()` reads it once;
- * `subscribe()` opens a channel that pushes a full snapshot then minimal diffs
- * (see `lib/live-state`), which the React `useLiveState` hook reassembles so
- * components pick only the slice they render. ANY RpcTarget can expose one: a
- * Durable Object over its folded state, or a stateless worker over state it
- * computes or fetches.
- *
- * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
- * reassembles it from its fold), so writes go through the node's own verbs —
- * events appended, mutations called — never a generic `set`. A wire-level
- * `set`/`assign` would let any principal that can reach the node broadcast
- * fabricated state to every subscriber.
- */
+/** Read-only live value exposed across a Cap'n Web capability boundary. */
 export interface LiveStateRpc<State = unknown> {
   get(): Promise<State>;
   subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
@@ -2006,10 +1999,7 @@ export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
   | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
 
-/**
- * Live handle for one live-state subscription. `ping()` reports liveness (and
- * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
- */
+/** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
@@ -3893,8 +3883,8 @@ export type PlatformCredsRef = { platform: string };
 
 /**
  * One direct worker-bundler call. The wrapper names deliberately match the
- * upstream functions; OS only resolves the repo-aware `files` value, adds its
- * platform virtual modules to `createWorker`, and caches the returned build.
+ * upstream functions; OS resolves the repo-aware `files` value, applies the
+ * deployment-specific `iterate` package pin, and caches the returned build.
  */
 export type DynamicWorkerSource =
   | { createApp: WorkerBundlerCreateAppOptions }

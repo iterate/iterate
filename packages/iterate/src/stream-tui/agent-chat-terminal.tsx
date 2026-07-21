@@ -6,7 +6,7 @@
  *
  * The data layer is the SAME client stack the web app renders from: the
  * one-socket session keeper (`iterate/client`, pointed at the deployment via
- * `configureIterateSession`) and the shared React hooks (`iterate/react` —
+ * `configureIterateSession`) and the shared React hooks (`iterate/sdk/itx/react` —
  * `useItxQuery` seeds durable history and `useItxSubscription` owns reconnect,
  * watchdog, and re-subscribe recovery), folding stream events through the
  * shared agent-ui reducer (@iterate-com/ui). Sends use TanStack Query's
@@ -28,7 +28,7 @@ import {
   useItxQuery,
   useItxSubscription,
   type Itx,
-} from "../itx/itx-react.ts";
+} from "../sdk/itx/react.ts";
 import {
   ensureOnboardingAgentReady,
   ONBOARDING_AGENT_PATH,

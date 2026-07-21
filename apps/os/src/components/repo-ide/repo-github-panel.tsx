@@ -5,7 +5,7 @@ import { ExternalLinkIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { useItx, useItxQuery, useLiveState } from "iterate/react";
+import { useItx, useItxQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { RepoProcessorState } from "../../domains/repos/repo-processor-contract.ts";
 import {
   GITHUB_UI_FORCE_PULL_DEPTH,

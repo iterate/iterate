@@ -8,7 +8,7 @@
 // egress door decided. The front-ends are pure presentation over these.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 
 import {
   buildApprovalMessage,

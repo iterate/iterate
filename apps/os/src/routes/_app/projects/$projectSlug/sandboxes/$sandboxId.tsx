@@ -25,7 +25,7 @@ import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { useItx, useLiveState } from "iterate/react";
+import { useItx, useLiveState } from "iterate/sdk/itx/react";
 import { InfoRow } from "~/components/info-row.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { SandboxStatusBadge } from "~/components/sandbox-status-badge.tsx";

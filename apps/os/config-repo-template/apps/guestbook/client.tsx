@@ -1,65 +1,55 @@
-import React, {
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useState,
-} from "https://esm.sh/react@19.2.4";
-import { createRoot } from "https://esm.sh/react-dom@19.2.4/client";
+/**
+ * Public guestbook UI. The provider owns the reconnectable Cap'n Web root;
+ * useLiveState consumes the nearest root.
+ */
+import { newWebSocketRpcSession, type RpcStub } from "iterate/sdk/capnweb";
+import React, { type FormEvent, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/sdk/capnweb/react";
+import type { GuestbookApi } from "./server.tsx";
 
-type Entry = {
-  id: string;
-  message: string;
-  name: string;
-  signedAt: string;
-};
-
-async function api<T>(init?: RequestInit): Promise<T> {
-  const response = await fetch("/api/entries", init);
-  if (!response.ok)
-    throw new Error((await response.text()) || `request failed (${response.status})`);
-  return (await response.json()) as T;
+function makeConnection() {
+  const endpoint = new URL("/api", window.location.href);
+  endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+  return newWebSocketRpcSession<GuestbookApi>(endpoint.toString());
 }
 
 export function GuestbookClient() {
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState("");
+  const api = useCapnWebRoot<RpcStub<GuestbookApi>>();
+  const { value: state, error: liveError } = useLiveState(
+    (session: RpcStub<GuestbookApi>) => session.liveState,
+    (s) => s,
+  );
   const [name, setName] = useState("");
+  const [message, setMessage] = useState("");
+  const [signing, setSigning] = useState(false);
+  const [signError, setSignError] = useState("");
 
-  const load = useCallback(async () => {
-    try {
-      setEntries(await api<Entry[]>());
-      setError("");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const error = liveError ?? (signError.length > 0 ? signError : undefined);
+  const entries = state?.entries ?? [];
+  // Only claim the configured title once reduced state has arrived — the
+  // seeded-apps heading wait must not pass on the HTML shell alone.
+  const title =
+    state === undefined ? "Loading…" : (state.birthCertificate?.config.title ?? "Guestbook");
 
   const sign = async (event: FormEvent) => {
     event.preventDefault();
+    if (api == null) return;
+    setSigning(true);
+    setSignError("");
     try {
-      await api<Entry>({
-        body: JSON.stringify({ message, name }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      });
+      await api.sign(name, message);
       setMessage("");
-      await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setSignError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSigning(false);
     }
   };
 
   return (
     <>
-      <h1>Guestbook</h1>
+      <h1>{title}</h1>
       <form onSubmit={sign}>
         <label htmlFor="name">Name</label>
         <input
@@ -78,17 +68,20 @@ export function GuestbookClient() {
           rows={4}
           value={message}
         />
-        <button type="submit">Sign guestbook</button>
+        <button disabled={api == null || signing} type="submit">
+          Sign guestbook
+        </button>
       </form>
-      {error.length > 0 && <p role="alert">{error}</p>}
-      {loading ? (
+      {error !== undefined && <p role="alert">{error}</p>}
+      {state === undefined ? (
         <p>Loading…</p>
       ) : entries.length === 0 ? (
         <p>No entries yet.</p>
       ) : (
         <section aria-label="Guestbook entries">
-          {entries.map((entry) => (
-            <article key={entry.id}>
+          {/* Newest first; key on payload identity (not reversed index). */}
+          {[...entries].reverse().map((entry) => (
+            <article key={`${entry.signedAt}\0${entry.name}\0${entry.message}`}>
               <strong>{entry.name}</strong> <time dateTime={entry.signedAt}>{entry.signedAt}</time>
               <p>{entry.message}</p>
             </article>
@@ -101,4 +94,8 @@ export function GuestbookClient() {
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("missing #root");
-createRoot(root).render(<GuestbookClient />);
+createRoot(root).render(
+  <CapnWebProvider makeConnection={makeConnection}>
+    <GuestbookClient />
+  </CapnWebProvider>,
+);

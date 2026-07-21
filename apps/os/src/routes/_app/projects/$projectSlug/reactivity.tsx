@@ -8,7 +8,7 @@ import {
   useItxSubscription,
   useLiveState,
   type ItxSubscriptionStatus,
-} from "iterate/react";
+} from "iterate/sdk/itx/react";
 import type { StreamEvent } from "iterate/processors";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 

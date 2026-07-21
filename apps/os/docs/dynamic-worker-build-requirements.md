@@ -31,7 +31,7 @@ Ordinary Worker builds additionally receive these platform-owned virtual
 modules by exact specifier:
 
 - `@iterate-com/capnweb`
-- `iterate/live-state`
+- `iterate/sdk/capnweb`
 - `iterate/processors`
 - `iterate/processors/cloudflare`
 - `iterate/sdk`

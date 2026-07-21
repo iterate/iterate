@@ -9,7 +9,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Table, TableBody, TableCell, TableRow } from "@iterate-com/ui/components/table";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import { useItxQuery } from "iterate/react";
+import { useItxQuery } from "iterate/sdk/itx/react";
 import { changedLinesGutter } from "./change-gutter.ts";
 import { HtmlPreview } from "./html-preview.tsx";
 import { projectMarkdownPreview } from "./markdown-frontmatter.ts";

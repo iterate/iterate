@@ -183,6 +183,12 @@ it("emits the AI response-cache key for every deployment while keeping productio
   });
 });
 
+it("exposes the selected environment name to browser-facing config", () => {
+  expect(config.vars.APP_CONFIG_ENVIRONMENT_NAME).toBe(process.env.DOPPLER_CONFIG?.trim() || "dev");
+  expect(envShapedVars(envs.prd).APP_CONFIG_ENVIRONMENT_NAME).toBe("prd");
+  expect(envShapedVars(envs.preview_6).APP_CONFIG_ENVIRONMENT_NAME).toBe("preview_6");
+});
+
 it("does not retain a reconciled Durable Object tombstone", () => {
   expect(config.exports).not.toHaveProperty("CloudflareSandboxDurableObject");
 });
@@ -200,6 +206,18 @@ it("routes Cloudflare for SaaS custom hostnames through the project provider zon
   expect(config.env.prd.routes ?? []).toContainEqual({
     pattern: "*/*",
     zone_name: "iterate.app",
+  });
+});
+
+it("routes the owned iterate.com apex and single-label apps to the production os worker", () => {
+  const productionRoutes = config.env.prd.routes ?? [];
+  expect(productionRoutes).toContainEqual({
+    pattern: "iterate.com/*",
+    zone_name: "iterate.com",
+  });
+  expect(productionRoutes).toContainEqual({
+    pattern: "*.iterate.com/*",
+    zone_name: "iterate.com",
   });
 });
 

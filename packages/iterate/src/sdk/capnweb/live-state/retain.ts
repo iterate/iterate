@@ -4,8 +4,8 @@
 // A "sink" is a callback the server keeps calling AFTER the RPC method that
 // carried it returned (a live subscription's push). Retaining it means: dup the
 // underlying stub while the transport supports it, and dispose the dup on close.
-// The stream event-delivery lane (`retainProcessEventBatch`) and the live-state
-// engine both build on these primitives instead of re-deriving the dance.
+// Stream event delivery and the live-state engine both build on these primitives
+// instead of re-deriving the transport dance.
 
 /** An RPC callback after retention: still callable, plus disposable and (best-effort) broken-transport aware. */
 export type RetainedCallback<Arg> = ((arg: Arg) => unknown) &

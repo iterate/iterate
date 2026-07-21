@@ -4,13 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@iterate-com/ui/components/card";
+import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { Input } from "@iterate-com/ui/components/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@iterate-com/ui/components/input-otp";
 import { Label } from "@iterate-com/ui/components/label";
@@ -79,41 +73,39 @@ function RouteComponent() {
         : undefined;
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <Card className={signedInUser ? "w-full max-w-md" : "w-full max-w-sm"}>
-        <CardHeader className="text-center">
-          <CardTitle className="text-xl">
-            {signedInUser ? "Choose an account" : "Sign in"}
-          </CardTitle>
-          <CardDescription>
-            {signedInUser
-              ? "Continue with an Iterate account or sign in as someone else."
-              : "Sign in to your Iterate account"}
-          </CardDescription>
-        </CardHeader>
-        <Separator />
-        <CardContent className="pt-6">
-          {signedInUser ? (
-            <AccountChooser
-              currentUser={signedInUser}
-              continueWithAccount={() =>
-                window.location.assign(getPostLoginRedirectUrl(redirectTo))
-              }
-              refreshCurrentPage={() => {
-                window.location.assign(window.location.pathname + window.location.search);
-              }}
-            >
-              <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
-            </AccountChooser>
-          ) : (
-            <LoginActions
-              redirectTo={redirectTo}
-              emailOtpEnabled={emailOtpEnabled}
-              loginHint={loginHint}
-            />
-          )}
-        </CardContent>
-      </Card>
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <main className={signedInUser ? "w-full max-w-md" : "w-full max-w-xs"}>
+        <div className="mb-8 flex items-center gap-4">
+          <IterateLogo className="size-12 shadow-sm" />
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold">
+              {signedInUser ? "Choose an account" : "Sign in"}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {signedInUser
+                ? "Continue with an iterate account or sign in as someone else."
+                : "Sign in to your iterate account"}
+            </p>
+          </div>
+        </div>
+        {signedInUser ? (
+          <AccountChooser
+            currentUser={signedInUser}
+            continueWithAccount={() => window.location.assign(getPostLoginRedirectUrl(redirectTo))}
+            refreshCurrentPage={() => {
+              window.location.assign(window.location.pathname + window.location.search);
+            }}
+          >
+            <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
+          </AccountChooser>
+        ) : (
+          <LoginActions
+            redirectTo={redirectTo}
+            emailOtpEnabled={emailOtpEnabled}
+            loginHint={loginHint}
+          />
+        )}
+      </main>
     </div>
   );
 }
@@ -206,11 +198,10 @@ function LoginActions({
       {!emailMode ? (
         <>
           {emailOtpEnabled ? (
-            <div className="relative">
-              <Separator />
-              <span className="bg-card text-muted-foreground absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 px-2 text-xs uppercase tracking-[0.2em]">
-                Or
-              </span>
+            <div className="flex items-center gap-3">
+              <Separator className="flex-1" />
+              <span className="text-xs tracking-[0.2em] text-muted-foreground uppercase">or</span>
+              <Separator className="flex-1" />
             </div>
           ) : null}
           <Button
@@ -306,13 +297,10 @@ function EmailOtpSignIn({
           Continue with email
         </Button>
       ) : (
-        <div className="space-y-4 rounded-xl border bg-muted/30 p-4">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-foreground">Continue with email</p>
-            <p className="text-xs text-muted-foreground">
-              We&apos;ll send a one-time code to your email.
-            </p>
-          </div>
+        <div className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            We&apos;ll send a one-time code to your email.
+          </p>
 
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>

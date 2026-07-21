@@ -5,7 +5,7 @@
 // stateless one (`itx.liveDemo.ticker`, driven by a timer in the request
 // isolate with no DO).
 import { expect, test } from "vitest";
-import { applyPatch, type LiveUpdate } from "iterate/live-state";
+import { applyPatch, type LiveUpdate } from "iterate/sdk/capnweb";
 import type { ProjectLiveState } from "../../src/domains/projects/project-live-state.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";

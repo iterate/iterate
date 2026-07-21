@@ -65,7 +65,7 @@ import {
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { useItxQuery } from "iterate/react";
+import { useItxQuery } from "iterate/sdk/itx/react";
 import {
   createRepoTask,
   isRepoTaskPath,
