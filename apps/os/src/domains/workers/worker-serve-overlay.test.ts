@@ -95,13 +95,33 @@ describe("workerOverlayDecision", () => {
 
 describe("workerOverlayHtml", () => {
   test("carries the iterate mark and the serve info", () => {
-    const html = workerOverlayHtml(commitOid);
+    const html = workerOverlayHtml({ commitOid, kind: "live" });
     expect(html).toContain('viewBox="0 0 500 500"');
     expect(html).toContain('"c0ffee1234"');
+    expect(html).toContain('data-kind="live"');
+  });
+
+  test("loading and error states carry the ring, the spinner marker, and the red color", () => {
+    const building = workerOverlayHtml({ kind: "building" });
+    expect(building).toContain('data-kind="building"');
+    expect(building).toContain('data-spinner="true"');
+    expect(building).toContain('id="ring"');
+    const failed = workerOverlayHtml({ kind: "buildFailed", message: "boom" });
+    expect(failed).toContain('data-kind="buildFailed"');
+    expect(failed).not.toContain('data-spinner="true"');
+    expect(failed).toContain("#dc2626");
+    // Failure details start visible; everything else keeps the menu closed.
+    expect(failed).toContain('<div id="panel">');
+    expect(building).toContain('<div id="panel" hidden>');
+    // The live badge never shows the ring machinery as active state.
+    expect(workerOverlayHtml({ commitOid, kind: "live" })).not.toContain('data-spinner="true"');
   });
 
   test("serve metadata cannot break out of the script element", () => {
-    const html = workerOverlayHtml('evil</script><script>alert("x")</script>');
+    const html = workerOverlayHtml({
+      commitOid: 'evil</script><script>alert("x")</script>',
+      kind: "live",
+    });
     // Only the fragment's own tags — the payload's are <-escaped inert.
     expect(html.match(/<\/script>/g)).toHaveLength(1);
     expect(html).toContain("\\u003c/script>");
@@ -119,18 +139,20 @@ describe("workerServeErrorResponse", () => {
     // JS clients poll for the marker to clear; no-JS clients meta-refresh.
     expect(body).toContain(WORKER_SERVE_ERROR_HEADER);
     expect(body).toContain('<noscript><meta http-equiv="refresh"');
-    expect(body).toContain("iterate");
+    expect(body).toContain('data-kind="serveError"');
   });
 });
 
 describe("workerBuildFailedResponse", () => {
-  test("marked 500 with the bundler's error, HTML-escaped, overlay-exempt", async () => {
+  test("marked 500 with the bundler's error, script-inert, overlay-exempt", async () => {
     const response = workerBuildFailedResponse(new Error('Could not resolve "<b>zod</b>"'));
     expect(response.status).toBe(500);
     expect(response.headers.get(WORKER_BUILD_FAILED_HEADER)).toBe("1");
     expect(response.headers.get(OVERLAY_OPT_OUT_HEADER)).toBe("1");
     const body = await response.text();
-    expect(body).toContain("Could not resolve &quot;&lt;b&gt;zod&lt;/b&gt;&quot;");
+    // The message rides the state JSON <-escaped and lands via textContent.
+    expect(body).toContain("Could not resolve");
+    expect(body).toContain("\\u003cb>zod\\u003c/b>");
     expect(body).not.toContain("<b>zod</b>");
     expect(body).toContain("then reload this page");
     expect(body).not.toContain("const poll = async");
