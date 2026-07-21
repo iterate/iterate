@@ -39,19 +39,19 @@ raise the budget automatically.
   so a failure cannot orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
-- OS Vitest gives every current file a worker immediately and permits at most
-  two concurrent tests per file in CI. Every case owns isolated deployed state,
-  so there is no file queue or historical-duration scheduler on the critical
-  path; the examples matrix also overlaps its isolated runtimes inside each
-  case.
+- OS Vitest runs seven files at once and permits at most two concurrent tests
+  per file in CI. A longest-processing-time-first sequencer starts the observed
+  slow files first, while the seven-worker bound keeps the combined Vitest and
+  Playwright project-creation burst inside measured preview capacity. The
+  examples matrix still overlaps its isolated runtimes inside each case.
 - Root Playwright uses eight fully parallel workers in CI. Preview runs queue the
   long reconnect/resume specs first so their fixed probe windows overlap the
   ordinary catalogue.
-- The job uses a 64-core Depot runner so the fully fanned-out Vitest catalogue,
-  eight Playwright workers, deploy builds, and packaging do not create a local
-  CPU queue. The deployed Worker and Durable Objects remain
-  the integration boundary; the marathon is the capacity and tail-latency
-  proof for the resulting remote burst.
+- The job uses a 16-core Depot runner. Measurements on larger runners showed
+  the overlapping local work peaking below ten cores; the deployed Worker and
+  Durable Objects, rather than host CPU, are the integration boundary. The
+  marathon is the capacity and tail-latency proof for the resulting remote
+  burst.
 
 Tests make this safe by owning isolated state. Test clients give every project
 create a collision-resistant caller-owned `prj_…` identifier, avoiding an
@@ -94,9 +94,9 @@ serially because they intentionally share one warm container.
   entire duration to the critical path.
 - Start fixed-duration or historically slow work first. Once the phase is
   parallel, late scheduling of the longest item is the usual avoidable tail.
-- Keep isolated files fully fanned out. If the resulting remote burst exposes
-  a real shared-capacity defect, diagnose that defect rather than serializing
-  the suite around it.
+- Keep the seven-worker file pool saturated and refresh the longest-first
+  timings when the tail moves. If that bounded remote burst exposes a real
+  shared-capacity defect, diagnose it rather than adding ad-hoc serial lanes.
 - Split composite tests when their internal serial work becomes the phase
   floor. This improves both scheduling and retry granularity.
 
