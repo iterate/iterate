@@ -4,6 +4,9 @@ export const WORKER_SERVE_HEADER = "x-iterate-worker-serve";
 /** Marks the terminal build-failed page on the fetch lane. */
 export const WORKER_BUILD_FAILED_HEADER = "x-iterate-worker-build-failed";
 
+/** Marks ingress's catch-all page for a platform-side serve failure. */
+export const WORKER_SERVE_ERROR_HEADER = "x-iterate-worker-serve-error";
+
 /** A worker response can opt its HTML out of the Iterate overlay. */
 export const OVERLAY_OPT_OUT_HEADER = "x-iterate-overlay";
 

@@ -106,20 +106,23 @@ reduce({ state, event }) {
 }
 
 processEvent({ state, event }) {
-  if (event.type === "events.iterate.com/widget/created") {
+  if (state.birthCertificate === null) return;
+
+  if (event?.type === "events.iterate.com/widget/created") {
     // Optional birth reactions belong here.
     return;
   }
-  if (state.birthCertificate === null) return;
 
   // Ordinary actions are allowed only after birth.
 }
 ```
 
 Reducers still reduce ordinary events before birth; they do not need a second
-dispatcher or a `reduceConfiguredEvent` abstraction. The pre-birth guard is
-only around actions. Command/RPC methods that require a live object assert
-that `birthCertificate !== null` and fail clearly when called too early.
+dispatcher or a `reduceConfiguredEvent` abstraction. Gate the whole
+`processEvent` hook on the birth certificate unless a pre-birth event
+legitimately has a consequence; in that exceptional case, gate per switch case
+and add a comment saying why. Command/RPC methods that require a live object
+assert that `birthCertificate !== null` and fail clearly when called too early.
 
 A second distinct birth is a corrupt stream and MUST throw. Retrying the same
 create command with the exact same batch is different: creators use stable
@@ -151,6 +154,15 @@ An agent creation batch is the reference shape:
 4. the workspace capability and boot-context setup events;
 5. explicit Agent and Capability Host subscriptions;
 6. `waitUntilProcessed({ offset: finalBatchOffset })` on both processors.
+
+A domain's shared birth batch lives in `<domain>-defaults.ts` as
+`<name>CreationEvents(...)`. Its event bodies are fully deterministic, its
+idempotency keys derive from `(projectId, path)` only, and it is safe to
+re-append on every contact. Explicit create doors and birthing routers share
+that builder so their keys collide by design. This determinism is
+load-bearing: Telegram's router re-appends the whole batch on every forwarded
+contact and relies on key dedupe, so one `now()` or random value in the builder
+would break that consumer while first-contact-only routers stayed green.
 
 Agent `create()` deliberately takes no arguments. It establishes only the
 shipped defaults and machinery above; caller-selected context, model
@@ -258,13 +270,17 @@ is `ConsumedInput<AgentProcessorContract>`. Use the lower-level
 `agent.stream.append(...)` only when intentionally writing an event outside
 the Agent processor's vocabulary or an ephemeral event to the shared stream.
 
-Config patches use `mergeProcessorConfig` with these exact rules:
+Agent's config patches use `mergeProcessorConfig` with these exact rules:
 
 - plain JSON objects merge recursively;
 - omitted keys retain their current values;
 - arrays, scalars, and `null` replace the old value wholesale;
 - the processor validates the complete merged value with its full config
   schema before storing it.
+
+The `<slug>/configured` suffix does not imply merge semantics: each event's
+description must say whether that domain patch-merges (Agent and Workspace),
+uses per-key null-unset behavior (Sandbox), or replaces wholesale (Telegram).
 
 Facet processors whose config is immutable simply keep it in their birth
 certificate. A processor may define its own later config events when the

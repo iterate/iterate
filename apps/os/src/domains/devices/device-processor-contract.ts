@@ -166,39 +166,12 @@ export const DeviceProcessorContract = defineProcessorContract({
         "notification-intent subscription that copies project-level notification/requested " +
         "intents onto this device stream.",
       payloadSchema: deviceBirthCertificateSchema(),
-      examples: [
-        {
-          description: "An iPhone enrolls after the user grants notification permission.",
-          payload: {
-            config: {
-              appVersion: "2.4.0",
-              label: "Misha's iPhone",
-              notificationsStatus: "granted",
-              ownerId: "usr_01HZX3K9M2",
-              platform: "ios",
-              pushTokenSecretPath: "/secrets/devices/dvc_3f8a/expo-push-token",
-              pushTokenSecretUpdatedOffset: 4,
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/device/notification-requested": {
       description:
         "Requests one expiring push notification to this device. The event's own offset is " +
         "the obligation's identity; every later fact points back with requestOffset.",
       payloadSchema: deviceNotificationRequestSchema(),
-      examples: [
-        {
-          description: "An approval request pushes to the phone with a five-minute deadline.",
-          payload: {
-            body: "POST api.stripe.com is waiting for your approval.",
-            destination: { kind: "approvals", approvalRequestEventOffset: 17 },
-            expiresAt: 1784536200000,
-            title: "Approval needed",
-          },
-        },
-      ],
     },
     "events.iterate.com/device/push-token-updated": {
       description:
@@ -245,19 +218,6 @@ export const DeviceProcessorContract = defineProcessorContract({
               "revision every send and clear is fenced on.",
           }),
       }),
-      examples: [
-        {
-          description: "The app rotates its Expo token after an OS update.",
-          payload: {
-            appVersion: "2.5.1",
-            label: "Misha's iPhone",
-            notificationsStatus: "granted",
-            ownerId: "usr_01HZX3K9M2",
-            pushTokenSecretPath: "/secrets/devices/dvc_3f8a/expo-push-token",
-            pushTokenSecretUpdatedOffset: 9,
-          },
-        },
-      ],
     },
     "events.iterate.com/device/revoked": {
       description:
@@ -272,14 +232,6 @@ export const DeviceProcessorContract = defineProcessorContract({
             "DeviceNotRegistered), sign-out.",
         }),
       }),
-      examples: [
-        { description: "The user signs out of the app.", payload: { reason: "sign-out" } },
-        {
-          description:
-            "Expo reported DeviceNotRegistered, so the processor cleared the credential and revoked itself.",
-          payload: { reason: "push-token-invalid" },
-        },
-      ],
     },
     "events.iterate.com/device/notification-attempt-started": {
       description:
@@ -291,12 +243,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           description: "The obligation being attempted: the offset of its requesting event.",
         }),
       }),
-      examples: [
-        {
-          description: "The processor is about to dial Expo for the request at offset 12.",
-          payload: { requestOffset: 12 },
-        },
-      ],
     },
     "events.iterate.com/device/notification-ticket-observed": {
       description:
@@ -312,12 +258,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           .min(1)
           .meta({ description: "Expo's receipt ticket id, polled later for the outcome." }),
       }),
-      examples: [
-        {
-          description: "Expo queued the push and handed back a ticket.",
-          payload: { requestOffset: 12, ticketId: "0f38e7d2-6a4b-4c8e-9f3a-2b1d5e7c9a01" },
-        },
-      ],
     },
     "events.iterate.com/device/notification-settled": {
       description:
@@ -402,22 +342,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           description: "The settled obligation: the offset of its requesting event.",
         }),
       }),
-      examples: [
-        {
-          description: "The receipt came back clean: APNs/FCM accepted the push.",
-          payload: {
-            outcome: {
-              kind: "accepted-by-push-service",
-              ticketId: "0f38e7d2-6a4b-4c8e-9f3a-2b1d5e7c9a01",
-            },
-            requestOffset: 12,
-          },
-        },
-        {
-          description: "Nobody attempted the push before its deadline, so it settled expired.",
-          payload: { outcome: { kind: "expired" }, requestOffset: 12 },
-        },
-      ],
     },
     "events.iterate.com/device/notification-opened": {
       description: "The app observed that the user opened a correlated notification.",
@@ -430,12 +354,6 @@ export const DeviceProcessorContract = defineProcessorContract({
           description: "The notification that was opened: the offset of its requesting event.",
         }),
       }),
-      examples: [
-        {
-          description: "The user tapped the approval notification.",
-          payload: { openedAt: "2026-07-18T08:12:30.000Z", requestOffset: 12 },
-        },
-      ],
     },
   },
   consumes: [

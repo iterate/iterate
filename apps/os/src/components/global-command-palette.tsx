@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useMatches, useNavigate } from "@tanstack/react-router";
 import {
   Dialog,
@@ -8,12 +8,17 @@ import {
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
 import { connectItx, connectIterateSession, useIterateSessionQuery } from "iterate/sdk/itx/react";
-import { CommandPaletteDialog } from "./command-palette-dialog.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
+
+const CommandPaletteDialog = lazy(() =>
+  import("./command-palette-dialog.tsx").then((module) => ({
+    default: module.CommandPaletteDialog,
+  })),
+);
 
 /**
  * The global ⌘K navigator, live on every app page. The active project and
@@ -150,20 +155,22 @@ export function GlobalCommandPalette() {
     );
   }
 
-  return (
-    <CommandPaletteDialog
-      open={open}
-      onOpenChange={handleOpenChange}
-      currentPath={activeStream.streamPath}
-      navigator={streamNavigator}
-      scope={activeStream.projectId}
-      // The admin lane browses through platform-wide operator authority, and its
-      // `__null__` deployment namespace has no project DO to index — dialing
-      // `projects.get("__null__")` would just retry forever. Admin gets the
-      // tree; the live index is the app lane's.
-      liveIndex={adminStream == null}
-    />
-  );
+  return open ? (
+    <Suspense fallback={<p role="status">Loading project navigation…</p>}>
+      <CommandPaletteDialog
+        open
+        onOpenChange={handleOpenChange}
+        currentPath={activeStream.streamPath}
+        navigator={streamNavigator}
+        scope={activeStream.projectId}
+        // The admin lane browses through platform-wide operator authority, and its
+        // `__null__` deployment namespace has no project DO to index — dialing
+        // `projects.get("__null__")` would just retry forever. Admin gets the
+        // tree; the live index is the app lane's.
+        liveIndex={adminStream == null}
+      />
+    </Suspense>
+  ) : null;
 }
 
 /**

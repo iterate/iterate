@@ -12,7 +12,7 @@ export type RootProjectRedirectDecision =
   | {
       kind: "project";
       project: RootRedirectProject;
-      onboarding: boolean;
+      welcome: boolean;
     }
   | {
       kind: "projects";
@@ -20,7 +20,6 @@ export type RootProjectRedirectDecision =
 
 export function chooseRootProjectRedirect(input: {
   preferredProjectSlug: string | null;
-  preferredProjectOnboarding: boolean;
   projects: RootRedirectProject[];
 }): RootProjectRedirectDecision {
   const readyProjects = input.projects.filter((project) => project.deploymentStatus === "ready");
@@ -32,16 +31,16 @@ export function chooseRootProjectRedirect(input: {
     return {
       kind: "project",
       project: preferredReadyProject,
-      onboarding: input.preferredProjectOnboarding,
+      welcome: false,
     };
   }
 
   if (readyProjects.length === 1) {
-    return { kind: "project", project: readyProjects[0]!, onboarding: true };
+    return { kind: "project", project: readyProjects[0]!, welcome: false };
   }
 
   if (input.projects.length === 1 && input.projects[0]!.deploymentStatus === "missing") {
-    return { kind: "project", project: input.projects[0]!, onboarding: true };
+    return { kind: "project", project: input.projects[0]!, welcome: true };
   }
 
   return { kind: "projects" };
@@ -49,7 +48,7 @@ export function chooseRootProjectRedirect(input: {
 
 /**
  * Commit a missing project's birth before the root SSR redirect, without
- * waiting for the bootstrap saga's `project/ready` event. The onboarding page
+ * waiting for the bootstrap saga's `project/ready` event. The project home
  * renders that remaining progress from live state.
  */
 export async function createMissingRootRedirectProject(

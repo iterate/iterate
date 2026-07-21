@@ -28,8 +28,8 @@ test("a new user can create a project through the UI form", async ({ page }) => 
   // the agent page's loading state both render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    // Back on OS after auth first-run onboarding: a single project goes
-    // straight to its onboarding agent while project bootstrap catches up.
+    // Back on OS after auth first-run onboarding: a single project enters its
+    // creation flow, which hands off to the onboarding agent once ready.
     // The composer is that route's structural chrome (renders on mount, no
     // LLM output involved); 60s carried over from the waitForURL this
     // replaced — cold-slot bootstrap + redirect can straggle.
@@ -46,10 +46,10 @@ test("a new user can create a project through the UI form", async ({ page }) => 
     await page.goto("/new-project");
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
-    // Create resolves only after the atomic birth batch and bootstrap saga
-    // reach project/ready, then the home route hands off to onboarding. The
-    // composer is that destination's structural chrome; 60s covers the cold
-    // birth + saga + handoff.
+    // Create resolves after the atomic birth batch, then project home shows
+    // the bootstrap saga and hands off to onboarding once ready. The composer
+    // is that destination's structural chrome; 60s covers the cold birth +
+    // saga + handoff.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });

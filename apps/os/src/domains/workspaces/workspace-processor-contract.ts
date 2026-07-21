@@ -37,20 +37,6 @@ export const WorkspaceProcessorContract = defineProcessorContract({
       description:
         "Creates a workspace processor on this stream. The birth certificate carries the complete default configuration; explicit creation may append an initial configured patch in the same atomic batch.",
       payloadSchema: workspaceBirthCertificateSchema(),
-      examples: [
-        {
-          description:
-            "A workspace is born with the config repo mounted at its root (committable) and a big imported repo mounted read-only at /iterate.",
-          payload: {
-            config: {
-              mounts: {
-                "/": { policy: "commit-to-main", repoPath: "/repos/config" },
-                "/iterate": { policy: "read-only", repoPath: "/repos/iterate" },
-              },
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/workspace/configured": {
       description:
@@ -86,20 +72,6 @@ export const WorkspaceProcessorContract = defineProcessorContract({
             description: "A configuration patch: deep-merged per mount point; null unmounts.",
           }),
       }),
-      examples: [
-        {
-          description:
-            "One patch flips the /iterate mount to committable and unmounts /scratch; every other mount is untouched.",
-          payload: {
-            config: {
-              mounts: {
-                "/iterate": { policy: "commit-to-main" },
-                "/scratch": null,
-              },
-            },
-          },
-        },
-      ],
     },
   },
   consumes: ["events.iterate.com/workspace/created", "events.iterate.com/workspace/configured"],
