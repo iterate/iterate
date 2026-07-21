@@ -100,13 +100,13 @@ export function NewAgentComposer({
   }
 
   function onDragEnter(event: DragEvent<HTMLFormElement>) {
-    if (!event.dataTransfer.types.includes("Files")) return;
+    if (createAgent.isPending || !event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     setIsDragging(true);
   }
 
   function onDragOver(event: DragEvent<HTMLFormElement>) {
-    if (!event.dataTransfer.types.includes("Files")) return;
+    if (createAgent.isPending || !event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }
@@ -117,7 +117,7 @@ export function NewAgentComposer({
   }
 
   function onDrop(event: DragEvent<HTMLFormElement>) {
-    if (!event.dataTransfer.types.includes("Files")) return;
+    if (createAgent.isPending || !event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     setIsDragging(false);
     addSelectedFiles(event.dataTransfer.files);

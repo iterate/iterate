@@ -1,14 +1,14 @@
 import { useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { z } from "zod";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectDashboard } from "~/components/project-dashboard.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { ONBOARDING_AGENT_PATH, isOnboardingActive } from "~/lib/onboarding-agent.ts";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
-const HomeSearch = z.object({
+const HomeSearch = StreamViewSearch.extend({
   /** Set by the create form: play the creation checklist until `ready`, then
    * hand over to the onboarding agent. */
   welcome: z.boolean().optional().catch(undefined),
