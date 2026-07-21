@@ -200,12 +200,9 @@ export async function testTarget(options: TestTargetOptions) {
     apps: recorded.apps,
     headSha: context.pullRequestHeadSha,
   });
-  const versionedAppSlugs = [
-    app.slug,
-    ...Object.keys(app.previewTestDependencyBaseUrlEnvVars ?? {}).map((slug) =>
-      CloudflarePreviewAppSlug.parse(slug),
-    ),
-  ];
+  // Match the full preview lane: RPC-only dependencies such as auth need an
+  // exact version pin even though they do not contribute a public base URL.
+  const versionedAppSlugs = expandPreviewDependencies([app.slug]);
   const workerVersionOverrides = resolvePreviewTestWorkerVersionOverrides({
     apps: recorded.apps,
     appSlugs: versionedAppSlugs,
