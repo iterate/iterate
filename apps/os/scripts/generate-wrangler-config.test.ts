@@ -203,6 +203,18 @@ it("routes Cloudflare for SaaS custom hostnames through the project provider zon
   });
 });
 
+it("routes the owned iterate.com apex and single-label apps to the production os worker", () => {
+  const productionRoutes = config.env.prd.routes ?? [];
+  expect(productionRoutes).toContainEqual({
+    pattern: "iterate.com/*",
+    zone_name: "iterate.com",
+  });
+  expect(productionRoutes).toContainEqual({
+    pattern: "*.iterate.com/*",
+    zone_name: "iterate.com",
+  });
+});
+
 it("does not add SaaS catch-all routes to preview zones without SSL-for-SaaS quota", () => {
   expect(config.env.preview_6.routes ?? []).not.toContainEqual({
     pattern: "*/*",
