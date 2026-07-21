@@ -1645,9 +1645,9 @@ export interface WorkspaceGit {
 export interface CollabChangesResult {
   baseContent: string;
   baseVersion: number;
-  deleted: { at: number; clientId: string; text: string }[];
+  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
   headVersion: number;
-  inserted: { clientId: string; from: number; to: number }[];
+  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────

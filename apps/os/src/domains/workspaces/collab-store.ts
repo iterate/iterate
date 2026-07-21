@@ -12,6 +12,7 @@ export function sqliteCollabStore(storage: {
     `CREATE TABLE IF NOT EXISTS collab_ops(
        path TEXT NOT NULL, epoch TEXT NOT NULL, version INTEGER NOT NULL,
        client_id TEXT NOT NULL, client_seq INTEGER NOT NULL, changes TEXT NOT NULL,
+       created_at INTEGER NOT NULL DEFAULT 0,
        PRIMARY KEY (path, epoch, version))`,
   );
   sql.exec(
@@ -44,14 +45,15 @@ export function sqliteCollabStore(storage: {
         if (live.length === 0) throw new Error(`stale collab session for ${path} — reopen`);
         for (const op of ops) {
           sql.exec(
-            `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes)
-             VALUES (?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
             path,
             epoch,
             op.version,
             op.clientId,
             op.clientSeq,
             JSON.stringify(op.changes),
+            op.createdAt ?? 0,
           );
         }
         sql.exec(
@@ -127,6 +129,7 @@ export function sqliteCollabStore(storage: {
               changes: JSON.parse(row.changes as string),
               clientId: row.client_id as string,
               clientSeq: row.client_seq as number,
+              createdAt: (row.created_at as number) || undefined,
               version: row.version as number,
             }) satisfies PersistedCollabOp,
         ),

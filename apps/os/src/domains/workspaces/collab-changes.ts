@@ -21,18 +21,18 @@ import { ChangeSet, Text } from "@codemirror/state";
  */
 
 export type CollabChangeSegment =
-  | { clientId: string; from: number; kind: "inserted"; to: number }
-  | { at: number; clientId: string; kind: "deleted"; text: string };
+  | { clientId: string; createdAt?: number; from: number; kind: "inserted"; to: number }
+  | { at: number; clientId: string; createdAt?: number; kind: "deleted"; text: string };
 
-type InsertedSpan = { clientId: string; from: number; to: number };
+type InsertedSpan = { clientId: string; createdAt?: number; from: number; to: number };
 
 export function attributedChanges(
   base: Text,
-  ops: { changes: unknown; clientId: string }[],
+  ops: { changes: unknown; clientId: string; createdAt?: number }[],
 ): CollabChangeSegment[] {
   let doc = base;
   let inserted: InsertedSpan[] = [];
-  let deleted: { at: number; clientId: string; text: string }[] = [];
+  let deleted: { at: number; clientId: string; createdAt?: number; text: string }[] = [];
 
   for (const op of ops) {
     const changes = ChangeSet.fromJSON(op.changes);
@@ -46,6 +46,7 @@ export function attributedChanges(
       subtract([range.fromA, range.toA], inserted).map(([from, to]) => ({
         at: range.fromB,
         clientId: op.clientId,
+        createdAt: op.createdAt,
         text: doc.sliceString(from, to),
       })),
     );
@@ -57,10 +58,16 @@ export function attributedChanges(
     // op's own inserted ranges so every character keeps its true author.
     const opInserts: InsertedSpan[] = ranges
       .filter((range) => range.toB > range.fromB)
-      .map((range) => ({ clientId: op.clientId, from: range.fromB, to: range.toB }));
+      .map((range) => ({
+        clientId: op.clientId,
+        createdAt: op.createdAt,
+        from: range.fromB,
+        to: range.toB,
+      }));
     inserted = inserted
       .map((span) => ({
         clientId: span.clientId,
+        createdAt: span.createdAt,
         from: changes.mapPos(span.from, 1),
         to: changes.mapPos(span.to, -1),
       }))
@@ -68,6 +75,7 @@ export function attributedChanges(
       .flatMap((span) =>
         subtract([span.from, span.to], opInserts).map(([from, to]) => ({
           clientId: span.clientId,
+          createdAt: span.createdAt,
           from,
           to,
         })),
@@ -77,7 +85,12 @@ export function attributedChanges(
 
     ranges.forEach((range) => {
       if (range.toB > range.fromB) {
-        inserted.push({ clientId: op.clientId, from: range.fromB, to: range.toB });
+        inserted.push({
+          clientId: op.clientId,
+          createdAt: op.createdAt,
+          from: range.fromB,
+          to: range.toB,
+        });
       }
     });
     doc = changes.apply(doc);
@@ -122,6 +135,8 @@ function coalesce(spans: InsertedSpan[]): InsertedSpan[] {
     const last = merged.at(-1);
     if (last && last.clientId === span.clientId && span.from <= last.to) {
       last.to = Math.max(last.to, span.to);
+      // Coalesced spans wear the LATEST touch time.
+      if ((span.createdAt ?? 0) > (last.createdAt ?? 0)) last.createdAt = span.createdAt;
     } else {
       merged.push({ ...span });
     }

@@ -24,6 +24,8 @@ export interface PersistedCollabOp {
   changes: unknown;
   clientId: string;
   clientSeq: number;
+  /** Accept time (epoch ms) — redline tooltips say WHEN as well as who. */
+  createdAt?: number;
   version: number;
 }
 
@@ -272,12 +274,14 @@ export class CollabEngine {
     const persisted: PersistedCollabOp[] = [];
     let doc = file.doc;
     let version = file.version;
+    const acceptedAt = Date.now();
     for (const [index, update] of updates.entries()) {
       doc = update.changes.apply(doc);
       persisted.push({
         changes: jsons[index],
         clientId: update.clientId,
         clientSeq: update.clientSeq,
+        createdAt: acceptedAt,
         version: version++,
       });
     }
