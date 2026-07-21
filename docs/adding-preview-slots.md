@@ -55,6 +55,13 @@ personal Chrome tab, so use it only when the human explicitly permits that for
 this task. The dedicated automation profile is the default because its cookies
 and permissions are isolated and disposable.
 
+When personal Chrome is explicitly approved, the human only needs to enable
+Playwriter on one harmless anchor tab. The agent can create and retain its own
+working tab from that browser context; do not make the human create a new tab
+for every provider. Record which tabs are user-owned, leave the anchor and
+unrelated tabs untouched, and re-identify the working tab by exact URL after an
+OAuth redirect.
+
 Browser automation does not weaken the approval boundary. The agent stops on
 2FA, CAPTCHA, a changed price, a different workspace or organization, a name
 collision, or any page whose final action is outside the approved batch.
@@ -105,7 +112,9 @@ The order is:
 9. Present the ledger and obtain separate approval for the production
    Semaphore lease write.
 10. Add the `preview` label to a draft canary whose body contains exactly
-    `preview_environment=preview-20`, then prove deploy, e2e, and cleanup.
+    `preview_environment=preview-20`, then prove deploy, e2e, one real
+    Google/GitHub/Slack round trip, and cleanup. Remove the label after cleanup
+    so the still-open draft cannot immediately reacquire a slot.
 
 Each failed checkpoint stops the rehearsal. Fix the runbook or automation at
 the point of failure before retrying the slot.
@@ -468,6 +477,29 @@ durable and the project will correctly remain unready.
 Now update Slack from bootstrap to full manifests, complete Slack installation
 through OS, and verify each GitHub App's `/app` identity and webhook URL.
 
+The lifecycle canary in step 9 must exercise one claimed slot through a
+disposable OS project. Provider dashboard state is insufficient:
+
+- Connect Google through OS, then call a metadata-only endpoint such as Gmail
+  `/users/me/profile`. The Auth callback and OS integration callback prove two
+  different Google redirect URIs. A historical connection row can remain after
+  disconnect; require `getConnection()` or a real API call, not the row.
+- Install the slot's GitHub App on the dedicated private smoke repository, then
+  read that exact repository through
+  `itx.integrations.github.get(connection).octokit`. This proves the App
+  installation credential, not only its manifest and callback.
+- Connect Slack through OS, require `auth.test`, join
+  `#slack-agent-e2e-test`, and post a uniquely marked mention from the separate
+  `SLACK_CI_BOT_TOKEN` actor. Require `slack/webhook-received`,
+  `slack/thread-route-configured`, a Slack-thread agent, and a reply by the
+  preview bot in the same thread. See [Slack testing](slack-testing.md).
+
+Use project-scoped admin claims when minting the browser session for a
+disposable project. Strip terminal colour codes before copying a printed mint
+URL; ANSI bytes inside the query string corrupt it. Do not print provider
+tokens. Disconnect or let normal preview cleanup erase the project connections
+after retaining only non-secret evidence.
+
 ## 8. Approve and add Semaphore leases
 
 This is a separate production write. Present the completed verification ledger
@@ -528,8 +560,17 @@ storage shard, unreleased lease, or mismatched final state fails the slot. Do
 not keep feeding work to a sick slot; leave it unavailable and record the
 reason until automatic health quarantine exists.
 
+Classify error-level telemetry rather than treating green checks as the final
+barrier. Intentional failure-path tests must be identifiable as such. Durable
+Object storage resets, network loss, Worker hangs/cancellations, and default
+project-worker readiness failures are not normal background noise; retain the
+event window and investigate or explicitly track them before declaring the
+expansion complete.
+
 Close the canary only after all ten slots have passed. Run `status` and
-`reconcile` once more.
+`reconcile` once more. If the canary is a real work PR rather than a disposable
+one, remove its `preview` label after cleanup instead of closing it; otherwise
+the next preview dispatch can claim another slot for the still-eligible draft.
 
 ## Resuming safely
 
@@ -562,6 +603,9 @@ explicitly approved.
   though a GitHub App has only one webhook URL.
 - Stored Slack bot tokens for preview 3 and preview 6 returned `invalid_auth`;
   secret presence is not credential verification.
+- The mirrored `SLACK_CI_BOT_TOKEN` in `os/preview_14` also returned
+  `invalid_auth`; `_shared/prd`'s canonical CI actor worked. Repair stale mirrors
+  instead of silently normalizing the fallback.
 - Slots 10–19 initially had matching Auth/OS session secrets per slot, but the
   values differed across slots and shadowed empty preview roots. Root
   inheritance is the required shape for later slots.

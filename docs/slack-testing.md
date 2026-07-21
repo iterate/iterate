@@ -94,6 +94,12 @@ doppler secrets get SLACK_CI_BOT_TOKEN --project os --config prd --plain >/dev/n
 #   doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN
 ```
 
+Prove the selected trigger token with `auth.test` before the smoke. During the
+preview-14 rehearsal, the `os/preview_14` mirror returned `invalid_auth` while
+the canonical `_shared/prd` actor remained live. Using the canonical actor can
+unblock the canary, but the stale per-config mirror is credential drift and
+must be repaired; do not record `invalid_auth` as an expected fallback path.
+
 ### Channel membership (common failure mode)
 
 **The product bot must be a member of the channel** or Slack will not deliver

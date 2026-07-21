@@ -1,7 +1,7 @@
 ---
-status: applying-approved-batch
+status: operational-follow-ups
 size: large
-branch: ops/create-preview-slots-10-19
+branch: ops/finish-preview-slots-10-19
 started: 2026-07-20
 base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 ---
@@ -11,18 +11,14 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 ## Status
 
 Slots 10–19 are provisioned, deployed, and published in Semaphore's nineteen-
-slot production pool. Google has persisted both callback types for every slot;
-GitHub App identity/webhooks and every Slack manifest URL are verified. Draft
-PR #2182 requested and claimed preview-14 through the normal `preview` label
-path. Its targeted cleanup completed in 14 seconds and all five apps deployed.
-All 59 browser scenarios pass on preview-14. The remaining OS failure is now
-explained: one transient Cloudflare event-subscription GET 500 was journaled as
-a terminal config-repo creation failure, so the stable smoke project could
-never become ready on later retries. A bounded, observable retry for
-idempotent Cloudflare API reads is implemented and covered test-first.
-Remaining work is its green preview-14 deployment proof, real OS-side
-GitHub/Slack/Google canaries, lifecycle cleanup, and the separately approved
-shared-session-root migration.
+slot production pool. Google has both callback types for every slot; GitHub App
+identity/webhooks and every Slack manifest URL are verified. Draft PR #2182
+requested preview-14, passed all five deploy/e2e lanes at head `4d8693cd2`, and
+proved real Google, GitHub, and Slack connections through OS. Normal cleanup
+erased the canary in 18 seconds, released preview-14, and reconciliation is
+clean. Remaining work is the separately approved shared-session-root migration
+and classification/fix of Cloudflare runtime anomalies observed around the
+preview run; `os/preview_14` also has a stale mirrored `SLACK_CI_BOT_TOKEN`.
 
 ## Goal
 
@@ -142,7 +138,11 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
 - [x] Add the two Google OAuth redirect URIs for every new slot.
   _The shared non-production `dev` client now persists both Auth and OS
   callbacks for previews 1–19, with no missing or duplicate preview URI._
-- [ ] Prove the preview-14 OS-side Slack/GitHub/Google connections.
+- [x] Prove the preview-14 OS-side Slack/GitHub/Google connections.
+  _A disposable project connected all three providers. Gmail profile and the
+  dedicated private GitHub smoke repository returned HTTP 200 through itx.
+  Slack authenticated `iteratepreview14`, received and routed a signed mention,
+  created the thread agent, and replied `preview-14 canary ok`._
 - [x] Present the completed provisioning ledger and obtain separate approval
   to add the production Semaphore leases.
   _The user approved publication after reviewing the deployed provider and
@@ -151,7 +151,11 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _Semaphore reports nineteen resources; slots 10–19 were available after
   seeding and reconciliation returned no issues. Preview-14 is now held by
   PR #2182 as explicitly requested._
-- [ ] Prove the assign/run/cleanup lifecycle with the draft canary PR.
+- [x] Prove the assign/run/cleanup lifecycle with the draft canary PR.
+  _PR #2182 claimed preview-14 from its standalone body directive, deployed and
+  tested all five apps, then normal cleanup erased OS/Auth/Streams state in 18
+  seconds and released the lease. Status reports preview-14 available and
+  reconciliation returns `{}`; the `preview` label was removed afterwards._
 - [ ] Move this task to `tasks/complete/` with a date prefix after all ten slots
   pass the normal lifecycle.
 
@@ -166,7 +170,7 @@ read back from the owning system.
 | 11   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
 | 12   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
 | 13   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
-| 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☑         |
 | 15   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
 | 16   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
 | 17   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
@@ -540,3 +544,38 @@ the recorded projection.
   reads now retry transient 408/429/5xx responses at most twice, log every
   absorbed attempt, and never replay mutations. The new regression is green
   alongside 47 event/repo processor tests.
+- 2026-07-21: Merged current `main` normally and reran preview-14 at
+  `4d8693cd2`. Every required check passed. The five-app preview run deployed
+  exact-head revisions; Auth passed 5 scenarios, Semaphore 12, Streams 21 API
+  plus 31 browser scenarios, Dummy Petshop 6, and OS passed with one bounded
+  retry of the live-stream delivery control.
+- 2026-07-21: Used a disposable preview-14 project to prove external providers
+  through the product surface. Google Auth and OS callback redirects completed;
+  Gmail `/users/me/profile` returned HTTP 200. GitHub installation `148103582`
+  read `iterate/iterate-os-linked-repo-smoke` through Octokit with HTTP 200.
+  Slack connection `t0675psn873` authenticated as `iteratepreview14`, joined
+  `#slack-agent-e2e-test`, received the CI actor's signed mention, configured
+  the route, created its thread agent, and replied `preview-14 canary ok` in
+  thread <https://iterate-com.slack.com/archives/C096Q1M4Y86/p1784660547967219>.
+- 2026-07-21: The first Gmail read correctly failed after an accidental UI
+  disconnect: the journal contained `google/disconnected`, and the connection
+  secret had been made unusable by clearing its egress pin and material.
+  Reconnecting restored both Google origins and material, after which the read
+  passed. A visible historical connection row is therefore not proof that the
+  connection is live; verify its status or perform the provider call.
+- 2026-07-21: The Slack smoke found `os/preview_14`'s mirrored
+  `SLACK_CI_BOT_TOKEN` returns `invalid_auth`; the canonical `_shared/prd`
+  trigger actor worked. This is recorded as credential drift to repair, not an
+  expected fallback. The product connection token itself passed `auth.test`.
+- 2026-07-21: A 30-minute `os-preview-14` telemetry audit after CI found 28
+  error-level events. Intentional test events (`kill requested` and the explicit
+  retry-path failure) are understood, but Durable Object storage resets,
+  network loss, Worker cancellation/hangs, and default-project-worker readiness
+  failures remain operational follow-up. The canary is functionally green, but
+  the task stays open under the repository's no-unexplained-errors rule.
+- 2026-07-21: Ran the ordinary PR cleanup after the provider canaries. It
+  reacquired the lapsed-but-free preview-14 lease, erased Auth/OS/Streams state,
+  parked OS and Streams at 503, and released the lease in 18 seconds. Production
+  status then reported 19 total / 17 available / 2 active / 0 orphaned, and
+  reconciliation returned `{}`. Removed #2182's `preview` label so the draft
+  cannot immediately reacquire another slot.
