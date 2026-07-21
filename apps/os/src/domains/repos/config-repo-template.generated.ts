@@ -1286,6 +1286,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              const showError = (error) => {\n" +
       "                identity.textContent = error instanceof Error ? error.message : String(error);\n" +
       "              };\n" +
+      "              const setRefreshing = (pending) => {\n" +
+      "                refresh.disabled = pending;\n" +
+      "                refresh.textContent = pending ? \"refreshing…\" : \"refresh over Cap'n Web\";\n" +
+      "                if (pending) refresh.dataset.spinner = \"true\";\n" +
+      "                else delete refresh.dataset.spinner;\n" +
+      "              };\n" +
       "              try {\n" +
       "                const session = await publicApi.authenticate({ type: \"from-server-cookie\" });\n" +
       "                const me = await session.me;\n" +
@@ -1294,11 +1300,18 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "                  events.textContent = JSON.stringify(await session.liveState.get(), null, 2);\n" +
       "                };\n" +
       "                const subscription = await session.liveState.subscribe(() => {\n" +
-      "                  void render().catch(showError);\n" +
+      "                  void render().then(() => setRefreshing(false), (error) => {\n" +
+      "                    setRefreshing(false);\n" +
+      "                    showError(error);\n" +
+      "                  });\n" +
       "                });\n" +
-      "                refresh.disabled = false;\n" +
+      "                setRefreshing(false);\n" +
       "                refresh.onclick = () => {\n" +
-      "                  void session.refresh().catch(showError);\n" +
+      "                  setRefreshing(true);\n" +
+      "                  void session.refresh().catch((error) => {\n" +
+      "                    setRefreshing(false);\n" +
+      "                    showError(error);\n" +
+      "                  });\n" +
       "                };\n" +
       "                addEventListener(\"pagehide\", () => {\n" +
       "                  subscription[Symbol.dispose]();\n" +
