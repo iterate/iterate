@@ -3,7 +3,11 @@ import { ZodError } from "zod";
 import { streamDeliveryAuthContext, trustedInternalAuthContext } from "../../auth.ts";
 import type { Env } from "../../env.ts";
 import { deploymentItxForInternal, itxForScope } from "../../rpc-targets.ts";
-import { takeWorkerFetchDispatch, workerBuildStatus } from "../workers/worker-fetch-dispatch.ts";
+import {
+  buildBudgetForRequest,
+  takeWorkerFetchDispatch,
+  workerBuildStatus,
+} from "../workers/worker-fetch-dispatch.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts";
 
@@ -77,8 +81,12 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
     try {
+      // Routers forward the browser's own headers, so a document navigation
+      // is recognizable on this hop too — clamp the dispatcher's budget the
+      // way ingress clamps its own, or an app-level first build holds the
+      // page blank for the SDK's full default.
       return await runner.fetch({
-        buildBudgetMs: taken.dispatch.buildBudgetMs,
+        buildBudgetMs: buildBudgetForRequest(taken.request, taken.dispatch.buildBudgetMs),
         ref: taken.dispatch.ref,
         request: taken.request,
       });

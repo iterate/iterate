@@ -47,12 +47,6 @@ export const SlackProcessorContract = defineProcessorContract({
     "events.iterate.com/slack/created": {
       description: "Birth certificate for this Slack webhook router.",
       payloadSchema: slackRouterBirthCertificateSchema(),
-      examples: [
-        {
-          description: "A Slack connection router is born for one named installation.",
-          payload: { config: { connection: "acme-slack" } },
-        },
-      ],
     },
     "events.iterate.com/slack-agent/created": {
       description: "Birth certificate for the Slack facet on an agent stream.",
@@ -69,18 +63,6 @@ export const SlackProcessorContract = defineProcessorContract({
           })
           .meta({ description: "The one Slack thread this agent stream is bound to." }),
       }),
-      examples: [
-        {
-          description: "A Slack facet binds an agent stream to one thread.",
-          payload: {
-            config: {
-              connection: "acme-slack",
-              channel: "C01234567",
-              threadTs: "1751980451.001200",
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/slack/webhook-received": {
       description:
@@ -96,30 +78,6 @@ export const SlackProcessorContract = defineProcessorContract({
         .meta({
           description: "The webhook envelope; extra keys (headers, team id) ride along untouched.",
         }),
-      examples: [
-        {
-          description:
-            "A threaded Slack message, as Slack's Events API delivers it (trimmed to the typical fields).",
-          payload: {
-            body: {
-              type: "event_callback",
-              team_id: "T0XYZ1234",
-              api_app_id: "A0AB12CD3",
-              event: {
-                type: "message",
-                channel: "C0AB12CD3",
-                user: "U0DE45FG6",
-                text: "Hey @iterate, can you take a look at this?",
-                ts: "1751980451.204569",
-                thread_ts: "1751980423.123456",
-                channel_type: "channel",
-              },
-              event_id: "Ev0HI78JK9",
-              event_time: 1751980451,
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/slack/thread-route-configured": {
       description:
@@ -132,17 +90,6 @@ export const SlackProcessorContract = defineProcessorContract({
           .string()
           .meta({ description: "Stream path future webhooks for this thread forward to." }),
       }),
-      examples: [
-        {
-          description:
-            "A fresh Slack thread gets its own routed agent stream (`/agents/slack/{connection}/{channel}/ts-{threadTs}`, channel and ts sanitized to lowercase kebab).",
-          payload: {
-            channel: "C0AB12CD3",
-            threadTs: "1751980423.123456",
-            streamPath: "/agents/slack/acme/c0ab12cd3/ts-1751980423-123456",
-          },
-        },
-      ],
     },
   },
   consumes: [

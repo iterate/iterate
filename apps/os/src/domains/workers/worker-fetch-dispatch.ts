@@ -52,6 +52,30 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket";
 }
 
+const DOCUMENT_COLD_BUILD_BUDGET_MS = 1_500;
+
+/**
+ * The cold-build budget a fetch-lane hop should race before answering with
+ * the building page.
+ *
+ * A person navigating (`sec-fetch-dest: document` — browsers set it, nothing
+ * can spoof it from a page) is watching a blank tab for exactly as long as
+ * this race runs, so it stays short: a fast warm load still serves directly,
+ * and a real cold build swaps the blank tab for the branded building page,
+ * which polls and reloads into the app by itself. Every other client — API
+ * calls, the building page's own polls, WebSocket dials, curl — keeps the
+ * caller's budget: an HTML stand-in does nothing for them, and waiting
+ * through the race means the first response after a build lands is the real
+ * one.
+ */
+export function buildBudgetForRequest(
+  request: Request,
+  callerBudgetMs?: number,
+): number | undefined {
+  if (request.headers.get("sec-fetch-dest") !== "document") return callerBudgetMs;
+  return Math.min(callerBudgetMs ?? DOCUMENT_COLD_BUILD_BUDGET_MS, DOCUMENT_COLD_BUILD_BUDGET_MS);
+}
+
 /**
  * Marks a 503 as "the worker is cold-building" on the fetch lane, where a
  * named error cannot cross the hop the way it does over RPC. Routers that

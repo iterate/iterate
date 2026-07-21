@@ -319,54 +319,10 @@ export const AgentProcessorContract = defineProcessorContract({
         "Model-visible context arrived (user message, developer note, assistant output, system " +
         "item). The single source of truth for what the LLM sees.",
       payloadSchema: agentContextItemSchema(),
-      examples: [
-        {
-          description: "A project installs or replaces the system prompt.",
-          payload: {
-            role: "system",
-            key: "agent/system-prompt",
-            content:
-              "You are Acme's release manager. Track open pull requests and nag reviewers politely.",
-          },
-        },
-        {
-          description: "A user sends a chat message from the web UI.",
-          payload: {
-            role: "user",
-            content: "What's on my calendar today?",
-            actor: { type: "user", origin: "web" },
-            llmRequestPolicy: { behaviour: "after-current-request" },
-          },
-        },
-        {
-          description:
-            "A Slack transcriber adds a compact description and a coordinate for the raw webhook.",
-          payload: {
-            role: "developer",
-            content: "A Slack user asked: what's our uptime this month?",
-            actor: { type: "slack", userId: "U0788AB12CD" },
-            refs: [
-              {
-                type: "event",
-                streamPath: "/integrations/slack/acme",
-                offset: 81,
-                eventType: "events.iterate.com/slack/webhook-received",
-              },
-            ],
-            llmRequestPolicy: { behaviour: "after-current-request" },
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/created": {
       description: "The agent exists. Payload is open — provenance may ride along.",
       payloadSchema: z.looseObject({}),
-      examples: [
-        {
-          description: "An agent existence fact has no caller-selected configuration.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/agent/configured": {
       description:
@@ -397,12 +353,6 @@ export const AgentProcessorContract = defineProcessorContract({
           .strict()
           .meta({ description: "Partial patch, deep-merged into the current config." }),
       }),
-      examples: [
-        {
-          description: "Select the model used for subsequent requests.",
-          payload: { config: { llm: { model: "openai/gpt-5.6-sol" } } },
-        },
-      ],
     },
     "events.iterate.com/agents/web-message-sent": {
       description:
@@ -415,15 +365,6 @@ export const AgentProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "Files attached to the message." }),
       }),
-      examples: [
-        {
-          description: "The agent sends a visible chat reply to the web UI.",
-          payload: {
-            message:
-              "You have 4 unread emails. The two that look important are from Dana (contract renewal) and GitHub (a failing build on main).",
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
@@ -439,14 +380,6 @@ export const AgentProcessorContract = defineProcessorContract({
             "past it the request settles cancelled/expired instead of running.",
         }),
       }),
-      examples: [
-        {
-          description:
-            "The debounce elapsed and the intent was recorded; this event's own offset becomes " +
-            "the requestOffset every later fact references.",
-          payload: { model: "openai/gpt-5.6-sol", expiresAt: 1752000600000 },
-        },
-      ],
     },
     "events.iterate.com/agent/llm-request-settled": {
       description:
@@ -500,42 +433,6 @@ export const AgentProcessorContract = defineProcessorContract({
           ])
           .meta({ description: "How the request settled." }),
       }),
-      examples: [
-        {
-          description: "The LLM returned assistant output, with normalized token usage.",
-          payload: {
-            requestOffset: 57,
-            durationMs: 2340,
-            result: {
-              status: "succeeded",
-              text: "You have 4 unread emails.",
-              usage: { inputTokens: 4096, outputTokens: 118 },
-            },
-          },
-        },
-        {
-          description:
-            "The LLM call failed; the error rides a stream/error-occurred event into " +
-            "model-visible context and the reduce schedules the retry.",
-          payload: {
-            requestOffset: 61,
-            durationMs: 30012,
-            result: { status: "failed", errorMessage: "LLM request timed out after 30000ms" },
-          },
-        },
-        {
-          description:
-            "New user input interrupted the running request; the streamed partial is preserved.",
-          payload: {
-            requestOffset: 58,
-            result: {
-              status: "cancelled",
-              reason: "interrupted-by-user-input",
-              partialText: "Let me check your cal",
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/llm-response-chunk": {
       description:
@@ -561,16 +458,6 @@ export const AgentProcessorContract = defineProcessorContract({
           .nonnegative()
           .meta({ description: "Chunk ordinal within the response." }),
       }),
-      examples: [
-        {
-          description: "The first streamed text delta of a response.",
-          payload: {
-            chunk: { choices: [{ delta: { content: "Hello" } }] },
-            llmRequestOffset: 57,
-            sequence: 0,
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/token-usage-reported": {
       description:
@@ -615,21 +502,6 @@ export const AgentProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "Reasoning/thinking tokens, where the model reports them." }),
       }),
-      examples: [
-        {
-          description:
-            "An OpenAI model reports a mostly-cache-hit request at about a tenth of the model's window.",
-          payload: {
-            llmRequestOffset: 57,
-            model: "openai/gpt-5.6-sol",
-            maxContextTokens: 272000,
-            inputTokens: 29295,
-            outputTokens: 111,
-            cachedInputTokens: 28416,
-            reasoningOutputTokens: 0,
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/summary-updated": {
       description:
@@ -639,24 +511,6 @@ export const AgentProcessorContract = defineProcessorContract({
         "({ waitingFor: null, clearWaitingForThroughOffset }) only clears a wait established " +
         "at or before the waking input's offset.",
       payloadSchema: AgentSummaryUpdated,
-      examples: [
-        {
-          description: "The agent names its work and describes the current phase.",
-          payload: {
-            title: "Lisbon trip planning",
-            activity: "Comparing flight prices",
-            description: "Helping Jane plan a three-day Lisbon trip in September.",
-          },
-        },
-        {
-          description: "The agent has finished its current work and needs an answer.",
-          payload: { waitingFor: "user_input", activity: "Waiting for travel dates" },
-        },
-        {
-          description: "A later wake clears a stale dependency.",
-          payload: { waitingFor: null },
-        },
-      ],
     },
     "events.iterate.com/agent/binding-set": {
       description:
@@ -664,17 +518,6 @@ export const AgentProcessorContract = defineProcessorContract({
         "normally emitted atomically with integration agent creation, never inferred from " +
         "paths. Contract-owned but reduced by integration processors, not by the agent.",
       payloadSchema: AgentBinding,
-      examples: [
-        {
-          description: "A Slack thread is attached to its routed agent.",
-          payload: {
-            type: "slack_thread",
-            connection: "acme-slack",
-            channelId: "C0123",
-            threadTs: "1751980451.123456",
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/paused": {
       description:
@@ -683,26 +526,12 @@ export const AgentProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional().meta({ description: "Why the loop paused." }),
       }),
-      examples: [
-        {
-          description: "The circuit breaker parked an agent chaining autonomous script turns.",
-          payload: {
-            reason: "autonomous turn limit reached (100 consecutive turns without external input)",
-          },
-        },
-      ],
     },
     "events.iterate.com/agent/resumed": {
       description: "The agent resumed scheduling turns. Mirrors stream/resumed.",
       payloadSchema: z.object({
         reason: z.string().trim().min(1).optional().meta({ description: "Why the loop resumed." }),
       }),
-      examples: [
-        {
-          description: "A user message woke the paused agent with a fresh autonomous budget.",
-          payload: { reason: "external input" },
-        },
-      ],
     },
   },
   consumes: [

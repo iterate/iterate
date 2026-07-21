@@ -25,13 +25,6 @@ export const NotificationLifecycleContract = defineProcessorContract({
           .object({})
           .meta({ description: "Reserved for birth-time configuration; empty today." }),
       }),
-      examples: [
-        {
-          description:
-            "Project bootstrap births the notification facet with the (currently empty) config.",
-          payload: { config: {} },
-        },
-      ],
     },
   },
   consumes: [],

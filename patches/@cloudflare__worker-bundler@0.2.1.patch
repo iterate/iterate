@@ -16,7 +16,7 @@ index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e8
 -			if (!versionMetadata) {
 -				result.warnings.push(`Version ${version} not found for ${name}`);
 -				return;
-+			const tarballUrl = versionRange?.match(/^https?:/) ? versionRange : undefined;
++			const tarballUrl = directTarballUrl(versionRange);
 +			let packageFiles;
 +			let versionMetadata;
 +			if (tarballUrl) {
@@ -46,10 +46,15 @@ index 0220df7c889d58e6a670214eb1b6e1aa10215b2f..47627a3aad06d1de1f732ed48ccdf7e8
  			for (const [filePath, content] of Object.entries(packageFiles)) fileSystem.write(`node_modules/${name}/${filePath}`, content);
  			const deps = versionMetadata.dependencies ?? {};
  			await Promise.all(Object.entries(deps).map(([depName, depVersion]) => installPackage(depName, depVersion, result, fileSystem, installedPackages, inProgress, registry)));
-@@ -104,6 +116,20 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
+@@ -104,6 +116,25 @@ async function installPackage(name, versionRange, result, fileSystem, installedP
  		inProgress.delete(name);
  	}
  }
++/** Return an HTTP(S) dependency spec as a normalized direct-tarball URL. */
++function directTarballUrl(versionRange) {
++	if (!versionRange.startsWith("https://") && !versionRange.startsWith("http://")) return;
++	return new URL(versionRange).toString();
++}
 +/** Read and validate the identity and dependency metadata inside a direct tarball. */
 +function packageMetadataFromTarball(expectedName, tarballUrl, packageFiles) {
 +	const packageJson = packageFiles["package.json"];
