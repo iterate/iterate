@@ -1,5 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
-import { importGithubArtifact } from "./artifact-import.ts";
+import {
+  importGithubArtifact,
+  importGithubArtifactWithInitialPushCapture,
+} from "./artifact-import.ts";
 
 function fakeArtifacts() {
   return {
@@ -9,6 +12,73 @@ function fakeArtifacts() {
 }
 
 describe("importGithubArtifact", () => {
+  test("captures the imported head after installing the exact-repo subscription", async () => {
+    const order: string[] = [];
+    const appended: unknown[] = [];
+    const commitOid = "9f8d2c4b1e7a6a53c0d4e8b2f19a7c3d5e6f8a01";
+    const artifacts = {
+      import: async () => {
+        order.push("import");
+        return {} as ArtifactsCreateRepoResult;
+      },
+      get: async () => {
+        order.push("ready");
+        return {
+          log: async () => {
+            order.push("read-head");
+            return [{ hash: commitOid }];
+          },
+        } as unknown as ArtifactsRepo;
+      },
+    };
+
+    await importGithubArtifactWithInitialPushCapture(
+      artifacts,
+      {
+        branch: "main",
+        name: "project--repo",
+        owner: "iterate",
+        repo: "iterate",
+      },
+      {
+        append: async (event) => {
+          order.push("append-capture");
+          appended.push(event);
+        },
+        ensureEventSubscription: async () => {
+          order.push("subscribe");
+        },
+        namespace: "os-preview-17-repos",
+      },
+    );
+
+    expect(order).toEqual(["import", "ready", "subscribe", "read-head", "append-capture"]);
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/repo/cloudflare-artifact-event-received",
+        idempotencyKey: `artifact-import-initial-push:${commitOid}`,
+        payload: {
+          artifactName: "project--repo",
+          body: {
+            type: "cf.artifacts.repo.pushed",
+            source: {
+              namespace: "os-preview-17-repos",
+              repoName: "project--repo",
+              type: "artifacts.repo",
+            },
+            payload: {
+              after: commitOid,
+              before: "0000000000000000000000000000000000000000",
+              ref: "refs/heads/main",
+            },
+          },
+          cloudflareEventType: "cf.artifacts.repo.pushed",
+          namespace: "os-preview-17-repos",
+        },
+      },
+    ]);
+  });
+
   test("imports the public GitHub URL with full history", async () => {
     const artifacts = fakeArtifacts();
 

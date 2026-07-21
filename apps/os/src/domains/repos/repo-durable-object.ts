@@ -73,7 +73,7 @@ import {
 import { diffRepoTaskFiles, type RepoCommittedFileChange } from "./repo-task-events.ts";
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
-import { importGithubArtifact } from "./artifact-import.ts";
+import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
 import { getOrCreateArtifact } from "./artifact-creation.ts";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -1479,15 +1479,22 @@ export class RepoDurableObject extends DurableObject<Env> {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     await timedStep("create-timing", timing, "artifact-import", async () => {
-      await importGithubArtifact(this.requireArtifacts(), {
-        branch: REPO_DEFAULT_BRANCH,
-        ...(input.depth === undefined ? {} : { depth: input.depth }),
-        name: artifactName,
-        owner: input.owner,
-        repo: input.repo,
-      });
+      await importGithubArtifactWithInitialPushCapture(
+        this.requireArtifacts(),
+        {
+          branch: REPO_DEFAULT_BRANCH,
+          ...(input.depth === undefined ? {} : { depth: input.depth }),
+          name: artifactName,
+          owner: input.owner,
+          repo: input.repo,
+        },
+        {
+          append: (event) => this.#stream.append(event),
+          ensureEventSubscription: () => this.ensureArtifactRepoEventSubscription(artifactName),
+          namespace: this.env.ARTIFACTS_NAMESPACE,
+        },
+      );
     });
-    await this.ensureArtifactRepoEventSubscription(artifactName);
     return {
       artifactName,
       defaultBranch: REPO_DEFAULT_BRANCH,

@@ -17,10 +17,12 @@ is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
 verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Two valid Bugbot findings now have regression
-coverage: requested-slot adoption erases unknown-provenance data, and seeded
-repository lookup no longer depends on Cloudflare subscription setup. Local OS
-tests and typecheck are green; fresh CI and Bugbot review remain before merge.
+ready for review against `main`. Three valid Bugbot findings now have regression
+coverage: requested-slot adoption erases unknown-provenance data, seeded
+repository lookup no longer depends on Cloudflare subscription setup, and a
+server-side GitHub import records its initial commit even though the exact-repo
+subscription can only be installed after the atomic import. Local OS tests and
+typecheck are green; fresh CI and Bugbot review remain before merge.
 Production deployment and Semaphore lease publication remain later, separate
 approval boundaries. The strict PR-body slot selector makes it possible to
 canary one expanded slot without exposing all ten to old clients.
@@ -398,3 +400,9 @@ the recorded projection.
   repository lookup depend on Cloudflare's subscriptions API. After merging
   current `main`, all 2,113 OS unit tests, 120 preview-tool tests, full
   monorepo typecheck, lint, and format checks pass locally.
+- 2026-07-21: Fixed Bugbot's public-import event race test-first. After the
+  atomic Cloudflare import becomes ready, OS installs the exact-repository
+  subscription, reads the imported branch head from Artifacts, and appends an
+  idempotent queue-shaped initial-push fact. This preserves commit/task facts
+  without transferring Git history through the Worker. All 2,114 OS unit
+  tests, OS typecheck, and changed-file lint/format checks pass locally.
