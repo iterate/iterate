@@ -153,17 +153,6 @@ function dialTarget(): {
   };
 }
 
-function credentialsFor(
-  credentials: NonNullable<IterateSessionConfig["credentials"]>,
-  forceRefresh: boolean,
-): ItxAuthCredentials | Promise<ItxAuthCredentials> {
-  return typeof credentials === "function" ? credentials({ forceRefresh }) : credentials;
-}
-
-function isAuthShapedError(error: unknown): boolean {
-  return error instanceof Error && /auth|token|unauthorized|401/i.test(error.message);
-}
-
 function noDialTarget(): never {
   throw new Error(
     "itx has no connection target: in a browser the session dials the page's /api " +
@@ -441,12 +430,17 @@ function dial(): Generation {
           if (typeof target.credentials === "function") {
             const authenticate = async (forceRefresh: boolean) =>
               (await unauthenticated.authenticate(
-                await credentialsFor(target.credentials, forceRefresh),
+                await target.credentials({ forceRefresh }),
               )) as unknown as SessionStub;
             try {
               root = await authenticate(false);
             } catch (error) {
-              if (!isAuthShapedError(error)) throw error;
+              if (
+                !(error instanceof Error) ||
+                !/auth|token|unauthorized|401/i.test(error.message)
+              ) {
+                throw error;
+              }
               root = await authenticate(true);
             }
           } else {

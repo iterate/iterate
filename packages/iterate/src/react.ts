@@ -4,3 +4,4 @@
 // ./itx/itx-react.ts). This entry is one-stop — it re-exports the imperative
 // keeper surface too, so a component file imports from exactly one place.
 export * from "./itx/itx-react.ts";
+export type * from "./itx-api.generated.ts";

@@ -1,10 +1,9 @@
 // Live chat round-trip through the app's own client modules, from Node.
 //
-// This drives the EXACT seam the phone uses — dialItx (itx-core.ts) over a
-// real capnweb WebSocket with a bearer token, the /agents/mobile/<ts> new-chat
-// convention, a live stream subscription like the thread screen's, and the
-// chat reducer — against whatever deployment the ambient environment points
-// at. Run it like the other e2e lanes:
+// This drives the shared iterate client over a real capnweb WebSocket with a
+// bearer token, the /agents/mobile/<ts> new-chat convention, a live stream
+// subscription like the thread screen's, and the chat reducer — against
+// whatever deployment the ambient environment points at.
 //
 //   doppler run --config dev -- pnpm --dir apps/mobile test:e2e   # local dev (pnpm dev must be running)
 //   doppler run --config preview_3 -- pnpm --dir apps/mobile test:e2e
@@ -17,14 +16,9 @@
 // event shapes, live push, and reducer.
 
 import { expect, test } from "vitest";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { type RpcStub } from "capnweb";
+import { connectItx, type Agent, type StreamEvent, type StreamEventBatch } from "iterate/node";
 import { mintForgedAccessToken } from "../../../scripts/auth/forge-token.ts";
-import type {
-  Agent,
-  StreamEvent,
-  StreamEventBatch,
-  UnauthenticatedOs,
-} from "../../os/src/itx-api.generated.ts";
 import {
   ASSISTANT_MESSAGE_TYPE,
   mergeEventsByOffset,
@@ -33,18 +27,19 @@ import {
 } from "../src/lib/chat.ts";
 import { base64ToUint8Array } from "../src/lib/encoding.ts";
 import { reduceFeed } from "../src/lib/feed.ts";
-import { dialItx } from "../src/lib/itx-core.ts";
-import { portlessOrigin, requireEnv, resolveBaseUrl, wsUrl } from "./e2e-helpers.ts";
+import { portlessOrigin, requireEnv, resolveBaseUrl } from "./e2e-helpers.ts";
 
 test("phone client seam: new mobile chat gets a live agent reply", async () => {
   const baseUrl = resolveBaseUrl();
 
   // A throwaway project, created the same way the other e2e lanes do (the
   // admin handle may create projects; there is no projects.remove yet).
-  const admin = newWebSocketRpcSession<UnauthenticatedOs>(wsUrl(baseUrl));
-  const adminSession = await admin.authenticate({
-    type: "admin-secret",
-    secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+  using adminSession = connectItx({
+    baseUrl,
+    auth: {
+      type: "admin-secret",
+      secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+    },
   });
   const slug = `mobile-e2e-${Date.now().toString(36)}`;
   const created = await adminSession.projects.get(slug).create({});
@@ -58,8 +53,7 @@ test("phone client seam: new mobile chat gets a live agent reply", async () => {
     email: "mobile-e2e@nustom.com",
     admin: true,
   });
-  const session = await dialItx(baseUrl, async () => token);
-  const project = await session.projects.get(projectId);
+  using project = connectItx({ baseUrl, auth: { type: "bearer", token }, projectId });
 
   // Live subscription first — the thread screen's lane — so we observe the
   // whole conversation as server pushes, not just the final read.

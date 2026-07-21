@@ -100,6 +100,8 @@ export {
   type Itx,
   type ItxLiveSubscriptionHandle,
   type IterateSessionConfig,
+  type ProjectStub,
+  type SessionStub,
 } from "./itx-session.ts";
 export { createIterateQueryClient } from "./query-client.ts";
 

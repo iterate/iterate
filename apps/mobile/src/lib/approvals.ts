@@ -3,19 +3,19 @@
 // UI-free half) with one divergence: signing is dependency-injected (a
 // `sign` callback) instead of importing approval-keys.ts, which is
 // Node-only (fs, os, swiftc). That keeps this file itself Expo-free, so the
-// live e2e drives it from Node exactly like it drives itx-core.ts, and the
-// UI screen binds `sign` to approver.ts's Face-ID-gated signer.
+// live e2e drives it from Node, and the UI screen binds `sign` to approver.ts's
+// Face-ID-gated signer.
 //
 // No custom abstraction beyond that: reconcileBacklog/awaitSettlement are
 // copied near-verbatim since they're already UI-free, generic, and this is
 // the second real caller (not a premature one).
 
 import type { RpcStub } from "capnweb";
+import type { Stream, StreamEvent } from "iterate/react";
 import {
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,
 } from "../../../os/src/domains/projects/egress-approvals.ts";
-import type { Stream, StreamEvent } from "../../../os/src/itx-api.generated.ts";
 
 export const EVENT = {
   requested: "events.iterate.com/project/human-approval-requested",

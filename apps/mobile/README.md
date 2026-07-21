@@ -93,15 +93,16 @@ box — gets typed in and remembered as a recent.
 ## How chat works
 
 One capnweb WebSocket to `<server>/api` (`authenticate({type:"bearer"})` —
-the same itx surface every other client programs against,
-`apps/os/src/itx-api.generated.ts`). A chat is an agent stream: "new chat"
+owned by the shared `iterate/react` keeper and typed from its public contract).
+A chat is an agent stream: "new chat"
 mints `/agents/mobile/<timestamp>` and the first `message()` call creates it
 (same lazy-seeding contract as the dashboard). The chat list is the unfiltered
 `/agents` catalogue, so web/Slack-started chats open and continue here too.
 The thread screen renders only visible messages plus a "working…" row derived
-from in-flight activity (`src/lib/chat.ts`); a live stream subscription pushes
-updates into the query cache (`src/lib/live-thread.ts`). Assistant messages are
-rendered as selectable Markdown; user messages remain literal text.
+from in-flight activity (`src/lib/chat.ts`); `useItxSubscription` pushes live
+events into the same TanStack Query cache as the initial read
+(`src/lib/use-live-events.ts`). Assistant messages are rendered as selectable
+Markdown; user messages remain literal text.
 
 ## Editing repositories
 
@@ -147,22 +148,22 @@ testable from the phone alone. The runner shipped in PR #2059.
 
 ## Verification
 
-| Lane                                                          | What it proves                                                                                                                                                                                                                  |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                                             |
-| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                                       |
-| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip from Node through the app's own dial: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
-| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                                           |
-| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                                               |
+| Lane                                                          | What it proves                                                                                                                                                                                                    |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --dir apps/mobile test`                                 | Pure logic: chat reducer, merge, path conventions (runs in root CI)                                                                                                                                               |
+| `pnpm spec --project=mobile`                                  | Real Expo Router + React Native Web behavior at a phone-sized viewport and one visible interaction; no Xcode/native build                                                                                         |
+| `doppler run --config dev -- pnpm --dir apps/mobile test:e2e` | Live round-trip through `iterate/node`: bearer auth → new mobile chat → real agent reply → live subscription. Point it at a preview by switching the Doppler config. Needs `pnpm dev` running for the dev config. |
+| `npx expo export` / `npx expo prebuild`                       | The bundle builds; app config is sane                                                                                                                                                                             |
+| Iterate development build on a phone                          | Native integration: the in-app browser OAuth hop, Keychain/Face ID, APNs enrollment, and device-specific behavior                                                                                                 |
 
 ## Layout
 
 | Path                           | What                                                                                    |
 | ------------------------------ | --------------------------------------------------------------------------------------- |
-| `src/lib/itx-core.ts`          | The dial: capnweb + bearer + the one auth-shaped retry (Expo-free, e2e-able)            |
+| `src/lib/itx.ts`               | Mobile deployment/OAuth binding for the shared `iterate/react` keeper                   |
 | `src/lib/auth.ts`              | Issuer discovery, dynamic registration, PKCE, rotation-safe token refresh               |
 | `src/lib/chat.ts`              | Pure: stream events → bubbles + working flag; agent path conventions                    |
-| `src/lib/live-thread.ts`       | Live subscription per thread feeding the tanstack-query cache                           |
+| `src/lib/use-live-events.ts`   | Initial stream reads + shared subscription hook feeding the TanStack Query cache        |
 | `src/lib/repo-working-tree.ts` | Local source-preserving edits and explicit batch commit state                           |
 | `src/lib/approver-core.ts`     | Pure P-256 keygen/sign (Expo-free, e2e-able) — the phone's "software" approval key      |
 | `src/lib/approver.ts`          | Face-ID-gated Keychain storage binding for approver-core.ts                             |
