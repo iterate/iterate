@@ -549,14 +549,12 @@ function ProjectSidebarGroup({
     queryFn: () => getProjectCustomHostnames({ data: { projectId: projectId ?? "" } }),
     staleTime: 5 * 60_000,
   });
-  const customHostname = customHostnames.data?.[0];
-  const projectWorkerUrl = customHostname
-    ? `https://${customHostname}/`
-    : buildProjectWorkerUrl({
-        projectSlug,
-        projectHostnameBases,
-        appBaseUrl,
-      });
+  const projectWorkerUrl = buildProjectWorkerUrl({
+    projectSlug,
+    customHostname: customHostnames.data?.[0] ?? null,
+    projectHostnameBases,
+    appBaseUrl,
+  });
   const showAgentRows = sidebarAgentRowsVisible({
     isMobile,
     openMobile,
