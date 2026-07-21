@@ -391,7 +391,7 @@ Doc rule shipped in the docs PR; code half still open.
 
 ### D2. slack-agent blocks a cosmetic repaint that telegram-agent backgrounds
 
-**Status:** in-pr #2201 (spike/proposal).
+**Status:** done #2201 (merged by Jonas).
 
 `slack-agent-processor-implementation.ts:341-350` blocks the frame on
 `#repaintPresence` — Slack `setTitle`/`setStatus` vendor calls hold the
