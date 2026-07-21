@@ -309,10 +309,12 @@ async function deployPreviewApps({
   }
   // A successful claim clears exhaustion/takeover banners; a slot move
   // leaves its own so the change is impossible to miss.
-  const claimNotice =
-    previousSlug && previousSlug !== environmentConfigLease.slug
-      ? `This PR's slot changed from ${previousSlug} to ${environmentConfigLease.slug} at ${new Date().toISOString()} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`
-      : null;
+  const claimNotice = describePreviewSlotChange({
+    changedAt: new Date().toISOString(),
+    nextSlug: environmentConfigLease.slug,
+    previousSlug,
+    requestedEnvironment,
+  });
   const leaseUpdate = await updatePreviewState(context, (state) => ({
     ...state,
     environmentConfigLease: toSlotDisplay(environmentConfigLease),
@@ -2059,6 +2061,19 @@ function resolveRequestedPreviewEnvironment(body: string): string | null {
     );
   }
   return slug;
+}
+
+function describePreviewSlotChange(input: {
+  changedAt: string;
+  nextSlug: string;
+  previousSlug: string | null;
+  requestedEnvironment: string | null;
+}): string | null {
+  if (!input.previousSlug || input.previousSlug === input.nextSlug) return null;
+  if (input.requestedEnvironment === input.nextSlug) {
+    return `This PR requested ${input.nextSlug} via preview_environment, so its slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt}. Everything below refers to the new slot.`;
+  }
+  return `This PR's slot changed from ${input.previousSlug} to ${input.nextSlug} at ${input.changedAt} (the old lease lapsed and someone else took the slot). Everything below refers to the new slot.`;
 }
 
 type PreviewSemaphoreLease = {
@@ -5572,6 +5587,7 @@ export const previewInternals = {
   describeEnvironmentConfigLeases,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
+  describePreviewSlotChange,
   diagnosePreviewFleetCapacity,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,

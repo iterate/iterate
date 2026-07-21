@@ -32,6 +32,7 @@ const {
   claimEnvironmentConfigLease,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
+  describePreviewSlotChange,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   requireExplicitReclaimForce,
@@ -82,6 +83,19 @@ preview_environment=preview-17
 preview_environment=preview-18
 `),
   ).toThrow(/at most one preview_environment directive/);
+});
+
+test("a requested slot move is not reported as a stolen lapsed lease", () => {
+  expect(
+    describePreviewSlotChange({
+      changedAt: "2026-07-21T10:00:00.000Z",
+      nextSlug: "preview-17",
+      previousSlug: "preview-6",
+      requestedEnvironment: "preview-17",
+    }),
+  ).toBe(
+    "This PR requested preview-17 via preview_environment, so its slot changed from preview-6 to preview-17 at 2026-07-21T10:00:00.000Z. Everything below refers to the new slot.",
+  );
 });
 
 test("Auth preview provisioning can target only an approved slot range", () => {

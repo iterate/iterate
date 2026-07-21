@@ -17,12 +17,14 @@ is complete for all ten slots, including clean second ensures and every returned
 ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
 preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
 verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Three valid Bugbot findings now have regression
+ready for review against `main`. Four valid Bugbot findings now have regression
 coverage: requested-slot adoption erases unknown-provenance data, seeded
 repository lookup no longer depends on Cloudflare subscription setup, and a
 server-side GitHub import records its initial commit even though the exact-repo
-subscription can only be installed after the atomic import. Local OS tests and
-typecheck are green; fresh CI and Bugbot review remain before merge.
+subscription can only be installed after the atomic import. Intentional
+PR-body-directed slot moves are also reported as requested moves, not expired
+lease takeovers. Local OS tests and typecheck are green; fresh CI and Bugbot
+review remain before merge.
 Production deployment and Semaphore lease publication remain later, separate
 approval boundaries. The strict PR-body slot selector makes it possible to
 canary one expanded slot without exposing all ten to old clients.
@@ -406,3 +408,7 @@ the recorded projection.
   idempotent queue-shaped initial-push fact. This preserves commit/task facts
   without transferring Git history through the Worker. All 2,114 OS unit
   tests, OS typecheck, and changed-file lint/format checks pass locally.
+- 2026-07-21: Fixed Bugbot's slot-move notice finding test-first. A successful
+  `preview_environment` move now names the directive as the reason; only an
+  unrequested move says the old lease lapsed and was taken. All 187 scripts
+  tests and changed-file lint/format checks pass locally.
