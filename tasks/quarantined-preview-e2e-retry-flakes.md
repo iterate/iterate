@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after live failures
 
-Twenty-eight live preview tests were quarantined on 2026-07-21 while landing PR
+Thirty live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 a failed first attempt made the preview proof red instead of silently treating
 the retry as success. A separate retry-disabled test exhausted its bounded
@@ -180,13 +180,30 @@ examples are unchanged from `main`. The retry gate correctly rejected this
 otherwise-green run; each case is quarantined explicitly rather than letting
 its second attempt certify the PR.
 
+The eighth exact-head run was
+[Depot job qg087shvm9](https://depot.dev/orgs/0p91s0lz49/workflows/cl8tqzvx8p?job=qg087shvm9)
+at commit `b5597dd0e360bbbcdfb8a13d8b803dd733076aac`. OS deployed in 43.2s,
+Playwright passed cleanly in 149s, and the OS Vitest lane fell to 148s, but
+two cases still passed only on retry:
+
+- catalogue example `sandbox-exec` failed in the Node runtime with `Durable
+  Object reset because its code was updated`.
+- `configured processor subscriptions are recorded as configured runtime
+  connections` failed with `WebSocket connection failed`.
+
+The catalogue case, source example, and configured-connection test body are
+unchanged from `main`; the connection test uses the shared fixture whose new
+idempotency key also passed immediately on retry. CI correctly rejected the
+otherwise-green 155.6s OS phase, and both cases are quarantined explicitly.
+
 ## Quarantined coverage
 
 - The eight Playwright tests above use narrow `test.skip` markers.
 - The repo-history, AI Gateway, project fast-path, itx worker-composition,
   sandbox-timeout, script-concurrency, subscription-validation, agent-tools,
-  and key-value Vitest tests use narrow `test.skip` markers.
-- The nine generated catalogue cases remain discoverable but are registered
+  key-value, and configured-connection Vitest tests use narrow `test.skip`
+  markers.
+- The ten generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 - The two Dummy Petshop OAuth cases use narrow `test.skip` markers; the other
@@ -230,6 +247,10 @@ its second attempt certify the PR.
   determine why the post-deploy readiness boundary still admitted old code.
 - Reproduce the key-value stream wait expiry and explain why recovery re-armed
   the one-shot wait without delivering its event inside the public deadline.
+- Correlate the `sandbox-exec` reset with the exact deployed Worker version and
+  determine why the Node runtime reached an old Durable Object incarnation.
+- Trace the configured-connection WebSocket dial failure and determine whether
+  it shares the same post-deploy readiness gap.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 

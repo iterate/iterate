@@ -69,7 +69,8 @@ const WAIT_FOR_EVENT_TYPE = "events.iterate.test/lifecycle-wait-never";
 // Durable Objects alive through retained callback stubs. The now-active tests
 // prove the configured wake path is teardownable and re-wakeable, while direct
 // Cap'n Web subscriptions are cleaned up when their session is disposed.
-test("configured processor subscriptions are recorded as configured runtime connections", async () => {
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("configured processor subscriptions are recorded as configured runtime connections", async () => {
   const marker = crypto.randomUUID();
 
   using session = withItxSession();

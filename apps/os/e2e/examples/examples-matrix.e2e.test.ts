@@ -48,6 +48,7 @@ const QUARANTINED_MATRIX_EXAMPLES = new Set([
   "ephemeral-events",
   "repo-edit-file",
   "run-script",
+  "sandbox-exec",
   "secrets-lifecycle",
   "workspace-edit-and-push",
   "workspace-files-transfer",
