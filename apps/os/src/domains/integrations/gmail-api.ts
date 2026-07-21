@@ -5,11 +5,13 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import type { EgressInvocationSource } from "../projects/egress-invocation-source.ts";
 import type { GmailRequestInput } from "./types.ts";
 
 export async function callGmailApi(input: {
   /** The Gmail REST call. */
   request: GmailRequestInput;
+  egressSource: EgressInvocationSource;
   projectId: string;
   /** The Authorization header VALUE — a `Bearer getSecret(...)` placeholder the
    * connection secret substitutes; never a raw token. */
@@ -17,7 +19,7 @@ export async function callGmailApi(input: {
 }) {
   const method = (input.request.method ?? "GET").trim().toUpperCase();
   const url = gmailUrl(input.request);
-  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(
+  const response = await projectStub(itxEnv.PROJECT, input.projectId).egress(
     new Request(url, {
       method,
       headers: {
@@ -29,6 +31,7 @@ export async function callGmailApi(input: {
         ? {}
         : { body: JSON.stringify(input.request.body) }),
     }),
+    input.egressSource,
   );
 
   const contentType = response.headers.get("content-type") ?? "";

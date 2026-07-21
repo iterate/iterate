@@ -59,7 +59,7 @@ const network = await vi.hoisted(async () => {
     PROJECT: {
       getByName(_name: string) {
         return {
-          async fetch(request: Request) {
+          async egress(request: Request) {
             const url = new URL(request.url);
             if (request.method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(url.pathname)) {
               if (state.githubRepoExists) {

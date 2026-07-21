@@ -1,6 +1,7 @@
 import { tracing } from "cloudflare:workers";
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
+import type { EgressInvocationSource } from "../projects/egress-invocation-source.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
@@ -56,6 +57,7 @@ export class DynamicWorkerRunner {
   readonly #waitUntil: (promise: Promise<unknown>) => void;
 
   constructor(props: {
+    egressSource: EgressInvocationSource;
     /** The hosting context's `ctx.exports` — loopback entrypoints are minted
      * from it, so the isolate's authority is the host's, never the ref's. */
     exports: ExecutionContext["exports"];
@@ -67,12 +69,13 @@ export class DynamicWorkerRunner {
     waitUntil: (promise: Promise<unknown>) => void;
   }) {
     const itxScope = itxEntrypointProps({
+      egressSource: props.egressSource,
       path: props.scopePath,
       projectId: props.projectId,
       purpose: "userspace",
     });
     this.#bindings = { ITX: itxEntrypointBinding(props.exports, itxScope) };
-    this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId);
+    this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId, props.egressSource);
     this.#projectId = props.projectId;
     this.#scopePath = props.scopePath;
     this.#waitUntil = props.waitUntil;

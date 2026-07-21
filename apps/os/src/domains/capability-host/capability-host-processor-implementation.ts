@@ -5,6 +5,7 @@ import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
+import type { EgressInvocationSource } from "../projects/egress-invocation-source.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -200,6 +201,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             executionId,
             expiresAt: execution.expiresAt,
             fallback,
+            requestedAtOffset: execution.requestedAtOffset,
           }),
         );
         continue;
@@ -282,6 +284,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
             [event.payload.executionId]: {
               status: "requested" as const,
               code: event.payload.code,
+              requestedAtOffset: event.offset,
               expiresAt: event.payload.expiresAt,
             },
           },
@@ -762,6 +765,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     executionId: string;
     expiresAt: number;
     fallback: ItxExpression | null;
+    requestedAtOffset: number;
   }) {
     const now = () => this.#now();
     const executionExpiresAt = input.expiresAt - SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS;
@@ -854,6 +858,12 @@ export class CapabilityHostProcessor extends StreamProcessor<
       const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
         emittedJs: checked.emittedJs,
         expiresAt: executionExpiresAt,
+        source: {
+          kind: "script-execution",
+          streamPath: this.#scopePath,
+          scriptRunRequestedEventOffset: input.requestedAtOffset,
+          executionId: input.executionId,
+        },
       });
       const runOutcome = await settleByDeadline(runPromise, executionExpiresAt, now);
       if (runOutcome.status === "deadline") {
@@ -1013,7 +1023,14 @@ export type RunScriptCommand = {
 };
 
 type ScriptExecutionEntrypoint = {
-  run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
+  run(
+    code: string,
+    options: {
+      emittedJs?: string;
+      expiresAt: number;
+      source: Extract<EgressInvocationSource, { kind: "script-execution" }>;
+    },
+  ): Promise<unknown>;
 };
 
 /**

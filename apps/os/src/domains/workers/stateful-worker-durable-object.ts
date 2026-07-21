@@ -44,6 +44,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   // stateless worker at this path. That is what lets a provided durable
   // capability call sibling capabilities through `this.env.ITX.get()`.
   readonly #workerRunner = new DynamicWorkerRunner({
+    egressSource: { kind: "scope", scopePath: this.#name.path },
     exports: this.ctx.exports,
     projectId: this.#name.projectId,
     scopePath: this.#name.path,

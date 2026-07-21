@@ -125,9 +125,9 @@ function sortKeysDeep(value: unknown): unknown {
 /**
  * The exact bytes an approval signature covers. Reconstructable by both
  * sides from the requested event alone: the CLI builds it from the event it
- * received, the Project DO from the payload it appended. `bodyPreview` and
- * `expiresAt` are deliberately excluded — the preview is a UI hint (the
- * signature covers the body via its hash) and expiry is enforced server-side.
+ * received, the Project DO from the payload it appended. Display/provenance
+ * fields and `expiresAt` are deliberately excluded — the signature covers the
+ * body via its hash, and expiry is enforced server-side.
  */
 export function buildApprovalMessage(input: {
   projectId: string;
@@ -151,6 +151,21 @@ export function buildApprovalMessage(input: {
       decision: input.decision,
     }),
   );
+}
+
+/** Preserve the complete body for human inspection; UTF-8 stays readable and other bytes are base64. */
+export function approvalRequestBody(bytes: Uint8Array): {
+  encoding: "utf8" | "base64";
+  content: string;
+} {
+  try {
+    return {
+      encoding: "utf8",
+      content: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    };
+  } catch {
+    return { encoding: "base64", content: bytesToBase64(bytes) };
+  }
 }
 
 // -----------------------------------------------------------------------------

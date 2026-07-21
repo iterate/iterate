@@ -326,6 +326,7 @@ import type {
   DeviceEnrollInput,
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
+import type { EgressInvocationSource } from "./domains/projects/egress-invocation-source.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -2837,7 +2838,14 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
  * verified itx-side.
  */
 class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations"> {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      egressSource: EgressInvocationSource;
+      projectId: string;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -2902,7 +2910,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
-      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      egress: projectEgressFetcher(
+        this.props.ctx.exports,
+        this.props.projectId,
+        this.props.egressSource,
+      ),
       parent: "a project itx (itx.integrations.parallel)",
     });
   }
@@ -3062,6 +3074,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
         authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
+        egressSource: this.props.egressSource,
         projectId: this.props.projectId,
         request: args[0] as GmailRequestInput,
       });
@@ -3087,7 +3100,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's mandatory `.octokit` namespace identifies the SDK;
       // replay the remaining dotted path onto the real Octokit. Its transport
       // rides the connection secret's substituting egress (github-api.ts).
-      const octokit = connectionOctokit({ connection, projectId: this.props.projectId });
+      const octokit = connectionOctokit({
+        connection,
+        egressSource: this.props.egressSource,
+        projectId: this.props.projectId,
+      });
       try {
         return await replayPathCall(octokit, { args, path: method.slice(1) });
       } catch (error) {
@@ -4308,6 +4325,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
     readonly props: {
       auth: ItxAuth;
       ctx: CfExecutionContext;
+      egressSource: EgressInvocationSource;
       projectId: string;
     },
   ) {
@@ -4324,6 +4342,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
     return new DynamicWorkerRpcTarget({
       buildBudgetMs: options?.buildBudgetMs,
       ctx: this.props.ctx,
+      egressSource: this.props.egressSource,
       flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
@@ -4342,7 +4361,11 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
   readonly #flattenNestedPaths: boolean;
-  readonly #props: { ctx: CfExecutionContext; projectId: string };
+  readonly #props: {
+    ctx: CfExecutionContext;
+    egressSource: EgressInvocationSource;
+    projectId: string;
+  };
   readonly #ref: DynamicWorkerRef;
   readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
@@ -4350,6 +4373,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   constructor(props: {
     buildBudgetMs?: number;
     ctx: CfExecutionContext;
+    egressSource: EgressInvocationSource;
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
@@ -4358,7 +4382,11 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
-    this.#props = { ctx: props.ctx, projectId: props.projectId };
+    this.#props = {
+      ctx: props.ctx,
+      egressSource: props.egressSource,
+      projectId: props.projectId,
+    };
     this.#ref = props.ref;
     this.#traceRole = props.traceRole;
   }
@@ -4369,6 +4397,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   // binding and egress fetcher come from the HOSTING context, not the ref.
   get #runner(): DynamicWorkerRunner {
     this.#lazyRunner ??= new DynamicWorkerRunner({
+      egressSource: this.#props.egressSource,
       exports: this.#props.ctx.exports,
       projectId: this.#props.projectId,
       scopePath: this.#ref.path,
@@ -4530,6 +4559,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
+      egressSource: { kind: "scope", scopePath: "/" },
       path: "/",
       projectId,
     });
@@ -4962,6 +4992,7 @@ type ExistingProjectRpcTargetProps = {
   // dotted-path calls (`itx.foo.bar(...)` → `capabilityHost.invokeCapability`).
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
+  egressSource: EgressInvocationSource;
   projectId: string;
 };
 
@@ -5040,6 +5071,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.#existingProps.projectId;
   }
 
+  get #egressSource(): EgressInvocationSource {
+    return this.#existingProps.egressSource;
+  }
+
   /** The project this itx is scoped into. */
   get projectId(): string {
     return this.#projectId;
@@ -5098,6 +5133,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
+        egressSource: { kind: "scope", scopePath: "/" },
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -5509,7 +5545,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Project-attributed outbound fetch (+ intercept). */
   get egress(): ProjectEgressRpcTarget {
-    return new ProjectEgressRpcTarget({ projectId: this.#projectId });
+    return new ProjectEgressRpcTarget({
+      projectId: this.#projectId,
+      source: this.#egressSource,
+    });
   }
 
   /** Project email: send(...) and the connection-scoped inbound address. */
@@ -5546,6 +5585,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
+      egressSource: this.#egressSource,
       projectId: this.#projectId,
     });
   }
@@ -5553,7 +5593,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */
   get mcp(): McpClientCollectionRpcTarget {
     return new McpClientCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#egressSource),
       projectId: this.#projectId,
       // Makes beginOAuth links notify the calling agent when the flow completes.
       scopePath: this.#capabilityHost.path,
@@ -5563,14 +5603,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Ad-hoc OpenAPI clients: connect(spec). */
   get openapi(): OpenApiCollectionRpcTarget {
     return new OpenApiCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#egressSource),
     });
   }
 
   /** Parallel API, preconfigured with iterate's platform API key. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#egressSource),
       parent: "a project itx (itx.parallel)",
     });
   }
@@ -5638,6 +5678,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
+      egressSource: this.#egressSource,
       projectId: this.#projectId,
     });
   }
@@ -5708,6 +5749,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return new DynamicWorkerRpcTarget({
       ctx: this.#props.ctx,
+      egressSource: this.#egressSource,
       flattenNestedPaths: true,
       projectId: this.#projectId,
       ref: defaultProjectWorkerRef(),
@@ -5739,6 +5781,7 @@ const ITX_SURFACE_MEMBER_NAMES: ReadonlySet<string> = new Set(
 export function itxForScope(props: {
   auth: ItxAuth;
   ctx: CfExecutionContext;
+  egressSource: EgressInvocationSource;
   path: string;
   projectId: string;
 }): ProjectRpcTarget {
@@ -5746,6 +5789,7 @@ export function itxForScope(props: {
     auth: props.auth,
     capabilityHost: new CapabilityHostRpcTarget(props),
     ctx: props.ctx,
+    egressSource: props.egressSource,
     projectId: props.projectId,
   });
 }
@@ -6105,7 +6149,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     });
   }
 
-  constructor(readonly props: { projectId: string }) {
+  constructor(readonly props: { projectId: string; source: EgressInvocationSource }) {
     super();
   }
 
@@ -6113,7 +6157,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse> {
-    return projectStub(env.PROJECT, this.props.projectId).fetch(request);
+    return projectStub(env.PROJECT, this.props.projectId).egress(request, this.props.source);
   }
 
   /** Install a live egress interceptor (last writer wins); returns a release handle. */

@@ -1,7 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
+import type { EgressInvocationSource } from "../projects/egress-invocation-source.ts";
+import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
@@ -66,11 +67,13 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       emittedJs?: string;
       /** Absolute epoch-ms deadline for the complete dynamic-worker call. */
       expiresAt: number;
+      source: Extract<EgressInvocationSource, { kind: "script-execution" }>;
     },
   ): Promise<ScriptExecutionSettlement> {
     const projectId = this.ctx.props.projectId;
     const scopePath = normalizePath(this.ctx.props.scopePath);
     const dynamicWorkers = new DynamicWorkerRunner({
+      egressSource: options.source,
       exports: this.ctx.exports,
       projectId,
       scopePath,

@@ -185,6 +185,109 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
   }
 }, 120_000);
 
+test("an agent codemode script carries one durable source through bare and scoped fetch", async () => {
+  const echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+
+  try {
+    using project = await itx.projects
+      .get(`egress-approval-source-${crypto.randomUUID()}`)
+      .create({});
+    const root = project.streams.get("/");
+    const agentPath = "/agents/refund-agent";
+    const agent = await project.agents.get(agentPath).create();
+    const echoHost = new URL(echo.url).hostname;
+    await root.append({
+      type: RULES_CONFIGURED,
+      payload: {
+        rules: [
+          {
+            ruleKey: "refunds-need-confirmation",
+            description: "Refunds require confirmation",
+            match: { hosts: [echoHost], methods: ["POST"] },
+            verdict: "hold",
+            approvalTimeoutMs: 60_000,
+          },
+        ],
+      },
+    });
+    await waitForCondition(
+      async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+      { description: "project processor to fold the approval rule" },
+    );
+
+    const code = `async (itx) => {
+      const bare = await fetch(${JSON.stringify(echo.url)}, {
+        method: "POST",
+        body: JSON.stringify({ orderId: 1234, via: "bare fetch" }),
+      });
+      const scoped = await itx.egress.fetch(new Request(${JSON.stringify(echo.url)}, {
+        method: "POST",
+        body: JSON.stringify({ orderId: 1234, via: "itx egress" }),
+      }));
+      return [bare.status, scoped.status];
+    }`;
+    const execution = agent.capabilityHost.runScript(code);
+
+    const bareRequest = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [REQUESTED],
+      timeoutMs: 30_000,
+    });
+    const barePayload = bareRequest.payload as HumanApprovalRequestedPayload;
+    expect(barePayload).toMatchObject({
+      body: {
+        encoding: "utf8",
+        content: JSON.stringify({ orderId: 1234, via: "bare fetch" }),
+      },
+      ruleDescription: "Refunds require confirmation",
+      ruleKey: "refunds-need-confirmation",
+      source: {
+        kind: "script-execution",
+        executionId: expect.any(String),
+        scriptRunRequestedEventOffset: expect.any(Number),
+        streamPath: agentPath,
+      },
+    });
+    if (barePayload.source?.kind !== "script-execution") {
+      throw new Error("expected script-execution approval provenance");
+    }
+    const scriptEvent = await agent.stream.getEvent({
+      offset: barePayload.source.scriptRunRequestedEventOffset,
+    });
+    expect(scriptEvent).toMatchObject({
+      type: "events.iterate.com/capability-host/script-run-requested",
+      payload: { code, executionId: barePayload.source.executionId },
+    });
+
+    await root.append({
+      type: GRANTED,
+      payload: { approvalRequestEventOffset: bareRequest.offset },
+    });
+    const scopedRequest = await root.waitForEvent({
+      afterOffset: bareRequest.offset,
+      eventTypes: [REQUESTED],
+      timeoutMs: 30_000,
+    });
+    expect(scopedRequest.payload).toMatchObject({
+      body: {
+        encoding: "utf8",
+        content: JSON.stringify({ orderId: 1234, via: "itx egress" }),
+      },
+      source: barePayload.source,
+    });
+    await root.append({
+      type: GRANTED,
+      payload: { approvalRequestEventOffset: scopedRequest.offset },
+    });
+
+    await expect(execution).resolves.toMatchObject({ result: [200, 200] });
+  } finally {
+    await echo.close();
+  }
+}, 120_000);
+
 test("enrolled approval keys make unsigned grants inert; a signed grant releases", async () => {
   const echo = await startEgressEcho();
   using session = withItxSession();

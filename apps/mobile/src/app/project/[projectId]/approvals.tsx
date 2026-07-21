@@ -7,18 +7,29 @@
 // tasks/mobile-native-capabilities.md for what a real dev build would add
 // (hardware-isolated signing, push notifications).
 
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { CodeBlock } from "../../../components/activity-card.tsx";
 import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
 import {
   deriveOpenRequests,
   EVENT,
   focusOpenRequest,
+  approvalBodyForDisplay,
   grant,
   reject,
   safeHost,
+  scriptCodeForApproval,
   type OpenRequest,
 } from "../../../lib/approvals.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
@@ -30,9 +41,10 @@ import { useLiveEvents } from "../../../lib/use-live-events.ts";
 const APPROVAL_EVENT_TYPES = [EVENT.requested, EVENT.granted, EVENT.rejected, EVENT.settled];
 
 export default function ApprovalsScreen() {
-  const { projectId, approvalRequestEventOffset } = useLocalSearchParams<{
+  const { projectId, approvalRequestEventOffset, slug } = useLocalSearchParams<{
     projectId: string;
     approvalRequestEventOffset?: string;
+    slug?: string;
   }>();
   const parsedTargetOffset = Number(approvalRequestEventOffset);
   const targetOffset =
@@ -158,56 +170,17 @@ export default function ApprovalsScreen() {
           renderItem={({ item: request }) => {
             const pending =
               respond.isPending && respond.variables?.request.offset === request.offset;
-            const targeted = request.offset === targetOffset;
             return (
-              <View style={[styles.card, targeted && styles.targetedCard]}>
-                {targeted ? (
-                  <Text style={styles.targetedLabel}>
-                    Opened from notification · request #{request.offset}
-                  </Text>
-                ) : null}
-                <Text style={styles.method}>
-                  {request.payload.method} {safeHost(request.payload.url)}
-                </Text>
-                <Text style={styles.url} selectable>
-                  {request.payload.url}
-                </Text>
-                {request.payload.secretPaths.length > 0 ? (
-                  <Text style={styles.secretLine}>
-                    spends {request.payload.secretPaths.join(", ")}
-                  </Text>
-                ) : null}
-                <Text style={styles.meta}>
-                  rule: {request.payload.ruleKey} · expires{" "}
-                  {new Date(request.payload.expiresAt).toLocaleTimeString()}
-                </Text>
-                {request.submitted ? (
-                  <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
-                ) : (
-                  <View style={styles.actions}>
-                    <Pressable
-                      style={[styles.button, styles.reject]}
-                      disabled={pending}
-                      onPress={() => respond.mutate({ request, decision: "reject" })}
-                    >
-                      <Text style={styles.rejectText}>Reject</Text>
-                    </Pressable>
-                    <Pressable
-                      style={[styles.button, styles.approve, !key.data && styles.buttonDisabled]}
-                      disabled={pending || !key.data}
-                      onPress={() => respond.mutate({ request, decision: "grant" })}
-                    >
-                      <Text style={styles.approveText}>
-                        {pending
-                          ? "Signing…"
-                          : key.data
-                            ? "Approve (Face ID)"
-                            : "Enroll to approve"}
-                      </Text>
-                    </Pressable>
-                  </View>
-                )}
-              </View>
+              <ApprovalCard
+                baseUrl={baseUrl!}
+                canApprove={Boolean(key.data)}
+                onRespond={(decision) => respond.mutate({ request, decision })}
+                pending={pending}
+                projectId={projectId}
+                projectSlug={slug || ""}
+                request={request}
+                targeted={request.offset === targetOffset}
+              />
             );
           }}
           ListFooterComponent={
@@ -225,6 +198,197 @@ export default function ApprovalsScreen() {
             )
           }
         />
+      )}
+    </View>
+  );
+}
+
+function ApprovalCard({
+  baseUrl,
+  canApprove,
+  onRespond,
+  pending,
+  projectId,
+  projectSlug,
+  request,
+  targeted,
+}: {
+  baseUrl: string;
+  canApprove: boolean;
+  onRespond(decision: "grant" | "reject"): void;
+  pending: boolean;
+  projectId: string;
+  projectSlug: string;
+  request: OpenRequest;
+  targeted: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const detailsKey = ["approval-details", projectId, request.offset];
+  const details = useQuery({
+    queryKey: detailsKey,
+    queryFn: async () => ({ body: false, script: false }),
+    initialData: { body: false, script: false },
+    staleTime: Infinity,
+  });
+  const source = request.payload.source;
+  const script = useQuery({
+    queryKey:
+      source?.kind === "script-execution"
+        ? [
+            "approval-source-script",
+            baseUrl,
+            projectId,
+            source.streamPath,
+            source.scriptRunRequestedEventOffset,
+          ]
+        : ["approval-source-script", baseUrl, projectId, "none", request.offset],
+    queryFn: async () => {
+      if (source?.kind !== "script-execution") {
+        throw new Error("This approval has no codemode script source.");
+      }
+      const project = await getProjectItx(baseUrl, projectId);
+      const event = await project.streams.get(source.streamPath).getEvent({
+        offset: source.scriptRunRequestedEventOffset,
+      });
+      return scriptCodeForApproval(request.payload, event);
+    },
+    enabled: details.data.script && source?.kind === "script-execution",
+    staleTime: Infinity,
+  });
+  const body = approvalBodyForDisplay(request.payload);
+  const toggle = (section: "body" | "script") => {
+    queryClient.setQueryData(detailsKey, { ...details.data, [section]: !details.data[section] });
+  };
+
+  return (
+    <View style={[styles.card, targeted && styles.targetedCard]}>
+      {targeted ? (
+        <Text style={styles.targetedLabel}>
+          Opened from notification · request #{request.offset}
+        </Text>
+      ) : null}
+      <Text style={styles.method}>
+        {request.payload.method} {safeHost(request.payload.url)}
+      </Text>
+      <Text style={styles.url} selectable>
+        {request.payload.url}
+      </Text>
+      {request.payload.secretPaths.length > 0 ? (
+        <Text style={styles.secretLine}>spends {request.payload.secretPaths.join(", ")}</Text>
+      ) : null}
+      <Text style={styles.meta} selectable>
+        body sha256: {request.payload.bodySha256 || "none"}
+      </Text>
+
+      {body ? (
+        <View style={styles.detailSection}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => toggle("body")}
+            style={styles.detailHeader}
+          >
+            <Text style={styles.chevron}>{details.data.body ? "▾" : "▸"}</Text>
+            <Text style={styles.detailTitle}>
+              {request.payload.body === undefined ? "Request body preview" : "Full request body"}
+            </Text>
+            {request.payload.body?.encoding === "base64" ? (
+              <Text style={styles.detailHint}>base64</Text>
+            ) : null}
+          </Pressable>
+          {details.data.body ? (
+            body.language === "json" ? (
+              <CodeBlock language="json" muted={false} text={body.text} />
+            ) : (
+              <ScrollView style={styles.bodyScroller} nestedScrollEnabled>
+                <Text style={styles.bodyText} selectable>
+                  {body.text}
+                </Text>
+              </ScrollView>
+            )
+          ) : null}
+        </View>
+      ) : null}
+
+      {source?.kind === "script-execution" ? (
+        <View style={styles.detailSection}>
+          <View style={styles.sourceHeader}>
+            <View style={styles.sourceCopy}>
+              <Text style={styles.detailLabel}>Triggered by codemode</Text>
+              <Text style={styles.sourceMeta} selectable>
+                {source.streamPath} · script event #{source.scriptRunRequestedEventOffset}
+              </Text>
+            </View>
+            {source.streamPath.startsWith("/agents/") ? (
+              <Pressable
+                accessibilityRole="link"
+                onPress={() =>
+                  router.push({
+                    pathname: "/project/[projectId]/chat",
+                    params: { path: source.streamPath, projectId, slug: projectSlug },
+                  })
+                }
+                style={styles.threadLink}
+              >
+                <Text style={styles.threadLinkText}>Open thread</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => toggle("script")}
+            style={styles.detailHeader}
+          >
+            <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
+            <Text style={styles.detailTitle}>Script</Text>
+          </Pressable>
+          {details.data.script ? (
+            script.isPending ? (
+              <ActivityIndicator color={colors.textMuted} size="small" />
+            ) : script.isError ? (
+              <Text style={styles.error}>{script.error.message}</Text>
+            ) : (
+              <CodeBlock language="typescript" muted={false} text={script.data} />
+            )
+          ) : null}
+        </View>
+      ) : source ? (
+        <Text style={styles.sourceMeta}>Triggered from {source.scopePath}</Text>
+      ) : (
+        <Text style={styles.sourceMeta}>Source metadata unavailable for this older request.</Text>
+      )}
+
+      <View style={styles.policy}>
+        <Text style={styles.detailLabel}>Approval policy</Text>
+        <Text style={styles.policyDescription}>
+          {request.payload.ruleDescription || request.payload.ruleKey}
+        </Text>
+        <Text style={styles.meta}>
+          {request.payload.ruleKey} · expires{" "}
+          {new Date(request.payload.expiresAt).toLocaleTimeString()}
+        </Text>
+      </View>
+
+      {request.submitted ? (
+        <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
+      ) : (
+        <View style={styles.actions}>
+          <Pressable
+            style={[styles.button, styles.reject]}
+            disabled={pending}
+            onPress={() => onRespond("reject")}
+          >
+            <Text style={styles.rejectText}>Reject</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.button, styles.approve, !canApprove && styles.buttonDisabled]}
+            disabled={pending || !canApprove}
+            onPress={() => onRespond("grant")}
+          >
+            <Text style={styles.approveText}>
+              {pending ? "Signing…" : canApprove ? "Approve (Face ID)" : "Enroll to approve"}
+            </Text>
+          </Pressable>
+        </View>
       )}
     </View>
   );
@@ -269,6 +433,59 @@ const styles = StyleSheet.create({
   url: { color: colors.textMuted, fontSize: 12, fontFamily: "Menlo", flexShrink: 1 },
   secretLine: { color: colors.working, fontSize: 12 },
   meta: { color: colors.textFaint, fontSize: 11 },
+  detailSection: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  detailHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.xs,
+    minHeight: 32,
+  },
+  chevron: { color: colors.textFaint, fontSize: 12, textAlign: "center", width: 14 },
+  detailTitle: { color: colors.text, flex: 1, fontSize: 13, fontWeight: "600" },
+  detailHint: { color: colors.textFaint, fontFamily: "Menlo", fontSize: 10 },
+  bodyScroller: {
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    maxHeight: 260,
+  },
+  bodyText: {
+    color: colors.textMuted,
+    fontFamily: "Menlo",
+    fontSize: 11,
+    lineHeight: 17,
+    padding: spacing.sm,
+  },
+  sourceHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
+  sourceCopy: { flex: 1, gap: 2 },
+  detailLabel: {
+    color: colors.textFaint,
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  sourceMeta: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 10, flexShrink: 1 },
+  threadLink: {
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  threadLinkText: { color: colors.accent, fontSize: 11, fontWeight: "600" },
+  policy: {
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    gap: 3,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+  },
+  policyDescription: { color: colors.text, fontSize: 13 },
   submitted: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   button: {

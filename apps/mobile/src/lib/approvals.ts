@@ -37,6 +37,46 @@ export function safeHost(url: string): string {
   }
 }
 
+export function approvalBodyForDisplay(payload: RequestedPayload): {
+  language: "json" | "text";
+  text: string;
+} | null {
+  if (payload.body === null) return null;
+  if (payload.body === undefined) {
+    return payload.bodyPreview === null ? null : { language: "text", text: payload.bodyPreview };
+  }
+  if (payload.body.encoding === "base64") {
+    return { language: "text", text: payload.body.content };
+  }
+  try {
+    JSON.parse(payload.body.content);
+    return { language: "json", text: payload.body.content };
+  } catch {
+    return { language: "text", text: payload.body.content };
+  }
+}
+
+export function scriptCodeForApproval(
+  payload: RequestedPayload,
+  event: StreamEvent | undefined,
+): string {
+  const source = payload.source;
+  if (source?.kind !== "script-execution") {
+    throw new Error("This approval was not triggered by a codemode script.");
+  }
+  if (
+    event === undefined ||
+    event.type !== "events.iterate.com/capability-host/script-run-requested" ||
+    event.path !== source.streamPath ||
+    event.offset !== source.scriptRunRequestedEventOffset ||
+    event.payload?.executionId !== source.executionId ||
+    typeof event.payload.code !== "string"
+  ) {
+    throw new Error("The approval's source script event could not be verified.");
+  }
+  return event.payload.code;
+}
+
 /** The canonical bytes a grant for this request signs over. */
 export function messageFor(
   projectId: string,

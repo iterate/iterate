@@ -2,6 +2,7 @@ import { createPrivateKey, createSign, generateKeyPairSync } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import {
+  approvalRequestBody,
   buildApprovalMessage,
   bytesToBase64,
   canonicalJson,
@@ -12,6 +13,19 @@ import {
   type EgressRule,
   type HumanApprovalKey,
 } from "./egress-approvals.ts";
+
+test("approvalRequestBody preserves every request byte for the expandable approval view", () => {
+  const text = JSON.stringify({ orderId: 1234, reason: "duplicate" });
+  expect(approvalRequestBody(new TextEncoder().encode(text))).toEqual({
+    encoding: "utf8",
+    content: text,
+  });
+
+  expect(approvalRequestBody(Uint8Array.from([0, 255, 17, 128]))).toEqual({
+    encoding: "base64",
+    content: "AP8RgA==",
+  });
+});
 
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
   description: "",

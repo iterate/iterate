@@ -431,6 +431,7 @@ export function createSubscriberDial(deps: {
       webhookEgress ??= projectEgressFetcher(
         deps.exports as ExecutionContext["exports"],
         deps.projectId,
+        { kind: "scope", scopePath: "/" },
       );
       const egress = webhookEgress;
       try {

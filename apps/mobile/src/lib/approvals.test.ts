@@ -1,6 +1,14 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { deriveOpenRequests, EVENT, focusOpenRequest, safeHost } from "./approvals.ts";
+import {
+  approvalBodyForDisplay,
+  deriveOpenRequests,
+  EVENT,
+  focusOpenRequest,
+  safeHost,
+  scriptCodeForApproval,
+  type RequestedPayload,
+} from "./approvals.ts";
 
 test("an unresolved request is open", () => {
   const open = deriveOpenRequests([requested(1, "post-echo")]);
@@ -47,10 +55,40 @@ test("a notification-targeted approval is focused at the front of the queue", ()
   expect(focusOpenRequest(open, 20).map((request) => request.offset)).toEqual([20, 10]);
 });
 
+test("the approval view resolves the exact script event and complete request body", () => {
+  const request = requested(10, "refund", {
+    body: { encoding: "utf8", content: '{"orderId":1234}' },
+    source: {
+      kind: "script-execution",
+      executionId: "agent-output:8",
+      scriptRunRequestedEventOffset: 9,
+      streamPath: "/agents/refund-agent",
+    },
+  });
+  const payload = request.payload as RequestedPayload;
+  const scriptEvent = {
+    type: "events.iterate.com/capability-host/script-run-requested",
+    offset: 9,
+    createdAt: "2026-07-21T15:00:00Z",
+    path: "/agents/refund-agent",
+    payload: {
+      code: "async () => fetch('/refund')",
+      executionId: "agent-output:8",
+      expiresAt: Date.now() + 60_000,
+    },
+  } satisfies StreamEvent;
+
+  expect(scriptCodeForApproval(payload, scriptEvent)).toBe("async () => fetch('/refund')");
+  expect(approvalBodyForDisplay(payload)).toEqual({
+    language: "json",
+    text: '{"orderId":1234}',
+  });
+});
+
 function requested(
   offset: number,
   ruleKey: string,
-  overrides: Partial<{ expiresAt: string }> = {},
+  overrides: Partial<RequestedPayload> = {},
 ): StreamEvent {
   return {
     type: EVENT.requested,
@@ -63,9 +101,12 @@ function requested(
       headers: {},
       bodySha256: null,
       bodyPreview: null,
+      body: undefined,
       secretPaths: [],
       ruleKey,
+      ruleDescription: "",
       expiresAt: overrides.expiresAt ?? "2099-01-01T00:00:00Z",
+      ...overrides,
     },
   };
 }

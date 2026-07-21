@@ -22,6 +22,7 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
+import { EgressInvocationSource } from "./egress-invocation-source.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -281,10 +282,28 @@ export const ProjectProcessorContract = defineProcessorContract({
         bodyPreview: z.string().nullable().default(null).meta({
           description: "First ~2KB of a UTF-8 body, for the approval UI only (NOT signed).",
         }),
+        body: z
+          .discriminatedUnion("encoding", [
+            z.strictObject({ encoding: z.literal("utf8"), content: z.string() }),
+            z.strictObject({ encoding: z.literal("base64"), content: z.string() }),
+          ])
+          .nullable()
+          .optional()
+          .meta({
+            description:
+              "The complete held body in placeholder form. The signature binds these bytes by bodySha256.",
+          }),
         secretPaths: z.array(z.string()).default([]).meta({
           description: 'Secret paths the request references — the "spends this secret" headline.',
         }),
         ruleKey: z.string().meta({ description: "The rule that caught the request." }),
+        ruleDescription: z.string().default("").meta({
+          description: "The matched rule's human-readable explanation, snapshotted at gate time.",
+        }),
+        source: EgressInvocationSource.optional().meta({
+          description:
+            "Host-minted provenance for the runtime invocation that attempted this request.",
+        }),
         expiresAt: z.string().meta({
           description: "ISO horizon after which the hold auto-rejects with reason expired.",
         }),
@@ -424,7 +443,7 @@ export type EgressRule = ProjectProcessorState["egressRules"][number];
 /** One enrolled approval public key as reduced onto project processor state. */
 export type HumanApprovalKey = ProjectProcessorState["humanApprovalKeys"][number];
 
-/** The human-approval-requested payload — what an approval signature covers (minus bodyPreview/expiresAt). */
+/** The complete human-approval-requested event payload; approval.v1 signs its request-subject fields. */
 export type HumanApprovalRequestedPayload = z.output<
   (typeof ProjectProcessorContract.events)["events.iterate.com/project/human-approval-requested"]["payloadSchema"]
 >;

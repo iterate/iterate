@@ -11,6 +11,7 @@ const captured: {
   request?: Request;
   requestCount: number;
   responseStatus?: number;
+  source?: unknown;
 } = {
   requestCount: 0,
 };
@@ -18,10 +19,11 @@ vi.mock("../../env.ts", () => ({
   itxEnv: {
     PROJECT: {
       getByName: (name: string) => ({
-        fetch: async (request: Request) => {
+        egress: async (request: Request, source: unknown) => {
           captured.projectDurableObjectName = name;
           captured.request = request;
           captured.requestCount += 1;
+          captured.source = source;
           if (captured.responseStatus !== undefined) {
             return Response.json(
               { message: "transient GitHub failure" },
@@ -44,10 +46,13 @@ vi.mock("../../env.ts", () => ({
 const { connectionOctokit, normalizeGithubError, GITHUB_CALL_GRAMMAR } =
   await import("./github-api.ts");
 
+const egressSource = { kind: "scope" as const, scopePath: "/agents/github" };
+
 beforeEach(() => {
   captured.projectDurableObjectName = undefined;
   captured.request = undefined;
   captured.requestCount = 0;
+  captured.source = undefined;
   captured.responseStatus = undefined;
 });
 
@@ -99,7 +104,7 @@ describe("normalizeGithubError", () => {
 
 describe("connectionOctokit", () => {
   test(".request() rides project egress with a placeholder auth header", async () => {
-    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const octokit = connectionOctokit({ connection: "acme", egressSource, projectId: "prj_1" });
     const response = await octokit.request("GET /user");
 
     expect(response.status).toBe(200);
@@ -110,10 +115,11 @@ describe("connectionOctokit", () => {
       'Bearer getSecret("/secrets/integrations/github/acme", { field: "accessToken" })',
     );
     expect(captured.projectDurableObjectName).toContain("prj_1");
+    expect(captured.source).toEqual(egressSource);
   });
 
   test("rest.* namespaced methods hit the right path over the same jailed transport", async () => {
-    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const octokit = connectionOctokit({ connection: "acme", egressSource, projectId: "prj_1" });
     await octokit.rest.repos.get({ owner: "iterate", repo: "os" });
 
     expect(new URL(captured.request!.url).pathname).toBe("/repos/iterate/os");
@@ -121,7 +127,7 @@ describe("connectionOctokit", () => {
   });
 
   test("graphql() hits GitHub's GraphQL endpoint over the same jailed transport", async () => {
-    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const octokit = connectionOctokit({ connection: "acme", egressSource, projectId: "prj_1" });
     const data = await octokit.graphql<{ repository: { name: string } }>(
       "query ($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { name } }",
       { owner: "iterate", repo: "iterate" },
@@ -137,7 +143,7 @@ describe("connectionOctokit", () => {
   });
 
   test("paginate() supports the RPC-safe route-string overload", async () => {
-    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const octokit = connectionOctokit({ connection: "acme", egressSource, projectId: "prj_1" });
     const files = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
       owner: "iterate",
       repo: "os",
@@ -151,7 +157,7 @@ describe("connectionOctokit", () => {
 
   test("does not automatically replay a write after a 5xx", async () => {
     captured.responseStatus = 500;
-    const octokit = connectionOctokit({ connection: "acme", projectId: "prj_1" });
+    const octokit = connectionOctokit({ connection: "acme", egressSource, projectId: "prj_1" });
 
     await expect(
       octokit.rest.issues.createComment({

@@ -197,6 +197,7 @@ async function apiFetch(
     // worker (`itx.worker.*`) stays on RPC dispatch; HTTP never does.
     const ref = defaultProjectWorkerRef();
     const runner = new DynamicWorkerRunner({
+      egressSource: { kind: "scope", scopePath: ref.path },
       exports: ctx.exports,
       projectId: route.resolved.projectId,
       scopePath: ref.path,

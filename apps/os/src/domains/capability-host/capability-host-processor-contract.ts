@@ -169,6 +169,15 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
               "The script source, carried in state so an attempt can start from the reduced " +
               "state alone (recovery never re-reads the request event).",
           }),
+          requestedAtOffset: z
+            .number()
+            .int()
+            .nonnegative()
+            .meta({
+              description:
+                "The exact script-run-requested event carrying this code; retained so downstream " +
+                "effects can point back to their durable source.",
+            }),
           expiresAt: z
             .number()
             .int()
