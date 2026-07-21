@@ -7,7 +7,7 @@
  *   doppler run --project os --config preview_1 -- pnpm exec tsx e2e/probe-agent-stall.mts [rounds] [concurrency]
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { connectItx } from "../src/itx-client.ts";
+import { connectItx } from "iterate/node";
 
 const baseUrl = (process.env.APP_CONFIG_BASE_URL ?? "").replace(/\/+$/, "");
 const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
