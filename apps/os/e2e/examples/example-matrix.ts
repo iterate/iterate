@@ -97,10 +97,33 @@ async function runInCli(input: {
     if (abortController.signal.aborted) {
       throw new ExampleRuntimeDeadlineError("cli", input.timeoutMs, { cause: error });
     }
-    throw error;
+    throw cliProcessFailure(error);
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function cliProcessFailure(error: unknown): unknown {
+  if (typeof error !== "object" || error === null) return error;
+  const processError = error as { stderr?: unknown; stdout?: unknown };
+  const stderr = compactProcessOutput(processError.stderr);
+  const stdout = compactProcessOutput(processError.stdout);
+  const output = stderr ?? stdout;
+  if (output === undefined) return error;
+  return new Error(
+    `cli process failed — ${stderr === undefined ? "stdout" : "stderr"}: ${output}`,
+    {
+      cause: error,
+    },
+  );
+}
+
+function compactProcessOutput(output: unknown): string | undefined {
+  if (typeof output !== "string") return undefined;
+  const compact = output.replace(/\s+/gu, " ").trim();
+  if (compact.length === 0) return undefined;
+  const limit = 2_000;
+  return compact.length > limit ? `…${compact.slice(-limit)}` : compact;
 }
 
 async function runInNode(input: {

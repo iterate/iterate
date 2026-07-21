@@ -166,6 +166,7 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Depot CI](docs/depot-ci.md) — workflow editing, Depot CLI commands, monitoring/wait loops, logs, dispatch, metrics, secrets, and gotchas
 - [CLI scripts](docs/cli-scripts.md) — how to write normal TypeScript scripts and expose them as CLIs
 - [Preview CI performance](docs/ci-preview-performance.md) — how the preview deploy+e2e check stays ~2-3 min, the budget guardrail, and how to keep it fast without raising cost
+- [E2e timing telemetry](docs/e2e-telemetry.md) — PostHog queries for no-retry duration, retry cost, queueing, hooks/fixtures, module startup, and named test phases
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Frontend development](docs/frontend-development.md) — the apps/os programming model: one capnweb capability tree over one WebSocket, the thin itx hooks (`useIterateSession`/`useItx`, `useItxQuery`/`useIterateSessionQuery`, `useLiveState`), and LiveView-style live state from Durable Objects
 - [Design system & React](docs/design-system.md)

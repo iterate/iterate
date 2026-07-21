@@ -16,7 +16,7 @@ import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import {
   authEnvs,
   dummyPetshopEnvs,
-  envs as osEnvs,
+  envs,
   previewEnvironmentSlotNumbers,
   semaphoreEnvs,
   streamsExampleEnvs,
@@ -33,12 +33,22 @@ import {
   OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
 import {
+  E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV,
+  renderCloudflareWorkerVersionOverrides,
+} from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
+import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
   renderWorkerSizeCell,
   workerSizeStatusContext,
   type WorkerSizeInfo,
 } from "./worker-size.ts";
+import {
+  normalizeError,
+  PreviewE2ePostHog,
+  type PreviewE2eModuleRecord,
+  type PreviewE2eTestRecord,
+} from "./e2e-posthog.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -124,7 +134,9 @@ export async function deploy(options: DeployCommandOptions = {}) {
  */
 export async function test(options: PullRequestCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
-  return await testPreviewApps({ context, runtime });
+  return await withPreviewE2eTelemetry(context, runtime, "test", (telemetry) =>
+    testPreviewApps({ context, runtime, telemetry }),
+  );
 }
 
 /**
@@ -146,7 +158,53 @@ export async function run(options: DeployCommandOptions = {}) {
 
   // A "nothing to deploy" skip still tests: the recorded deployments ARE the
   // current head's code, and their green must be earned, not assumed.
-  return await testPreviewApps({ context, runtime, state: deployResult.state });
+  return await withPreviewE2eTelemetry(context, runtime, "run", (telemetry) =>
+    testPreviewApps({ context, runtime, state: deployResult.state, telemetry }),
+  );
+}
+
+async function withPreviewE2eTelemetry<T>(
+  context: PullRequestPreviewContext,
+  runtime: PreviewRuntime,
+  operation: "test" | "run",
+  execute: (telemetry: PreviewE2ePostHog) => Promise<T>,
+): Promise<T> {
+  const telemetry = new PreviewE2ePostHog({
+    environment: runtime.commandEnvironment,
+    headSha: context.pullRequestHeadSha,
+    operation,
+    pullRequestNumber: context.pullRequestNumber,
+    runUrl: context.workflowRunUrl,
+  });
+  const startedAt = Date.now();
+  telemetry.runStarted();
+  let result!: T;
+  let operationError: unknown;
+  try {
+    result = await execute(telemetry);
+  } catch (error) {
+    operationError = error;
+  }
+  telemetry.runFinished({
+    status: operationError ? "failed" : "passed",
+    durationMs: Date.now() - startedAt,
+    ...(operationError ? { error: operationError } : {}),
+  });
+  let telemetryError: unknown;
+  try {
+    await telemetry.shutdown();
+  } catch (error) {
+    telemetryError = error;
+  }
+  if (operationError && telemetryError) {
+    throw new AggregateError(
+      [operationError, telemetryError],
+      "Preview test command and PostHog delivery both failed",
+    );
+  }
+  if (operationError) throw operationError;
+  if (telemetryError) throw telemetryError;
+  return result;
 }
 
 async function deployPreviewApps({
@@ -328,14 +386,29 @@ async function deployPreviewApps({
     notice: claimNotice,
   }));
 
-  // Best-effort: a missing or unreadable baseline only costs the "vs main"
-  // delta in the size column, never the deploy.
-  const workerSizeBaselines = await fetchMainWorkerSizeBaselines(context).catch(
-    (error): Record<string, WorkerSizeInfo> => {
+  // Both are read-only GitHub lookups, so overlap them before starting the
+  // deploy fleet. A missing size baseline only costs the "vs main" delta;
+  // uncertainty about container inputs safely chooses Wrangler's full rollout.
+  const [workerSizeBaselines, osContainerRollout] = await Promise.all([
+    fetchMainWorkerSizeBaselines(context).catch((error): Record<string, WorkerSizeInfo> => {
       logPreview(`worker-size baselines unavailable: ${formatPreviewErrorMessage(error)}`);
       return {};
-    },
-  );
+    }),
+    appsToDeploy.some((app) => app.slug === "os")
+      ? resolvePreviewOsContainerRollout({
+          dopplerConfig: environmentConfigLease.dopplerConfig,
+          githubToken: context.githubToken,
+          nextSlotSlug: environmentConfigLease.slug,
+          previousSlotSlug: previousSlug,
+          previousState: current.state,
+          pullRequestHeadSha: context.pullRequestHeadSha,
+          repositoryFullName: context.repositoryFullName,
+        })
+      : Promise.resolve(null),
+  ]);
+  if (osContainerRollout) {
+    logPreview(`OS container rollout: ${osContainerRollout.mode} — ${osContainerRollout.reason}`);
+  }
 
   let ok = true;
   let latestState = leaseUpdate.state;
@@ -360,6 +433,9 @@ async function deployPreviewApps({
             // The sha, not @<pr>: pkg.pr.new PR refs are moving
             // targets, while the sha pins the exact build this deploy shipped.
             PREVIEW_PULL_REQUEST_HEAD_SHA: context.pullRequestHeadSha,
+            ...(app.slug === "os" && osContainerRollout
+              ? { OS_CONTAINERS_ROLLOUT: osContainerRollout.mode }
+              : {}),
           },
           dopplerConfig: environmentConfigLease.dopplerConfig,
           mainWorkerSize: workerSizeBaselines[app.slug] ?? null,
@@ -447,13 +523,44 @@ function resolvePreviewTestBaseUrlEnvironment({
   });
 }
 
+function resolvePreviewTestWorkerVersionOverrides(input: {
+  apps: Partial<Record<CloudflarePreviewAppSlug, CloudflarePreviewAppEntry>>;
+  appSlugs: readonly CloudflarePreviewAppSlugType[];
+  dopplerConfig: string;
+  headSha: string;
+}): string {
+  return renderCloudflareWorkerVersionOverrides(
+    input.appSlugs.map((appSlug) => {
+      const entry = input.apps[appSlug];
+      const expectedWorkerName = cloudflarePreviewApps[appSlug].resolvePreviewAppConfig(
+        input.dopplerConfig,
+      ).workerName;
+      if (
+        entry?.headSha !== input.headSha ||
+        entry.deployedWorkerName !== expectedWorkerName ||
+        !entry.deployedWorkerVersion
+      ) {
+        throw new Error(
+          `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.headSha.slice(0, 7)}. Re-run preview deploy.`,
+        );
+      }
+      return {
+        versionId: entry.deployedWorkerVersion,
+        workerName: entry.deployedWorkerName,
+      };
+    }),
+  );
+}
+
 async function testPreviewApps({
   context,
   runtime,
   state: knownState,
+  telemetry,
 }: {
   context: PullRequestPreviewContext;
   runtime: PreviewRuntime;
+  telemetry: PreviewE2ePostHog;
   /**
    * In-process state from a just-finished deploy (the `run` path). A fresh
    * PR-body read can lag deploy's write (GitHub read-after-write lag) and
@@ -585,6 +692,12 @@ async function testPreviewApps({
     };
   }
   logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
+  const workerVersionOverrides = resolvePreviewTestWorkerVersionOverrides({
+    apps: recorded.apps,
+    appSlugs: testableApps.map((app) => app.slug),
+    dopplerConfig: environmentConfigLease.dopplerConfig,
+    headSha: context.pullRequestHeadSha,
+  });
 
   // Preview e2e commands are full app-level suites. They run concurrently:
   // each app deploys its own workers, and the non-OS suites are seconds-long
@@ -617,6 +730,7 @@ async function testPreviewApps({
         environmentConfigLease.dopplerConfig,
         "--",
         "env",
+        `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
         ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
@@ -626,39 +740,53 @@ async function testPreviewApps({
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
     });
     const testDurationMs = Date.now() - startedAt;
-    console.error(
-      `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
-    );
-    if (testResult.exitCode === 0) {
-      warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
+
+    // Collected pass or fail. A green command without a complete structured
+    // report is not a green observability proof: it would silently bias every
+    // PostHog latency query toward whichever lanes happened to report.
+    const testSummary = await app.collectTestTelemetry({
+      repositoryRoot: runtime.repositoryRoot,
+    });
+    announceRetryTelemetry(app.slug, testSummary);
+    for (const test of testSummary.tests) {
+      telemetry.testFinished({ ...test, app: app.slug, slot: environmentConfigLease.slug });
+    }
+    for (const module of testSummary.modules) {
+      telemetry.moduleFinished({ ...module, app: app.slug, slot: environmentConfigLease.slug });
     }
 
-    // Collected pass or fail: on a red run the telemetry explains which tests
-    // burned their retry before the failure. Never fails the lane.
-    const retrySummary = app.collectRetryTelemetry
-      ? await app
-          .collectRetryTelemetry({ repositoryRoot: runtime.repositoryRoot })
-          .catch((error): PreviewRetrySummary | null => {
-            console.error(`[preview] retry telemetry collection failed for ${app.slug}:`, error);
-            return null;
-          })
+    const incompleteTelemetry = testSummary.collectionErrors.length
+      ? `Structured e2e telemetry was incomplete: ${testSummary.collectionErrors.join("; ")}`
       : null;
-    if (retrySummary) {
-      announceRetryTelemetry(app.slug, retrySummary);
+    const testFailure =
+      previewTestFailureMessage({ result: testResult, retrySummary: testSummary }) ??
+      incompleteTelemetry;
+    telemetry.appFinished({
+      app: app.slug,
+      slot: environmentConfigLease.slug,
+      status: testFailure ? "failed" : "passed",
+      durationMs: testDurationMs,
+      exitCode: testResult.exitCode,
+      testCount: testSummary.tests.length,
+      retryCount: testSummary.retried.reduce((total, test) => total + test.retryCount, 0),
+      collectionErrors: testSummary.collectionErrors,
+    });
+    console.error(
+      `[preview] test ${testFailure ? "failed" : "passed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
+    );
+    if (!testFailure) {
+      warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
     }
 
     return CloudflarePreviewAppEntry.parse({
       ...existingEntry,
       appDisplayName: app.displayName,
       appSlug: app.slug,
-      message:
-        testResult.exitCode === 0
-          ? null
-          : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+      message: testFailure,
       runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
-      status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+      status: testFailure ? "tests-failed" : "deployed",
       testDurationMs,
-      testRetries: retrySummary ? renderPreviewRetrySummary(retrySummary) : null,
+      testRetries: renderPreviewRetrySummary(testSummary),
       updatedAt: new Date().toISOString(),
     } satisfies CloudflarePreviewAppEntry);
   });
@@ -1359,12 +1487,14 @@ export type CloudflarePreviewApp = {
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   /**
-   * Resolve non-secret public app config from envs.ts. Doppler supplies only
-   * secrets; readiness probes merge their bearer token into this config.
+   * Resolve the public URL and Worker script from the repo's typed envs.ts.
+   * Deploy scripts consume that same map, so orchestration never forks the
+   * deployment identity through a second config read.
    */
   resolvePreviewAppConfig: (dopplerConfig: string) => {
     baseUrl: string;
     projectHostnameBases?: string[];
+    workerName: string;
   };
   paths: string[];
   /**
@@ -1407,22 +1537,19 @@ export type CloudflarePreviewApp = {
   previewDeployBudgetMs?: number;
   previewTestBudgetMs?: number;
   /**
-   * Collect per-test retry telemetry after the app's preview test command
-   * finishes (pass or fail) — policy rule 5, retries are measured, never
-   * silent (docs/testing.md#retries-and-timeouts). Returns null when the
-   * lane produced no telemetry; must never throw a run-failing error (the
-   * caller logs and continues). The result lands in the run log, a
-   * `::notice::`/`::warning::` annotation, and the PR-body table.
+   * Collect every test/module result after the command finishes. A missing
+   * report is an explicit collection error: a green lane must not silently
+   * disappear from latency analytics.
    */
-  collectRetryTelemetry?: (params: { repositoryRoot: string }) => Promise<PreviewRetrySummary>;
+  collectTestTelemetry: (params: { repositoryRoot: string }) => Promise<PreviewTestSummary>;
 };
 
 /**
  * Aggregated retry telemetry for one app's preview e2e lane: every test that
  * needed a re-roll, whichever sub-lane (TUI, Vitest, Playwright) it ran in.
- * Why this exists: with one CI retry, a rare real race turns a run red about
- * once in 400 runs, but shows up here about once in 20 — the count, not the
- * run status, is the detector for probabilistic bugs.
+ * Why this exists: a retry can preserve the first failure while still letting
+ * the test finish successfully. The count and first failure keep flakes
+ * visible without making an otherwise-green run fail.
  */
 export type PreviewRetrySummary = {
   retried: {
@@ -1433,6 +1560,13 @@ export type PreviewRetrySummary = {
     passedAfterRetry: boolean;
     firstFailure?: string;
   }[];
+};
+
+/** Complete structured timing plus any lane that failed to produce a report. */
+export type PreviewTestSummary = PreviewRetrySummary & {
+  tests: PreviewE2eTestRecord[];
+  modules: PreviewE2eModuleRecord[];
+  collectionErrors: string[];
 };
 
 /**
@@ -1447,13 +1581,63 @@ const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
 const streamsExampleVitestRetryTelemetryFile =
   "/tmp/os-preview-streams-example-vitest-retries.json";
+const authVitestTelemetryFile = "/tmp/auth-preview-vitest-results.json";
+const semaphoreVitestTelemetryFile = "/tmp/semaphore-preview-vitest-results.json";
+const dummyPetshopVitestTelemetryFile = "/tmp/dummy-petshop-preview-vitest-results.json";
 
-/** Reads the shared retry JSON written by a Vitest or TUI sub-lane. */
-async function readVitestRetryTelemetry(
+/** Reads complete Vitest timing written by RetryTelemetryReporter. */
+async function readVitestTestTelemetry(
   filePath: string,
-  lane = "vitest",
-): Promise<PreviewRetrySummary["retried"]> {
+  lane: string,
+  repositoryRoot: string,
+): Promise<PreviewTestSummary> {
   const TelemetryFile = z.object({
+    tests: z.array(
+      z.object({
+        fullName: z.string(),
+        moduleId: z.string(),
+        retryCount: z.number().int().nonnegative(),
+        passedAfterRetry: z.boolean(),
+        state: z.string(),
+        durationMs: z.number().nonnegative(),
+        startedAtMs: z.number().optional(),
+        scheduleDelayMs: z.number().nonnegative().optional(),
+        beforeEachDurationMs: z.number().nonnegative(),
+        afterEachDurationMs: z.number().nonnegative(),
+        bodyDurationMs: z.number().nonnegative(),
+        phases: z.array(
+          z.object({
+            name: z.string(),
+            category: z.string().optional(),
+            durationMs: z.number().nonnegative(),
+          }),
+        ),
+        errors: z.array(
+          z.object({
+            message: z.string(),
+            name: z.string().optional(),
+            stack: z.string().optional(),
+          }),
+        ),
+      }),
+    ),
+    modules: z.array(
+      z.object({
+        moduleId: z.string(),
+        environmentSetupDurationMs: z.number().nonnegative(),
+        prepareDurationMs: z.number().nonnegative(),
+        collectDurationMs: z.number().nonnegative(),
+        setupDurationMs: z.number().nonnegative(),
+        testAndHookDurationMs: z.number().nonnegative(),
+        importDurationMs: z.number().nonnegative(),
+        queuedAtMs: z.number().optional(),
+        collectedAtMs: z.number().optional(),
+        startedAtMs: z.number().optional(),
+        finishedAtMs: z.number().optional(),
+        queueDurationMs: z.number().nonnegative().optional(),
+        executionWallDurationMs: z.number().nonnegative().optional(),
+      }),
+    ),
     retried: z.array(
       z.object({
         fullName: z.string(),
@@ -1464,13 +1648,63 @@ async function readVitestRetryTelemetry(
     ),
   });
   const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
-  return parsed.retried.map((record) => ({
+  if (parsed.tests.length === 0) throw new Error(`${filePath} contained no test results`);
+  const tests: PreviewE2eTestRecord[] = parsed.tests.map((record) => ({
     lane,
     name: record.fullName,
+    moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
+    state: record.state,
+    durationMs: record.durationMs,
     retryCount: record.retryCount,
     passedAfterRetry: record.passedAfterRetry,
-    ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+    ...(record.startedAtMs === undefined
+      ? {}
+      : { startedAt: new Date(record.startedAtMs).toISOString() }),
+    ...(record.scheduleDelayMs === undefined ? {} : { scheduleDelayMs: record.scheduleDelayMs }),
+    beforeEachDurationMs: record.beforeEachDurationMs,
+    afterEachDurationMs: record.afterEachDurationMs,
+    bodyDurationMs: record.bodyDurationMs,
+    attempts: [],
+    phases: record.phases,
+    errors: record.errors,
   }));
+  return {
+    tests,
+    modules: parsed.modules.map((record) => ({
+      lane,
+      moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
+      environmentSetupDurationMs: record.environmentSetupDurationMs,
+      prepareDurationMs: record.prepareDurationMs,
+      collectDurationMs: record.collectDurationMs,
+      setupDurationMs: record.setupDurationMs,
+      testAndHookDurationMs: record.testAndHookDurationMs,
+      importDurationMs: record.importDurationMs,
+      ...(record.queuedAtMs === undefined
+        ? {}
+        : { queuedAt: new Date(record.queuedAtMs).toISOString() }),
+      ...(record.collectedAtMs === undefined
+        ? {}
+        : { collectedAt: new Date(record.collectedAtMs).toISOString() }),
+      ...(record.startedAtMs === undefined
+        ? {}
+        : { startedAt: new Date(record.startedAtMs).toISOString() }),
+      ...(record.finishedAtMs === undefined
+        ? {}
+        : { finishedAt: new Date(record.finishedAtMs).toISOString() }),
+      ...(record.queueDurationMs === undefined ? {} : { queueDurationMs: record.queueDurationMs }),
+      ...(record.executionWallDurationMs === undefined
+        ? {}
+        : { executionWallDurationMs: record.executionWallDurationMs }),
+    })),
+    retried: parsed.retried.map((record) => ({
+      lane,
+      name: record.fullName,
+      retryCount: record.retryCount,
+      passedAfterRetry: record.passedAfterRetry,
+      ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+    })),
+    collectionErrors: [],
+  };
 }
 
 /**
@@ -1479,20 +1713,37 @@ async function readVitestRetryTelemetry(
  * streams example app). A retried spec has more than one result attempt;
  * Playwright reports "flaky" for passed-after-retry.
  */
-async function readPlaywrightRetryTelemetry(
+type PlaywrightTelemetryStep = {
+  title?: string;
+  category?: string;
+  duration?: number;
+  steps?: PlaywrightTelemetryStep[];
+};
+
+async function readPlaywrightTestTelemetry(
   filePath: string,
-  lane = "specs",
-): Promise<PreviewRetrySummary["retried"]> {
+  lane: string,
+  repositoryRoot: string,
+): Promise<PreviewTestSummary> {
   /** The subset of Playwright's JSON-reporter suite tree we walk. */
   type PlaywrightJsonSuite = {
+    title?: string;
+    file?: string;
     suites?: PlaywrightJsonSuite[];
     specs?: {
       title?: string;
+      file?: string;
       tests?: {
+        projectName?: string;
         status?: string;
         results?: {
           retry?: number;
           status?: string;
+          duration?: number;
+          startTime?: string;
+          workerIndex?: number;
+          parallelIndex?: number;
+          steps?: PlaywrightTelemetryStep[];
           error?: unknown;
           errors?: unknown[];
         }[];
@@ -1502,37 +1753,72 @@ async function readPlaywrightRetryTelemetry(
   const report = JSON.parse(await readFile(filePath, "utf8")) as {
     suites?: PlaywrightJsonSuite[];
   };
-  const retried: PreviewRetrySummary["retried"] = [];
-  const visit = (suite: PlaywrightJsonSuite) => {
+  const tests: PreviewE2eTestRecord[] = [];
+  const visit = (suite: PlaywrightJsonSuite, parentTitles: string[] = []) => {
+    const titles = suite.title ? [...parentTitles, suite.title] : parentTitles;
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
-        if (retryCount > 0) {
-          const failedResult = test.results?.find(
-            (result) =>
-              result.status === "failed" || result.error !== undefined || result.errors?.length,
-          );
-          const firstFailure = compactRetryFailure(
-            failedResult?.error ?? failedResult?.errors?.[0],
-          );
-          retried.push({
-            lane,
-            name: spec.title ?? "(unknown spec)",
-            retryCount,
-            passedAfterRetry: test.status === "flaky",
-            ...(firstFailure ? { firstFailure } : {}),
-          });
-        }
+        const results = test.results ?? [];
+        const finalResult = results.at(-1);
+        const errors = results.flatMap((result) => [
+          ...(result.error ? [normalizeError(result.error)] : []),
+          ...(result.errors ?? []).map(normalizeError),
+        ]);
+        tests.push({
+          lane,
+          name: [...titles, spec.title ?? "(unknown spec)", test.projectName ?? ""]
+            .filter(Boolean)
+            .join(" › "),
+          moduleId: normalizeTestModuleId(spec.file ?? suite.file ?? "playwright", repositoryRoot),
+          ...(test.projectName ? { project: test.projectName } : {}),
+          state: finalResult?.status ?? test.status ?? "unknown",
+          durationMs: results.reduce((total, result) => total + (result.duration ?? 0), 0),
+          retryCount,
+          passedAfterRetry:
+            retryCount > 0 && (test.status === "flaky" || finalResult?.status === "passed"),
+          ...(results[0]?.startTime ? { startedAt: results[0].startTime } : {}),
+          errors,
+          phases: [],
+          attempts: results.map((result) => ({
+            attemptIndex: result.retry ?? 0,
+            state: result.status ?? "unknown",
+            durationMs: result.duration ?? 0,
+            ...(result.startTime ? { startedAt: result.startTime } : {}),
+            ...(result.workerIndex === undefined ? {} : { workerIndex: result.workerIndex }),
+            ...(result.parallelIndex === undefined ? {} : { parallelIndex: result.parallelIndex }),
+            ...(result.error ? { error: normalizeError(result.error) } : {}),
+            phases: flattenPlaywrightSteps(result.steps ?? []),
+          })),
+        });
       }
     }
     for (const child of suite.suites ?? []) {
-      visit(child);
+      visit(child, titles);
     }
   };
   for (const suite of report.suites ?? []) {
     visit(suite);
   }
-  return retried;
+  if (tests.length === 0) throw new Error(`${filePath} contained no test results`);
+  return summaryFromTests(tests);
+}
+
+function flattenPlaywrightSteps(
+  steps: ReadonlyArray<PlaywrightTelemetryStep>,
+  parents: string[] = [],
+): PreviewE2eTestRecord["phases"] {
+  return steps.flatMap((step) => {
+    const path = [...parents, step.title ?? "(unnamed step)"];
+    return [
+      {
+        name: path.join(" › "),
+        ...(step.category ? { category: step.category } : {}),
+        durationMs: step.duration ?? 0,
+      },
+      ...flattenPlaywrightSteps(step.steps ?? [], path),
+    ];
+  });
 }
 
 /**
@@ -1540,18 +1826,49 @@ async function readPlaywrightRetryTelemetry(
  * (the sub-lane may have died before writing) and logging anything else —
  * telemetry must never fail the lane.
  */
-async function readRetryTelemetryLane(
+async function readTestTelemetryLane(
   label: string,
-  read: () => Promise<PreviewRetrySummary["retried"]>,
-): Promise<PreviewRetrySummary["retried"]> {
+  read: () => Promise<PreviewTestSummary>,
+): Promise<PreviewTestSummary> {
   try {
     return await read();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.error(`[preview] retry telemetry unreadable for ${label}:`, error);
-    }
-    return [];
+    const message = `${label}: ${error instanceof Error ? error.message : String(error)}`;
+    console.error(`[preview] test telemetry unavailable for ${message}`);
+    return { tests: [], modules: [], retried: [], collectionErrors: [message] };
   }
+}
+
+function summaryFromTests(tests: PreviewE2eTestRecord[]): PreviewTestSummary {
+  return {
+    tests,
+    modules: [],
+    retried: tests
+      .filter((test) => test.retryCount > 0)
+      .map((test) => ({
+        lane: test.lane,
+        name: test.name,
+        retryCount: test.retryCount,
+        passedAfterRetry: test.passedAfterRetry,
+        ...(test.errors[0] ? { firstFailure: compactRetryFailure(test.errors[0]) } : {}),
+      })),
+    collectionErrors: [],
+  };
+}
+
+function combineTestSummaries(summaries: PreviewTestSummary[]): PreviewTestSummary {
+  return {
+    tests: summaries.flatMap((summary) => summary.tests),
+    modules: summaries.flatMap((summary) => summary.modules),
+    retried: summaries.flatMap((summary) => summary.retried),
+    collectionErrors: summaries.flatMap((summary) => summary.collectionErrors),
+  };
+}
+
+function normalizeTestModuleId(moduleId: string, repositoryRoot: string): string {
+  return moduleId.startsWith(repositoryRoot)
+    ? moduleId.slice(repositoryRoot.length).replace(/^\//, "")
+    : moduleId;
 }
 
 /** One compact human line for the run log and the PR-body table. */
@@ -1569,10 +1886,25 @@ function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null 
 }
 
 /**
- * Surfaces retry telemetry as a workflow annotation, mirroring
- * warnIfOverBudget: one or two retried tests per run is the observed
- * platform-flake floor (~0.5% of test executions) and gets a notice; a
- * pile-up smells like a slot-wide problem and escalates to a warning.
+ * Convert a test command into the single failure stored in preview state.
+ * Retries remain visible in telemetry, but the runner's final exit code owns
+ * pass/fail: a test that succeeds on its permitted retry is green.
+ */
+function previewTestFailureMessage(input: {
+  result: { exitCode: number | null; stderr?: string; stdout?: string };
+  retrySummary: PreviewRetrySummary | null;
+}): string | null {
+  if (input.result.exitCode !== 0) {
+    return commandFailureMessage(input.result, "Preview tests failed after deploy.");
+  }
+
+  return null;
+}
+
+/**
+ * Surfaces retry telemetry without changing the command's outcome. A small
+ * number is a notice; a pile-up is a warning because it may indicate a
+ * slot-wide incident rather than independent flakes.
  */
 function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   const rendered = renderPreviewRetrySummary(summary);
@@ -1581,8 +1913,8 @@ function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   }
   const level = summary.retried.length >= 4 ? "warning" : "notice";
   console.log(
-    `::${level} title=Preview e2e retries::${slug}: ${rendered}. A retried test is a real failure a ` +
-      `re-roll absorbed — see docs/testing.md#retries-and-timeouts.`,
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. The retry passed and does not fail ` +
+      `this run; quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.`,
   );
 }
 
@@ -1620,8 +1952,42 @@ export const cloudflarePreviewSharedPaths = [
   "scripts/lib/**",
 ] as const;
 
+/**
+ * The complete source closure for Wrangler's OS container applications.
+ * Preview may use `--containers-rollout none` only when GitHub proves none of
+ * these changed from the exact OS revision already serving on the same slot.
+ * Keep this deliberately conservative: an unnecessary rollout costs seconds;
+ * a missed input silently leaves stale image or capacity configuration live.
+ */
+const osContainerRolloutInputPaths = [
+  "apps/os/package.json",
+  "apps/os/sandbox/**",
+  "apps/os/scripts/canonicalize-output-wrangler-config.ts",
+  "apps/os/scripts/generate-wrangler-config.ts",
+  "apps/os/src/domains/sandboxes/instance-types.ts",
+  "apps/os/vite.config.ts",
+  "apps/os/wrangler.jsonc",
+  "envs.ts",
+  "patches/**",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "scripts/lib/wrangler-config.ts",
+] as const;
+
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
 export const cloudflarePreviewAdditionalTriggerPaths = ["apps/auth-example/**"] as const;
+
+function requirePreviewEnvironment<T>(
+  appSlug: CloudflarePreviewAppSlugType,
+  dopplerConfig: string,
+  environments: Readonly<Record<string, T>>,
+): T {
+  const environment = environments[dopplerConfig];
+  if (!environment) {
+    throw new Error(`Unknown ${appSlug} environment ${JSON.stringify(dopplerConfig)}.`);
+  }
+  return environment;
+}
 
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   os: {
@@ -1632,13 +1998,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = osEnvs[dopplerConfig as keyof typeof osEnvs];
-      if (!env) {
-        throw new Error(`Unknown OS environment ${JSON.stringify(dopplerConfig)}.`);
-      }
+      const environment = requirePreviewEnvironment("os", dopplerConfig, envs);
       return {
-        baseUrl: env.baseUrl,
-        projectHostnameBases: env.projectHostnameBases,
+        baseUrl: environment.baseUrl,
+        projectHostnameBases: environment.projectHostnameBases,
+        workerName: environment.osWorkerName,
       };
     },
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
@@ -1663,11 +2027,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "playwright.config.ts",
       // The suite also builds and exercises the mobile web app locally.
       "apps/mobile/**",
-      // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
-      ".bun-version",
-      // OS imports iterate/sdk/itx/react, and its preview e2e lane builds and runs the
-      // iterate TUI artifact. A CLI-only change therefore still needs the OS
-      // deployment and post-deploy PTY proof.
+      // OS imports iterate/sdk, so a CLI/package-only change still needs
+      // the OS deployment and its e2e proof.
       "packages/iterate/**",
       "apps/auth/**",
       "apps/auth-contract/**",
@@ -1678,8 +2039,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // Petshop. Co-select both; every deploy starts concurrently and OS derives
     // Auth's public signing key directly from Doppler.
     previewDependencies: ["auth", "dummy-petshop"],
-    // The active Durable Object barrier replaces the former blind 40s hold;
-    // retry-clean historical full-fleet deploys completed around 72s.
+    // Require wrangler's exact edge version to stay visible for a quiet
+    // interval. Tests then pin that immutable version explicitly.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "APP_CONFIG_BASE_URL",
@@ -1739,21 +2100,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
-    collectRetryTelemetry: async ({ repositoryRoot }) => {
-      const [vitest, tui, specs] = await Promise.all([
-        readRetryTelemetryLane("os vitest lane", () =>
-          readVitestRetryTelemetry(osVitestRetryTelemetryFile),
+    collectTestTelemetry: async ({ repositoryRoot }) => {
+      const [vitest, specs] = await Promise.all([
+        readTestTelemetryLane("os vitest lane", () =>
+          readVitestTestTelemetry(osVitestRetryTelemetryFile, "vitest", repositoryRoot),
         ),
-        readRetryTelemetryLane("os TUI lane", () =>
-          readVitestRetryTelemetry(osTuiRetryTelemetryFile, "tui"),
-        ),
-        readRetryTelemetryLane("os playwright specs", () =>
-          readPlaywrightRetryTelemetry(
+        readTestTelemetryLane("os playwright specs", () =>
+          readPlaywrightTestTelemetry(
             resolve(repositoryRoot, "test-results/playwright-results.json"),
+            "playwright",
+            repositoryRoot,
           ),
         ),
       ]);
-      return { retried: [...vitest, ...tui, ...specs] };
+      // TUI is currently an explicit no-op skip and produces no test report.
+      return combineTestSummaries([vitest, specs]);
     },
   },
   semaphore: {
@@ -1766,11 +2127,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = semaphoreEnvs[dopplerConfig as keyof typeof semaphoreEnvs];
-      if (!env) {
-        throw new Error(`Unknown Semaphore environment ${JSON.stringify(dopplerConfig)}.`);
-      }
-      return { baseUrl: env.baseUrl };
+      const environment = requirePreviewEnvironment("semaphore", dopplerConfig, semaphoreEnvs);
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
     },
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
@@ -1788,7 +2146,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // handout order — the exact semantics this preview machinery's own slot
     // leasing depends on — and was previously invoked by NOTHING
     // (docs/testing.md#lanes).
-    previewTestCommandArgs: ["env", "-u", "SEMAPHORE_API_TOKEN", "pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      `rm -f ${semaphoreVitestTelemetryFile}; env -u SEMAPHORE_API_TOKEN E2E_RETRY_TELEMETRY_FILE=${semaphoreVitestTelemetryFile} pnpm test:e2e`,
+    ],
+    collectTestTelemetry: async ({ repositoryRoot }) =>
+      readTestTelemetryLane("semaphore vitest lane", () =>
+        readVitestTestTelemetry(semaphoreVitestTelemetryFile, "vitest", repositoryRoot),
+      ),
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
@@ -1803,11 +2169,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "auth",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = authEnvs[dopplerConfig as keyof typeof authEnvs];
-      if (!env) {
-        throw new Error(`Unknown Auth environment ${JSON.stringify(dopplerConfig)}.`);
-      }
-      return { baseUrl: env.authBaseUrl };
+      const environment = requirePreviewEnvironment("auth", dopplerConfig, authEnvs);
+      return { baseUrl: environment.authBaseUrl, workerName: environment.authWorkerName };
     },
     paths: ["apps/auth/**", "apps/auth-contract/**"],
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
@@ -1821,7 +2184,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // doppler wrap supplies APP_CONFIG_SERVICE_AUTH_TOKEN for the internal.*
     // seeding procedures; preview auth bakes the fixed test OTP the suite
     // signs in with.
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      `rm -f ${authVitestTelemetryFile}; E2E_RETRY_TELEMETRY_FILE=${authVitestTelemetryFile} pnpm test:e2e`,
+    ],
+    collectTestTelemetry: async ({ repositoryRoot }) =>
+      readTestTelemetryLane("auth vitest lane", () =>
+        readVitestTestTelemetry(authVitestTelemetryFile, "vitest", repositoryRoot),
+      ),
   },
   "streams-example-app": {
     slug: "streams-example-app",
@@ -1831,13 +2202,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = streamsExampleEnvs[dopplerConfig as keyof typeof streamsExampleEnvs];
-      if (!env) {
-        throw new Error(
-          `Unknown streams-example-app environment ${JSON.stringify(dopplerConfig)}.`,
-        );
-      }
-      return { baseUrl: env.baseUrl };
+      const environment = requirePreviewEnvironment(
+        "streams-example-app",
+        dopplerConfig,
+        streamsExampleEnvs,
+      );
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
     },
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
@@ -1879,22 +2249,23 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
       ].join("; "),
     ],
-    collectRetryTelemetry: async ({ repositoryRoot }) => {
+    collectTestTelemetry: async ({ repositoryRoot }) => {
       const [vitest, playwright] = await Promise.all([
-        readRetryTelemetryLane("streams-example-app vitest lane", () =>
-          readVitestRetryTelemetry(streamsExampleVitestRetryTelemetryFile),
+        readTestTelemetryLane("streams-example-app vitest lane", () =>
+          readVitestTestTelemetry(streamsExampleVitestRetryTelemetryFile, "vitest", repositoryRoot),
         ),
-        readRetryTelemetryLane("streams-example-app playwright lane", () =>
-          readPlaywrightRetryTelemetry(
+        readTestTelemetryLane("streams-example-app playwright lane", () =>
+          readPlaywrightTestTelemetry(
             resolve(
               repositoryRoot,
               "apps/streams-example-app/test-results/playwright-results.json",
             ),
             "playwright",
+            repositoryRoot,
           ),
         ),
       ]);
-      return { retried: [...vitest, ...playwright] };
+      return combineTestSummaries([vitest, playwright]);
     },
   },
   "dummy-petshop": {
@@ -1907,11 +2278,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "dummy-petshop",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = dummyPetshopEnvs[dopplerConfig as keyof typeof dummyPetshopEnvs];
-      if (!env) {
-        throw new Error(`Unknown dummy-petshop environment ${JSON.stringify(dopplerConfig)}.`);
-      }
-      return { baseUrl: env.baseUrl };
+      const environment = requirePreviewEnvironment(
+        "dummy-petshop",
+        dopplerConfig,
+        dummyPetshopEnvs,
+      );
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
     },
     paths: ["apps/dummy-petshop/**"],
     // The fixture's content barely ever changes; envs.ts rides along because
@@ -1919,7 +2291,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      `rm -f ${dummyPetshopVitestTelemetryFile}; E2E_RETRY_TELEMETRY_FILE=${dummyPetshopVitestTelemetryFile} pnpm test:e2e`,
+    ],
+    collectTestTelemetry: async ({ repositoryRoot }) =>
+      readTestTelemetryLane("dummy-petshop vitest lane", () =>
+        readVitestTestTelemetry(dummyPetshopVitestTelemetryFile, "vitest", repositoryRoot),
+      ),
   },
 };
 
@@ -2012,6 +2392,9 @@ export const CloudflarePreviewAppEntry = z.object({
   shortSha: z.string().trim().min(1).nullable().optional(),
   cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
   deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Public Worker script and immutable Wrangler version proven by this entry. */
+  deployedWorkerName: z.string().trim().min(1).nullable().optional(),
+  deployedWorkerVersion: z.uuid().nullable().optional(),
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
   /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
   testRetries: z.string().trim().min(1).nullable().optional(),
@@ -3167,8 +3550,8 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
     ]);
 
     setDopplerSecrets("auth", config, {
-      // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public
-      // URL. Origins/routes themselves are generated from the root envs.ts.
+      // Runtime consumers still receive their public origin through Doppler;
+      // deployment orchestration derives the same value from root envs.ts.
       APP_CONFIG_BASE_URL: authOrigin,
       AUTH_SEED_OAUTH_CLIENTS: seed,
       APP_CONFIG_AUTH_APP_ORIGIN: authOrigin,
@@ -3596,8 +3979,8 @@ async function deployPreviewApp(input: {
     app: input.app,
     commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
-    signal: input.signal,
     repositoryRoot: input.repositoryRoot,
+    signal: input.signal,
   });
   const baseEntry = {
     appDisplayName: input.app.displayName,
@@ -3615,6 +3998,8 @@ async function deployPreviewApp(input: {
     input.existingEntry?.status === "deployed" &&
     input.existingEntry.publicUrl === appConfig.baseUrl &&
     input.existingEntry.deployedFingerprint === fingerprint &&
+    input.existingEntry.deployedWorkerName === appConfig.workerName &&
+    input.existingEntry.deployedWorkerVersion &&
     // The record alone is not proof the worker still answers — this app may
     // be selected precisely because the not-serving sweep found it dead
     // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
@@ -3637,6 +4022,8 @@ async function deployPreviewApp(input: {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       deployedFingerprint: fingerprint,
+      deployedWorkerName: input.existingEntry.deployedWorkerName,
+      deployedWorkerVersion: input.existingEntry.deployedWorkerVersion,
       workerSizeKib: input.existingEntry.workerSizeKib ?? null,
       workerGzipKib: input.existingEntry.workerGzipKib ?? null,
       mainWorkerGzipKib: input.existingEntry.mainWorkerGzipKib ?? null,
@@ -3671,15 +4058,15 @@ async function deployPreviewApp(input: {
     });
   }
 
-  const deployedWorkerVersion = input.app.previewReadyWorkerVersion
-    ? parseLastDeployedWorkerVersionId(`${deployResult.stdout}\n${deployResult.stderr}`)
-    : null;
-  if (input.app.previewReadyWorkerVersion && !deployedWorkerVersion) {
+  const deployedWorkerVersion = parseLastDeployedWorkerVersionId(
+    `${deployResult.stdout}\n${deployResult.stderr}`,
+  );
+  if (!deployedWorkerVersion) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
       message:
-        "Preview deployment succeeded, but wrangler did not report the deployed Worker version required by the readiness barrier.",
+        "Preview deployment succeeded, but wrangler did not report the exact Worker version required by preview tests.",
       status: "deploy-failed",
     });
   }
@@ -3710,6 +4097,8 @@ async function deployPreviewApp(input: {
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
     ...sizeFields,
+    deployedWorkerName: appConfig.workerName,
+    deployedWorkerVersion,
     deployedFingerprint: fingerprint,
     status: "awaiting-tests",
   });
@@ -3726,6 +4115,7 @@ async function readPreviewAppConfig(input: {
     baseUrl: z.string().trim().url(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
     readinessBearerToken: z.string().trim().min(1).optional(),
+    workerName: z.string().trim().min(1),
   });
   const parsePreviewAppConfig = (value: unknown) => {
     const parsed = PreviewAppConfig.parse(value);
@@ -3793,7 +4183,7 @@ async function readPreviewAppConfig(input: {
     typeof dopplerConfig === "object" && dopplerConfig !== null
       ? {
           ...dopplerConfig,
-          baseUrl: repoConfig.baseUrl,
+          ...repoConfig,
           projectHostnameBases:
             repoConfig.projectHostnameBases ??
             ("projectHostnameBases" in dopplerConfig
@@ -4847,6 +5237,88 @@ function makeGithubCompareFetcher(input: {
   };
 }
 
+type PreviewOsContainerRolloutDecision = {
+  mode: "immediate" | "none";
+  reason: string;
+};
+
+/**
+ * Skip Wrangler's serial container reconciliation only across one proven,
+ * same-slot OS ancestry where every container input is unchanged. This is an
+ * optimization boundary, so every unknown shape fails open to the normal full
+ * rollout rather than risking stale deployed container configuration.
+ */
+async function resolvePreviewOsContainerRollout(input: {
+  dopplerConfig: string;
+  githubToken: string;
+  nextSlotSlug: string;
+  previousSlotSlug: string | null;
+  previousState: CloudflarePreviewState;
+  pullRequestHeadSha: string;
+  repositoryFullName: string;
+  /** Injectable for unit tests; defaults to GitHub's commit comparison. */
+  fetchCompare?: PreviewCompareFetcher;
+}): Promise<PreviewOsContainerRolloutDecision> {
+  const immediate = (reason: string): PreviewOsContainerRolloutDecision => ({
+    mode: "immediate",
+    reason,
+  });
+  if (input.previousSlotSlug !== input.nextSlotSlug) {
+    return immediate("the preview slot is new or changed");
+  }
+
+  const previous = input.previousState.apps.os;
+  const currentWorkerName = cloudflarePreviewApps.os.resolvePreviewAppConfig(
+    input.dopplerConfig,
+  ).workerName;
+  if (
+    !previous?.headSha ||
+    !previous.deployedWorkerVersion ||
+    previous.deployedWorkerName !== currentWorkerName ||
+    !["awaiting-tests", "deployed", "tests-failed"].includes(previous.status)
+  ) {
+    return immediate("the same slot has no exact prior OS deployment identity");
+  }
+  if (previous.headSha === input.pullRequestHeadSha) {
+    return {
+      mode: "none",
+      reason: "the exact OS revision is already proven on this slot",
+    };
+  }
+
+  const fetchCompare = input.fetchCompare ?? makeGithubCompareFetcher(input);
+  let compared: Awaited<ReturnType<PreviewCompareFetcher>>;
+  try {
+    compared = await fetchCompare(`${previous.headSha}...${input.pullRequestHeadSha}`);
+  } catch (error) {
+    return immediate(
+      `the OS ancestry comparison was unavailable: ${formatPreviewErrorMessage(error)}`,
+    );
+  }
+
+  const compareHazard = describeForcePushCompareHazard(compared.status);
+  if (compareHazard) {
+    return immediate(compareHazard);
+  }
+  // GitHub's compare response caps its file list at 300. Exactly hitting the
+  // cap cannot prove that an omitted file was not a container input.
+  if (compared.changedFilenames.length >= 300) {
+    return immediate("the OS ancestry comparison hit GitHub's 300-file response cap");
+  }
+
+  const changedInput = compared.changedFilenames.find((filename) =>
+    matchesPreviewPath(filename, osContainerRolloutInputPaths),
+  );
+  if (changedInput) {
+    return immediate(`container input ${changedInput} changed`);
+  }
+
+  return {
+    mode: "none",
+    reason: `no container input changed since ${previous.headSha.slice(0, 7)}`,
+  };
+}
+
 /**
  * GitHub's three-dot compare diffs the head against the MERGE BASE of the two
  * commits, not against the base commit itself. When the previously deployed
@@ -5776,19 +6248,22 @@ export const previewInternals = {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
-  readPlaywrightRetryTelemetry,
+  readPlaywrightTestTelemetry,
   readPreviewAppConfig,
-  readVitestRetryTelemetry,
+  readVitestTestTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
+  previewTestFailureMessage,
   resolveAuthPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
+  resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestWorkerVersionOverrides,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   selectPreviewSlotDataOwners,

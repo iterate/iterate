@@ -1,4 +1,5 @@
 import type { RpcStub } from "capnweb";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
 import type { Agent, Project as ProjectRpcTarget } from "../../src/itx-api.generated.ts";
@@ -35,6 +36,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
         agentPath,
         auth: adminAuth(),
         baseUrl,
+        headers: cloudflareWorkerVersionOverrideHeaders(process.env),
         projectId: project.id,
       });
     },

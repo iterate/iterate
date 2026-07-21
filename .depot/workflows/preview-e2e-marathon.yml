@@ -1,18 +1,12 @@
-# Runs the preview e2e lane N times CONSECUTIVELY on Depot CI infra against a
-# leased preview slot, to prove the lane is stable (the goal: 50 green in a
-# row). One Depot job: deploy the slot once (flake-hunt-loop.sh's preflight),
-# optionally warm it, then loop `pnpm preview test`, FAILING FAST on the first
-# failure. This is the same lane cloudflare-previews.yml runs once per push —
-# here it just repeats, on Depot (not a workstation), so the result is trusted.
+# Runs the complete preview critical path N times consecutively on Depot:
+# full-fleet deploy, then every e2e lane. It fails fast on the first functional
+# failure or run at/above five minutes. This is cloudflare-previews.yml repeated
+# on the same runner shape, not a warm test-only approximation.
 #
-# On-demand only — no automatic triggers (a marathon is expensive and explicit):
-#   depot ci run --org 0p91s0lz49 \
-#     --workflow .depot/workflows/preview-e2e-marathon.yml
-# `depot ci run` uploads local unpushed changes as a patch, so it runs whatever
-# is checked out. It does not pass workflow_dispatch inputs, hence the
-# `inputs.X || '<default>'` fallbacks below. Once merged to the default branch
-# you can also `depot ci dispatch ... --workflow preview-e2e-marathon.yml
-# --input pull-request-number=<pr> --input runs=<n>`.
+# On-demand only — dispatch the exact committed branch and name the PR:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
+#     --workflow preview-e2e-marathon.yml --ref <branch> \
+#     --input pull-request-number=<pr>
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
 # ITERATE_BOT_GITHUB_TOKEN — same as cloudflare-previews.yml.
@@ -24,32 +18,31 @@ on:
     inputs:
       pull-request-number:
         description: PR whose preview slot to marathon
-        required: false
-        default: "1850"
+        required: true
       runs:
-        description: consecutive green runs required
+        description: consecutive green runs required (empty = the script's default)
         required: false
-        # 15, not 50: every lane run drives ~15 gpt-5.5 agent turns at ~34k
-        # prompt tokens each — a 50-run marathon materially dents the Workers
-        # AI daily spend cap (the 2026-07-10 2041 fleet outage was exactly
-        # that). 15 consecutive greens is strong stability evidence; run it
-        # twice on different days for more.
-        default: "15"
-      warmup-runs:
-        description: uncounted priming runs before counting starts
+      max-run-seconds:
+        description: per-run proof ceiling (empty = PREVIEW_RUN_PROOF_BUDGET_SECS)
         required: false
-        default: "1"
+
+# A marathon must never race the ordinary preview workflow or cleanup for the
+# same PR. Queue behind an existing run; a newer PR event may cancel this stale
+# proof through the same repository-wide group.
+concurrency:
+  group: cloudflare-previews-${{ inputs.pull-request-number }}
+  cancel-in-progress: false
 
 jobs:
   marathon:
     name: Preview e2e marathon
-    # 8-core mirrors cloudflare-previews.yml: the lane is network-bound (waiting
-    # on the deployed slot), not CPU-bound.
-    runs-on: depot-ubuntu-24.04-8
-    # A 50-run marathon of a ~2-4 min lane is a couple of hours; give it real
-    # headroom above that but bounded (a wedged run is caught by the loop's own
-    # fail-fast watchdog long before this).
-    timeout-minutes: 300
+    # Match the production preview check exactly: seven Vitest file workers run
+    # alongside Playwright and the app-level lanes on the measured 16-core host.
+    runs-on: depot-ubuntu-24.04-16
+    # 25 accepted runs cannot consume 125 minutes; this leaves bounded room for
+    # setup and an externally stolen slot while the per-run watchdog diagnoses
+    # a tail before the outer limit.
+    timeout-minutes: 180
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -69,16 +62,15 @@ jobs:
       - name: Marathon
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # flake-hunt-loop.sh's `pnpm preview deploy/test` default their token
-          # to GITHUB_TOKEN (resolveGithubToken in preview.ts).
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          PR_NUMBER: ${{ inputs.pull-request-number || '1850' }}
-          RUNS: ${{ inputs.runs || '15' }}
-          WARMUP_RUNS: ${{ inputs.warmup-runs || '1' }}
+          PR_NUMBER: ${{ inputs.pull-request-number }}
+          # Empty inputs fall through to the script's own defaults, which the
+          # e2e-policy guard keeps synced to budgets.ts.
+          RUNS: ${{ inputs.runs }}
+          MAX_RUN_DURATION_SECS: ${{ inputs.max-run-seconds }}
           LOG_DIR: /tmp/marathon
-        # flake-hunt-loop.sh: preflight full-fleet deploy, warm, then loop the
-        # lane, exiting non-zero (failing the job) on the first FAIL / SKIP /
-        # PARTIAL. Its caffeinate re-exec is Darwin-only and no-ops here.
+        # The loop exits non-zero on the first deploy/test failure, skip,
+        # partial fleet, watchdog, or duration-budget breach.
         run: ./scripts/preview/flake-hunt-loop.sh
       - name: Collect marathon test artifacts
         if: always()

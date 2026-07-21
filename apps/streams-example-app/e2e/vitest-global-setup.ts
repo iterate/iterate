@@ -1,3 +1,4 @@
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { e2eWorkerUrl } from "./helpers.ts";
 
 /**
@@ -13,7 +14,10 @@ export default async function setup() {
   try {
     // Any HTTP response (including 401/redirect on admin-gated deployed
     // playgrounds) proves the target is up; only transport errors throw.
-    await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    await fetch(url, {
+      headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+      signal: AbortSignal.timeout(15_000),
+    });
   } catch (error) {
     throw new Error(
       `Streams playground is not reachable at ${url}. ` +

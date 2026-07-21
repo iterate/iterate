@@ -51,7 +51,32 @@ function makeHarness() {
 }
 
 describe("RepoProcessor eviction recovery", () => {
-  it("re-drives a transient creation error after revival without recording failure", async () => {
+  it("redelivers empty creation interrupted by a deployment without poisoning the repo", async () => {
+    const h = makeHarness();
+    let calls = 0;
+    h.createEmpty.impl = async () => {
+      calls += 1;
+      if (calls === 1) {
+        const reset = Object.assign(
+          new Error("Durable Object reset because its code was updated."),
+          { durableObjectReset: true },
+        );
+        throw new Error("Artifact client could not create the repo", { cause: reset });
+      }
+      return CREATED_ARTIFACT;
+    };
+    await h.stream.append(EMPTY_REQUEST);
+
+    await expect(h.settle()).rejects.toThrow("Artifact client could not create the repo");
+    expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
+
+    await h.settle();
+
+    expect(calls).toBe(2);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
+  it("redelivers a still-materializing empty Artifact without recording failure", async () => {
     const h = makeHarness();
     let calls = 0;
     h.createEmpty.impl = async () => {
@@ -59,13 +84,12 @@ describe("RepoProcessor eviction recovery", () => {
       if (calls === 1) throw new RepoNotSeededError("Artifact import is still in progress");
       return CREATED_ARTIFACT;
     };
-
-    await h.append(EMPTY_REQUEST);
+    await h.stream.append(EMPTY_REQUEST);
+    await expect(h.settle()).rejects.toThrow("Artifact import is still in progress");
     expect(calls).toBe(1);
     expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
 
-    h.crash();
-    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
+    await h.settle();
 
     expect(calls).toBe(2);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);

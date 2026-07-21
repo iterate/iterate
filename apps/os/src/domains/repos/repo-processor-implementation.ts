@@ -1,5 +1,6 @@
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
+import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import {
   RepoProcessorContract,
   type RepoCreateRequest,
@@ -21,18 +22,19 @@ import { isRepoNotSeededError } from "./utils.ts";
  * A repo begins as a CREATION SAGA. `repos/create-requested` is the durable
  * intent (empty starter seed, a private GitHub pull at depth one, or a public
  * GitHub import performed by Cloudflare Artifacts outside the Worker);
- * `repos/created` or `repos/create-failed` is its terminal fact. The vendor
- * work is a state-derived obligation: whenever a delivery reaches head with
- * the request open (no terminal fact) and no attempt live in THIS
- * incarnation, the at-head pass drives it in the background — a slow public
- * import must not hold the stream cursor. The terminal certificate's
+ * `repos/created` or `repos/create-failed` is its terminal fact. Empty seeding
+ * is short must-complete work, so the at-head pass holds the stream checkpoint
+ * with `blockProcessorWhile`; an interrupted attempt is redelivered by the
+ * stream spine immediately instead of depending on another event to wake a
+ * quiet config repo. GitHub imports remain state-derived background
+ * obligations because they can be long-running. The terminal certificate's
  * idempotency keys are offset-free (`created` / `create-failed`), so a
- * redelivery or revival cannot rotate them and double-birth. A vendor error
- * settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed repo's
- * stream never reacts to anything again. The one exception is a
- * still-materializing Artifact (RepoNotSeededError): no terminal fact is
- * journaled, the obligation stays open, and the revival pass re-drives the
- * idempotent creation.
+ * redelivery or revival cannot rotate them and double-birth. A vendor/domain
+ * error settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed
+ * repo's stream never reacts to anything again. A still-materializing
+ * Artifact (RepoNotSeededError) or Durable Object lifecycle interruption is
+ * not a domain failure: no terminal fact is journaled and the durable
+ * obligation remains open for redelivery/revival.
  *
  * Commit facts come from ONE source: the Cloudflare Artifacts event queue.
  * Each `repo/cloudflare-artifact-event-received` push on the default branch
@@ -81,7 +83,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * eviction. A fresh incarnation finds the open request in state, sees no
    * attempt here, and drives it again.
    */
-  #creationAttemptedThisIncarnation = false;
+  #longCreationAttemptedThisIncarnation = false;
 
   /**
    * RUNTIME state: request ids of GitHub imports THIS incarnation is driving.
@@ -186,25 +188,32 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // yet replayed, and acting on that would re-run completed obligations.
     if (!delivery.caughtUp) return;
 
-    // The creation saga: drive the open request when THIS incarnation has no
-    // attempt live (normal start and post-eviction recovery are the same
-    // branch on purpose). Background work — the vendor side can be a full
-    // public GitHub import — and offset-free terminal idempotency keys, so a
-    // re-driven attempt collapses onto the first terminal fact.
+    // The creation saga. Empty seeding is short and must complete before this
+    // frame is acknowledged: if an Artifacts DO is reset during a deployment,
+    // the stream spine redelivers the uncommitted frame and retries promptly.
+    // GitHub-backed creation can be a long import, so it remains a background
+    // obligation re-derived from state after eviction. Offset-free terminal
+    // keys make both paths converge on one certificate.
     const createRequest = state.createRequest;
     if (
       createRequest !== null &&
       state.birthCertificate === null &&
-      !this.#creationAttemptedThisIncarnation
+      createRequest.type === "empty"
     ) {
-      this.#creationAttemptedThisIncarnation = true;
+      blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
+    } else if (
+      createRequest !== null &&
+      state.birthCertificate === null &&
+      !this.#longCreationAttemptedThisIncarnation
+    ) {
+      this.#longCreationAttemptedThisIncarnation = true;
       runInBackground(async () => {
         try {
           await append(await this.#createRepoTerminal(createRequest));
         } catch (error) {
           // No terminal fact landed, so a later at-head/revival pass in this
           // incarnation must be allowed to re-drive the obligation.
-          this.#creationAttemptedThisIncarnation = false;
+          this.#longCreationAttemptedThisIncarnation = false;
           throw error;
         }
       });
@@ -229,9 +238,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * private GitHub repo starts from an empty Artifact, links, and pulls the
    * default branch through the Worker at depth one. Any vendor error settles
    * the saga as `repos/create-failed` — EXCEPT a still-materializing Artifact
-   * (RepoNotSeededError), which keeps the obligation open so the recovery
-   * alarm re-drives the idempotent creation instead of failing a repo that is
-   * merely slow.
+   * (RepoNotSeededError) or a Durable Object lifecycle interruption. Those
+   * keep the obligation open for redelivery/revival instead of permanently
+   * failing a repo because infrastructure restarted underneath it.
    */
   async #createRepoTerminal(
     request: RepoCreateRequest,
@@ -244,7 +253,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         payload: { ...artifact, request },
       };
     } catch (error) {
-      if (isRepoNotSeededError(error)) throw error;
+      if (isRepoNotSeededError(error) || isRetryableDurableObjectAvailabilityError(error)) {
+        throw error;
+      }
       return {
         type: "events.iterate.com/repos/create-failed",
         idempotencyKey: this.idempotencyKey("create-failed"),

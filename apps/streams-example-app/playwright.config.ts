@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 import { resolveDeployedEnv } from "./e2e/auth.ts";
 import { STORAGE_STATE_PATH } from "./e2e/playwright-global-setup.ts";
@@ -44,6 +45,7 @@ export default defineConfig({
       : undefined,
   use: {
     baseURL: workerUrl ?? localUrl,
+    extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),
     storageState: usesSavedSession ? STORAGE_STATE_PATH : undefined,
     // CI records traces only on the retry attempt (fleet convention, same as
     // the root config): always-on recording taxes every healthy test in the

@@ -10,6 +10,10 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  isRetryableDurableObjectAvailabilityError,
+  STREAM_UNAVAILABLE_MESSAGE_PREFIX,
+} from "../streams/stream-unavailable.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
   AgentCollectionProcessorContract,
@@ -71,6 +75,23 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
       throw new Error("waitUntilAgentCreated timeoutMs must be a positive safe integer");
     }
 
+    try {
+      await this.#observeAgentCreated(path, input.timeoutMs);
+    } catch (error) {
+      // The caller's idempotent replay of this wait is the ONE recovery
+      // layer for deploy resets, but workerd strips lifecycle flags and
+      // causes at the RPC hop back to it. Re-mint the availability tag onto
+      // the message — the one channel every hop preserves — so a nested
+      // stream reset stays classifiable at the caller.
+      if (isRetryableDurableObjectAvailabilityError(error)) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${message}`, { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  async #observeAgentCreated(path: AgentPath, timeoutMs: number): Promise<void> {
     const observationAbort = new AbortController();
     // Register first so an event arriving during catch-up cannot pass between
     // the durable-state check and the future-delivery waiter. Observe rejection
@@ -81,7 +102,7 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
       predicate: (event) =>
         event.type === "events.iterate.com/agent/created" &&
         event.source?.crossPostedFrom?.at(-1)?.path === path,
-      timeoutMs: input.timeoutMs,
+      timeoutMs,
       signal: observationAbort.signal,
     });
     const observedDelivery = delivered.then(

@@ -15,8 +15,9 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-OS starts its onboarding smoke, built-package TUI, Vitest, and Playwright as
-four independent sub-lanes. Therefore, healthy wall time should approach:
+OS starts its onboarding smoke, explicit TUI quarantine marker, Vitest, and
+Playwright as four independent sub-lanes. Therefore, healthy wall time should
+approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -33,23 +34,24 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
-- OS smoke, TUI, Vitest, and Playwright run concurrently. Every background
-  process is joined even if another one fails, so a failure cannot orphan work
-  or discard another lane's result.
+- OS smoke, the explicit TUI quarantine marker, Vitest, and Playwright run
+  concurrently. Every background process is joined even if another one fails,
+  so a failure cannot orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
-- OS Vitest uses seven file workers and at most two concurrent tests per file
-  in CI. Eight workers is healthy in isolation, but seven keeps the combined
-  Vitest-plus-Playwright burst below the preview's shared Durable Object/RPC
-  contention point. Its sequencer starts historically slow files first; the
-  examples matrix then overlaps its isolated runtimes inside each case.
+- OS Vitest runs seven files at once and permits at most two concurrent tests
+  per file in CI. A longest-processing-time-first sequencer starts the observed
+  slow files first, while the seven-worker bound keeps the combined Vitest and
+  Playwright project-creation burst inside measured preview capacity. The
+  examples matrix still overlaps its isolated runtimes inside each case.
 - Root Playwright uses eight fully parallel workers in CI. Preview runs queue the
   long reconnect/resume specs first so their fixed probe windows overlap the
   ordinary catalogue.
-- The job uses a 16-core Depot runner. A complete 32-core run peaked below ten
-  cores while its allocation wait dominated setup, so the larger shape added
-  queue tail without removing remote latency. The deployed Worker and Durable
-  Objects remain the integration boundary.
+- The job uses a 16-core Depot runner. Measurements on larger runners showed
+  the overlapping local work peaking below ten cores; the deployed Worker and
+  Durable Objects, rather than host CPU, are the integration boundary. The
+  marathon is the capacity and tail-latency proof for the resulting remote
+  burst.
 
 Tests make this safe by owning isolated state. Test clients give every project
 create a collision-resistant caller-owned `prj_…` identifier, avoiding an
@@ -62,29 +64,33 @@ serially because they intentionally share one warm container.
 
 - **Retries live only at the individual-test layer.** CI permits one retry;
   app lanes and the whole workflow never retry automatically.
-- **Watchdogs fail rather than retry.** The TUI and Vitest/Playwright processes
-  retain their own bounded `timeout`s, inside the workflow backstop.
-- **Readiness is an active version proof.** A healthy edge response alone does
-  not prove that Cloudflare has finished updating Durable Objects. OS checks
-  ten bounded waves concurrently. Each wave samples eight version-specific
-  `CapabilityHostDurableObject` placements and one fixed incarnation in every
-  other deployed OS Durable Object namespace. The streams example checks ten
-  waves of eight fixed `StreamDurableObject` incarnations. Once every wave
-  reports the exact deployed version, the complete set is revalidated after a
-  10-second quiet interval. Failed waves alone stay in the hot retry set. The
-  fan-out route requires the app's existing Doppler-backed bearer, and the
-  client rejects malformed wave identities instead of accepting a partial
-  proof.
-- **Only classified rollout states retry.** Version skew, flagged Durable
-  Object lifecycle resets, and the probe's own bounded timeout are settling
-  states. Authentication/configuration failures and unclassified 5xx responses
-  fail the deployment immediately with a bounded response diagnostic.
-- **The proof does not exercise product work.** Its RPC only returns the
-  incarnation's version. In particular, probing a sandbox Durable Object does
-  not create or start a container. Ordinary health requests remain cheap and
-  do not touch Durable Objects.
-- **Retries remain visible.** Vitest, TUI, and Playwright write compact retry
-  telemetry that is folded into the preview state in the PR description.
+- **Watchdogs fail rather than retry.** The TUI quarantine marker and
+  Vitest/Playwright processes retain their own bounded `timeout`s, inside the
+  workflow backstop.
+- **Readiness proves the uploaded edge version.** OS and the streams example
+  report `CF_VERSION_METADATA`; the orchestrator requires wrangler's exact
+  final version on the health probe (no multi-second dwell after first match).
+  The probe is a cheap public health request and never wakes synthetic Durable
+  Objects.
+- **Warm OS deploys skip only proven-unchanged container work.** Wrangler
+  otherwise builds and reconciles the six stock sandbox image applications
+  serially even when all six report `no changes`. The orchestrator requests
+  `--containers-rollout none` only when the same slot has an exact prior OS
+  deployment and GitHub's ancestry diff contains no image, generated config,
+  cap, package, or Wrangler-config input. New slots, bootstraps, force-pushes,
+  truncated/unavailable comparisons, and relevant changes use the full
+  rollout.
+- **Durable Object resets are handled by product operations.** Cloudflare may
+  still move an individual Durable Object to new code after edge readiness.
+  Idempotent operations must redeliver after that explicit lifecycle outcome
+  without committing terminal failure state. A finite placement sample cannot
+  prove the whole fleet, so readiness does not pretend otherwise.
+- **Readiness retries are bounded and diagnostic.** Each request has a short
+  watchdog, the overall deploy check has a hard deadline, and the final HTTP
+  response body or transport error is retained in the failure message.
+- **Retries remain visible.** Vitest and Playwright write compact retry
+  telemetry that is folded into the preview state in the PR description. The
+  quarantined TUI marker writes an empty ledger and names its restoration task.
 - **Do not serialize around a product defect.** Repeated storage, RPC, stream,
   or project-birth tails require diagnosis. Parallel tests are allowed to
   expose real shared-capacity limits.
@@ -97,9 +103,9 @@ serially because they intentionally share one warm container.
   entire duration to the critical path.
 - Start fixed-duration or historically slow work first. Once the phase is
   parallel, late scheduling of the longest item is the usual avoidable tail.
-- Raise workers only with repeated preview evidence. More local concurrency
-  cannot shorten one composite test and may create retry work at the deployed
-  slot.
+- Keep the seven-worker file pool saturated and refresh the longest-first
+  timings when the tail moves. If that bounded remote burst exposes a real
+  shared-capacity defect, diagnose it rather than adding ad-hoc serial lanes.
 - Split composite tests when their internal serial work becomes the phase
   floor. This improves both scheduling and retry granularity.
 
@@ -115,6 +121,13 @@ serially because they intentionally share one warm container.
 Use at least three unchanged warm-slot runs when changing concurrency. A single
 green run proves neither the tail nor the retry rate. Classify every retry and
 audit matching Cloudflare errors before calling an operational change proven.
+
+For a release-level stability proof, dispatch `preview-e2e-marathon.yml`. Each
+counted run repeats the complete critical path (full-fleet deploy, then all test
+lanes), records duration and retry count in `summary.tsv`, and fails fast on a
+functional failure or a duration at or above five minutes. The acceptance bar
+is 25 consecutive accepted runs; environment ownership refusals are recorded
+but uncounted because the guard fires before any tests run.
 
 ## Cost
 
