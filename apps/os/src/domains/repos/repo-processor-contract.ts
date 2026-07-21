@@ -351,12 +351,12 @@ export const RepoProcessorContract = defineProcessorContract({
     "events.iterate.com/github/webhook-received",
     // The stream's own birth fact (core-owned): reduces `initialized`.
     "events.iterate.com/stream/created",
-    // The platform revival fact (core-owned). MUST be consumed (the runner
-    // throws at construction otherwise): its ordinary delivery is the
-    // guaranteed at-head turn where `processEvent` under `delivery.caughtUp`
-    // re-drives the open obligations — an undriven creation request is
-    // re-attempted, an orphaned GitHub import is re-driven (the sync is an
-    // idempotent current-head fast-forward).
+    // The platform revival fact (core-owned). This contract currently consumes
+    // it, but does not react to the fact itself; an unconsumed tail would
+    // receive the same eventless at-head turn that re-drives open obligations
+    // — an undriven creation request is re-attempted, and an orphaned GitHub
+    // import is re-driven (the sync is an idempotent current-head
+    // fast-forward).
     "events.iterate.com/stream/processor-revived",
   ],
   emits: [
