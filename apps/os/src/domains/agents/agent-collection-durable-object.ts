@@ -10,8 +10,11 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  isRetryableDurableObjectAvailabilityError,
+  STREAM_UNAVAILABLE_MESSAGE_PREFIX,
+} from "../streams/stream-unavailable.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { waitUntilAgentCreatedInCollection } from "./agent-collection-created-barrier.ts";
 import {
   AgentCollectionProcessorContract,
   type AgentCollectionProcessorState,
@@ -67,19 +70,77 @@ export class AgentCollectionDurableObject extends DurableObject<Env> {
       throw new Error("waitUntilAgentCreated timeoutMs must be a positive safe integer");
     }
 
-    await waitUntilAgentCreatedInCollection({
-      path,
-      reads: this.#reads,
-      timeoutMs: input.timeoutMs,
-      onLifecycleRetry: ({ attempt, error, maxAttempts }) => {
-        console.warn("agent collection barrier restarting after lifecycle reset", {
-          attempt,
-          error,
-          maxAttempts,
-          path,
-        });
-      },
+    try {
+      await this.#observeAgentCreated(path, input.timeoutMs);
+    } catch (error) {
+      // The caller's idempotent replay of this wait is the ONE recovery
+      // layer for deploy resets, but workerd strips lifecycle flags and
+      // causes at the RPC hop back to it. Re-mint the availability tag onto
+      // the message — the one channel every hop preserves — so a nested
+      // stream reset stays classifiable at the caller.
+      if (isRetryableDurableObjectAvailabilityError(error)) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${STREAM_UNAVAILABLE_MESSAGE_PREFIX}${message}`, { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  async #observeAgentCreated(path: AgentPath, timeoutMs: number): Promise<void> {
+    const observationAbort = new AbortController();
+    // Register first so an event arriving during catch-up cannot pass between
+    // the durable-state check and the future-delivery waiter. Observe rejection
+    // immediately: the catch-up may fail or prove the agent is already present,
+    // and cancelling the now-unneeded bounded waiter must never reject later as
+    // an unhandled promise.
+    const delivered = this.#reads.waitUntilEvent({
+      predicate: (event) =>
+        event.type === "events.iterate.com/agent/created" &&
+        event.source?.crossPostedFrom?.at(-1)?.path === path,
+      timeoutMs,
+      signal: observationAbort.signal,
     });
+    const observedDelivery = delivered.then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const observedCatchUp = this.#reads.catchUp().then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    try {
+      // A push may reduce the creation while a cold catch-up is still reading
+      // older pages, so either successful observation is sufficient. The
+      // delivery wait also bounds a stuck catch-up with the caller's deadline.
+      const first = await Promise.race([
+        observedDelivery.then((observation) => ({ kind: "delivery" as const, observation })),
+        observedCatchUp.then((observation) => ({ kind: "catch-up" as const, observation })),
+      ]);
+      if (first.kind === "delivery") {
+        if (first.observation.status === "fulfilled") return;
+        throw new Error(`agent collection did not reduce creation of ${path}`, {
+          cause: first.observation.error,
+        });
+      }
+      if (first.observation.status === "rejected") {
+        throw new Error(`agent collection could not catch up while creating ${path}`, {
+          cause: first.observation.error,
+        });
+      }
+      if (this.#reads.currentState.agents[path] !== undefined) return;
+
+      const observation = await observedDelivery;
+      if (observation.status === "rejected") {
+        throw new Error(`agent collection did not reduce creation of ${path}`, {
+          cause: observation.error,
+        });
+      }
+    } finally {
+      observationAbort.abort();
+      await observedDelivery;
+      void observedCatchUp;
+    }
   }
 
   /** Receive the collection's deliberately narrow agent-stream push lane. */
