@@ -1491,6 +1491,10 @@ export interface Workspace {
   configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null>;
+  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
+  collab: WorkspaceCollab;
+  /** A path's mount content at HEAD — the base uncommitted work diffs against. */
+  readBase(path: string): Promise<string | null>;
   /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
   /** Whether a path exists in the merged view. */
@@ -1547,6 +1551,74 @@ export interface CfVideosCapability {
 }
 
 /**
+ * The collaborative session lane of a workspace: server-authoritative
+ * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
+ * versions, optimistic clients rebasing unconfirmed edits). Sessions are
+ * durable; the workspace's ordinary filesystem RPC reads/writes route through
+ * live sessions automatically, so this surface is only for LIVE participants
+ * (editors) and redline consumers.
+ */
+export interface WorkspaceCollab {
+  __describe(): Promise<Description>;
+  /** Join (or start) the collaborative editing session for one file. */
+  open(path: string): Promise<{ content: string; epoch: string; version: number }>;
+  /** Submit a client update batch (rebase model; idempotent via clientSeq). */
+  push(input: {
+    baseVersion: number;
+    clientId: string;
+    epoch: string;
+    ops: { changes: unknown; clientSeq: number }[];
+    path: string;
+  }):
+    | (Promise<{ status: "accepted"; version: number } & Disposable> &
+        Pick<{ status: Promise<"accepted">; version: Promise<number> }, "status" | "version">)
+    | (Promise<{ status: "epoch-mismatch"; epoch: string } & Disposable> &
+        Pick<{ status: Promise<"epoch-mismatch">; epoch: Promise<string> }, "epoch" | "status">)
+    | (Promise<{ status: "history-miss" } & Disposable> &
+        Pick<{ status: Promise<"history-miss"> }, "status">)
+    | (Promise<{ status: "too-large"; maxBytes: number } & Disposable> &
+        Pick<{ status: Promise<"too-large">; maxBytes: Promise<number> }, "maxBytes" | "status">);
+  /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
+   * snapshot when past the retained floor, or ended after a destructive op. */
+  wait(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+  ):
+    | Promise<{ ops: { changes: unknown; clientId: string }[]; status: "ops" } & Disposable>
+    | (Promise<
+        {
+          snapshot: { ackedSeq: number; content: string; epoch: string; version: number };
+          status: "snapshot";
+        } & Disposable
+      > &
+        Pick<
+          {
+            snapshot: Promise<
+              { ackedSeq: number; content: string; epoch: string; version: number } & Disposable
+            > &
+              Pick<
+                {
+                  ackedSeq: Promise<number>;
+                  content: Promise<string>;
+                  epoch: Promise<string>;
+                  version: Promise<number>;
+                },
+                "ackedSeq" | "content" | "epoch" | "version"
+              >;
+            status: Promise<"snapshot">;
+          },
+          "snapshot" | "status"
+        >)
+    | (Promise<{ status: "ended" } & Disposable> & Pick<{ status: Promise<"ended"> }, "status">);
+  /** Head versions of every live session (a cheap board change cursor). */
+  versions(): Promise<Record<string, number>>;
+  /** Attributed tracked changes since the last commit (redline segments). */
+  changes(path: string): Promise<CollabChangesResult>;
+}
+
+/**
  * The per-mount git surface of a workspace. `status()` groups the overlay's
  * changes by owning mount (plus the never-committable unmounted scratch);
  * `commit({ message, scope? })` turns ONE mount's changes into one ordinary
@@ -1563,6 +1635,14 @@ export interface WorkspaceGit {
   commit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult>;
   /** One mount's repo history, newest first. */
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
+}
+
+export interface CollabChangesResult {
+  baseContent: string;
+  baseVersion: number;
+  deleted: { at: number; clientId: string; text: string }[];
+  headVersion: number;
+  inserted: { clientId: string; from: number; to: number }[];
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────

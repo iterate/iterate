@@ -1,7 +1,7 @@
 import { Text } from "@codemirror/state";
-import { resolveAbsolutePath } from "./paths.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
-import { attributedChanges, type CollabChangeSegment } from "./collab-changes.ts";
+import { resolveAbsolutePath } from "./paths.ts";
+import { attributedChanges } from "./collab-changes.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
 import {
   CollabEngine,
@@ -59,6 +59,14 @@ export interface CollabSessionStore extends CollabStore {
   setBase(path: string, base: { content: string; version: number }): void;
   /** Delete the session, its snapshot, its ops, and its base — the durable end. */
   endSession(path: string): void;
+}
+
+export interface CollabChangesResult {
+  baseContent: string;
+  baseVersion: number;
+  deleted: { at: number; clientId: string; text: string }[];
+  headVersion: number;
+  inserted: { clientId: string; from: number; to: number }[];
 }
 
 /** One settled file from a reconcile barrier — exactly what a commit that
@@ -353,26 +361,33 @@ export class CollabHost {
    * Attributed tracked changes since the last commit (or session birth):
    * a pure fold of the retained op log over the stored baseline.
    */
-  async changes(rawPath: string): Promise<{
-    baseContent: string;
-    baseVersion: number;
-    headVersion: number;
-    segments: CollabChangeSegment[];
-  }> {
+  async changes(rawPath: string): Promise<CollabChangesResult> {
     const path = CollabHost.canonical(rawPath);
     this.#assertLive(path);
     const head = await this.#opened(path);
     const base = this.#store.getBase(path);
     if (base === null) throw new Error(`no redline base recorded for ${path}`);
     const ops = await this.#store.readOps(path, head.epoch, base.version - 1);
+    const segments = attributedChanges(Text.of(base.content.split("\n")), ops);
+    // Two plain arrays on the wire (a union array breaks the generated
+    // capnweb promise-mapped types); consumers re-interleave by position.
     return {
       // ONE baseline for both redline layers: the merge view diffs against
       // the same content the attribution folded from — never two sources
       // that can diverge under head motion or an interrupted commit.
       baseContent: base.content,
       baseVersion: base.version,
+      deleted: segments.flatMap((segment) =>
+        segment.kind === "deleted"
+          ? [{ at: segment.at, clientId: segment.clientId, text: segment.text }]
+          : [],
+      ),
       headVersion: head.version,
-      segments: attributedChanges(Text.of(base.content.split("\n")), ops),
+      inserted: segments.flatMap((segment) =>
+        segment.kind === "inserted"
+          ? [{ clientId: segment.clientId, from: segment.from, to: segment.to }]
+          : [],
+      ),
     };
   }
 

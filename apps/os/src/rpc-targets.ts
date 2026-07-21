@@ -345,6 +345,7 @@ import type {
   WorkspaceMount,
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
+import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
   DynamicWorkerRunner,
   type DynamicWorkerTraceRole,
@@ -2101,7 +2102,7 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   }
 
   /** Attributed tracked changes since the last commit (redline segments). */
-  changes(path: string) {
+  changes(path: string): Promise<CollabChangesResult> {
     return this.durableObjectStub.collabChanges(path);
   }
 }

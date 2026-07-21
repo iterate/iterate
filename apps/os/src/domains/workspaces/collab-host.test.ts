@@ -185,10 +185,11 @@ describe("collab host", () => {
     const before = await host.changes(PATH);
     expect(before.baseVersion).toBe(0);
     expect(before.headVersion).toBe(3);
-    const authors = new Set(before.segments.map((segment) => segment.clientId));
+    const authors = new Set(
+      [...before.inserted, ...before.deleted].map((segment) => segment.clientId),
+    );
     expect(authors).toEqual(new Set(["alice", "bob", "external"]));
-    const deletion = before.segments.find((segment) => segment.kind === "deleted");
-    expect(deletion).toMatchObject({ text: SEED }); // bob deleted the base text
+    expect(before.deleted[0]).toMatchObject({ text: SEED }); // bob deleted the base text
 
     // Commit: the fence settles, commits, and stamps as one job.
     await host.commitBarrier(
@@ -196,13 +197,13 @@ describe("collab host", () => {
       () => true,
     );
     const after = await host.changes(PATH);
-    expect(after).toMatchObject({ baseVersion: 3, headVersion: 3, segments: [] });
+    expect(after).toMatchObject({ baseVersion: 3, deleted: [], headVersion: 3, inserted: [] });
 
     // Post-commit edits redline against the NEW base only. (clientSeq
     // continues from alice's confirmed count — seq 0 would be deduped.)
     await pushOne(host, { epoch: opened.epoch, version: 3 }, "post ", 11, 1, "alice");
     const next = await host.changes(PATH);
-    expect(next.segments).toEqual([{ clientId: "alice", from: 0, kind: "inserted", to: 5 }]);
+    expect(next.inserted).toEqual([{ clientId: "alice", from: 0, to: 5 }]);
   });
 
   test("redline survives compaction: ops retained back to the baseline", async () => {
@@ -244,8 +245,7 @@ describe("collab host", () => {
 
     const redline = await host.changes(PATH);
     expect(redline.headVersion).toBe(301);
-    const deletion = redline.segments.find((segment) => segment.kind === "deleted");
-    expect(deletion).toMatchObject({ clientId: "deleter", text: "settled " });
+    expect(redline.deleted[0]).toMatchObject({ clientId: "deleter", text: "settled " });
   });
 
   test("mount-scoped commit stamping: unstamped sessions keep their redline", async () => {
@@ -273,9 +273,10 @@ describe("collab host", () => {
       (path, mount) => (mount === "/A" ? path === PATH : path !== PATH),
     );
 
-    expect((await host.changes(PATH)).segments).toEqual([]);
+    const stamped = await host.changes(PATH);
+    expect([...stamped.inserted, ...stamped.deleted]).toEqual([]);
     const other = await host.changes(OTHER);
-    expect(other.segments).toEqual([{ clientId: "peer", from: 0, kind: "inserted", to: 5 }]);
+    expect(other.inserted).toEqual([{ clientId: "peer", from: 0, to: 5 }]);
   });
 
   test("first touch after eviction must NOT idle-end other live sessions", async () => {
@@ -375,7 +376,7 @@ describe("collab host", () => {
     expect(files.get(PATH)).toBe(`committed ${SEED}`);
     // …and the raced push SURVIVES in the redline instead of vanishing.
     const redline = await host.changes(PATH);
-    expect(redline.segments).toEqual([{ clientId: "peer", from: 0, kind: "inserted", to: 5 }]);
+    expect(redline.inserted).toEqual([{ clientId: "peer", from: 0, to: 5 }]);
   });
 
   test("a delete racing a slow-seeding open wins: no resurrection", async () => {
