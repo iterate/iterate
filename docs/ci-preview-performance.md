@@ -23,7 +23,7 @@ pickup + setup + slowest deploy + slowest test lane + reporting
 ```
 
 It must not approach the sum of app deployments, app test suites, or OS
-sub-lanes. Soft warnings currently fire above 105 seconds for OS deploy or 100
+sub-lanes. Soft warnings currently fire above 90 seconds for OS deploy or 100
 seconds for OS tests; crossing one is evidence to investigate, not a reason to
 raise the budget automatically.
 
@@ -64,10 +64,18 @@ serially because they intentionally share one warm container.
   app lanes and the whole workflow never retry automatically.
 - **Watchdogs fail rather than retry.** The TUI and Vitest/Playwright processes
   retain their own bounded `timeout`s, inside the workflow backstop.
-- **Readiness is a version barrier.** OS must serve the exact deployed Worker
-  version continuously for 40 seconds before project creation begins. Shorter
-  holds previously admitted Durable Object code-update resets. Reduce this
-  only with post-deploy trace evidence.
+- **Readiness is an active version proof.** A healthy edge response alone does
+  not prove that Cloudflare has finished updating Durable Objects. OS checks
+  ten bounded waves concurrently. Each wave samples eight version-specific
+  `CapabilityHostDurableObject` placements and one fixed incarnation in every
+  other deployed OS Durable Object namespace. The streams example checks ten
+  waves of eight fixed `StreamDurableObject` incarnations. Once every wave
+  reports the exact deployed version, the complete set is revalidated after a
+  10-second quiet interval. Failed waves alone stay in the hot retry set.
+- **The proof does not exercise product work.** Its RPC only returns the
+  incarnation's version. In particular, probing a sandbox Durable Object does
+  not create or start a container. Ordinary health requests remain cheap and
+  do not touch Durable Objects.
 - **Retries remain visible.** Vitest, TUI, and Playwright write compact retry
   telemetry that is folded into the preview state in the PR description.
 - **Do not serialize around a product defect.** Repeated storage, RPC, stream,

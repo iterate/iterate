@@ -48,6 +48,11 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * successful set is read-your-writes visible AND provably alarm-armed.
  */
 export class SchedulerDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),

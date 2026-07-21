@@ -511,8 +511,20 @@ describe("preview test commands", () => {
 
   test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
-      previewDeployBudgetMs: 105_000,
+      previewDeployBudgetMs: 90_000,
+      previewReadyWorkerVersion: {
+        probeQueryParam: "deployment-probe",
+        probeWaveCount: 10,
+        stableForMs: 10_000,
+      },
       previewTestBudgetMs: 100_000,
+    });
+    expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
+      previewReadyWorkerVersion: {
+        probeQueryParam: "deployment-probe",
+        probeWaveCount: 10,
+        stableForMs: 10_000,
+      },
     });
 
     const workflow = parseYaml(
@@ -582,6 +594,48 @@ describe("preview readiness URLs", () => {
       await expect(readiness).resolves.toEqual({ ok: true });
       expect(fetchMock).toHaveBeenCalledTimes(4);
     } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("proves every Durable Object wave in parallel and retries only failed waves", async () => {
+    vi.useFakeTimers();
+    let waveOneAttempts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const wave = new URL(String(input)).searchParams.get("deployment-probe");
+      if (wave === "1" && waveOneAttempts++ === 0) {
+        return new Response(null, { status: 503 });
+      }
+      return new Response(null, {
+        status: 200,
+        headers: { "x-iterate-worker-version": "expected-version" },
+      });
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 3,
+          stableForMs: 2_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(
+        fetchMock.mock.calls.map(([input]) =>
+          new URL(String(input)).searchParams.get("deployment-probe"),
+        ),
+      ).toEqual(["0", "1", "2", "1", "0", "1", "2"]);
+    } finally {
+      error.mockRestore();
       fetchMock.mockRestore();
       vi.useRealTimers();
     }

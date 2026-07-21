@@ -7,6 +7,13 @@ import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
+import {
+  deploymentReadinessProbeIndexes,
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWave,
+  deploymentReadinessResponse,
+} from "~/deployment-readiness.ts";
+import { DurableObjectNameCodec } from "~/domains/durable-object-names.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
 
@@ -66,7 +73,38 @@ export default createServerEntry({
     const url = new URL(request.url);
 
     if (url.pathname === "/api/__internal/health") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      const version = workerEnv.CF_VERSION_METADATA?.id ?? "unversioned";
+      const probeSequence = url.searchParams.get(deploymentReadinessProbeQueryParam);
+      if (probeSequence === null) {
+        return new Response("ok", {
+          headers: {
+            "cache-control": "no-store",
+            "content-type": "text/plain",
+            "x-iterate-worker-version": version,
+          },
+        });
+      }
+
+      const probes = deploymentReadinessProbeIndexes(
+        deploymentReadinessProbeWave(probeSequence),
+      ).map((probe) =>
+        workerEnv.STREAM.getByName(
+          DurableObjectNameCodec.stringify(
+            {
+              path: "/deployment-readiness",
+              projectId: null,
+              props: { probe: String(probe) },
+            },
+            { allowNullProjectId: true },
+          ),
+        ),
+      );
+      return deploymentReadinessResponse({
+        app: "streams-example-app",
+        readDurableObjectVersions: () =>
+          Promise.all(probes.map((probe) => probe.deploymentVersion())),
+        version,
+      });
     }
 
     // Parsed per request, NOT at module scope (matching apps/os): a fresh
