@@ -26,6 +26,29 @@ import {
 
 export type MaybePromise<T> = T | Promise<T>;
 
+// `keepAliveWhile` is fire-and-forget from the host's point of view (it only
+// keeps the runtime alive while the work runs), so this bridges the work's
+// result/failure back into a promise the caller can await.
+export async function awaitKeepAliveBacked<T>(
+  keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (keepAliveWhile === undefined) return await work();
+
+  return await new Promise<T>((resolve, reject) => {
+    keepAliveWhile(async () => {
+      try {
+        const result = await work();
+        resolve(result);
+        return result;
+      } catch (error) {
+        reject(error);
+        throw error;
+      }
+    });
+  });
+}
+
 /**
  * The structural slice of a processor contract that the class needs. Contracts
  * built with `defineProcessorContract(...)` satisfy this; the full contract
@@ -412,14 +435,6 @@ export abstract class StreamProcessor<
    */
   protected processEvent(_args: ProcessEventArgs<Contract>): undefined {}
 
-  /**
-   * Reduce one raw stream event against explicit state, without touching any
-   * processor-internal state. Returns `undefined` for events this processor
-   * does not consume, and a {@link ConsumedEventParseFailure} for events of a
-   * consumed TYPE whose shape fails the contract parse — streams accept raw
-   * appends by design, so a malformed event is a fact of the log, not an
-   * exception: throwing here would wedge the cursor on it forever.
-   */
   /** Parse a raw event against the contract: `undefined` (type not consumed),
    * a Zod error (consumed type, bad shape), or the typed consumed event.
    * Stateless — shared by {@link #reduceRawEvent} and {@link #isDeliverable}. */
@@ -449,6 +464,14 @@ export abstract class StreamProcessor<
     return this.#parseConsumedEvent(event).ok;
   }
 
+  /**
+   * Reduce one raw stream event against explicit state, without touching any
+   * processor-internal state. Returns `undefined` for events this processor
+   * does not consume, and a {@link ConsumedEventParseFailure} for events of a
+   * consumed TYPE whose shape fails the contract parse — streams accept raw
+   * appends by design, so a malformed event is a fact of the log, not an
+   * exception: throwing here would wedge the cursor on it forever.
+   */
   #reduceRawEvent(args: {
     event: StreamEvent;
     state: ProcessorState<Contract>;
@@ -470,7 +493,7 @@ export abstract class StreamProcessor<
    * from the hook args — that one rides the runner's recovery keepalive.
    */
   protected runInBackground(work: () => Promise<unknown>): void {
-    this.#runKeepAliveBackedWork(work).catch((error: unknown) => {
+    awaitKeepAliveBacked(this.#keepAliveWhile, work).catch((error: unknown) => {
       console.error("stream processor background work failed", error);
     });
   }
@@ -547,26 +570,6 @@ export abstract class StreamProcessor<
         this.subscriberMetrics.noteAppendCommitted({ maxCommittedOffset, t0, atMs: Date.now() });
       }
       return committed;
-    });
-  }
-
-  // keepAliveWhile is fire-and-forget from the host's point of view (it only
-  // keeps the runtime alive while the work runs), so this bridges the work's
-  // result/failure back into a promise the caller can await.
-  async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
-    if (this.#keepAliveWhile === undefined) return await work();
-
-    return await new Promise<unknown>((resolve, reject) => {
-      this.#keepAliveWhile!(async () => {
-        try {
-          const result = await work();
-          resolve(result);
-          return result;
-        } catch (error) {
-          reject(error);
-          throw error;
-        }
-      });
     });
   }
 }

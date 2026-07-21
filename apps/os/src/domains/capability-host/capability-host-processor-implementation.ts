@@ -526,7 +526,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
       );
     } catch (error) {
       settlementAbort.abort(error);
-      void observedSettlement;
       throw error;
     }
     const settlement = await observedSettlement;
@@ -686,29 +685,20 @@ export class CapabilityHostProcessor extends StreamProcessor<
   }
 
   async #waitForScriptSettlement(executionId: string, timeoutMs: number, signal: AbortSignal) {
-    let settled: { event: StreamEvent; settlement: ScriptExecutionSettlementValue } | undefined;
+    const idempotencyKey = this.idempotencyKey(`script-run-settled@${executionId}`);
     await this.deps.reads.waitUntilEvent({
-      predicate: (event) => {
-        if (event.type !== "events.iterate.com/capability-host/script-run-settled") return false;
-        const payload = event.payload;
-        if (
-          payload === null ||
-          typeof payload !== "object" ||
-          Array.isArray(payload) ||
-          payload.executionId !== executionId
-        ) {
-          return false;
-        }
-        const settlement = ScriptExecutionSettlement.safeParse(payload.settlement);
-        if (!settlement.success) return false;
-        settled = { event, settlement: settlement.data };
-        return true;
-      },
+      predicate: (event) =>
+        event.idempotencyKey === idempotencyKey &&
+        settlementFromSettledEvent(event, executionId) !== undefined,
       timeoutMs,
       signal,
     });
-    if (!settled) throw new Error(`script execution "${executionId}" completed without an event`);
-    return settled;
+    const event = await this.stream.getEvent({ idempotencyKey });
+    const settlement = settlementFromSettledEvent(event, executionId);
+    if (event === undefined || settlement === undefined) {
+      throw new Error(`script execution "${executionId}" completed without an event`);
+    }
+    return { event, settlement };
   }
 
   /**
