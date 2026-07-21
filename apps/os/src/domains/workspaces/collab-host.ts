@@ -1,4 +1,5 @@
 import { Text } from "@codemirror/state";
+import { resolveAbsolutePath } from "./paths.ts";
 import { countOccurrences, replaceLiteralOccurrences } from "../repos/edit-utils.ts";
 import { attributedChanges, type CollabChangeSegment } from "./collab-changes.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
@@ -45,8 +46,12 @@ export interface CollabSessionStore extends CollabStore {
   livePaths(): string[];
   /** Whether a durable session exists — one local-SQLite lookup. */
   hasSession(path: string): boolean;
-  /** Record that `version` is settled into the overlay. */
-  markFlushed(path: string, version: number): void;
+  /** Record that `version` is settled into the overlay (epoch-conditional). */
+  markFlushed(path: string, version: number, epoch?: string): void;
+  /** ONE atomic transition for every baseline a commit stamps — partial
+   * multi-file advancement after a crash is unrepresentable. Entries whose
+   * session ended (or rotated epoch) are skipped, never mis-stamped. */
+  setBases(files: { content: string; epoch: string; path: string; version: number }[]): void;
   /** The redline baseline: seed content at birth, re-stamped at each commit.
    * Retention keeps ops back to this version, so tracked changes are always
    * reconstructable — the op log IS the redline data. */
@@ -60,6 +65,7 @@ export interface CollabSessionStore extends CollabStore {
  * follows the barrier will contain for that path. */
 export interface SettledFile {
   content: string;
+  epoch: string;
   path: string;
   version: number;
 }
@@ -68,11 +74,27 @@ const FLUSH_IDLE_MS = 2_000;
 const FLUSH_MAX_MS = 15_000;
 const WAIT_TIMEOUT_MS = 20_000;
 const IDLE_END_MS = 5 * 60_000;
+/** Sweeps are periodic housekeeping, not per-keystroke work. */
+const SWEEP_INTERVAL_MS = 60_000;
 
 export class CollabHost {
   readonly #fs: CollabSettledFs;
   readonly #store: CollabSessionStore;
   readonly #engine: CollabEngine;
+  // THE mutation coordinator: session lifecycle (open/end/sweep), settlement
+  // (flush/reconcile), and settled-truth operations (status/configure/commit
+  // via barrier()) all serialize here, so none of them can interleave — a
+  // debounce flush can never land between a commit's barrier and its stamp,
+  // and a configure can never re-route a session an open is still seeding.
+  // Per-keystroke pushes deliberately stay on the per-file engine chains;
+  // the store's epoch-CAS is their stale-work backstop.
+  #chain: Promise<unknown> = Promise.resolve();
+
+  #exclusive<T>(job: () => Promise<T>): Promise<T> {
+    const run = this.#chain.then(job, job);
+    this.#chain = run.catch(() => {});
+    return run;
+  }
   /** Bumped per durable end; open() re-checks it after its awaited seed so a
    * concurrent delete can never be resurrected by a slow-seeding open. */
   readonly #destroyed = new Map<string, number>();
@@ -92,10 +114,11 @@ export class CollabHost {
     });
   }
 
-  /** Session keys are canonical absolute paths — `tasks/x.md` and
-   * `/tasks/x.md` must address ONE authority over one file. */
+  /** Session keys are FULLY RESOLVED absolute paths — `tasks/x.md`,
+   * `//tasks/x.md`, and `/tasks/a/../x.md` must address ONE authority over
+   * one file; two engines over one file would flush competing heads. */
   static canonical(path: string): string {
-    return path.startsWith("/") ? path : `/${path}`;
+    return resolveAbsolutePath(path);
   }
 
   /** Liveness IS the durable session table — no in-memory mirror to drift. */
@@ -114,9 +137,23 @@ export class CollabHost {
 
   async open(rawPath: string): Promise<{ content: string; epoch: string; version: number }> {
     const path = CollabHost.canonical(rawPath);
+    if (path === "/" || path.split("/").includes(".git")) {
+      throw new Error(`cannot open a collaborative session on ${path}`);
+    }
     this.#touch(path);
     if (this.isLive(path)) return this.#opened(path);
+    // Capture the destruction generation BEFORE queueing on the coordinator:
+    // a synchronous delete issued after this call but before the job runs
+    // must still win against the birth.
     const destroyedBefore = this.#destroyed.get(path) ?? 0;
+    return this.#exclusive(() => this.#openFresh(path, destroyedBefore));
+  }
+
+  async #openFresh(
+    path: string,
+    destroyedBefore: number,
+  ): Promise<{ content: string; epoch: string; version: number }> {
+    if (this.isLive(path)) return this.#opened(path);
     const opened = await this.#engine.open(path, async () => {
       const content = (await this.#fs.readFile(path)) ?? "";
       if (content.length > MAX_DOC_BYTES) {
@@ -148,20 +185,28 @@ export class CollabHost {
   async wait(rawPath: string, epoch: string, afterVersion: number): Promise<CollabPull> {
     const path = CollabHost.canonical(rawPath);
     this.#assertLive(path);
+    this.#lastActivity.set(path, Date.now()); // a parked watcher IS activity
     await this.#opened(path);
-    const first = await this.#engine.pull(path, epoch, afterVersion);
-    if (first.status !== "ops" || first.ops.length > 0) return first;
-    await new Promise<void>((resolve) => {
+    // Register BEFORE the first pull: an update landing between pull and
+    // registration would otherwise be silently missed for a whole timeout.
+    const woke = new Promise<void>((resolve) => {
       const waiters = this.#waiters.get(path) ?? new Set();
       this.#waiters.set(path, waiters);
       const finish = () => {
         clearTimeout(timer);
         waiters.delete(finish);
+        if (waiters.size === 0) this.#waiters.delete(path);
         resolve();
       };
       const timer = setTimeout(finish, WAIT_TIMEOUT_MS);
       waiters.add(finish);
     });
+    const first = await this.#engine.pull(path, epoch, afterVersion);
+    if (first.status !== "ops" || first.ops.length > 0) {
+      this.#wake(path); // release our own registration
+      return first;
+    }
+    await woke;
     if (!this.isLive(path)) return { status: "ended" };
     return this.#engine.pull(path, epoch, afterVersion);
   }
@@ -235,7 +280,11 @@ export class CollabHost {
    * so redline baselines advance to what was actually committed, never
    * swallowing post-barrier keystrokes.
    */
-  async reconcile(): Promise<SettledFile[]> {
+  reconcile(): Promise<SettledFile[]> {
+    return this.#exclusive(() => this.#settleAll());
+  }
+
+  async #settleAll(): Promise<SettledFile[]> {
     const settled: SettledFile[] = [];
     for (const path of this.#store.livePaths()) {
       const file = await this.#flush(path);
@@ -244,12 +293,33 @@ export class CollabHost {
     return settled;
   }
 
-  /** Advance redline baselines to a just-committed barrier snapshot. */
-  markCommitted(settled: SettledFile[]): void {
-    for (const file of settled) {
-      if (!this.isLive(file.path)) continue;
-      this.#store.setBase(file.path, { content: file.content, version: file.version });
-    }
+  /**
+   * THE commit fence: settle every session, run the commit, and stamp the
+   * committed mount's baselines — as ONE coordinated job. No debounce flush,
+   * open, configure, or destructive op can interleave, so the committed
+   * overlay, the stamped baselines, and the barrier snapshot are one state.
+   */
+  async commitBarrier<T extends { mount?: string }>(
+    runCommit: () => Promise<T>,
+    ownsPath: (path: string, mount: string) => boolean,
+  ): Promise<T> {
+    return this.#exclusive(async () => {
+      const settled = await this.#settleAll();
+      const result = await runCommit();
+      if (result.mount !== undefined) {
+        const mount = result.mount;
+        this.#store.setBases(settled.filter((file) => ownsPath(file.path, mount)));
+      }
+      return result;
+    });
+  }
+
+  /** Settle-then-run under the coordinator (status/configure barriers). */
+  barrier<T>(operation: () => Promise<T>): Promise<T> {
+    return this.#exclusive(async () => {
+      await this.#settleAll();
+      return operation();
+    });
   }
 
   /**
@@ -278,8 +348,12 @@ export class CollabHost {
    * Unflushed keystrokes are discarded BY DESIGN — flushing first would
    * defeat the destruction. Parked waiters wake into an epoch-less pull. */
   endSessions(paths?: string[]): void {
+    // Synchronous ON PURPOSE (no coordinator await): destruction must win
+    // instantly against anything mid-flight; the generation bump plus the
+    // store's epoch-CAS unwind whatever was already queued.
     for (const path of (paths ?? this.#store.livePaths()).map(CollabHost.canonical)) {
       this.#destroyed.set(path, (this.#destroyed.get(path) ?? 0) + 1);
+      this.#lastActivity.delete(path);
       if (!this.isLive(path)) continue;
       this.#engine.discard(path);
       this.#store.endSession(path);
@@ -291,7 +365,15 @@ export class CollabHost {
   /** Opportunistic idle sweep: settle-and-end clean sessions nobody is
    * watching, so a later open seeds from fresh settled truth instead of
    * resurrecting a stale pin. Called from the DO's collab entry points. */
+  #lastSweep = 0;
+
   async sweepIdle(now = Date.now()): Promise<void> {
+    if (now - this.#lastSweep < SWEEP_INTERVAL_MS) return;
+    this.#lastSweep = now;
+    await this.#exclusive(() => this.#sweep(now));
+  }
+
+  async #sweep(now: number): Promise<void> {
     for (const path of this.#store.livePaths()) {
       const idleSince = this.#lastActivity.get(path);
       if (idleSince === undefined) {
@@ -326,8 +408,8 @@ export class CollabHost {
     const settled = await this.#fs.readFile(path);
     if ((this.#destroyed.get(path) ?? 0) !== generation || !this.isLive(path)) return null;
     if (settled !== head.content) await this.#fs.writeFile(path, head.content);
-    this.#store.markFlushed(path, head.version);
-    return { content: head.content, path, version: head.version };
+    this.#store.markFlushed(path, head.version, head.epoch);
+    return { content: head.content, epoch: head.epoch, path, version: head.version };
   }
 
   #scheduleFlush(path: string): void {
@@ -339,8 +421,9 @@ export class CollabHost {
     this.#flushTimers.set(path, {
       max,
       // A lost or failed timer costs only latency: the durable dirty marker
-      // survives and the next barrier settles it.
-      timer: setTimeout(() => void this.#flush(path).catch(() => {}), delay),
+      // survives and the next barrier settles it. Coordinated, so a timer
+      // can never land inside a commit fence.
+      timer: setTimeout(() => void this.#exclusive(() => this.#flush(path)).catch(() => {}), delay),
     });
   }
 

@@ -368,24 +368,20 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async gitStatus(): Promise<WorkspaceStatus> {
     await this.#assertCreated();
-    await this.#collab.reconcile();
-    return this.#core.gitStatus();
+    return this.#collab.barrier(() => this.#core.gitStatus());
   }
 
   async gitCommit(input: WorkspaceCommitInput): Promise<WorkspaceCommitResult> {
     await this.#assertCreated();
-    const settled = await this.#collab.reconcile();
-    const result = await this.#core.gitCommit(input);
-    // Baselines advance to exactly the barrier snapshot the commit contains —
-    // post-barrier keystrokes stay uncommitted AND stay in the redline. Scoped
-    // to the COMMITTED mount only: a commit never spans mounts, so stamping a
-    // session under another mount would silently erase (and prune!) its
-    // still-uncommitted redline.
+    // Settle → commit → stamp as ONE fence: no flush timer, open, or
+    // configure can interleave, and baselines advance mount-scoped to
+    // exactly what the commit contained (a commit never spans mounts;
+    // stamping another mount's session would erase its redline).
     const mounts = this.#currentConfig().mounts;
-    this.#collab.markCommitted(
-      settled.filter((file) => routeMount(mounts, file.path)?.mountPath === result.mount),
+    return this.#collab.commitBarrier(
+      () => this.#core.gitCommit(input),
+      (path, mount) => routeMount(mounts, path)?.mountPath === mount,
     );
-    return result;
   }
 
   async gitLog(input: WorkspaceGitLogInput = {}): Promise<WorkspaceGitLogEntry[]> {

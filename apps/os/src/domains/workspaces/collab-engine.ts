@@ -100,10 +100,10 @@ export function minimalSplice(doc: Text, next: string): ChangeSet | null {
 const SNAPSHOT_EVERY = 256;
 /** Ops kept in memory for rebase/pull; older submissions get history-miss. */
 const HISTORY_WINDOW = 1000;
-/** Dedupe identities retained per file; oldest evict first (retrying past an
- * eviction re-applies at worst one idle client's stale batch — rebaseUpdates'
- * own-prefix skip still guards the common case). */
-const MAX_CLIENT_SEQS = 64;
+// Dedupe identities are retained for the whole session: idempotency is a
+// GUARANTEE, so identities retire only with the session/epoch lifecycle,
+// never via an author-count LRU (evicting one would let a stale retry
+// re-apply). Sessions end on destruction and idle sweep, bounding growth.
 /** DO SQLite caps a cell at 2MB; one op's serialized changes must fit with
  * headroom (https://developers.cloudflare.com/durable-objects/platform/limits). */
 export const MAX_PUSH_BYTES = 256 * 1024;
@@ -156,6 +156,19 @@ export class CollabEngine {
 
   async #push(file: FileEngine, input: CollabPush): Promise<CollabPushResult> {
     if (input.epoch !== file.epoch) return { epoch: file.epoch, status: "epoch-mismatch" };
+
+    // Protocol validation at the door: sequences are strictly-ascending
+    // non-negative integers, batches are bounded. A malformed batch is a
+    // protocol error, never a partial application.
+    if (input.ops.length > 256) throw new Error("push batch exceeds 256 ops");
+    for (const [index, op] of input.ops.entries()) {
+      if (!Number.isInteger(op.clientSeq) || op.clientSeq < 0) {
+        throw new Error("clientSeq must be a non-negative integer");
+      }
+      if (index > 0 && op.clientSeq <= input.ops[index - 1]!.clientSeq) {
+        throw new Error("clientSeq batch must be strictly ascending");
+      }
+    }
 
     // Full-duplicate fast path (retry after a lost ack with no news since).
     const seen = file.clientSeqs.get(input.clientId) ?? -1;
@@ -237,9 +250,11 @@ export class CollabEngine {
     // a SQLite cell, and the resulting doc must stay under the live cap.
     let bytes = 0;
     let growth = 0;
+    const encoder = new TextEncoder();
     const jsons = updates.map((update) => {
       const json = update.changes.toJSON();
-      bytes += JSON.stringify(json).length;
+      // UTF-8 bytes, not UTF-16 units — the SQLite cell cap is a byte cap.
+      bytes += encoder.encode(JSON.stringify(json)).length;
       growth += update.changes.newLength - update.changes.length;
       return json;
     });
@@ -278,9 +293,6 @@ export class CollabEngine {
         clientId: update.clientId,
         version: file.version - updates.length + index,
       });
-    }
-    while (file.clientSeqs.size > MAX_CLIENT_SEQS) {
-      file.clientSeqs.delete(file.clientSeqs.keys().next().value!);
     }
     if (file.recent.length > HISTORY_WINDOW) {
       file.recent.splice(0, file.recent.length - HISTORY_WINDOW);

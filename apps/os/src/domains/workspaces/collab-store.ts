@@ -1,7 +1,7 @@
 import type { CollabSnapshot, PersistedCollabOp } from "./collab-engine.ts";
 import type { CollabSessionStore } from "./collab-host.ts";
 
-/** The Durable Object's storage backing: three tables, every multi-row write
+/** The Durable Object's storage backing: four tables, every multi-row write
  * in one transactionSync (output gates make the ack crash-durable). */
 export function sqliteCollabStore(storage: {
   sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } };
@@ -28,9 +28,20 @@ export function sqliteCollabStore(storage: {
     `CREATE TABLE IF NOT EXISTS collab_bases(
        path TEXT PRIMARY KEY, version INTEGER NOT NULL, content TEXT NOT NULL)`,
   );
+  sql.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS collab_ops_client_seq
+       ON collab_ops(path, epoch, client_id, client_seq)`,
+  );
   return {
+    // Every mutation is EPOCH-CONDITIONAL: a stale engine (whose session was
+    // ended and reopened while its work sat on a queue) must fail loudly,
+    // never advance the new session's state by path alone.
     append: async (path, epoch, ops) => {
       storage.transactionSync(() => {
+        const live = sql
+          .exec(`SELECT 1 FROM collab_sessions WHERE path = ? AND epoch = ?`, path, epoch)
+          .toArray();
+        if (live.length === 0) throw new Error(`stale collab session for ${path} — reopen`);
         for (const op of ops) {
           sql.exec(
             `INSERT INTO collab_ops(path, epoch, version, client_id, client_seq, changes)
@@ -44,9 +55,10 @@ export function sqliteCollabStore(storage: {
           );
         }
         sql.exec(
-          `UPDATE collab_sessions SET head_version = ? WHERE path = ?`,
+          `UPDATE collab_sessions SET head_version = ? WHERE path = ? AND epoch = ?`,
           ops.at(-1)!.version + 1,
           path,
+          epoch,
         );
       });
     },
@@ -130,8 +142,41 @@ export function sqliteCollabStore(storage: {
         .map((row) => row.path as string),
     hasSession: (path) =>
       sql.exec(`SELECT 1 FROM collab_sessions WHERE path = ?`, path).toArray().length > 0,
-    markFlushed: (path, version) => {
-      sql.exec(`UPDATE collab_sessions SET overlay_version = ? WHERE path = ?`, version, path);
+    markFlushed: (path, version, epoch) => {
+      sql.exec(
+        `UPDATE collab_sessions SET overlay_version = ? WHERE path = ?${epoch === undefined ? "" : " AND epoch = ?"}`,
+        ...(epoch === undefined ? [version, path] : [version, path, epoch]),
+      );
+    },
+    // One atomic transition for every baseline a commit stamps: partial
+    // multi-file advancement after a crash is unrepresentable.
+    setBases: (files) => {
+      storage.transactionSync(() => {
+        for (const file of files) {
+          const live = sql
+            .exec(
+              `SELECT 1 FROM collab_sessions WHERE path = ? AND epoch = ?`,
+              file.path,
+              file.epoch,
+            )
+            .toArray();
+          if (live.length === 0) continue; // session ended mid-commit — nothing to stamp
+          sql.exec(
+            `INSERT OR REPLACE INTO collab_bases(path, version, content) VALUES (?, ?, ?)`,
+            file.path,
+            file.version,
+            file.content,
+          );
+          const snapshotVersion =
+            (sql.exec(`SELECT version FROM collab_snapshots WHERE path = ?`, file.path).toArray()[0]
+              ?.version as number | undefined) ?? file.version;
+          sql.exec(
+            `DELETE FROM collab_ops WHERE path = ? AND version < ?`,
+            file.path,
+            Math.min(file.version, snapshotVersion),
+          );
+        }
+      });
     },
     getBase: (path) => {
       const row = sql.exec(`SELECT * FROM collab_bases WHERE path = ?`, path).toArray()[0];

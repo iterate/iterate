@@ -190,9 +190,11 @@ describe("collab host", () => {
     const deletion = before.segments.find((segment) => segment.kind === "deleted");
     expect(deletion).toMatchObject({ text: SEED }); // bob deleted the base text
 
-    // Commit: reconcile → (core commit) → markCommitted resets the baseline.
-    const settled = await host.reconcile();
-    host.markCommitted(settled);
+    // Commit: the fence settles, commits, and stamps as one job.
+    await host.commitBarrier(
+      async () => ({ mount: "/" }),
+      () => true,
+    );
     const after = await host.changes(PATH);
     expect(after).toMatchObject({ baseVersion: 3, headVersion: 3, segments: [] });
 
@@ -264,10 +266,12 @@ describe("collab host", () => {
       path: OTHER,
     });
 
-    // The DO filters the barrier's settled files to the committed mount; the
-    // contract markCommitted must honor: only stamped paths advance.
-    const settled = await host.reconcile();
-    host.markCommitted(settled.filter((file) => file.path === PATH));
+    // The DO's ownsPath predicate scopes stamping to the committed mount:
+    // only owned paths advance, inside the one commit fence.
+    await host.commitBarrier(
+      async () => ({ mount: "/A" }),
+      (path, mount) => (mount === "/A" ? path === PATH : path !== PATH),
+    );
 
     expect((await host.changes(PATH)).segments).toEqual([]);
     const other = await host.changes(OTHER);
@@ -355,16 +359,19 @@ describe("collab host", () => {
     await pushOne(host, opened, "committed ", SEED.length);
 
     slowWrites = true;
-    const barrier = host.reconcile(); // captures the head, parks on the write
-    await Promise.resolve();
-    // A keystroke races the barrier: accepted AFTER the head was captured.
-    await pushOne(host, { epoch: opened.epoch, version: 1 }, "late ", SEED.length + 10, 1);
+    const barrier = host.commitBarrier(
+      async () => {
+        // A keystroke races the commit: accepted after the settle, before the
+        // stamp — the fence must stamp the settled state, not the new head.
+        await pushOne(host, { epoch: opened.epoch, version: 1 }, "late ", SEED.length + 10, 1);
+        return { mount: "/" };
+      },
+      () => true,
+    );
     releaseWrite();
-    const settled = await barrier;
-    host.markCommitted(settled);
+    await barrier;
 
-    // The stamped baseline is what the overlay (and the commit) contains…
-    expect(settled).toEqual([{ content: `committed ${SEED}`, path: PATH, version: 1 }]);
+    // The overlay (and the commit) contains exactly the settled snapshot…
     expect(files.get(PATH)).toBe(`committed ${SEED}`);
     // …and the raced push SURVIVES in the redline instead of vanishing.
     const redline = await host.changes(PATH);

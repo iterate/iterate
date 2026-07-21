@@ -357,7 +357,7 @@ describe("collab engine", () => {
     expect(engine.head(PATH)!.content).toBe(a.doc);
   });
 
-  test("dedupe identities are bounded", async () => {
+  test("dedupe identities are RETAINED for the session — idempotency is a guarantee", async () => {
     const { snapshots, store } = fakeStore();
     const engine = makeEngine(store);
     const opened = await engine.open(PATH, seeded());
@@ -376,7 +376,24 @@ describe("collab engine", () => {
       });
       expect(result.status).toBe("accepted");
     }
-    expect(Object.keys(snapshots.get(PATH)!.clientSeqs).length).toBeLessThanOrEqual(64);
+    // Evicting any identity would let that client's retry re-apply; growth is
+    // bounded by the SESSION lifecycle (destruction/idle end), never an LRU.
+    // The guarantee itself: the very FIRST client's lost-ack retry, 299
+    // authors later, is still recognized and dropped.
+    void snapshots;
+    const retry = await engine.push({
+      baseVersion: 300,
+      clientId: "ephemeral-0",
+      epoch: opened.epoch,
+      ops: [
+        {
+          changes: ChangeSet.of({ from: 0, insert: ".", to: 0 }, SEED.length + 300).toJSON(),
+          clientSeq: 0,
+        },
+      ],
+      path: PATH,
+    });
+    expect(retry).toEqual({ status: "accepted", version: 300 }); // deduped, no new op
   });
 
   test.each([42, 7, 1337, 2024, 555])(
