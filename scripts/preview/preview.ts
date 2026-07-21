@@ -679,15 +679,10 @@ async function testPreviewApps({
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
     });
     const testDurationMs = Date.now() - startedAt;
-    console.error(
-      `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
-    );
-    if (testResult.exitCode === 0) {
-      warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
-    }
 
-    // Collected pass or fail: on a red run the telemetry explains which tests
-    // burned their retry before the failure. Never fails the lane.
+    // Collected pass or fail: a passed-on-retry test is still a failed CI
+    // proof. The telemetry identifies the exact test to quarantine rather
+    // than allowing an unrelated PR to repeatedly absorb its tail latency.
     const retrySummary = app.collectRetryTelemetry
       ? await app
           .collectRetryTelemetry({ repositoryRoot: runtime.repositoryRoot })
@@ -700,16 +695,21 @@ async function testPreviewApps({
       announceRetryTelemetry(app.slug, retrySummary);
     }
 
+    const testFailure = previewTestFailureMessage({ result: testResult, retrySummary });
+    console.error(
+      `[preview] test ${testFailure ? "failed" : "passed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
+    );
+    if (!testFailure) {
+      warnIfOverBudget("e2e", app.slug, testDurationMs, app.previewTestBudgetMs);
+    }
+
     return CloudflarePreviewAppEntry.parse({
       ...existingEntry,
       appDisplayName: app.displayName,
       appSlug: app.slug,
-      message:
-        testResult.exitCode === 0
-          ? null
-          : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+      message: testFailure,
       runUrl: context.workflowRunUrl ?? existingEntry.runUrl ?? null,
-      status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+      status: testFailure ? "tests-failed" : "deployed",
       testDurationMs,
       testRetries: retrySummary ? renderPreviewRetrySummary(retrySummary) : null,
       updatedAt: new Date().toISOString(),
@@ -1445,11 +1445,9 @@ export type CloudflarePreviewApp = {
   previewTestBudgetMs?: number;
   /**
    * Collect per-test retry telemetry after the app's preview test command
-   * finishes (pass or fail) — policy rule 5, retries are measured, never
-   * silent (docs/testing.md#retries-and-timeouts). Returns null when the
-   * lane produced no telemetry; must never throw a run-failing error (the
-   * caller logs and continues). The result lands in the run log, a
-   * `::notice::`/`::warning::` annotation, and the PR-body table.
+   * finishes. Collection failure itself is logged without masking the test
+   * command's result. A passed-after-retry record makes the CI proof fail;
+   * the result also lands in the run log, an annotation, and the PR table.
    */
   collectRetryTelemetry?: (params: { repositoryRoot: string }) => Promise<PreviewRetrySummary>;
 };
@@ -1457,9 +1455,9 @@ export type CloudflarePreviewApp = {
 /**
  * Aggregated retry telemetry for one app's preview e2e lane: every test that
  * needed a re-roll, whichever sub-lane (TUI, Vitest, Playwright) it ran in.
- * Why this exists: with one CI retry, a rare real race turns a run red about
- * once in 400 runs, but shows up here about once in 20 — the count, not the
- * run status, is the detector for probabilistic bugs.
+ * Why this exists: a retry can preserve the first failure while still letting
+ * the test finish its diagnostic second attempt. The count and first failure
+ * identify the flaky test to quarantine; the run remains red.
  */
 export type PreviewRetrySummary = {
   retried: {
@@ -1606,20 +1604,42 @@ function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null 
 }
 
 /**
- * Surfaces retry telemetry as a workflow annotation, mirroring
- * warnIfOverBudget: one or two retried tests per run is the observed
- * platform-flake floor (~0.5% of test executions) and gets a notice; a
- * pile-up smells like a slot-wide problem and escalates to a warning.
+ * Convert a test command plus retry telemetry into the single failure stored
+ * in preview state. A retry may gather a useful second-attempt result, but it
+ * never turns the run green: unrelated flakes belong in explicit, task-backed
+ * quarantine instead of being silently paid for by every PR.
+ */
+function previewTestFailureMessage(input: {
+  result: { exitCode: number | null; stderr?: string; stdout?: string };
+  retrySummary: PreviewRetrySummary | null;
+}): string | null {
+  if (input.result.exitCode !== 0) {
+    return commandFailureMessage(input.result, "Preview tests failed after deploy.");
+  }
+
+  const absorbed = input.retrySummary?.retried.filter((record) => record.passedAfterRetry) ?? [];
+  if (absorbed.length === 0) {
+    return null;
+  }
+
+  const names = absorbed.map((record) => `${record.name} (${record.lane})`).join(", ");
+  return `${absorbed.length} test(s) passed only after retry: ${names}. A passed-on-retry test is a failed CI proof; quarantine an unrelated flake explicitly and link its task per docs/testing.md.`;
+}
+
+/**
+ * Surfaces retry telemetry as a workflow annotation. A passed-on-retry test
+ * is an error because it makes this CI proof fail; an already-failed retry is
+ * still useful context for the command failure.
  */
 function announceRetryTelemetry(slug: string, summary: PreviewRetrySummary) {
   const rendered = renderPreviewRetrySummary(summary);
   if (!rendered) {
     return;
   }
-  const level = summary.retried.length >= 4 ? "warning" : "notice";
+  const level = summary.retried.some((record) => record.passedAfterRetry) ? "error" : "warning";
   console.log(
-    `::${level} title=Preview e2e retries::${slug}: ${rendered}. The retry passed and does not fail ` +
-      `this run; quarantine recurring or pathologically slow unrelated flakes per docs/testing.md.`,
+    `::${level} title=Preview e2e retries::${slug}: ${rendered}. A passed-on-retry test is a failed ` +
+      `CI proof; quarantine an unrelated flake explicitly per docs/testing.md.`,
   );
 }
 
@@ -5484,6 +5504,7 @@ export const previewInternals = {
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   renderPreviewRetrySummary,
+  previewTestFailureMessage,
   resolveAuthPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,

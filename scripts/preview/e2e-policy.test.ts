@@ -174,7 +174,7 @@ describe("watchdogs the shell can't import stay in sync", () => {
         { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
       ],
     });
-    const annotation = `::notice title=Preview e2e retries::os: ${rendered}. The retry passed and does not fail this run.`;
+    const annotation = `::error title=Preview e2e retries::os: ${rendered}. A passed-on-retry test is a failed CI proof.`;
     expect(annotation.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
   });
 });
@@ -277,5 +277,25 @@ describe("retry telemetry parsers", () => {
       }),
     ).toBe("2 retried: a (vitest x1) — Network connection lost · b (specs x1, still failed)");
     expect(previewInternals.renderPreviewRetrySummary({ retried: [] })).toBeNull();
+  });
+
+  it("fails a command that passed only after a test retry", () => {
+    expect(
+      previewInternals.previewTestFailureMessage({
+        result: { exitCode: 0 },
+        retrySummary: {
+          retried: [
+            { lane: "vitest", name: "creates a project", retryCount: 1, passedAfterRetry: true },
+          ],
+        },
+      }),
+    ).toContain("1 test(s) passed only after retry: creates a project (vitest)");
+
+    expect(
+      previewInternals.previewTestFailureMessage({
+        result: { exitCode: 0 },
+        retrySummary: { retried: [] },
+      }),
+    ).toBeNull();
   });
 });

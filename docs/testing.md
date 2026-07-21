@@ -51,9 +51,9 @@ away from.
 4. **One retry, watchdogs above, telemetry always.** Retries live in
    exactly one layer (the individual test, CI only); everything above is
    a fail-never-retry watchdog sized to ~2× healthy p99; every absorbed
-   retry surfaces in the PR table but does not make an otherwise-green run
-   fail. A recurring or pathologically slow unrelated flake is explicitly
-   quarantined and tracked instead of repeatedly taxing the critical path.
+   retry surfaces in the PR table and makes the CI proof fail. A flaky or
+   pathologically slow unrelated test is explicitly quarantined and tracked
+   instead of repeatedly taxing the critical path.
    Budgets are evidence, not vibes — see [Retries and
    timeouts](#retries-and-timeouts) and the marathon audit.
 
@@ -426,9 +426,9 @@ watchdog does not budget for the lane doing that twice.
 
 ### Retry telemetry
 
-An attempt that fails and then passes on its one permitted retry does **not**
-make the run fail or block an unrelated PR. It remains useful reliability
-telemetry and must stay visible:
+An attempt that fails and then passes on its one permitted retry makes the run
+fail. The second attempt preserves useful diagnostic evidence; it does not
+turn a flaky first attempt into a green proof. The retry must stay visible:
 
 - **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
 retries: ...` (the Vitest `RetryTelemetryReporter` lives in
@@ -439,18 +439,17 @@ retries: ...` (the Vitest `RetryTelemetryReporter` lives in
 - **Preview CI**: the OS lane writes TUI and Vitest telemetry JSON (via
   `E2E_RETRY_TELEMETRY_FILE`) plus Playwright's `playwright-results.json`;
   `scripts/preview/preview.ts` folds all three into a `retries` column in the
-  PR-body table and a `::notice::` annotation (escalating to `::warning::`
-  when ≥4 tests retried in one run — that smells slot-wide, not
-  probabilistic).
+  PR-body table and an `::error::` annotation. The app lane is recorded as
+  `tests-failed` even when every second attempt passed.
 - **Volume**: probabilistic regressions need run volume to detect — that is
   what the on-demand marathon is for
   (`.depot/workflows/preview-e2e-marathon.yml`, N consecutive runs of the
   full preview lane on Depot). Watch the retry counts across a marathon, not
   just the pass/fail streak.
 
-When telemetry trends up without failures, investigate it. If the test is
-repeatedly flaky or adds disproportionate tail latency, use the quarantine
-protocol below instead of repeatedly making unrelated PRs pay for it.
+If the retry is unrelated to the current change, use the quarantine protocol
+below instead of rerunning CI until it happens to pass first try or repeatedly
+making unrelated PRs pay for it.
 
 ### Flaky-test quarantine protocol
 

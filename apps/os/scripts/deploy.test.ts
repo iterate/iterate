@@ -32,8 +32,8 @@ describe("retired Artifact event Queue consumer", () => {
       }
       if (path === "/queues/queue-id/consumers") {
         return [
-          { consumer_id: "other-consumer", script_name: "other", type: "worker" },
-          { consumer_id: "consumer-id", script_name: "os-preview-4", type: "worker" },
+          { consumer_id: "other-consumer", script: "other", type: "worker" },
+          { consumer_id: "consumer-id", script: "os-preview-4", type: "worker" },
         ] as T;
       }
       return undefined as T;

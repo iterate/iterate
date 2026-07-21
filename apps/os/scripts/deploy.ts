@@ -67,7 +67,7 @@ const RetiredQueue = z.object({
 });
 const RetiredQueueConsumer = z.object({
   consumer_id: z.string(),
-  script_name: z.string().optional(),
+  script: z.string().optional(),
   type: z.string().optional(),
 });
 
@@ -96,7 +96,7 @@ export async function detachRetiredArtifactEventQueueConsumer(input: {
     .array(RetiredQueueConsumer)
     .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
   const consumer = consumers.find(
-    (candidate) => candidate.type === "worker" && candidate.script_name === input.workerName,
+    (candidate) => candidate.type === "worker" && candidate.script === input.workerName,
   );
   if (!consumer) {
     console.log(`retired Artifact event Queue consumer absent: ${queueName}`);
