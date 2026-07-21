@@ -5,19 +5,25 @@ import {
 } from "./browser-subscriber.ts";
 
 describe("browserStreamSubscriberDescriptor", () => {
-  it("announces the authenticated user's name, email, and picture", () => {
+  it("announces the authenticated user's id, name, email, and picture", () => {
     const announcement = { slug: "browser-feed" };
     const picture = "https://example.com/jonas.png";
+    const user = {
+      id: "usr_jonas",
+      email: "jonas@example.com",
+      name: "Jonas Temple",
+      picture,
+    };
 
     expect(
       browserStreamSubscriberDescriptor({
         announcement,
-        user: { email: "jonas@example.com", name: "Jonas Temple", picture },
+        user,
       }),
     ).toEqual({
       description: "browser",
       processor: { announcement },
-      user: { email: "jonas@example.com", name: "Jonas Temple", picture },
+      user,
     });
   });
 
@@ -33,6 +39,7 @@ describe("browserStreamSubscriberDescriptor", () => {
 
 describe("browserStreamSubscriberUserUpdate", () => {
   const user = {
+    id: "usr_jonas",
     email: "jonas@example.com",
     name: "Jonas Temple",
     picture: "https://example.com/jonas.png",
@@ -65,6 +72,15 @@ describe("browserStreamSubscriberUserUpdate", () => {
 
   it("reconnects a live subscription when the user's picture changes", () => {
     const next = { ...user, picture: "https://example.com/jonas-updated.png" };
+
+    expect(browserStreamSubscriberUserUpdate({ current: user, next, started: true })).toEqual({
+      user: next,
+      reconnect: true,
+    });
+  });
+
+  it("reconnects a live subscription when the user id changes", () => {
+    const next = { ...user, id: "usr_other" };
 
     expect(browserStreamSubscriberUserUpdate({ current: user, next, started: true })).toEqual({
       user: next,

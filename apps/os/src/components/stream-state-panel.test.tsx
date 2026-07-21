@@ -7,6 +7,7 @@ import type {
   AgentUiPresenceEntry,
   AgentUiProcessorAnnouncement,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
 
 const liveStateMocks = vi.hoisted(() => ({
@@ -58,6 +59,7 @@ test("presence avatars render an authenticated user's picture with an initials f
     connected: true,
     description: "browser",
     user: {
+      id: "usr_jonas",
       email: "jonas@example.com",
       name: "Jonas Temple",
       picture: "https://example.com/jonas.png",
@@ -70,6 +72,86 @@ test("presence avatars render an authenticated user's picture with an initials f
     entry.user?.picture,
   );
   expect(host.querySelector("[data-slot=avatar-fallback]")?.textContent).toBe("JT");
+});
+
+test("presence tooltips show human identity and processor names", async () => {
+  const human: AgentUiPresenceEntry = {
+    subscriptionKey: "browser:tab-1",
+    direction: "inbound",
+    connected: true,
+    user: {
+      id: "usr_jonas",
+      email: "jonas@example.com",
+      name: "Jonas Temple",
+    },
+  };
+  const { host, root } = mountPanel();
+  const render = (entry: AgentUiPresenceEntry) =>
+    root.render(
+      <TooltipProvider delay={0}>
+        <PresenceAvatar entry={entry} busy={false} />
+      </TooltipProvider>,
+    );
+
+  await act(async () => render(human));
+  await hoverPresenceAvatar(host);
+  expect(document.body.querySelector("[data-slot=tooltip-content]")?.textContent).toBe(
+    "NameJonas TempleEmail addressjonas@example.comUser IDusr_jonas",
+  );
+
+  await act(async () => render(processorPresence));
+  await hoverPresenceAvatar(host);
+  expect(document.body.querySelector("[data-slot=tooltip-content]")?.textContent).toBe(
+    "test processor",
+  );
+});
+
+test("a focused human subscriber shows their name, email address, and user id", async () => {
+  liveStateMocks.project.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  const entry: AgentUiPresenceEntry = {
+    subscriptionKey: "browser:tab-1",
+    direction: "inbound",
+    connected: true,
+    description: "browser",
+    user: {
+      id: "usr_jonas",
+      email: "jonas@example.com",
+      name: "Jonas Temple",
+    },
+    processor: {
+      ...processorAnnouncement,
+      slug: "browser-feed",
+      description: "Mirrors a stream in the browser.",
+    },
+  };
+  const { host, root } = mountPanel();
+
+  await act(async () =>
+    root.render(
+      <StreamStatePanel
+        {...panelProps({
+          focusedKey: entry.subscriptionKey,
+          presence: [entry],
+        })}
+      />,
+    ),
+  );
+
+  const userDetails = host.querySelector("dl");
+  expect(userDetails?.textContent).toContain("NameJonas Temple");
+  expect(userDetails?.textContent).toContain("Email addressjonas@example.com");
+  expect(userDetails?.textContent).toContain("User IDusr_jonas");
 });
 
 test("a pushed runtime update does not reload or blank a focused processor snapshot", async () => {
@@ -124,6 +206,20 @@ function mountPanel() {
   const root = createRoot(host);
   mountedRoots.push(root);
   return { host, root };
+}
+
+async function hoverPresenceAvatar(host: HTMLElement): Promise<void> {
+  const trigger = host.querySelector("[data-slot=tooltip-trigger]");
+  if (!(trigger instanceof HTMLElement)) throw new Error("presence tooltip trigger missing");
+  await act(async () => {
+    const pointerOver = new MouseEvent("pointerover", { bubbles: true });
+    Object.defineProperty(pointerOver, "pointerType", { value: "mouse" });
+    trigger.dispatchEvent(pointerOver);
+    trigger.dispatchEvent(new MouseEvent("mouseenter"));
+  });
+  await vi.waitFor(() => {
+    expect(document.body.querySelector("[data-slot=tooltip-content]")).not.toBeNull();
+  });
 }
 
 function panelProps(

@@ -499,6 +499,7 @@ describe("agent-ui reducer", () => {
           subscriber: {
             description: "browser",
             user: {
+              id: "usr_jonas",
               email: "jonas@example.com",
               name: "Jonas Temple",
               picture: "https://example.com/jonas.png",
@@ -522,6 +523,7 @@ describe("agent-ui reducer", () => {
       subscriptionKey: "browser:tab-1",
       connected: false,
       user: {
+        id: "usr_jonas",
         email: "jonas@example.com",
         name: "Jonas Temple",
         picture: "https://example.com/jonas.png",

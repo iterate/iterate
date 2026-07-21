@@ -257,7 +257,7 @@ export type AgentUiPresenceEntry = {
   direction: "inbound" | "outbound";
   connected: boolean;
   description?: string;
-  user?: { email: string; name?: string; picture?: string };
+  user?: { id?: string; email: string; name?: string; picture?: string };
   processor?: AgentUiProcessorAnnouncement;
 };
 
@@ -395,6 +395,7 @@ const AgentUiPresenceEntrySchema = z.strictObject({
   description: z.string().optional(),
   user: z
     .strictObject({
+      id: z.string().optional(),
       email: z.string(),
       name: z.string().optional(),
       picture: z.string().optional(),
@@ -880,6 +881,7 @@ function reduceAgentUiEvent(
       const user =
         typeof subscriberUser?.email === "string"
           ? {
+              ...(typeof subscriberUser.id === "string" ? { id: subscriberUser.id } : {}),
               email: subscriberUser.email,
               ...(typeof subscriberUser.name === "string" ? { name: subscriberUser.name } : {}),
               ...(typeof subscriberUser.picture === "string"

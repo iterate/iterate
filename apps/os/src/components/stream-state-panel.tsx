@@ -4,6 +4,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import type {
   AgentUiPresenceEntry,
   AgentUiProcessorAnnouncement,
@@ -43,22 +44,42 @@ export function PresenceAvatar({
 }) {
   const label = presenceLabel(entry);
   return (
-    <Avatar className={cn("size-6 font-mono text-[9px] font-bold", className)}>
-      {entry.user?.picture ? <AvatarImage src={entry.user.picture} alt="" /> : null}
-      <AvatarFallback className={cn("text-[9px] font-bold", presenceColorClasses(label))}>
-        {presenceInitials(label)}
-      </AvatarFallback>
-      <span
-        className={cn(
-          "absolute -bottom-px -right-px size-2 rounded-full border-[1.5px] border-background",
-          entry.connected
-            ? busy
-              ? "animate-pulse bg-amber-500"
-              : "bg-emerald-500"
-            : "bg-zinc-300 dark:bg-zinc-600",
+    <Tooltip>
+      <TooltipTrigger
+        render={<Avatar className={cn("size-6 font-mono text-[9px] font-bold", className)} />}
+      >
+        {entry.user?.picture ? <AvatarImage src={entry.user.picture} alt="" /> : null}
+        <AvatarFallback className={cn("text-[9px] font-bold", presenceColorClasses(label))}>
+          {presenceInitials(label)}
+        </AvatarFallback>
+        <span
+          className={cn(
+            "absolute -bottom-px -right-px size-2 rounded-full border-[1.5px] border-background",
+            entry.connected
+              ? busy
+                ? "animate-pulse bg-amber-500"
+                : "bg-emerald-500"
+              : "bg-zinc-300 dark:bg-zinc-600",
+          )}
+        />
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-80">
+        {entry.user == null ? (
+          <span>
+            {entry.processor == null ? `${label} subscriber` : `${entry.processor.slug} processor`}
+          </span>
+        ) : (
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-left">
+            <dt>Name</dt>
+            <dd className="min-w-0 break-all">{entry.user.name ?? "—"}</dd>
+            <dt>Email address</dt>
+            <dd className="min-w-0 break-all">{entry.user.email}</dd>
+            <dt>User ID</dt>
+            <dd className="min-w-0 break-all">{entry.user.id ?? "—"}</dd>
+          </dl>
         )}
-      />
-    </Avatar>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -110,6 +131,7 @@ type ProcessorPanelEntry = {
   connected: boolean;
   direction: "inbound" | "outbound";
   description?: string;
+  user?: AgentUiPresenceEntry["user"];
   processor?: AgentUiProcessorAnnouncement;
   subscriptionType?: "configured" | "ephemeral";
   deliveryMode?: "wake" | "push" | "webhook";
@@ -795,6 +817,7 @@ function buildProcessorPanelEntries(
     if (entries.has(subscriptionKey)) continue;
     const subscriber = readRuntimeRecord(connection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
+    const user = readSubscriberUser(subscriber?.user);
     const subscriptionType = readSubscriptionType(connection) ?? "ephemeral";
     const config = configured[subscriptionKey];
     entries.set(subscriptionKey, {
@@ -805,6 +828,7 @@ function buildProcessorPanelEntries(
       ...(typeof subscriber?.description === "string"
         ? { description: subscriber.description }
         : {}),
+      ...(user === undefined ? {} : { user }),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
       ...(streamRuntime?.runtime.connections[subscriptionKey] === undefined
@@ -832,6 +856,7 @@ function buildProcessorPanelEntries(
     const subscriptionType = runtimeConnection.subscriptionType;
     const subscriber = readRuntimeRecord(runtimeConnection.subscriber);
     const announcement = readAnnouncement(subscriber?.processor);
+    const user = readSubscriberUser(subscriber?.user);
     entries.set(subscriptionKey, {
       subscriptionKey,
       kind: subscriptionType === "configured" ? "processor" : "consumer",
@@ -840,6 +865,7 @@ function buildProcessorPanelEntries(
       ...(typeof subscriber?.description === "string"
         ? { description: subscriber.description }
         : {}),
+      ...(user === undefined ? {} : { user }),
       ...(announcement == null ? {} : { processor: announcement }),
       subscriptionType,
       runtimeConnection,
@@ -1239,6 +1265,17 @@ function readAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
   return { slug, version, description, consumes, emits, ownedEvents };
 }
 
+function readSubscriberUser(value: unknown): AgentUiPresenceEntry["user"] {
+  const user = readRuntimeRecord(value);
+  if (typeof user?.email !== "string") return undefined;
+  return {
+    ...(typeof user.id === "string" ? { id: user.id } : {}),
+    email: user.email,
+    ...(typeof user.name === "string" ? { name: user.name } : {}),
+    ...(typeof user.picture === "string" ? { picture: user.picture } : {}),
+  };
+}
+
 function isLlmish(entry: Pick<AgentUiPresenceEntry, "processor">): boolean {
   const slug = entry.processor?.slug ?? "";
   return ["agent", "capability-host"].includes(slug);
@@ -1364,6 +1401,7 @@ function ProcessorDetail({
         <PanelCloseButton onClose={onClose} />
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
+        {entry.user == null ? null : <SubscriberUserDetail user={entry.user} />}
         {processor == null ? (
           shouldShowConfiguredDetail(entry.config) ? null : (
             <p className="text-sm leading-relaxed text-muted-foreground">
@@ -1414,6 +1452,22 @@ function ProcessorDetail({
         </div>
       </div>
     </>
+  );
+}
+
+function SubscriberUserDetail({ user }: { user: NonNullable<AgentUiPresenceEntry["user"]> }) {
+  return (
+    <div>
+      <SectionHeading>User</SectionHeading>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-xl bg-muted/40 px-4 py-3 font-mono text-xs">
+        <dt className="text-muted-foreground">Name</dt>
+        <dd className="min-w-0 break-all">{user.name ?? "—"}</dd>
+        <dt className="text-muted-foreground">Email address</dt>
+        <dd className="min-w-0 break-all">{user.email}</dd>
+        <dt className="text-muted-foreground">User ID</dt>
+        <dd className="min-w-0 break-all">{user.id ?? "—"}</dd>
+      </dl>
+    </div>
   );
 }
 
