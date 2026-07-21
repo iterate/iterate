@@ -50,20 +50,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/**
- * One documented example payload for an owned event, rendered on the public
- * event docs site (events.iterate.com). The payload must parse against the
- * event's `payloadSchema` — enforced by the event-docs unit tests rather than
- * at module load, so a bad example fails CI instead of bricking a worker boot.
- */
-export type EventExample = {
-  /** What this example shows, e.g. "Push delivery to another stream's acceptCrossPost". */
-  description: string;
-  /** The example payload, in the payload schema's input shape. */
-  payload: unknown;
-};
-
-/** One owned event: its payload schema plus optional human description and examples. */
+/** One owned event: its payload schema plus an optional human description. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
@@ -75,7 +62,6 @@ export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutpu
    * an append site impossible instead of a silent storage leak.
    */
   ephemeral?: true;
-  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */
@@ -875,7 +861,7 @@ function getProcessorSlug(contract: unknown): string {
  * requires that): its ordinary delivery is the guaranteed turn that lands at
  * the stream head, where `processEvent`'s at-head pass
  * (`delivery.caughtUp`) re-drives the processor's open obligations. The
- * event DEFINITION (payload schema, examples) lives with the platform's core
+ * event DEFINITION (payload schema) lives with the platform's core
  * stream contract; this constant is here so contracts and the runner agree on
  * the type string without importing that contract.
  */

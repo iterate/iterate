@@ -67,12 +67,6 @@ export const EmailProcessorContract = defineProcessorContract({
         "Birth certificate for this email router processor. Appended once by project " +
         "creation; the router routes no mail before it reduces.",
       payloadSchema: emailRouterBirthCertificateSchema(),
-      examples: [
-        {
-          description: "Project creation births the router on /integrations/email.",
-          payload: { config: {} },
-        },
-      ],
     },
     "events.iterate.com/email-agent/created": {
       description:
@@ -92,20 +86,6 @@ export const EmailProcessorContract = defineProcessorContract({
           })
           .meta({ description: "Thread identity fixed at the facet's birth." }),
       }),
-      examples: [
-        {
-          description:
-            "The router births the email facet for a new inbound thread (thread id = the " +
-            "received event's offset).",
-          payload: {
-            config: {
-              threadId: "2",
-              counterpart: "jonas@example.com",
-              subject: "Quarterly report",
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/email/received": {
       description:
@@ -223,53 +203,6 @@ export const EmailProcessorContract = defineProcessorContract({
         })
         .loose()
         .meta({ description: "One parsed inbound email as the ingress door captures it." }),
-      examples: [
-        {
-          description: "A person emails the project inbox; the door parsed and stored it.",
-          payload: {
-            envelope: { from: "jonas@example.com", to: "acme@iterate.app" },
-            recipient: { slug: "acme", threadId: null },
-            projectId: "prj_0123456789abcdef",
-            automated: false,
-            message: {
-              messageId: "msg-1@mail.example",
-              inReplyTo: null,
-              references: [],
-              from: { address: "jonas@example.com", name: "Jonas" },
-              replyToAddress: null,
-              subject: "Quarterly report",
-              text: "Can you pull the Q2 numbers together?",
-              attachments: [
-                {
-                  filename: "q2.pdf",
-                  mimeType: "application/pdf",
-                  size: 1234,
-                  path: "/email/inbound/msg-1-0-q2.pdf",
-                },
-              ],
-            },
-          },
-        },
-        {
-          description:
-            "A reply to the thread's +t-tagged Reply-To address carries its own route back.",
-          payload: {
-            envelope: { from: "jonas@example.com", to: "acme+t2@iterate.app" },
-            recipient: { slug: "acme", threadId: "2" },
-            projectId: "prj_0123456789abcdef",
-            automated: false,
-            message: {
-              messageId: "msg-2@mail.example",
-              inReplyTo: "out-1@iterate.app",
-              references: ["msg-1@mail.example", "out-1@iterate.app"],
-              from: { address: "jonas@example.com", name: "Jonas" },
-              subject: "Re: Quarterly report",
-              text: "Looks great, thanks!",
-              attachments: [],
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/email/rejected": {
       description:
@@ -294,16 +227,6 @@ export const EmailProcessorContract = defineProcessorContract({
         })
         .loose()
         .meta({ description: "Envelope-sized audit fact for one refused inbound email." }),
-      examples: [
-        {
-          description: "Mail from a sender outside the project allowlist bounces at the door.",
-          payload: {
-            envelope: { from: "stranger@example.net", to: "acme@iterate.app" },
-            reason: "sender-not-allowed",
-            projectId: "prj_0123456789abcdef",
-          },
-        },
-      ],
     },
     "events.iterate.com/email/sent": {
       description:
@@ -336,20 +259,6 @@ export const EmailProcessorContract = defineProcessorContract({
         })
         .loose()
         .meta({ description: "One outbound email's audit trail entry." }),
-      examples: [
-        {
-          description: "The agent replies inside thread 2; the audit fact carries the thread id.",
-          payload: {
-            from: "acme@iterate.app",
-            messageId: "out-1@iterate.app",
-            projectId: "prj_0123456789abcdef",
-            subject: "Re: Quarterly report",
-            to: "jonas@example.com",
-            threadId: "2",
-            inReplyTo: "msg-1@mail.example",
-          },
-        },
-      ],
     },
     "events.iterate.com/email/sender-allowed": {
       description:
@@ -366,16 +275,6 @@ export const EmailProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "Why the pattern was added (audit note)." }),
       }),
-      examples: [
-        {
-          description: "Project birth seeds the creator's address.",
-          payload: { pattern: "jonas@example.com", reason: "project-creator" },
-        },
-        {
-          description: "Open the inbox to a whole trusted domain.",
-          payload: { pattern: "*@example.com" },
-        },
-      ],
     },
     "events.iterate.com/email/thread-route-configured": {
       description:
@@ -402,26 +301,6 @@ export const EmailProcessorContract = defineProcessorContract({
           .optional()
           .meta({ description: "The thread's subject when the route was created." }),
       }),
-      examples: [
-        {
-          description: "A new inbound thread routes to its own email agent stream.",
-          payload: {
-            threadId: "2",
-            streamPath: "/agents/email/t2",
-            counterpart: "jonas@example.com",
-            subject: "Quarterly report",
-          },
-        },
-        {
-          description:
-            "An agent-initiated conversation binds replies to the sending agent's stream.",
-          payload: {
-            threadId: "a1b2c3d4e5f6",
-            streamPath: "/agents/slack/conn/c123/ts-1",
-            counterpart: "jonas@example.com",
-          },
-        },
-      ],
     },
   },
   consumes: [
