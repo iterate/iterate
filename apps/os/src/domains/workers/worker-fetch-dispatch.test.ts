@@ -59,7 +59,7 @@ describe("worker fetch dispatch header", () => {
   });
 
   test("building response is a marked, retryable, self-refreshing 503", async () => {
-    const response = workerBuildingResponse();
+    const response = workerBuildingResponse("/prj_test");
     expect(response.status).toBe(503);
     expect(response.headers.get(WORKER_BUILDING_HEADER)).toBe("1");
     expect(response.headers.get("retry-after")).not.toBeNull();
@@ -71,13 +71,19 @@ describe("worker fetch dispatch header", () => {
     expect(body).toContain(WORKER_BUILDING_HEADER);
     expect(body).toContain('<noscript><meta http-equiv="refresh"');
     expect(body).toContain('data-spinner="true"');
+    expect(body).toContain("data-iterate-default-favicon");
+    expect(body).toContain('href="/prj_test/.iterate/favicon.svg"');
   });
 
   test("the classifier answers build-lifecycle errors with their pages, nothing else", async () => {
     // Errors arrive over RPC name-preserved, class identity lost — so the
     // classifier is exercised exactly the way real hops see them.
-    const building = workerBuildStatus(namedError("WorkerBuildInProgressError", "still building"));
+    const building = workerBuildStatus(
+      namedError("WorkerBuildInProgressError", "still building"),
+      "/prj_test",
+    );
     expect(building).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
+    expect(await building!.response.text()).toContain('href="/prj_test/.iterate/favicon.svg"');
     expect(
       workerBuildStatus(namedError("RepoNotSeededError", "config repo is still seeding")),
     ).toMatchObject({ outcome: "worker_building", response: { status: 503 } });
@@ -92,6 +98,7 @@ describe("worker fetch dispatch header", () => {
 
     const failed = workerBuildStatus(
       namedError("WorkerBuildFailedError", "Expected ; but found is"),
+      "/prj_test",
     );
     expect(failed).toMatchObject({ outcome: "worker_build_failed", response: { status: 500 } });
     expect(await failed!.response.text()).toContain("Expected ; but found is");
