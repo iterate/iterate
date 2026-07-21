@@ -439,9 +439,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "export function TodoClient() {\n" +
       "  const [error, setError] = useState(\"\");\n" +
       "  const [loading, setLoading] = useState(true);\n" +
-      "  const [mutating, setMutating] = useState(false);\n" +
+      "  const [pendingMutations, setPendingMutations] = useState(0);\n" +
       "  const [title, setTitle] = useState(\"\");\n" +
       "  const [todos, setTodos] = useState<Todo[]>([]);\n" +
+      "  const mutating = pendingMutations > 0;\n" +
       "\n" +
       "  const load = useCallback(async () => {\n" +
       "    try {\n" +
@@ -459,14 +460,14 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }, [load]);\n" +
       "\n" +
       "  const mutate = async (mutation: () => Promise<unknown>) => {\n" +
-      "    setMutating(true);\n" +
+      "    setPendingMutations((current) => current + 1);\n" +
       "    try {\n" +
       "      await mutation();\n" +
       "      await load();\n" +
       "    } catch (cause) {\n" +
       "      setError(cause instanceof Error ? cause.message : String(cause));\n" +
       "    } finally {\n" +
-      "      setMutating(false);\n" +
+      "      setPendingMutations((current) => current - 1);\n" +
       "    }\n" +
       "  };\n" +
       "\n" +
@@ -518,6 +519,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <input\n" +
       "                aria-label={`Mark ${todo.title} ${todo.done ? \"not done\" : \"done\"}`}\n" +
       "                checked={todo.done}\n" +
+      "                disabled={mutating}\n" +
       "                onChange={(event) => {\n" +
       "                  const done = event.currentTarget.checked;\n" +
       "                  void mutate(async () => {\n" +
@@ -532,6 +534,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              />\n" +
       "              <span className={todo.done ? \"done\" : \"\"}>{todo.title}</span>\n" +
       "              <button\n" +
+      "                disabled={mutating}\n" +
       "                onClick={() => {\n" +
       "                  void mutate(async () => {\n" +
       "                    await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {\n" +

@@ -23,9 +23,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export function TodoClient() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [mutating, setMutating] = useState(false);
+  const [pendingMutations, setPendingMutations] = useState(0);
   const [title, setTitle] = useState("");
   const [todos, setTodos] = useState<Todo[]>([]);
+  const mutating = pendingMutations > 0;
 
   const load = useCallback(async () => {
     try {
@@ -43,14 +44,14 @@ export function TodoClient() {
   }, [load]);
 
   const mutate = async (mutation: () => Promise<unknown>) => {
-    setMutating(true);
+    setPendingMutations((current) => current + 1);
     try {
       await mutation();
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setMutating(false);
+      setPendingMutations((current) => current - 1);
     }
   };
 
@@ -102,6 +103,7 @@ export function TodoClient() {
               <input
                 aria-label={`Mark ${todo.title} ${todo.done ? "not done" : "done"}`}
                 checked={todo.done}
+                disabled={mutating}
                 onChange={(event) => {
                   const done = event.currentTarget.checked;
                   void mutate(async () => {
@@ -116,6 +118,7 @@ export function TodoClient() {
               />
               <span className={todo.done ? "done" : ""}>{todo.title}</span>
               <button
+                disabled={mutating}
                 onClick={() => {
                   void mutate(async () => {
                     await api<void>(`/api/todos/${encodeURIComponent(todo.id)}`, {
