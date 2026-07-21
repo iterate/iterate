@@ -1,4 +1,3 @@
-import { buildEvent } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import { CoreProcessorContract } from "./core-processor-contract.ts";
 
@@ -60,22 +59,18 @@ export function buildDurableObjectProcessorSubscriptionConfiguredEvent(input: {
   processorSlug: string;
   subscriptionKey?: string;
 }) {
-  return buildEvent({
-    contract: CoreProcessorContract,
-    event: {
-      type: "events.iterate.com/stream/subscription-configured",
-      ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-      payload: {
-        subscriptionKey:
-          input.subscriptionKey ?? `${input.durableObjectName}#${input.processorSlug}`,
-        delivery: {
-          mode: "wake",
-          expression: [...input.processor, "wakeStreamSubscriber"],
-          // processorSlug rides the delivery explicitly; the wake request
-          // carries it so multi-processor hosts resolve without parsing
-          // anything out of the (opaque) subscription key.
-          processorSlug: input.processorSlug,
-        },
+  return CoreProcessorContract.buildEvent({
+    type: "events.iterate.com/stream/subscription-configured",
+    ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    payload: {
+      subscriptionKey: input.subscriptionKey ?? `${input.durableObjectName}#${input.processorSlug}`,
+      delivery: {
+        mode: "wake",
+        expression: [...input.processor, "wakeStreamSubscriber"],
+        // processorSlug rides the delivery explicitly; the wake request
+        // carries it so multi-processor hosts resolve without parsing
+        // anything out of the (opaque) subscription key.
+        processorSlug: input.processorSlug,
       },
     },
   });

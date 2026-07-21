@@ -101,12 +101,7 @@ describe("first-party PostHog stream integration", () => {
         onPoison: "park",
       },
     });
-    expect(() =>
-      CoreProcessorContract.parseEventInput(
-        "events.iterate.com/stream/subscription-configured",
-        event,
-      ),
-    ).not.toThrow();
+    expect(() => CoreProcessorContract.parseEventInput(event)).not.toThrow();
   });
 
   it("captures the raw durable event with only useful indexed dimensions", async () => {
