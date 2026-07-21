@@ -18,7 +18,7 @@ test("server-renders project routes before the itx client connects", async ({ he
   const replResponse = await page.goto(`/projects/${fixture.project.slug}/repl`);
   if (replResponse === null) throw new Error("Direct project REPL navigation returned no response");
   expect(await replResponse.text()).toContain("Connecting to itx...");
-  await page.getByText("Run TypeScript against your Iterate context.").waitFor();
+  await page.getByText("Run TypeScript against your iterate context.").waitFor();
 
   expect(pageErrors).toEqual([]);
 });
