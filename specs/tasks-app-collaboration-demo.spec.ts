@@ -17,7 +17,8 @@ const MISHA = {
 };
 
 // Deliberately opt-in: this is a disposable demo against shared production
-// state, not part of the product-spec catalogue run by ordinary CI.
+// state, not part of the product-spec catalogue run by ordinary CI. Tracked in
+// tasks/complete/2026-07-21-tasks-app-collaboration-demo.md.
 test("demo the tasks app from checkout through collaboration and GitHub", async ({
   browser,
   page,
