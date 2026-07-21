@@ -18,7 +18,7 @@ test("an override re-points the iterate dependency in every manifest that carrie
   const files = projectRepoSeedFiles(spec);
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
-  expect(packageJson).toMatchObject({ dependencies: { iterate: spec } });
+  expect(packageJson).toMatchObject({ devDependencies: { iterate: spec } });
 
   // Every non-manifest file is untouched, and nothing still carries @main.
   const others = files.filter((file) => !file.path.endsWith("package.json"));
@@ -35,6 +35,6 @@ test("the template's own spec matches what the substitution looks for", () => {
     PROJECT_REPO_INITIAL_FILES.find((file) => file.path === "package.json")!.content,
   );
   expect(packageJson).toMatchObject({
-    dependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
+    devDependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
   });
 });
