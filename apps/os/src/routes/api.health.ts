@@ -3,6 +3,7 @@ import { parseConfig } from "../config.ts";
 import {
   deploymentReadinessProbeIndexes,
   deploymentReadinessProjectProbes,
+  deploymentReadinessNamedProbes,
   deploymentReadinessProbeQueryParam,
   deploymentReadinessProbeWave,
   deploymentReadinessRequestAuthorized,
@@ -73,6 +74,10 @@ export const Route = createFileRoute("/api/health")({
             }),
             ...deploymentReadinessProjectProbes.map(([binding, path]) => {
               const stub = itxEnv[binding].getByName(projectProbeName(path));
+              return { name: binding, readVersion: () => stub.deploymentVersion() };
+            }),
+            ...deploymentReadinessNamedProbes.map(([binding, name]) => {
+              const stub = itxEnv[binding].getByName(name);
               return { name: binding, readVersion: () => stub.deploymentVersion() };
             }),
             {

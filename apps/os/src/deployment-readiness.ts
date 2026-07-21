@@ -27,6 +27,11 @@ export const deploymentReadinessProjectProbes = [
   ["SANDBOX_STANDARD_4", "/sandboxes/deployment-readiness"],
 ] as const;
 
+/** Fixed identities for namespaces whose coordination atom is not project-shaped. */
+export const deploymentReadinessNamedProbes = [
+  ["WORKER_BUILD_COORDINATOR", "deployment-readiness"],
+] as const;
+
 /** Parse one canonical wave; malformed or out-of-range values are not aliases. */
 export function deploymentReadinessProbeWave(value: string | null): number | null {
   if (value === null || !/^\d+$/.test(value)) return null;
