@@ -297,9 +297,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "/**\n" +
       " * The guestbook's creation batch: the birth certificate plus the durable WAKE\n" +
-      " * subscription that puts GuestbookApp on the stream's delivery spine. Every\n" +
-      " * first contact (a page visit, an /api socket, a direct sign) may offer it —\n" +
-      " * the idempotency keys collapse the copies. Bump the subscription key's\n" +
+      " * subscription that puts GuestbookApp on the stream's delivery spine.\n" +
+      " * Initialization is lazy and only matters when something consumes the fold:\n" +
+      " * the `/api` socket every page opens offers this batch, and so does a direct\n" +
+      " * `sign()`. (A bare GET of `/` serves only the static shell — its client then\n" +
+      " * opens `/api`, which initializes; a GET that never opens the socket has\n" +
+      " * nothing reading the subscription, so leaving it unconfigured is correct.)\n" +
+      " * The idempotency keys collapse duplicate offers. Bump the subscription key's\n" +
       " * version whenever the persisted delivery expression changes.\n" +
       " */\n" +
       "export function guestbookCreationEvents(): StreamEventInput[] {\n" +
@@ -359,9 +363,11 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    return this.#host.wakeSubscriber;\n" +
       "  }\n" +
       "\n" +
-      "  /** First contact initializes the stream: an empty fold means nobody has\n" +
-      "   * offered the birth certificate + wake subscription yet. The batch is\n" +
-      "   * idempotency-keyed, so every caller may offer it. */\n" +
+      "  /** Lazily initialize the stream: an empty fold means nobody has offered the\n" +
+      "   * birth certificate + wake subscription yet. Called from the two paths that\n" +
+      "   * actually consume the fold — the `/api` socket and `sign()` — never from a\n" +
+      "   * bare GET, which only serves the static shell (whose client then opens\n" +
+      "   * `/api`). The batch is idempotency-keyed, so every caller may offer it. */\n" +
       "  async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {\n" +
       "    const registry = await this.#host.registry();\n" +
       "    await registry.catchUp(\"guestbook\");\n" +

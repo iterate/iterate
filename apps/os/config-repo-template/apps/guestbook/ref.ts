@@ -24,9 +24,13 @@ export const guestbookAppRef = {
 
 /**
  * The guestbook's creation batch: the birth certificate plus the durable WAKE
- * subscription that puts GuestbookApp on the stream's delivery spine. Every
- * first contact (a page visit, an /api socket, a direct sign) may offer it —
- * the idempotency keys collapse the copies. Bump the subscription key's
+ * subscription that puts GuestbookApp on the stream's delivery spine.
+ * Initialization is lazy and only matters when something consumes the fold:
+ * the `/api` socket every page opens offers this batch, and so does a direct
+ * `sign()`. (A bare GET of `/` serves only the static shell — its client then
+ * opens `/api`, which initializes; a GET that never opens the socket has
+ * nothing reading the subscription, so leaving it unconfigured is correct.)
+ * The idempotency keys collapse duplicate offers. Bump the subscription key's
  * version whenever the persisted delivery expression changes.
  */
 export function guestbookCreationEvents(): StreamEventInput[] {

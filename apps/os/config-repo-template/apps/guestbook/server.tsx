@@ -28,9 +28,11 @@ export class GuestbookApp extends IterateDurableObject {
     return this.#host.wakeSubscriber;
   }
 
-  /** First contact initializes the stream: an empty fold means nobody has
-   * offered the birth certificate + wake subscription yet. The batch is
-   * idempotency-keyed, so every caller may offer it. */
+  /** Lazily initialize the stream: an empty fold means nobody has offered the
+   * birth certificate + wake subscription yet. Called from the two paths that
+   * actually consume the fold — the `/api` socket and `sign()` — never from a
+   * bare GET, which only serves the static shell (whose client then opens
+   * `/api`). The batch is idempotency-keyed, so every caller may offer it. */
   async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {
     const registry = await this.#host.registry();
     await registry.catchUp("guestbook");
