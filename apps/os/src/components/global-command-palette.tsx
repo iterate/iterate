@@ -11,6 +11,7 @@ import { connectItx, connectIterateSession, useIterateSessionQuery } from "itera
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
 import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
+import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
@@ -190,6 +191,7 @@ function ProjectPickerDialog({
     key: ["projects"],
     query: (session) => session.projects.list(),
     enabled: open,
+    staleTime: projectsListStaleTime,
   });
 
   return (

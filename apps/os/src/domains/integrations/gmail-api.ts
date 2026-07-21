@@ -1,23 +1,23 @@
-// Gmail REST proxy: the request goes through the connection secret's fetch
+// Gmail REST proxy: the request goes through project egress
 // carrying a `getSecret(...)` Authorization placeholder — the Secret DO
 // substitutes the fresh access token and its oauth-refresh-token strategy
 // refreshes on 401. No token bytes ever reach this code.
 
+import { itxEnv } from "../../env.ts";
+import { projectStub } from "../projects/egress.ts";
 import type { GmailRequestInput } from "./types.ts";
 
 export async function callGmailApi(input: {
   /** The Gmail REST call. */
   request: GmailRequestInput;
+  projectId: string;
   /** The Authorization header VALUE — a `Bearer getSecret(...)` placeholder the
    * connection secret substitutes; never a raw token. */
   authorization: string;
-  /** Sends the composed request through the connection secret's fetch (the DO
-   * stub): substitute + 401→refresh→retry, all in trusted DO code. */
-  send: (request: Request) => Promise<Response>;
 }) {
   const method = (input.request.method ?? "GET").trim().toUpperCase();
   const url = gmailUrl(input.request);
-  const response = await input.send(
+  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(
     new Request(url, {
       method,
       headers: {
