@@ -43,6 +43,8 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
 );
 const QUARANTINED_MATRIX_EXAMPLES = new Set([
   "append-and-read-stream",
+  "describe-project",
+  "discover-tree",
   "repo-edit-file",
   "run-script",
   "secrets-lifecycle",

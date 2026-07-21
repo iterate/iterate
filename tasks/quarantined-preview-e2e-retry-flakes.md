@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after live failures
 
-Fifteen live preview tests were quarantined on 2026-07-21 while landing PR
+Eighteen live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 a failed first attempt made the preview proof red instead of silently treating
 the retry as success. A separate retry-disabled test exhausted its bounded
@@ -102,12 +102,31 @@ The catalogue case and source example are unchanged from `main`. This was the
 only failure in the run; CI correctly rejected the absorbed retry and the case
 is quarantined rather than rerun until green.
 
+The fifth exact-head run was
+[Depot job rmnhbkdz4l](https://depot.dev/orgs/0p91s0lz49/workflows/2mhc1gpmww?job=rmnhbkdz4l)
+at commit `fb143389ea61756b17cde9a65706e6c51212e8c0`. OS deployed in 66.5s,
+Playwright passed cleanly in 162s with zero retries, and the 175.94s OS Vitest
+lane recorded three more passed-on-retry failures:
+
+- catalogue example `describe-project`: `stream-unavailable: Durable Object
+  reset because its code was updated`.
+- catalogue example `discover-tree`: `Durable Object reset because its code
+  was updated`.
+- `Project repos, workers, runScript, and dynamic worker refs compose`:
+  `Durable Object reset because its code was updated`.
+
+All three passed on retry, so the strict retry accounting correctly rejected
+the 176.5s OS test phase. The direct Vitest body, both catalogue cases, and
+both source examples are unchanged from `main`. The synchronized failure
+signature is a post-deploy Durable Object reset cluster, not a regression in
+this PR, and is quarantined explicitly rather than certified by retries.
+
 ## Quarantined coverage
 
 - The seven Playwright tests above use narrow `test.skip` markers.
-- The repo-history, AI Gateway, and project fast-path Vitest tests use narrow
-  `test.skip` markers.
-- The five generated catalogue cases remain discoverable but are registered
+- The repo-history, AI Gateway, project fast-path, and itx worker-composition
+  Vitest tests use narrow `test.skip` markers.
+- The seven generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
 
@@ -130,6 +149,9 @@ is quarantined rather than rerun until green.
   its fast browser execution and remove the long-tail server-side stall.
 - Correlate the `secrets-lifecycle` CLI WebSocket dial failure with OS request
   traces and determine why the same deployed example succeeded in Playwright.
+- Correlate the synchronized post-deploy reset cluster with the exact Worker
+  version and deployment-readiness boundary, and determine why tests can begin
+  before the old/new Durable Object reset has settled.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 
