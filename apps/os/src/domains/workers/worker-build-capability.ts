@@ -27,7 +27,9 @@ export async function coordinateWorkerBuild(
  * repos, invoke the compiler sidecar, and fill the artifact cache. Rechecking
  * KV closes the race between the caller's miss and arrival at the keyed
  * Durable Object; resolving repo files here means followers do not repeat the
- * snapshot read.
+ * snapshot read. KV is deliberately not a lease because its consistency model
+ * has no atomic lock primitive:
+ * https://developers.cloudflare.com/kv/concepts/how-kv-works/#consistency
  */
 export async function executeCoordinatedWorkerBuild(
   request: WorkerBuildRequest,
@@ -70,7 +72,7 @@ async function resolvedSourceFiles(
   buildEnv: Pick<Env, "REPO">,
   projectId: string,
   resolved: ResolvedWorkerFileSource,
-): Promise<Record<string, string>> {
+) {
   if (resolved.type === "inline") return resolved.files;
   const repo = buildEnv.REPO.getByName(
     DurableObjectNameCodec.stringify({ path: resolved.repoPath, projectId }),

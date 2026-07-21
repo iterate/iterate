@@ -23,7 +23,9 @@ type Flight = {
  *
  * Followers receive promises created in their own RPC invocation rather than
  * awaiting the leader's I/O promise. The Durable Object supplies the global
- * rendezvous; this class only owns the live operation and its followers.
+ * rendezvous; this class only owns the live operation and its followers. This
+ * avoids Workers' cross-request I/O ownership failure:
+ * https://developers.cloudflare.com/workers/observability/errors/#cannot-perform-io-on-behalf-of-a-different-request
  */
 export class WorkerBuildCoordinator {
   readonly #execute: (request: WorkerBuildRequest) => Promise<WorkerBuildArtifact>;
@@ -86,7 +88,7 @@ export class WorkerBuildCoordinator {
     flight: Flight,
     kind: WorkerBuildCoordinatorEvent["kind"],
     outcome?: WorkerBuildCoordinatorEvent["outcome"],
-  ): void {
+  ) {
     this.#observe({
       buildKey: flight.buildKey,
       ...(kind === "settled" ? { durationMs: this.#now() - flight.startedAt } : {}),
@@ -97,7 +99,7 @@ export class WorkerBuildCoordinator {
   }
 }
 
-function copyError(error: unknown): Error {
+function copyError(error: unknown) {
   if (!(error instanceof Error)) return new Error(String(error));
   const copy = new Error(error.message);
   copy.name = error.name;

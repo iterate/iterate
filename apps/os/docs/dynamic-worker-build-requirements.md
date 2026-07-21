@@ -89,13 +89,17 @@ KV stores one complete modules/assets JSON record per successful key with a
 distinguish deterministic source failures from transient registry or runtime
 failures; a later request tries again.
 
-KV is only the immutable result cache, never a lock. After the caller's fast
-KV read misses, every request for the same key reaches the globally named
-coordinator object. Its leader rechecks KV, reads the repo snapshot, calls the
-bundler, and writes the artifact once; concurrent followers receive the same
-plain-data result through promises owned by their own RPC invocations.
-Different build keys address different objects and therefore build in
-parallel. A coordinator reset may retry the idempotent build, but normal
+KV is only the immutable result cache, never a lock: [its eventually
+consistent model](https://developers.cloudflare.com/kv/concepts/how-kv-works/#consistency)
+has no atomic lease primitive. After the caller's fast KV read misses, every
+request for the same key reaches the globally named coordinator object. Its
+leader rechecks KV, reads the repo snapshot, calls the bundler, and writes the
+artifact once; concurrent followers receive the same plain-data result through
+promises owned by their own RPC invocations. Different build keys address
+different objects and therefore build in parallel, following Cloudflare's
+[one coordination atom per Durable
+Object](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#model-your-durable-objects-around-your-atom-of-coordination)
+guidance. A coordinator reset may retry the idempotent build, but normal
 cross-isolate concurrency cannot create a stampede.
 
 Browser fetches may stop waiting at a small budget while the coordinator's
