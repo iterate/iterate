@@ -65,6 +65,14 @@ const h = vi.hoisted(() => {
       }),
     },
     WORKER_BUILD_CACHE: kv,
+    WORKER_BUILD_COORDINATOR: {
+      getByName: () => ({
+        build: async (request: import("./worker-build-capability.ts").WorkerBuildRequest) => {
+          const { executeCoordinatedWorkerBuild } = await import("./worker-build-capability.ts");
+          return await executeCoordinatedWorkerBuild(request, itxEnv as never);
+        },
+      }),
+    },
     WORKER_BUNDLER: {},
     WORKER_SELF: "os-test",
   };

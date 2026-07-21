@@ -58,6 +58,11 @@ export interface Env {
    * (domains/workers/artifact-store.ts). Every entry is reproducible from its
    * deterministic build key, so the namespace is safe to wipe. */
   WORKER_BUILD_CACHE: KVNamespace;
+  /** One coordinator actor per content-addressed build key. KV remains the
+   * result cache; this namespace elects one live builder across OS isolates. */
+  WORKER_BUILD_COORDINATOR: DurableObjectNamespace<
+    import("./domains/workers/worker-build-coordinator-durable-object.ts").WorkerBuildCoordinatorDurableObject
+  >;
   /**
    * The worker-bundler sidecar (src/worker-bundler.ts): the only OS script
    * carrying esbuild-wasm. Source files cross this binding as inert data so a

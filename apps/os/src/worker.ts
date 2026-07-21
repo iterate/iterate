@@ -60,6 +60,7 @@ export { ProjectDurableObject } from "./domains/projects/project-durable-object.
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
+export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";

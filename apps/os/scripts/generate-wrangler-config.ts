@@ -183,6 +183,7 @@ const DO_CLASSES = {
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
+  WORKER_BUILD_COORDINATOR: "WorkerBuildCoordinatorDurableObject",
   WORKER: "StatefulWorkerDurableObject",
   // Deliberately NOT "WorkspaceDurableObject": declarative exports key
   // namespaces by class name, and the retired single-parent-overlay workspace

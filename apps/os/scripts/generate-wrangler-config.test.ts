@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
-import { deploymentReadinessProjectProbes } from "../src/deployment-readiness.ts";
+import {
+  deploymentReadinessNamedProbes,
+  deploymentReadinessProjectProbes,
+} from "../src/deployment-readiness.ts";
 import {
   config,
   localDevAuthJwks,
@@ -64,6 +67,7 @@ it("probes every configured Durable Object namespace before preview tests", () =
   const probedBindings = [
     "CAPABILITY_HOST",
     "STREAM",
+    ...deploymentReadinessNamedProbes.map(([binding]) => binding),
     ...deploymentReadinessProjectProbes.map(([binding]) => binding),
   ].toSorted();
 
