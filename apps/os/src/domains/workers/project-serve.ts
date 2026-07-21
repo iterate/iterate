@@ -9,7 +9,7 @@ import { applyProjectWorkerOverlay, workerServeErrorResponse } from "./worker-se
 /** Long enough for warm-cache loads and quick bundles; past it, show the page. */
 const PROJECT_HOST_BUILD_BUDGET_MS = 15_000;
 
-export type ProjectServeOutcome = "worker_build_failed" | "worker_building" | "worker_serve_error";
+type ProjectServeOutcome = "worker_build_failed" | "worker_building" | "worker_serve_error";
 
 /**
  * Project ingress's serve envelope — the one place the project lane decides
