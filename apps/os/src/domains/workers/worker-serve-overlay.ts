@@ -80,9 +80,9 @@ export function workerOverlayHtml(state: WorkerOverlayState): string {
     .replaceAll("\u2028", "\\u2028")
     .replaceAll("\u2029", "\\u2029");
   const isBusy = state.kind === "building" || state.kind === "serveError";
-  // A failed build's details must not hide behind a click — the menu starts
-  // open (the badge still toggles it away).
-  const startOpen = state.kind === "buildFailed";
+  // Failure details must not hide behind a click — error states start with
+  // the menu open (the badge still toggles it away).
+  const startOpen = state.kind === "buildFailed" || state.kind === "serveError";
   return `<script>(() => {
   if (window.__iterateWorkerOverlay) return;
   window.__iterateWorkerOverlay = true;
@@ -100,8 +100,8 @@ export function workerOverlayHtml(state: WorkerOverlayState): string {
     #ring rect { stroke-dasharray: 30 70; animation: trace 1.2s linear infinite; }
     [data-kind="building"] #ring, [data-kind="serveError"] #ring, [data-kind="buildFailed"] #ring { display: block; }
     [data-kind="serveError"] #ring, [data-kind="buildFailed"] #ring { color: #dc2626; }
-    [data-kind="buildFailed"] #ring rect { stroke-dasharray: none; animation: none; }
-    [data-kind="building"] .mark, [data-kind="serveError"] .mark { animation: pulse 1.6s ease-in-out infinite; }
+    [data-kind="buildFailed"] #ring rect, [data-kind="serveError"] #ring rect { stroke-dasharray: none; animation: none; }
+    [data-kind="building"] .mark { animation: pulse 1.6s ease-in-out infinite; }
     @keyframes trace { to { stroke-dashoffset: -100; } }
     @keyframes pulse { 50% { opacity: 0.45; } }
     #tip { display: none; position: absolute; bottom: 46px; right: 0; padding: 4px 8px; background: #0a0a0a; color: #fafafa; border-radius: 6px; white-space: nowrap; pointer-events: none; }
