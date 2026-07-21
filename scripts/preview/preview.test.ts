@@ -9,6 +9,7 @@ import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
+  environmentConfigLeaseInventory,
   previewInternals,
 } from "./preview.ts";
 
@@ -31,6 +32,7 @@ const {
   claimEnvironmentConfigLease,
   describeForcePushCompareHazard,
   describeLostSlotOwnership,
+  describePreviewSlotChange,
   evaluateCloudflareZoneCheck,
   holderPullRequestUrl,
   requireExplicitReclaimForce,
@@ -46,6 +48,8 @@ const {
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
+  resolveProvisionAuthPreviewSlotNumbers,
+  resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
@@ -57,6 +61,84 @@ const {
   syncPreviewInventory,
   waitForHttpReadiness,
 } = previewInternals;
+
+test("a PR body can request one configured preview environment", () => {
+  expect(
+    resolveRequestedPreviewEnvironment(`
+Deploy this on the expanded fleet.
+
+preview_environment=preview-17
+`),
+  ).toBe("preview-17");
+});
+
+test("a preview environment directive must be unique and name configured inventory", () => {
+  expect(resolveRequestedPreviewEnvironment("No environment preference.")).toBeNull();
+  expect(() => resolveRequestedPreviewEnvironment("preview_environment=preview-99")).toThrow(
+    /Unknown preview_environment preview-99/,
+  );
+  expect(() =>
+    resolveRequestedPreviewEnvironment(`
+preview_environment=preview-17
+preview_environment=preview-18
+`),
+  ).toThrow(/at most one preview_environment directive/);
+});
+
+test("preview environment examples and comments are not active directives", () => {
+  expect(
+    resolveRequestedPreviewEnvironment(`
+Example:
+
+\`\`\`
+preview_environment=preview-17
+\`\`\`
+
+<!--
+preview_environment=preview-18
+-->
+`),
+  ).toBeNull();
+
+  expect(
+    resolveRequestedPreviewEnvironment(`
+\`\`\`text
+preview_environment=preview-18
+\`\`\`
+
+preview_environment=preview-17
+`),
+  ).toBe("preview-17");
+});
+
+test("a requested slot move is not reported as a stolen lapsed lease", () => {
+  expect(
+    describePreviewSlotChange({
+      changedAt: "2026-07-21T10:00:00.000Z",
+      nextSlug: "preview-17",
+      previousSlug: "preview-6",
+      requestedEnvironment: "preview-17",
+    }),
+  ).toBe(
+    "This PR requested preview-17 via preview_environment, so its slot changed from preview-6 to preview-17 at 2026-07-21T10:00:00.000Z. Everything below refers to the new slot.",
+  );
+});
+
+test("Auth preview provisioning can target only an approved slot range", () => {
+  expect(
+    resolveProvisionAuthPreviewSlotNumbers({
+      availableSlots: [1, 2, 9, 10, 11, 12, 13, 19],
+      slots: "10-13,19",
+    }),
+  ).toEqual([10, 11, 12, 13, 19]);
+
+  expect(() =>
+    resolveProvisionAuthPreviewSlotNumbers({
+      availableSlots: [1, 2, 3],
+      slots: "3-4",
+    }),
+  ).toThrow(/unknown preview slot 4/);
+});
 
 describe("preview app dependency expansion", () => {
   test("expands os to include its auth and dummy-petshop dependencies", () => {
@@ -1831,7 +1913,12 @@ describe("claimEnvironmentConfigLease", () => {
 
     expect(lease.slug).toBe("preview-5");
     expect(lease.dopplerConfig).toBe("preview_5");
-    expect(semaphore.acquire).toHaveBeenCalledWith(expect.objectContaining({ holder: "pr-1600" }));
+    expect(semaphore.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedSlugs: environmentConfigLeaseInventory.map((resource) => resource.slug),
+        holder: "pr-1600",
+      }),
+    );
   });
 
   test("adopts a lease the semaphore already attributes to this holder instead of taking a second slot", async () => {
@@ -2495,6 +2582,34 @@ describe("assignEnvironmentConfigLease", () => {
     );
   });
 
+  test("erases an adopted requested slot when it is not recorded by the PR", async () => {
+    const eraseSlotData = vi.fn(async () => {});
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async () =>
+        fakeLease({ slug: "preview-17", data: { dopplerConfig: "preview_17" } }),
+      ),
+      list: vi.fn(async () => [leasedResource("preview-17", "pr-1600", "preview_17")]),
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      eraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: null,
+      semaphore,
+      wantedSlug: "preview-17",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "kept",
+      lease: { slug: "preview-17" },
+    });
+    expect(eraseSlotData).toHaveBeenCalledExactlyOnceWith({
+      dopplerConfig: "preview_17",
+      slug: "preview-17",
+    });
+  });
+
   test("moves to the requested slot and releases the previously held lease", async () => {
     const release = vi.fn(async () => ({ released: true }));
     const semaphore = fakeSemaphore({
@@ -2528,6 +2643,58 @@ describe("assignEnvironmentConfigLease", () => {
       expect.objectContaining({
         slug: "preview-2",
         leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+      }),
+    );
+  });
+
+  test("finishes an interrupted requested-slot move when the holder owns both slots", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const acquireSpecific = vi.fn(async (input: { force?: boolean; slug: string }) => {
+      if (input.slug === "preview-2") {
+        return fakeLease({
+          slug: "preview-2",
+          leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+        });
+      }
+      return input.force
+        ? fakeLease({
+            slug: "preview-17",
+            data: { dopplerConfig: "preview_17" },
+            leaseId: "1197a5b3-a705-4380-9958-6a0dbead16b7",
+          })
+        : null;
+    });
+    const semaphore = fakeSemaphore({
+      acquireSpecific,
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-17", "pr-1600", "preview_17"),
+      ]),
+      release,
+    });
+
+    const result = await assignEnvironmentConfigLease({
+      eraseSlotData: noopEraseSlotData,
+      holder: "pr-1600",
+      leaseMs: 1000,
+      recordedSlug: "preview-2",
+      semaphore,
+      wantedSlug: "preview-17",
+    });
+
+    expect(result).toMatchObject({
+      changedFromSlug: "preview-2",
+      lease: { slug: "preview-17" },
+      outcome: "moved",
+      previousLeaseReleased: true,
+    });
+    expect(acquireSpecific).toHaveBeenCalledWith(
+      expect.objectContaining({ force: true, slug: "preview-17" }),
+    );
+    expect(release).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+        slug: "preview-2",
       }),
     );
   });
@@ -2574,6 +2741,72 @@ describe("assignEnvironmentConfigLease", () => {
         wantedSlug: "preview-5",
       }),
     ).rejects.toThrow(/pr-1601[\s\S]*--force/);
+  });
+
+  test("releases an unrelated adopted lease when the requested slot is unavailable", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async (input: { force?: boolean; slug: string }) =>
+        input.slug === "preview-2" && input.force
+          ? fakeLease({
+              slug: "preview-2",
+              leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+            })
+          : null,
+      ),
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-5", "pr-1601"),
+      ]),
+      release,
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedSlug: null,
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/preview-5 is leased by pr-1601/);
+    expect(release).toHaveBeenCalledWith({
+      leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+      slug: "preview-2",
+      type: "environment-config-lease",
+    });
+  });
+
+  test("keeps the recorded current lease when the requested slot is unavailable", async () => {
+    const release = vi.fn(async () => ({ released: true }));
+    const semaphore = fakeSemaphore({
+      acquireSpecific: vi.fn(async (input: { force?: boolean; slug: string }) =>
+        input.slug === "preview-2" && input.force
+          ? fakeLease({
+              slug: "preview-2",
+              leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
+            })
+          : null,
+      ),
+      list: vi.fn(async () => [
+        leasedResource("preview-2", "pr-1600"),
+        leasedResource("preview-5", "pr-1601"),
+      ]),
+      release,
+    });
+
+    await expect(
+      assignEnvironmentConfigLease({
+        eraseSlotData: noopEraseSlotData,
+        holder: "pr-1600",
+        leaseMs: 1000,
+        recordedSlug: "preview-2",
+        semaphore,
+        wantedSlug: "preview-5",
+      }),
+    ).rejects.toThrow(/preview-5 is leased by pr-1601/);
+    expect(release).not.toHaveBeenCalled();
   });
 
   test("passes force through to evict the current holder", async () => {

@@ -170,7 +170,7 @@ describe("event queue handler", () => {
         }
         if (
           path ===
-          "/client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100"
+          "/client/v4/accounts/account-1/event_subscriptions/subscriptions?queue_id=queue-1&order=name&direction=asc&page=1&per_page=100"
         ) {
           return Response.json({ success: true, result: [] });
         }
@@ -189,7 +189,7 @@ describe("event queue handler", () => {
 
     expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       "GET /client/v4/accounts/account-1/queues?page=1&per_page=100",
-      "GET /client/v4/accounts/account-1/event_subscriptions/subscriptions?page=1&per_page=100",
+      "GET /client/v4/accounts/account-1/event_subscriptions/subscriptions?queue_id=queue-1&order=name&direction=asc&page=1&per_page=100",
       "POST /client/v4/accounts/account-1/event_subscriptions/subscriptions",
     ]);
     expect(calls[2]?.body).toMatchObject({
