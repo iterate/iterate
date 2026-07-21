@@ -273,19 +273,24 @@ export default async function deploy(
       writeWranglerConfig();
     },
     extraDeployArgs: () => containerDeployArgs,
-    // Deploy both compiler sidecars while the OS Vite build runs. deployApp
-    // joins this lane before uploading the main Worker, so neither service
-    // binding can target a missing script.
+    // Deploy the compiler sidecars while the OS Vite build runs. Keep their
+    // Cloudflare uploads sequential within this lane: Wrangler makes several
+    // API calls per upload, and running both together on top of the parallel
+    // preview fleet has produced account-level 429s. Both still fit beneath
+    // the main build, and deployApp joins this lane before uploading the main
+    // Worker so neither service binding can target a missing script.
     concurrentBuildWork: async (ctx, _secretValues, credentials) => {
       const cwd = fileURLToPath(new URL("..", import.meta.url));
-      await Promise.all(
-        ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"].map((config) =>
-          runAsync("pnpm", ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name], {
+      for (const config of ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"]) {
+        await runAsync(
+          "pnpm",
+          ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name],
+          {
             cwd,
             env: credentials,
-          }),
-        ),
-      );
+          },
+        );
+      }
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {
