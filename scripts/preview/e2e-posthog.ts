@@ -17,6 +17,7 @@ export type PreviewE2eAttempt = {
   phases: PreviewE2ePhase[];
 };
 export type PreviewE2eTestRecord = {
+  framework: "vitest" | "playwright" | "node-test" | "script";
   lane: string;
   name: string;
   moduleId: string;
@@ -35,6 +36,7 @@ export type PreviewE2eTestRecord = {
   errors: PreviewE2eError[];
 };
 export type PreviewE2eModuleRecord = {
+  framework: "vitest" | "node-test" | "script";
   lane: string;
   moduleId: string;
   environmentSetupDurationMs: number;
@@ -82,6 +84,7 @@ export class PreviewE2ePostHog {
       workflow_run_id: runId,
       workflow_run_attempt: runAttempt,
       workflow_run_url: context.runUrl,
+      execution_context: context.environment.GITHUB_RUN_ID ? "ci" : "local",
       runner_name: context.environment.RUNNER_NAME,
       runner_os: context.environment.RUNNER_OS,
       $process_person_profile: false,
@@ -98,7 +101,12 @@ export class PreviewE2ePostHog {
   }
 
   runStarted() {
-    this.capture("preview e2e run started", { status: "running" });
+    this.capture("ci test run started", {
+      framework: "mixed",
+      test_kind: "e2e",
+      lane: "preview",
+      status: "running",
+    });
   }
 
   appFinished(input: {
@@ -111,7 +119,9 @@ export class PreviewE2ePostHog {
     retryCount: number;
     collectionErrors: string[];
   }) {
-    this.capture("preview e2e phase finished", {
+    this.capture("ci test lane finished", {
+      framework: "mixed",
+      test_kind: "e2e",
       scope: "app",
       phase: "test",
       app: input.app,
@@ -127,6 +137,8 @@ export class PreviewE2ePostHog {
 
   testFinished(input: PreviewE2eTestRecord & { app: string; slot?: string }) {
     const common = {
+      framework: input.framework,
+      test_kind: "e2e",
       app: input.app,
       lane: input.lane,
       test_name: input.name,
@@ -134,7 +146,7 @@ export class PreviewE2ePostHog {
       test_project: input.project,
       preview_slot: input.slot,
     };
-    this.capture("preview e2e test finished", {
+    this.capture("ci test finished", {
       ...common,
       test_state: input.state,
       duration_ms: input.durationMs,
@@ -153,7 +165,7 @@ export class PreviewE2ePostHog {
       error_count: input.errors.length,
     });
     for (const attempt of input.attempts) {
-      this.capture("preview e2e test attempt finished", {
+      this.capture("ci test attempt finished", {
         ...common,
         attempt_index: attempt.attemptIndex,
         is_retry: attempt.attemptIndex > 0,
@@ -171,7 +183,9 @@ export class PreviewE2ePostHog {
   }
 
   moduleFinished(input: PreviewE2eModuleRecord & { app: string; slot?: string }) {
-    this.capture("preview e2e module finished", {
+    this.capture("ci test module finished", {
+      framework: input.framework,
+      test_kind: "e2e",
       app: input.app,
       lane: input.lane,
       test_module: input.moduleId,
@@ -197,7 +211,10 @@ export class PreviewE2ePostHog {
     error?: unknown;
   }) {
     const error = input.error ? normalizeError(input.error) : null;
-    this.capture("preview e2e run finished", {
+    this.capture("ci test run finished", {
+      framework: "mixed",
+      test_kind: "e2e",
+      lane: "preview",
       status: input.status,
       duration_ms: input.durationMs,
       error_name: error?.name,
@@ -237,7 +254,7 @@ export class PreviewE2ePostHog {
     phase: PreviewE2ePhase,
     attemptIndex?: number,
   ) {
-    this.capture("preview e2e test phase finished", {
+    this.capture("ci test phase finished", {
       ...test,
       phase_name: phase.name,
       phase_category: phase.category,

@@ -612,18 +612,17 @@ export class StreamDurableObject extends DurableObject<Env> {
       // persisted expressions are NAMES — every delivery re-derives authority
       // from THIS stream's own itx root (project-scoped, or the deployment
       // root for projectId: null streams).
-      const event = CoreProcessorContract.parseEventInput(
-        "events.iterate.com/stream/subscription-configured",
-        args.event,
-      );
-      if (event.payload.delivery.mode === "webhook" && this.name.projectId === null) {
+      const payload = CoreProcessorContract.events[
+        "events.iterate.com/stream/subscription-configured"
+      ].payloadSchema.parse(args.event.payload);
+      if (payload.delivery.mode === "webhook" && this.name.projectId === null) {
         // Webhook POSTs ride the project egress lane (attribution +
         // interception); a global stream has no project to attribute them to.
         throw new Error("webhook subscriptions require a project-scoped stream");
       }
       // An unparseable selector condition must be rejected before it commits,
       // not discovered as a per-event error forever after. (compile throws.)
-      compileEventSelector(event.payload.selector);
+      compileEventSelector(payload.selector);
     }
 
     if (!args.state.paused) return;
@@ -691,7 +690,6 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #reduceCore(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
-    const parse = CoreProcessorContract.parseEvent;
     let next: CoreProcessorState = {
       ...args.state,
       eventCount: args.state.eventCount + 1,
@@ -711,9 +709,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       return this.#reduceCircuitBreaker({ event: args.event, state: next });
     }
 
-    switch (args.event.type) {
+    const event = parseCoreEvent(args.event);
+    if (event === undefined) {
+      return this.#reduceCircuitBreaker({ event: args.event, state: next });
+    }
+
+    switch (event.type) {
       case "events.iterate.com/stream/created": {
-        const event = parse("events.iterate.com/stream/created", args.event);
         if (event.offset !== 1) {
           throw new Error(
             "events.iterate.com/stream/created must be the first event and have offset 1",
@@ -731,7 +733,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/woken": {
-        const event = parse("events.iterate.com/stream/woken", args.event);
         // A new stream incarnation means every previous delivery connection
         // died with the old one. Clearing the roster here is what keeps it
         // truthful without heartbeats: surviving subscribers reconnect and
@@ -740,7 +741,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/paused": {
-        const event = parse("events.iterate.com/stream/paused", args.event);
         return {
           ...next,
           paused: true,
@@ -750,7 +750,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/resumed": {
-        const event = parse("events.iterate.com/stream/resumed", args.event);
         return {
           ...next,
           paused: false,
@@ -760,7 +759,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/configured": {
-        const event = parse("events.iterate.com/stream/configured", args.event);
         const circuitBreaker = event.payload.config.circuitBreaker;
         if (circuitBreaker === undefined) return next;
         return {
@@ -776,7 +774,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscriber-connected": {
-        const event = parse("events.iterate.com/stream/subscriber-connected", args.event);
         const { subscriptionKey, subscriber, subscriptionType } = event.payload;
         // Ephemeral connections are runtime facts, not reduced state: their
         // lifetime is the live socket, tracked in #subscribers. Folding them
@@ -800,7 +797,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscriber-disconnected": {
-        const event = parse("events.iterate.com/stream/subscriber-disconnected", args.event);
         const { [event.payload.subscriptionKey]: _closed, ...connectionsByKey } =
           next.connectionsByKey;
         return this.#reduceCircuitBreaker({
@@ -810,7 +806,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-configured": {
-        const event = parse("events.iterate.com/stream/subscription-configured", args.event);
         return this.#reduceCircuitBreaker({
           event: args.event,
           state: {
@@ -831,7 +826,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-removed": {
-        const event = parse("events.iterate.com/stream/subscription-removed", args.event);
         const { [event.payload.subscriptionKey]: _removed, ...configuredSubscribersByKey } =
           next.configuredSubscribersByKey;
         return this.#reduceCircuitBreaker({
@@ -841,7 +835,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-parked": {
-        const event = parse("events.iterate.com/stream/subscription-parked", args.event);
         const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
         // A parked fact for a since-removed subscription folds to nothing.
         if (existing === undefined) {
@@ -863,7 +856,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/subscription-resumed": {
-        const event = parse("events.iterate.com/stream/subscription-resumed", args.event);
         const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
         if (existing === undefined) {
           return this.#reduceCircuitBreaker({ event: args.event, state: next });
@@ -884,11 +876,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       case "events.iterate.com/stream/subscription-cursor-set":
         // The seek itself is a side effect on the spine's cursor row (see
         // #processEvent); the fold only validates and counts the fact.
-        parse("events.iterate.com/stream/subscription-cursor-set", args.event);
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       case "events.iterate.com/stream/child-stream-created": {
-        const event = parse("events.iterate.com/stream/child-stream-created", args.event);
         if (next.path === undefined) {
           return this.#reduceCircuitBreaker({ event: args.event, state: next });
         }
@@ -903,7 +893,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       }
 
       case "events.iterate.com/stream/error-occurred":
-        parse("events.iterate.com/stream/error-occurred", args.event);
         return this.#reduceCircuitBreaker({ event: args.event, state: next });
 
       default:
@@ -928,36 +917,23 @@ export class StreamDurableObject extends DurableObject<Env> {
       return;
     }
 
-    switch (args.event.type) {
+    const event = parseCoreEvent(args.event);
+    if (event === undefined) return;
+
+    switch (event.type) {
       case "events.iterate.com/stream/subscription-configured": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-configured",
-          args.event,
-        );
         this.#subscribers.onSubscriptionConfigured(event.payload, event.offset);
         return;
       }
       case "events.iterate.com/stream/subscription-removed": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-removed",
-          args.event,
-        );
         this.#subscribers.onSubscriptionRemoved(event.payload.subscriptionKey);
         return;
       }
       case "events.iterate.com/stream/subscription-resumed": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-resumed",
-          args.event,
-        );
         this.#subscribers.onResumed(event.payload.subscriptionKey);
         return;
       }
       case "events.iterate.com/stream/subscription-cursor-set": {
-        const event = CoreProcessorContract.parseEvent(
-          "events.iterate.com/stream/subscription-cursor-set",
-          args.event,
-        );
         this.#subscribers.onCursorSet(event.payload.subscriptionKey, event.payload.afterOffset);
         return;
       }
@@ -1511,6 +1487,13 @@ type ReducedCoreEvent = {
   previousState: CoreProcessorState;
   state: CoreProcessorState;
 };
+
+/** Parse only event types owned by the core contract; application events are inert here. */
+function parseCoreEvent(event: StreamEvent) {
+  return Object.hasOwn(CoreProcessorContract.events, event.type)
+    ? CoreProcessorContract.parseEvent(event)
+    : undefined;
+}
 
 function resetCircuitBreaker(
   circuitBreaker: CoreProcessorState["circuitBreaker"],

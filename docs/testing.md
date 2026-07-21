@@ -7,7 +7,7 @@ timers, `test.for` tables with hand-written literal expectations), see
 [Vitest patterns](vitest-patterns.md).
 
 For cross-run timing analysis and the PostHog event/query contract, see
-[E2e timing telemetry](e2e-telemetry.md). It records all tests (not only
+[CI and test telemetry](ci-test-telemetry.md). It records all tests (not only
 retries), Playwright attempts/steps, Vitest hook/body/module timing, and makes a
 missing structured report an explicit preview failure.
 

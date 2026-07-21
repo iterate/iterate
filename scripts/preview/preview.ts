@@ -1576,6 +1576,8 @@ export type PreviewTestSummary = PreviewRetrySummary & {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
+/** Structured timing for the standalone onboarding smoke's logical test. */
+const osOnboardingSmokeTelemetryFile = "/tmp/os-preview-onboarding-smoke.json";
 /** Same JSON shape, written by the Microsoft TUI Test wrapper. */
 const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
@@ -1590,6 +1592,7 @@ async function readVitestTestTelemetry(
   filePath: string,
   lane: string,
   repositoryRoot: string,
+  framework: "vitest" | "node-test" | "script" = "vitest",
 ): Promise<PreviewTestSummary> {
   const TelemetryFile = z.object({
     tests: z.array(
@@ -1650,6 +1653,7 @@ async function readVitestTestTelemetry(
   const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
   if (parsed.tests.length === 0) throw new Error(`${filePath} contained no test results`);
   const tests: PreviewE2eTestRecord[] = parsed.tests.map((record) => ({
+    framework,
     lane,
     name: record.fullName,
     moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
@@ -1671,6 +1675,7 @@ async function readVitestTestTelemetry(
   return {
     tests,
     modules: parsed.modules.map((record) => ({
+      framework,
       lane,
       moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
       environmentSetupDurationMs: record.environmentSetupDurationMs,
@@ -1766,6 +1771,7 @@ async function readPlaywrightTestTelemetry(
           ...(result.errors ?? []).map(normalizeError),
         ]);
         tests.push({
+          framework: "playwright",
           lane,
           name: [...titles, spec.title ?? "(unknown spec)", test.projectName ?? ""]
             .filter(Boolean)
@@ -2062,7 +2068,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
-        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ../../test-results/playwright-results.json`,
+        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osOnboardingSmokeTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
@@ -2086,7 +2092,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // preview.ts to fold into the PR body alongside Playwright's report.
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
-        `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane smoke /tmp/os-preview-smoke.log env E2E_RETRY_TELEMETRY_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
@@ -2101,7 +2107,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ].join("; "),
     ],
     collectTestTelemetry: async ({ repositoryRoot }) => {
-      const [vitest, specs] = await Promise.all([
+      const [smoke, vitest, specs] = await Promise.all([
+        readTestTelemetryLane("os onboarding smoke", () =>
+          readVitestTestTelemetry(
+            osOnboardingSmokeTelemetryFile,
+            "onboarding smoke",
+            repositoryRoot,
+            "script",
+          ),
+        ),
         readTestTelemetryLane("os vitest lane", () =>
           readVitestTestTelemetry(osVitestRetryTelemetryFile, "vitest", repositoryRoot),
         ),
@@ -2114,7 +2128,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         ),
       ]);
       // TUI is currently an explicit no-op skip and produces no test report.
-      return combineTestSummaries([vitest, specs]);
+      return combineTestSummaries([smoke, vitest, specs]);
     },
   },
   semaphore: {
