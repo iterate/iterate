@@ -18,11 +18,48 @@ import {
  * document mounting the SAME overlay component in the matching state:
  * a spinner ring tracing the mark's border while something is happening,
  * a red ring for errors, a tooltip on hover, details in a click-open menu.
+ * The same streaming transform supplies an inverted Iterate favicon only
+ * when the user-space document did not provide a rel=icon link itself.
  */
 
-/** The iterate mark — the letter i from the product logo. Also the face of
+/** The Iterate mark's canonical path geometry. */
+const ITERATE_I_PATH =
+  "M264.649 170.149H289.821L286.092 186.904L276.303 233.444L270.709 259.971L263.717 293.015L258.124 320.008L251.131 352.586L249.267 364.687V371.668L249.733 372.133H253.462L259.522 369.806L266.048 365.617L275.371 357.24L282.829 349.328L286.558 345.14L288.888 346.071L294.948 350.725L308 360.498L307.068 362.36L303.339 367.944L296.813 376.322L291.685 382.837L286.558 388.422L282.363 393.076L275.837 399.592L272.108 402.849L267.446 406.573L262.785 409.83L256.725 413.554L247.869 417.742L238.08 420.535L231.554 421H224.096L216.637 420.069L211.51 418.673L206.382 416.811L201.255 413.088L196.594 408.434L192.865 400.988L191.466 394.938L191 389.818V383.768L193.797 365.152L199.857 335.832L207.315 301.392L224.096 223.205L225.028 216.224V206.916L224.562 205.054L222.231 204.123L219.434 203.193L206.382 203.658L196.127 204.589H193.331V178.526L194.263 175.734L258.59 170.615L264.649 170.149Z";
+const ITERATE_DOT_PATH =
+  "M264.649 78H268.844L275.836 78.9308L282.362 80.7924L287.49 83.5848L292.151 87.7734L295.414 92.8928L297.278 96.616L299.143 105.924L299.609 113.836L299.143 118.49L298.677 122.213L296.812 128.729L293.549 134.779L290.286 138.502L286.091 141.76L282.362 143.621L278.167 145.018L274.438 145.948L267.912 146.414H260.92L254.394 145.483L249.267 144.087L244.139 141.294L239.944 138.037L236.681 133.383L233.884 127.332L232.486 121.282L232.02 117.559V108.716L232.952 101.735L234.816 95.6852L237.613 90.1004L240.41 86.3772L246.936 82.1886L252.529 79.8616L259.522 78.4654L264.649 78Z";
+
+/** The Iterate mark — the letter i from the product logo. Also the face of
  * platform-chrome pages outside this module (the project-app sign-in page). */
-export const ITERATE_MARK_SVG = `<svg class="mark" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="iterate"><rect width="500" height="500" fill="black" rx="112"/><g transform="translate(20 20) scale(0.92)"><path d="M264.649 170.149H289.821L286.092 186.904L276.303 233.444L270.709 259.971L263.717 293.015L258.124 320.008L251.131 352.586L249.267 364.687V371.668L249.733 372.133H253.462L259.522 369.806L266.048 365.617L275.371 357.24L282.829 349.328L286.558 345.14L288.888 346.071L294.948 350.725L308 360.498L307.068 362.36L303.339 367.944L296.813 376.322L291.685 382.837L286.558 388.422L282.363 393.076L275.837 399.592L272.108 402.849L267.446 406.573L262.785 409.83L256.725 413.554L247.869 417.742L238.08 420.535L231.554 421H224.096L216.637 420.069L211.51 418.673L206.382 416.811L201.255 413.088L196.594 408.434L192.865 400.988L191.466 394.938L191 389.818V383.768L193.797 365.152L199.857 335.832L207.315 301.392L224.096 223.205L225.028 216.224V206.916L224.562 205.054L222.231 204.123L219.434 203.193L206.382 203.658L196.127 204.589H193.331V178.526L194.263 175.734L258.59 170.615L264.649 170.149Z" fill="white"/><path d="M264.649 78H268.844L275.836 78.9308L282.362 80.7924L287.49 83.5848L292.151 87.7734L295.414 92.8928L297.278 96.616L299.143 105.924L299.609 113.836L299.143 118.49L298.677 122.213L296.812 128.729L293.549 134.779L290.286 138.502L286.091 141.76L282.362 143.621L278.167 145.018L274.438 145.948L267.912 146.414H260.92L254.394 145.483L249.267 144.087L244.139 141.294L239.944 138.037L236.681 133.383L233.884 127.332L232.486 121.282L232.02 117.559V108.716L232.952 101.735L234.816 95.6852L237.613 90.1004L240.41 86.3772L246.936 82.1886L252.529 79.8616L259.522 78.4654L264.649 78Z" fill="white"/></g></svg>`;
+function iterateMarkSvg(background: "black" | "white", foreground: "black" | "white"): string {
+  return `<svg class="mark" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="iterate"><rect width="500" height="500" fill="${background}" rx="112"/><g transform="translate(20 20) scale(0.92)"><path d="${ITERATE_I_PATH}" fill="${foreground}"/><path d="${ITERATE_DOT_PATH}" fill="${foreground}"/></g></svg>`;
+}
+
+export const ITERATE_MARK_SVG = iterateMarkSvg("black", "white");
+const USERSPACE_FAVICON_SVG = iterateMarkSvg("white", "black");
+export const WORKER_DEFAULT_FAVICON_PATH = "/.iterate/favicon.svg";
+
+export function workerDefaultFaviconHtml(urlPrefix = ""): string {
+  const href = escapeHtml(`${urlPrefix}${WORKER_DEFAULT_FAVICON_PATH}`);
+  return `<link rel="icon" type="image/svg+xml" href="${href}" data-iterate-default-favicon>`;
+}
+
+/** The same-origin asset referenced by the injected link. Keeping this out of
+ * a data URL lets ordinary `img-src 'self'` CSPs accept the default. */
+export function workerDefaultFaviconResponse(request: Request): Response | null {
+  if (new URL(request.url).pathname !== WORKER_DEFAULT_FAVICON_PATH) return null;
+  if (request.method !== "GET" && request.method !== "HEAD") return null;
+  return new Response(request.method === "HEAD" ? null : USERSPACE_FAVICON_SVG, {
+    headers: {
+      "cache-control": "public, max-age=3600",
+      "content-type": "image/svg+xml; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+export function relIncludesIcon(rel: string | null): boolean {
+  return rel?.split(/\s+/).some((token) => token.toLowerCase() === "icon") ?? false;
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -80,9 +117,9 @@ export function workerOverlayHtml(state: WorkerOverlayState): string {
     .replaceAll("\u2028", "\\u2028")
     .replaceAll("\u2029", "\\u2029");
   const isBusy = state.kind === "building" || state.kind === "serveError";
-  // A failed build's details must not hide behind a click — the menu starts
-  // open (the badge still toggles it away).
-  const startOpen = state.kind === "buildFailed";
+  // Failure details must not hide behind a click — error states start with
+  // the menu open (the badge still toggles it away).
+  const startOpen = state.kind === "buildFailed" || state.kind === "serveError";
   return `<script>(() => {
   if (window.__iterateWorkerOverlay) return;
   window.__iterateWorkerOverlay = true;
@@ -100,8 +137,8 @@ export function workerOverlayHtml(state: WorkerOverlayState): string {
     #ring rect { stroke-dasharray: 30 70; animation: trace 1.2s linear infinite; }
     [data-kind="building"] #ring, [data-kind="serveError"] #ring, [data-kind="buildFailed"] #ring { display: block; }
     [data-kind="serveError"] #ring, [data-kind="buildFailed"] #ring { color: #dc2626; }
-    [data-kind="buildFailed"] #ring rect { stroke-dasharray: none; animation: none; }
-    [data-kind="building"] .mark, [data-kind="serveError"] .mark { animation: pulse 1.6s ease-in-out infinite; }
+    [data-kind="buildFailed"] #ring rect, [data-kind="serveError"] #ring rect { stroke-dasharray: none; animation: none; }
+    [data-kind="building"] .mark { animation: pulse 1.6s ease-in-out infinite; }
     @keyframes trace { to { stroke-dashoffset: -100; } }
     @keyframes pulse { 50% { opacity: 0.45; } }
     #tip { display: none; position: absolute; bottom: 46px; right: 0; padding: 4px 8px; background: #0a0a0a; color: #fafafa; border-radius: 6px; white-space: nowrap; pointer-events: none; }
@@ -157,6 +194,7 @@ function standInPageHtml(input: {
   script?: string;
   state: WorkerOverlayState;
   title: string;
+  urlPrefix?: string;
 }): string {
   return `<!doctype html>
 <html>
@@ -164,6 +202,7 @@ function standInPageHtml(input: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>${escapeHtml(input.title)}</title>
+    ${workerDefaultFaviconHtml(input.urlPrefix)}
     ${input.head ?? ""}
     <style>
       body { margin: 0; min-height: 100vh; background: #fff; }
@@ -195,12 +234,13 @@ function reloadWhenHeaderClearsScript(headerName: string, intervalMs: number): s
  * 503/WORKER_BUILDING_HEADER contract by workerBuildingResponse, which also
  * owns that header's name — passed in here to keep the dependency one-way.
  */
-export function workerBuildingPageHtml(buildingHeader: string): string {
+export function workerBuildingPageHtml(buildingHeader: string, urlPrefix = ""): string {
   return standInPageHtml({
     head: `<noscript><meta http-equiv="refresh" content="3" /></noscript>`,
     script: `<script>${reloadWhenHeaderClearsScript(buildingHeader, 1_500)}</script>`,
     state: { kind: "building" },
     title: "Building…",
+    urlPrefix,
   });
 }
 
@@ -209,11 +249,12 @@ export function workerBuildingPageHtml(buildingHeader: string): string {
  * error waits in the click-open menu. No automatic retry of a potentially
  * broken source — fixing it and reloading heals.
  */
-export function workerBuildFailedResponse(error: unknown): Response {
+export function workerBuildFailedResponse(error: unknown, urlPrefix = ""): Response {
   return new Response(
     standInPageHtml({
       state: { kind: "buildFailed", message: buildFailureMessageFromError(error) },
       title: "Worker build failed",
+      urlPrefix,
     }),
     {
       headers: {
@@ -233,13 +274,14 @@ export function workerBuildFailedResponse(error: unknown): Response {
  * dependency hiccup), so the red ring keeps spinning and the page polls its
  * way back into the app; internals stay in the logs.
  */
-export function workerServeErrorResponse(): Response {
+export function workerServeErrorResponse(urlPrefix = ""): Response {
   return new Response(
     standInPageHtml({
       head: `<noscript><meta http-equiv="refresh" content="5" /></noscript>`,
       script: `<script>${reloadWhenHeaderClearsScript(WORKER_SERVE_ERROR_HEADER, 3_000)}</script>`,
       state: { kind: "serveError" },
       title: "Something went wrong",
+      urlPrefix,
     }),
     {
       headers: {
@@ -254,24 +296,15 @@ export function workerServeErrorResponse(): Response {
   );
 }
 
-/**
- * Whether (and with what) to inject the overlay into a project-lane response:
- * an HTML document carrying platform serve info, not a socket, not opted out,
- * and nothing we would corrupt by transforming (own CSP, pre-encoded body).
- * Exported for unit tests — the HTMLRewriter call itself is proven in e2e
- * (workerd-only API).
- */
-export function workerOverlayDecision(request: Request, response: Response): string | null {
+/** The common streaming-transform boundary: a project-served HTML document,
+ * not a socket, encoded body, or subresource. */
+function workerHtmlDocumentCommit(request: Request, response: Response): string | null {
   if (response.status === 101 || response.webSocket || response.body === null) return null;
   const raw = response.headers.get(WORKER_SERVE_HEADER);
   if (raw === null) return null;
   if (!response.headers.get("content-type")?.includes("text/html")) return null;
-  if (response.headers.has(OVERLAY_OPT_OUT_HEADER)) return null;
-  // A page with its own CSP likely forbids inline scripts — injecting would
-  // only produce console errors, never a widget. A pre-encoded body (a worker
-  // returning bytes it compressed itself) cannot be parsed, let alone
-  // transformed.
-  if (response.headers.has("content-security-policy")) return null;
+  // A pre-encoded body (a worker returning bytes it compressed itself) cannot
+  // be parsed, let alone transformed.
   if (response.headers.has("content-encoding")) return null;
   // Subresource fetches (XHR returning HTML fragments) don't need chrome;
   // absent sec-fetch-dest (curl, old clients) counts as a document.
@@ -280,22 +313,52 @@ export function workerOverlayDecision(request: Request, response: Response): str
   return raw.length > 0 ? raw : null;
 }
 
+export function workerOverlayDecision(request: Request, response: Response): string | null {
+  const commitOid = workerHtmlDocumentCommit(request, response);
+  if (commitOid === null) return null;
+  if (response.headers.has(OVERLAY_OPT_OUT_HEADER)) return null;
+  // A page with its own CSP likely forbids the inline overlay script. The
+  // favicon remains eligible: an app can override it with any rel=icon link.
+  if (response.headers.has("content-security-policy")) return null;
+  return commitOid;
+}
+
 /**
  * Ingress's one call: dress a project-worker response in the platform's
- * overlay. HTML documents get the widget appended before </body> via
- * HTMLRewriter (streaming — bytes flow while the parser looks for the body
- * end tag); everything else passes through untouched.
+ * user-space chrome. HTML documents get the default favicon at document end
+ * unless the app supplied one anywhere, plus (when allowed) the widget before
+ * </body>. HTMLRewriter keeps the transformation streaming; everything else
+ * passes through untouched.
  */
 export function applyProjectWorkerOverlay(request: Request, response: Response): Response {
+  if (workerHtmlDocumentCommit(request, response) === null) return response;
   const commitOid = workerOverlayDecision(request, response);
-  if (commitOid === null) return response;
-  const transformed = new HTMLRewriter()
-    .on("body", {
+  const urlPrefix = request.headers.get("x-iterate-url-prefix") ?? "";
+  let hasFavicon = false;
+  const rewriter = new HTMLRewriter()
+    .on("link", {
       element(element) {
-        element.append(workerOverlayHtml({ commitOid, kind: "live" }), { html: true });
+        hasFavicon ||= relIncludesIcon(element.getAttribute("rel"));
       },
     })
-    .transform(response);
+    .on("body", {
+      element(element) {
+        if (commitOid !== null) {
+          element.append(workerOverlayHtml({ commitOid, kind: "live" }), { html: true });
+        }
+      },
+    })
+    .onDocument({
+      end(end) {
+        // Wait until every app-authored link has been observed: rel=icon is
+        // legal in the body too, and the app's icon always wins. Browsers
+        // accept the fallback link at document end even without head/body.
+        if (!hasFavicon) {
+          end.append(workerDefaultFaviconHtml(urlPrefix), { html: true });
+        }
+      },
+    });
+  const transformed = rewriter.transform(response);
   const out = new Response(transformed.body, transformed);
   // The transform changes byte length, and fetch already decompressed the
   // upstream body — a copied length header would lie about this body.

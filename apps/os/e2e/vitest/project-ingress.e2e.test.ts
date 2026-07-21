@@ -29,6 +29,15 @@ test("project ingress serves the static seeded homepage at the root", async () =
   expect(pageResponse).toMatchObject({ status: 200 });
   const homepage = await pageResponse.text();
   expect(homepage).toContain("Hello from your iterate project worker");
+  // The seeded homepage intentionally omits <head>; ingress still supplies a
+  // default user-space icon after checking the whole document for app icons.
+  expect(homepage).toContain(
+    `href="/${projectId}/.iterate/favicon.svg" data-iterate-default-favicon`,
+  );
+  const favicon = await fetch(buildUrl({ path: `/${projectId}/.iterate/favicon.svg` }));
+  expect(favicon).toMatchObject({ status: 200 });
+  expect(favicon.headers.get("content-type")).toContain("image/svg+xml");
+  expect(await favicon.text()).toContain('fill="white"');
   // The homepage links to each seeded app on its own host: the current host
   // prefixed with "<app>--".
   const requestHost = new URL(buildUrl({ path: "/" })).host;
@@ -171,6 +180,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
   expect(guestbook).toMatchObject({ status: 200 });
   const guestbookHtml = await guestbook.text();
   expect(guestbookHtml).toContain("<title>Guestbook</title>");
+  expect(guestbookHtml).toContain("data-iterate-default-favicon");
   expect(guestbookHtml).toContain(
     '<script type="module" src="/apps/guestbook/client.js"></script>',
   );
