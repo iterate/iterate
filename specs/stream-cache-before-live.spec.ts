@@ -3,7 +3,7 @@ import { spinnerWaiter } from "middlewright";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
-test("an empty agent feed waits for matching events after subscribing", async ({
+test("empty agent feeds distinguish waiting from filtered zero matches", async ({
   baseURL,
   helpers,
   page,
@@ -40,6 +40,16 @@ test("an empty agent feed waits for matching events after subscribing", async ({
     await page
       .getByText("Waiting for events…", { exact: true })
       .waitFor({ state: "hidden", timeout: 30_000 });
+
+    await page.goto(
+      `/projects/${fixture.project.slug}/agents/streams${agentPath}?q=definitely-no-match`,
+    );
+    const filteredEmpty = page.locator('[data-slot="empty"]').filter({
+      hasText: "Nothing matches the current filters",
+    });
+    await filteredEmpty.waitFor({ timeout: 30_000 });
+    await filteredEmpty.getByRole("status", { name: "Loading" }).waitFor({ state: "hidden" });
+    await page.getByText("Waiting for events…", { exact: true }).waitFor({ state: "hidden" });
   });
 });
 
