@@ -15,11 +15,12 @@ slot production pool. Google has persisted both callback types for every slot;
 GitHub App identity/webhooks and every Slack manifest URL are verified. Draft
 PR #2182 requested and claimed preview-14 through the normal `preview` label
 path. Its targeted cleanup completed in 14 seconds and all five apps deployed.
-Three app e2e lanes passed; OS exposed one last test-process URL duplication,
-and Semaphore exposed an unobserved sibling waiter only when a flaky attempt
-failed. Both regressions now have focused fixes. Remaining work is a green
-preview-14 rerun, real OS-side GitHub/Slack/Google canaries, lifecycle cleanup,
-and the separately approved shared-session-root migration.
+Four app e2e lanes now pass. OS accepts the repository-owned test origin and
+its remaining authentication failure was a stale Playwright role (`button`
+for a rendered link); the corrected real preview-14 scenario passes without a
+retry. Remaining work is one fully green preview-14 run, real OS-side
+GitHub/Slack/Google canaries, lifecycle cleanup, and the separately approved
+shared-session-root migration.
 
 ## Goal
 
@@ -515,3 +516,11 @@ the recorded projection.
   sibling waiter unobserved long enough for Vitest to report a rejection; both
   waiters now receive rejection handlers immediately and settle in `finally`.
   The complete live Semaphore suite passes against preview-14.
+- 2026-07-21: That run passed all non-OS apps but surfaced eleven OS retries
+  during a burst of stream timeouts and one Cloudflare subscriptions API 500.
+  The only surviving failure reached the project-app sign-in page, whose
+  accessible snapshot exposed `Continue with iterate` as a link while the test
+  selected a button. Both project-app sign-ins now select the rendered link.
+  After merging current `main` (including its project-create fast path), the
+  complete real-member/project-app authentication scenario passed against
+  preview-14 in 37 seconds with retries disabled.
