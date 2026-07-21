@@ -17,7 +17,6 @@ import {
   agentCommandValue,
   buildStreamForest,
   defaultPaletteTab,
-  expandableStreamPaths,
   flattenStreamRows,
   formatEventCount,
   hasPathDescendant,
@@ -78,7 +77,7 @@ export function CommandPaletteDialog({
     undefined,
     initialPaletteDialogState,
   );
-  const { tab, query, selectedValue, expandedAgentPaths, expandedStreamPaths } = palette;
+  const { tab, query, selectedValue, expandedAgentPaths, collapsedStreamPaths } = palette;
   const enabled = open && liveIndex;
   const nowMs = useTickingNowMs(CLOCK_TICK_MS, open);
   const streamsState = useLiveState(
@@ -104,14 +103,6 @@ export function CommandPaletteDialog({
       tab: defaultPaletteTab(currentPath, liveIndex),
     });
   }, [currentPath, liveIndex, open]);
-
-  useEffect(() => {
-    if (!open || streamsState.value === undefined) return;
-    dispatchPalette({
-      type: "streams_available",
-      expandablePaths: expandableStreamPaths(streamsState.value),
-    });
-  }, [open, streamsState.value]);
 
   function openStream(path: string) {
     onOpenChange(false);
@@ -168,7 +159,7 @@ export function CommandPaletteDialog({
     const expanded =
       target.kind === "agent"
         ? expandedAgentPaths.has(target.path)
-        : expandedStreamPaths.has(target.path);
+        : !collapsedStreamPaths.has(target.path);
     const action = paletteKeyboardAction({
       target,
       key: event.key,
@@ -242,7 +233,7 @@ export function CommandPaletteDialog({
             ) : tab === "tree" ? (
               <StreamTreeResults
                 currentPath={currentPath}
-                expandedPaths={expandedStreamPaths}
+                collapsedPaths={collapsedStreamPaths}
                 loading={streamsLoading}
                 query={query}
                 streams={streams}
@@ -287,7 +278,6 @@ export function CommandPaletteDialog({
                   ? "Search streams by path…"
                   : "Search recent streams…"
             }
-            wrapperClassName="border-t-0"
           />
         </div>
       </Command>
@@ -397,7 +387,7 @@ function AgentCommandItem({
 
 function StreamTreeResults({
   currentPath,
-  expandedPaths,
+  collapsedPaths,
   loading,
   query,
   streams,
@@ -405,7 +395,7 @@ function StreamTreeResults({
   onToggleExpanded,
 }: {
   currentPath: string;
-  expandedPaths: ReadonlySet<string>;
+  collapsedPaths: ReadonlySet<string>;
   loading: boolean;
   query: string;
   streams: Record<string, StreamIndexRow>;
@@ -414,8 +404,8 @@ function StreamTreeResults({
 }) {
   const forest = useMemo(() => buildStreamForest(streams), [streams]);
   const rows = useMemo(
-    () => flattenStreamRows(forest, expandedPaths, query).slice(0, MAX_STREAM_TREE_RESULTS),
-    [expandedPaths, forest, query],
+    () => flattenStreamRows(forest, collapsedPaths, query).slice(0, MAX_STREAM_TREE_RESULTS),
+    [collapsedPaths, forest, query],
   );
   if (rows.length === 0) {
     return <CommandEmpty>{loading ? "Loading streams…" : "No matching streams."}</CommandEmpty>;
@@ -504,7 +494,9 @@ function RecentStreamResults({
     return <CommandEmpty>{loading ? "Loading streams…" : "No recent streams."}</CommandEmpty>;
   }
   return (
-    <CommandGroup className="p-0">
+    // overflow-visible: the group's default overflow-hidden would trap the
+    // sticky header, which must stick to the scrolling CommandList instead.
+    <CommandGroup className="overflow-visible p-0">
       <div
         className="sticky top-0 z-10 hidden border-b bg-popover px-3 py-1.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_5.5rem_5.5rem] sm:gap-3"
         aria-hidden

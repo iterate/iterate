@@ -3,7 +3,6 @@ import {
   agentCommandValue,
   buildStreamForest,
   defaultPaletteTab,
-  expandableStreamPaths,
   flattenStreamRows,
   formatEventCount,
   hasPathDescendant,
@@ -30,7 +29,11 @@ function stream(path: string, eventCount = 1): StreamIndexRow {
 
 describe("command palette models", () => {
   test("resets related palette state atomically when opening and changing tabs", () => {
-    const opened = reducePaletteDialogState(initialPaletteDialogState(), {
+    const collapsed = reducePaletteDialogState(initialPaletteDialogState(), {
+      type: "stream_toggled",
+      path: "/agents",
+    });
+    const opened = reducePaletteDialogState(collapsed, {
       type: "opened",
       tab: "recent",
     });
@@ -47,36 +50,14 @@ describe("command palette models", () => {
       tab: "agents",
     });
 
-    expect(opened.expandStreamsOnLoad).toBe(true);
+    expect(collapsed.collapsedStreamPaths).toEqual(new Set(["/agents"]));
+    expect(opened.collapsedStreamPaths).toEqual(new Set());
     expect(queried.query).toBe("cattle");
     expect(changedTab).toMatchObject({
       tab: "agents",
       query: "cattle",
       selectedValue: "",
     });
-  });
-
-  test("fully expands the stream tree once index data arrives after open", () => {
-    const opened = reducePaletteDialogState(initialPaletteDialogState(), {
-      type: "opened",
-      tab: "tree",
-    });
-    const expanded = reducePaletteDialogState(opened, {
-      type: "streams_available",
-      expandablePaths: expandableStreamPaths({
-        "/": stream("/"),
-        "/agents": stream("/agents"),
-        "/agents/cows": stream("/agents/cows"),
-      }),
-    });
-    const again = reducePaletteDialogState(expanded, {
-      type: "streams_available",
-      expandablePaths: new Set(["/"]),
-    });
-
-    expect(expanded.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
-    expect(expanded.expandStreamsOnLoad).toBe(false);
-    expect(again.expandedStreamPaths).toEqual(new Set(["/", "/agents"]));
   });
 
   test("prefixes agent cmdk identities so they cannot collide with stream paths", () => {
@@ -151,19 +132,21 @@ describe("command palette models", () => {
     expect(root?.children[0]?.children[0]?.row.path).toBe("/agents/a/deep");
   });
 
-  test("preserves expansion locally and reveals ancestor context while searching", () => {
+  test("renders fully expanded by default, prunes collapsed subtrees, searches through them", () => {
     const rows = [stream("/"), stream("/agents"), stream("/agents/cows")];
     const forest = buildStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
 
-    expect(flattenStreamRows(forest, new Set(["/"]), "").map(({ node }) => node.row.path)).toEqual([
-      "/",
-      "/agents",
-    ]);
-    expect(flattenStreamRows(forest, new Set(), "cows").map(({ node }) => node.row.path)).toEqual([
+    expect(flattenStreamRows(forest, new Set(), "").map(({ node }) => node.row.path)).toEqual([
       "/",
       "/agents",
       "/agents/cows",
     ]);
+    expect(
+      flattenStreamRows(forest, new Set(["/agents"]), "").map(({ node }) => node.row.path),
+    ).toEqual(["/", "/agents"]);
+    expect(
+      flattenStreamRows(forest, new Set(["/agents"]), "cows").map(({ node }) => node.row.path),
+    ).toEqual(["/", "/agents", "/agents/cows"]);
   });
 
   test("labels tree rows with the leaf segment and formats event counts", () => {

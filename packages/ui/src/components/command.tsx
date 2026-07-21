@@ -47,7 +47,7 @@ function CommandDialog({
         // A prior `top-1/3 translate-y-0` Spotlight offset stacked with the
         // large ⌘K height (`sm:h-[66svh]`) and pinned the palette to the
         // bottom of the viewport.
-        className={cn("overflow-hidden rounded-xl p-0", className)}
+        className={cn("overflow-hidden p-0", className)}
         showCloseButton={showCloseButton}
       >
         <DialogHeader className="sr-only">
@@ -62,17 +62,12 @@ function CommandDialog({
 
 function CommandInput({
   className,
-  wrapperClassName,
   ...props
-}: React.ComponentProps<typeof CommandPrimitive.Input> & {
-  /** Extra classes on the input chrome wrapper (border/padding placement). */
-  wrapperClassName?: string;
-}) {
+}: React.ComponentProps<typeof CommandPrimitive.Input>) {
   return (
-    <div
-      data-slot="command-input-wrapper"
-      className={cn("flex items-center gap-2 border-t px-3 py-2", wrapperClassName)}
-    >
+    // Borderless chrome: the container placing the input (top or bottom of
+    // the palette) owns the divider.
+    <div data-slot="command-input-wrapper" className="flex items-center gap-2 px-3 py-2">
       <SearchIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <CommandPrimitive.Input
         data-slot="command-input"

@@ -62,12 +62,6 @@ export function hasPathDescendant(paths: Iterable<string>, path: string): boolea
   return false;
 }
 
-/** Every path that has at least one descendant — the default fully-expanded tree. */
-export function expandableStreamPaths(streams: Record<string, StreamIndexRow>): Set<string> {
-  const paths = Object.keys(streams);
-  return new Set(paths.filter((path) => hasPathDescendant(paths, path)));
-}
-
 export function isPaletteResultKeyboardTarget(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -110,11 +104,20 @@ const STREAM_TREE_SHAPE = {
     node.row.path.toLowerCase().includes(query),
 };
 
+/** Streams render fully expanded by default; `collapsedPaths` holds the exceptions. */
 export function flattenStreamRows(
   forest: readonly PaletteStreamTreeNode[],
-  expandedPaths: ReadonlySet<string>,
+  collapsedPaths: ReadonlySet<string>,
   query: string,
 ): TreeRow<PaletteStreamTreeNode>[] {
+  const expandedPaths = new Set<string>();
+  const visit = (nodes: readonly PaletteStreamTreeNode[]) => {
+    for (const node of nodes) {
+      if (!collapsedPaths.has(node.row.path)) expandedPaths.add(node.row.path);
+      visit(node.children);
+    }
+  };
+  visit(forest);
   return flattenTreeRows(forest, STREAM_TREE_SHAPE, expandedPaths, query);
 }
 
@@ -133,10 +136,10 @@ type PaletteDialogState = {
   tab: PaletteTab;
   query: string;
   selectedValue: string;
+  /** Agents render collapsed to roots by default; these are expanded. */
   expandedAgentPaths: ReadonlySet<string>;
-  expandedStreamPaths: ReadonlySet<string>;
-  /** Expand every parent path once streams first arrive after open. */
-  expandStreamsOnLoad: boolean;
+  /** Streams render fully expanded by default; these are collapsed. */
+  collapsedStreamPaths: ReadonlySet<string>;
 };
 
 export function initialPaletteDialogState(): PaletteDialogState {
@@ -145,8 +148,7 @@ export function initialPaletteDialogState(): PaletteDialogState {
     query: "",
     selectedValue: "",
     expandedAgentPaths: new Set(),
-    expandedStreamPaths: new Set(),
-    expandStreamsOnLoad: false,
+    collapsedStreamPaths: new Set(),
   };
 }
 
@@ -157,8 +159,7 @@ type PaletteDialogAction =
   | { type: "selection_changed"; selectedValue: string }
   | { type: "tab_changed"; tab: PaletteTab }
   | { type: "agent_toggled"; path: string }
-  | { type: "stream_toggled"; path: string }
-  | { type: "streams_available"; expandablePaths: ReadonlySet<string> };
+  | { type: "stream_toggled"; path: string };
 
 export function reducePaletteDialogState(
   state: PaletteDialogState,
@@ -166,15 +167,14 @@ export function reducePaletteDialogState(
 ): PaletteDialogState {
   switch (action.type) {
     case "closed":
-      return { ...state, query: "", selectedValue: "", expandStreamsOnLoad: false };
+      return { ...state, query: "", selectedValue: "" };
     case "opened":
       return {
         tab: action.tab,
         query: "",
         selectedValue: "",
         expandedAgentPaths: new Set(),
-        expandedStreamPaths: new Set(),
-        expandStreamsOnLoad: true,
+        collapsedStreamPaths: new Set(),
       };
     case "query_changed":
       return { ...state, query: action.query, selectedValue: "" };
@@ -190,15 +190,7 @@ export function reducePaletteDialogState(
     case "stream_toggled":
       return {
         ...state,
-        expandedStreamPaths: toggledSet(state.expandedStreamPaths, action.path),
-        expandStreamsOnLoad: false,
-      };
-    case "streams_available":
-      if (!state.expandStreamsOnLoad) return state;
-      return {
-        ...state,
-        expandedStreamPaths: action.expandablePaths,
-        expandStreamsOnLoad: false,
+        collapsedStreamPaths: toggledSet(state.collapsedStreamPaths, action.path),
       };
   }
 }
