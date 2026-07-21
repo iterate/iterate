@@ -229,6 +229,37 @@ describe("SlackAgentProcessor", () => {
     });
   });
 
+  it("classifies structured idempotent Slack reaction outcomes without reporting them", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const h = makeSlackAgentHarness({
+        callSlackApi: async ({ method }) => {
+          if (method === "reactions.add") {
+            throw Object.assign(new Error("opaque Slack failure"), {
+              slackErrorCode: "already_reacted",
+            });
+          }
+        },
+      });
+      await h.play([
+        "append",
+        SLACK_AGENT_BORN,
+        THREAD_ROUTE_CONFIGURED,
+        {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: humanMessageWebhookPayload({}),
+        },
+      ]);
+
+      expect(error).not.toHaveBeenCalledWith(
+        "[slack-agent] Slack side effect failed",
+        expect.anything(),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("records unmentioned human messages as non-triggering history without eyes", async () => {
     const h = makeSlackAgentHarness();
     await h.play([

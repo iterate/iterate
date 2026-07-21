@@ -47,6 +47,7 @@ import type { ProcessorState } from "./processor-contracts.ts";
 import type { StreamEvent } from "./schemas.ts";
 import type { StreamEventBatch } from "./rpc-types.ts";
 import {
+  awaitKeepAliveBacked,
   StreamProcessor,
   type MaybePromise,
   type StreamProcessorContract,
@@ -656,7 +657,15 @@ export class StreamProcessorRunner<
             state: reduction.state,
             delivery,
             blockProcessorWhile: (work) => {
-              const attempt = eventChain.then(() => this.#keepAliveBackedWork(work, true));
+              const attempt = eventChain.then(() =>
+                this.#keepAliveBackedWork(work).catch((error: unknown) => {
+                  console.error(
+                    `stream processor blocked work failed (${this.driver.contract.slug})`,
+                    error,
+                  );
+                  throw error;
+                }),
+              );
               eventChain = attempt;
               startedBlockers.push(attempt);
             },
@@ -706,7 +715,15 @@ export class StreamProcessorRunner<
           state: ctx.state,
           delivery,
           blockProcessorWhile: (work) => {
-            const attempt = passChain.then(() => this.#keepAliveBackedWork(work, true));
+            const attempt = passChain.then(() =>
+              this.#keepAliveBackedWork(work).catch((error: unknown) => {
+                console.error(
+                  `stream processor blocked work failed (${this.driver.contract.slug})`,
+                  error,
+                );
+                throw error;
+              }),
+            );
             passChain = attempt;
             startedBlockers.push(attempt);
           },
@@ -1017,32 +1034,11 @@ export class StreamProcessorRunner<
    * Route registered work through the recovery adapter's keepalive when
    * present (both `blockProcessorWhile` and `runInBackground` ride it — "the
    * DO died owing work" must equal "the alarm was armed"), else through the
-   * plain `keepAlive` hook, else run directly. Same fire-and-forget→promise
-   * bridge as the legacy `#runKeepAliveBackedWork`.
+   * plain `keepAlive` hook, else run directly.
    */
-  async #keepAliveBackedWork(work: () => Promise<unknown>, isBlocked = false): Promise<unknown> {
+  async #keepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
     const keepAliveWhile = this.durability?.recovery?.keepAliveWhile ?? this.keepAlive;
-    try {
-      if (keepAliveWhile === undefined) return await work();
-      return await new Promise<unknown>((resolve, reject) => {
-        keepAliveWhile(async () => {
-          try {
-            const result = await work();
-            resolve(result);
-            return result;
-          } catch (error) {
-            reject(error);
-            throw error;
-          }
-        });
-      });
-    } catch (error) {
-      // The frame still fails and retries — this log adds context, not handling.
-      if (isBlocked) {
-        console.error(`stream processor blocked work failed (${this.driver.contract.slug})`, error);
-      }
-      throw error;
-    }
+    return await awaitKeepAliveBacked(keepAliveWhile, work);
   }
 
   /** Serialize frames + self-pulls; the chain swallows each entry's

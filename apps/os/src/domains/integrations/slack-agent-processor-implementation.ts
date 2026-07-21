@@ -227,7 +227,7 @@ export class SlackAgentProcessor extends StreamProcessor<
         if (isOwnBotMessage(slackEvent, { botBotId, botUserId })) break;
         if (isBotAction(slackEvent, botUserId)) break;
 
-        const eventType = readStringField(slackEvent, "type");
+        const eventType = readString(slackEvent.type);
         // `app_mention` is Slack's dedicated "someone mentioned this app"
         // delivery; treat it like a message for transcription + LLM wake.
         if (eventType !== "message" && eventType !== "app_mention") {
@@ -239,14 +239,14 @@ export class SlackAgentProcessor extends StreamProcessor<
           break;
         }
 
-        const channel = target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
+        const channel = target?.channel ?? state.channel ?? readString(slackEvent.channel);
         const threadTs =
           target?.threadTs ??
           state.threadTs ??
-          readStringField(slackEvent, "thread_ts") ??
-          readNestedMessageStringField(slackEvent, "thread_ts") ??
-          readStringField(slackEvent, "ts");
-        const messageText = readStringField(slackEvent, "text")?.trim();
+          readString(slackEvent.thread_ts) ??
+          readString(readRecord(slackEvent.message)?.thread_ts) ??
+          readString(slackEvent.ts);
+        const messageText = readString(slackEvent.text)?.trim();
         const bangCommand = compileBangCommand({
           channel,
           connection: birthCertificate.config.connection,
@@ -485,17 +485,13 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     if (fallbackActivity !== undefined) {
       if (!hasAssistantThreadUi || generation !== this.#runtimePresentationGeneration) return;
-      const paintedText = (summary.activity ?? fallbackActivity) + "…";
-      if (paintedText === this.#paintedActivityText) return;
-      await this.#callSlackApi(connection, "assistant.threads.setStatus", {
-        channel_id: channel,
-        thread_ts: threadTs,
-        status: paintedText,
-        loading_messages: [paintedText],
+      await this.#paintActivityStatus({
+        activity: summary.activity,
+        channel,
+        connection,
+        fallbackActivity,
+        threadTs,
       });
-      if (generation === this.#runtimePresentationGeneration) {
-        this.#paintedActivityText = paintedText;
-      }
       return;
     }
 
@@ -514,6 +510,27 @@ export class SlackAgentProcessor extends StreamProcessor<
   }
 
   // ------------------------------------------------------ Slack paint helpers
+
+  async #paintActivityStatus(input: {
+    activity: string | undefined;
+    channel: string;
+    connection: string;
+    fallbackActivity: string;
+    threadTs: string;
+  }): Promise<void> {
+    const paintedText = `${input.activity ?? input.fallbackActivity}…`;
+    if (paintedText === this.#paintedActivityText) return;
+    if (this.deps.callSlackApi == null) return;
+    await this.#callSlackApi(input.connection, "assistant.threads.setStatus", {
+      channel_id: input.channel,
+      thread_ts: input.threadTs,
+      status: paintedText,
+      loading_messages: [paintedText],
+    });
+    // The memo records only a paint call this invocation actually made;
+    // freshness and generation gates never write it on skipped work.
+    this.#paintedActivityText = paintedText;
+  }
 
   /**
    * Paint current summary/runtime once per at-head pass. Freshness gates only
@@ -563,16 +580,13 @@ export class SlackAgentProcessor extends StreamProcessor<
 
     if (fallbackActivity !== undefined) {
       if (!fresh || !hasAssistantThreadUi) return;
-      const text = summary.activity ?? fallbackActivity;
-      const paintedText = `${text}…`;
-      if (paintedText === this.#paintedActivityText) return;
-      await this.#callSlackApi(connection, "assistant.threads.setStatus", {
-        channel_id: channel,
-        thread_ts: threadTs,
-        status: paintedText,
-        loading_messages: [paintedText],
+      await this.#paintActivityStatus({
+        activity: summary.activity,
+        channel,
+        connection,
+        fallbackActivity,
+        threadTs,
       });
-      this.#paintedActivityText = paintedText;
       return;
     }
 
@@ -658,14 +672,14 @@ export class SlackAgentProcessor extends StreamProcessor<
     try {
       await this.deps.callSlackApi({ body, connection, method });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const slackErrorCode = readString(readRecord(error)?.slackErrorCode);
       if (
         method === "reactions.add" &&
-        (message.includes("already_reacted") || message.includes("not_reactable"))
+        (slackErrorCode === "already_reacted" || slackErrorCode === "not_reactable")
       ) {
         return;
       }
-      if (method === "reactions.remove" && message.includes("no_reaction")) return;
+      if (method === "reactions.remove" && slackErrorCode === "no_reaction") return;
       console.error("[slack-agent] Slack side effect failed", {
         error,
         method,
@@ -843,9 +857,9 @@ function curateSlackFile(file: unknown): unknown {
 }
 
 function isBotMessage(slackEvent: Record<string, unknown>): boolean {
-  if (readStringField(slackEvent, "subtype") === "bot_message") return true;
-  if (readStringField(slackEvent, "bot_id") != null) return true;
-  if (readRecordField(slackEvent, "bot_profile") != null) return true;
+  if (readString(slackEvent.subtype) === "bot_message") return true;
+  if (readString(slackEvent.bot_id) != null) return true;
+  if (readRecord(slackEvent.bot_profile) != null) return true;
   return false;
 }
 
@@ -861,15 +875,14 @@ function isOwnBotMessage(
   if (!isBotMessage(slackEvent)) return false;
 
   let comparedIdentity = false;
-  const msgBotId = readStringField(slackEvent, "bot_id");
+  const msgBotId = readString(slackEvent.bot_id);
   if (identity.botBotId != null && msgBotId != null) {
     comparedIdentity = true;
     if (msgBotId === identity.botBotId) return true;
   }
 
   const msgUserId =
-    readStringField(slackEvent, "user") ??
-    readStringField(readRecordField(slackEvent, "bot_profile"), "user_id");
+    readString(slackEvent.user) ?? readString(readRecord(slackEvent.bot_profile)?.user_id);
   if (identity.botUserId != null && msgUserId != null) {
     comparedIdentity = true;
     if (msgUserId === identity.botUserId) return true;
@@ -884,7 +897,7 @@ function isOwnBotMessage(
  */
 function isBotAction(slackEvent: Record<string, unknown>, botUserId: string | undefined): boolean {
   if (botUserId == null) return false;
-  return readStringField(slackEvent, "user") === botUserId;
+  return readString(slackEvent.user) === botUserId;
 }
 
 /** The `files` array on a Slack message event, reduced to what storage needs. */
@@ -905,22 +918,6 @@ function readSlackMessageFiles(slackEvent: Record<string, unknown>): SlackShared
     });
   }
   return shared;
-}
-
-function readStringField(value: unknown, key: string): string | undefined {
-  if (value == null || typeof value !== "object") return undefined;
-  const field = (value as Record<string, unknown>)[key];
-  return typeof field === "string" ? field : undefined;
-}
-
-function readRecordField(value: unknown, key: string): Record<string, unknown> | null {
-  if (value == null || typeof value !== "object") return null;
-  return readRecord((value as Record<string, unknown>)[key]);
-}
-
-function readNestedMessageStringField(value: unknown, key: string): string | undefined {
-  if (value == null || typeof value !== "object") return undefined;
-  return readStringField((value as Record<string, unknown>).message, key);
 }
 
 export function compileBangCommand(input: {
