@@ -32,6 +32,33 @@ launched with `depot ci dispatch --workflow preview-e2e-marathon.yml --ref
 Local runs are for fast iteration while fixing a flake; the consecutive-green
 bar is measured on Depot's same 16-core runner shape as the normal preview job.
 
+## Round 7 (2026-07-21, post-#2226 and #2227)
+
+This is a fresh proof from `origin/main` at
+`767baafc35c774f48916a15278659e61dd8c9670`, after unified CI/test telemetry
+(#2226) and immediate OS Vitest file scheduling (#2227) merged. It inherits no
+streak: the accepted-run counter starts at zero.
+
+The exact #2227 head, `220ab10c9fd2ea51d4cd15ac4a0659fdf7562ed1`,
+passed its normal preview check on the first workflow attempt. The complete
+GitHub check took 4m59s, including pickup, setup, deployment, tests, and final
+bookkeeping. OS deployed in 115.5s and its e2e lane passed in 158.9s. Within
+that lane, all 48 runnable Vitest files were scheduled immediately and Vitest
+finished in 78.28s, down from 181.77s with the former seven-worker queue.
+
+One matrix case, `run-script`, passed on its permitted single Vitest retry
+after the separate Node runtime reported `WebSocket connection failed.` The
+run stayed green, but the retry is part of this round's evidence and will be
+compared with subsequent telemetry before any harness change. No extra retry
+layer or test-specific exception has been added.
+
+Round-7 run ledger:
+
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                    |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------ |
+| Pre-round normal preview | `220ab10c9fd2ea51d4cd15ac4a0659fdf7562ed1` |             1 |       1 | Passed in 4m59s; Node transport-open retry |
+| Round-7 marathon 1       | _pending_                                  |          0/25 |       0 | Pending                                    |
+
 ## Round 6 (2026-07-21, post-#2169)
 
 This is a fresh proof from `origin/main` at
