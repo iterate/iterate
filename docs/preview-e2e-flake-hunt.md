@@ -13,9 +13,9 @@ failure or tail encountered along the way.
 Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
 Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
 hardening, and merged main's worker-build pipeline (#1612) — whose `#writeChain`
-write serialization supersedes round 2's standalone flake-15 fix. Round 3
-(this PR) carries on toward 50 consecutive green runs, targeting the two
-pre-existing flakes still open after the round-2 merge (see "Round 3 targets").
+write serialization supersedes round 2's standalone flake-15 fix. Later rounds
+repeat the same proof after substantial platform changes and record their exact
+base revision, run IDs, and findings below.
 
 Method: loop a full-fleet `pnpm preview deploy --all-apps` followed by
 `pnpm preview test`, failing fast on the first functional failure or run at or
@@ -30,7 +30,66 @@ sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
 launched with `depot ci dispatch --workflow preview-e2e-marathon.yml --ref
 <branch> --input pull-request-number=<pr>`.
 Local runs are for fast iteration while fixing a flake; the consecutive-green
-bar is measured on Depot's same 64-core runner shape as the normal preview job.
+bar is measured on Depot's same 16-core runner shape as the normal preview job.
+
+## Round 6 (2026-07-21, post-#2169)
+
+This is a fresh proof from `origin/main` at
+`a999a11a00987bd59694d79f20949353644f29f6`, after PR #2169 merged. It does not
+inherit a streak from that PR: the counter begins at zero and the complete
+deploy-plus-test critical path is run 25 more times.
+
+The exact final tested head before #2169's squash merge was
+`950a4f01726f52ec2fb185305dc4dcf9baa7745d`. Its normal preview check passed.
+Schema-v2 PostHog telemetry recorded a 187,448ms test operation, 306 logical
+test results, 95 Playwright attempt results, 208 named test phases, and 57
+module results. It also exposed one absorbed Vitest retry:
+
+- lane: OS Vitest
+- module: `apps/os/e2e/examples/examples-matrix.e2e.test.ts`
+- test: `catalogue example "repo-read-file" runs identically across runtimes`
+- first failure: the spawned CLI runtime lost its initial Cap'n Web connection
+  with `WebSocket connection failed.`
+- retry: the complete matrix case passed in 30,008ms
+
+The failure is not evidence against `repo-read-file`: the other runtimes
+completed and the retry passed. It is a transport-open failure in the genuinely
+separate CLI process. The CLI currently makes one connection attempt and the
+single Vitest retry reruns the whole isolated case, which is the repository's
+intended one retry layer. No nested transport or harness retry has been added.
+The CI diagnostic already included the enriched
+`cli process failed — stderr:` output; Node's `execFile` defaults to UTF-8
+strings, so PR #2169's Buffer-output bot comment does not describe the observed
+runtime and needs no speculative conversion.
+
+An absorbed retry remains a green run under the testing policy, but it is never
+silent: every retry in this round is classified from telemetry plus CI logs and
+artifacts. Any reproducible product or harness defect gets a minimal fix on its
+own reviewed green PR before the streak resumes. The catalogue runtime matrix
+remains intact.
+
+Round-6 run ledger (filled from the marathon's machine-readable summary):
+
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                           |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------------- |
+| Pre-round normal preview | `950a4f01726f52ec2fb185305dc4dcf9baa7745d` |             1 |       1 | Passed; CLI transport-open retry classified above |
+| Round-6 marathon 1       | `443d7a49a6da759842248ce8b284c820db2a41ab` |          0/25 |       0 | Functional pass; rejected at 312s                 |
+
+The first round-6 marathon was [Depot run
+`2b0d59sw92`](https://depot.dev/orgs/0p91s0lz49/workflows/2b0d59sw92).
+Every test passed without retry, but the proof correctly stopped because the
+deploy-plus-test critical path took 312 seconds: 123.9 seconds deploying, then
+188.4 seconds testing. OS Vitest was the test pole at 181.8 seconds.
+
+Schema-v2 module timing showed why. The seven-worker cap made the final
+33.7-second `itx-egress.e2e.test.ts` file wait 147.6 seconds before it could
+start. The 48 OS module executions contained 1,112.7 seconds of remote work;
+even perfect seven-worker scheduling has a 159.0-second lower bound. These
+files create isolated projects and spend nearly all their time awaiting remote
+operations, so CI now gives every file a worker immediately. The in-file limit
+of two remains for the few cases that deliberately share a bounded project
+pool. The next marathon measures whether the deployed platform has a real
+capacity limit instead of encoding an assumed one in the local scheduler.
 
 ## Round 5 (2026-07-21)
 
