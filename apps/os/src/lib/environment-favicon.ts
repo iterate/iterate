@@ -11,7 +11,7 @@ type EnvironmentFaviconInput = {
 
 /**
  * Production deliberately returns the existing logo asset byte-for-byte.
- * Preview and dev keep the white Iterate mark, with a small environment badge
+ * Preview and dev keep the white iterate mark, with a small environment badge
  * in the free lower-right corner so crowded browser tabs remain distinguishable.
  */
 export function environmentFaviconHref(input: EnvironmentFaviconInput) {

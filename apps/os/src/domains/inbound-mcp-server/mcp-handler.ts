@@ -261,7 +261,7 @@ async function resolveMcpAuth(input: {
   const mcpAudiences = oauthResourceAudienceVariants(canonicalMcpResourceUrl(input));
   const auth = createMcpIterateAuth(input, mcpAudiences);
   if (!auth) {
-    return new Response("Iterate auth is not configured.", {
+    return new Response("iterate auth is not configured.", {
       status: 503,
       headers: mcpCorsHeaders,
     });
@@ -314,7 +314,7 @@ async function resolveMcpAuth(input: {
   };
 }
 
-// Iterate Auth issues a JWT access token only when the client requests an RFC
+// iterate Auth issues a JWT access token only when the client requests an RFC
 // 8707 `resource` (audience); clients that omit it — Grok's connector, generic
 // MCP clients — get an OPAQUE token instead. The JWT verifier can't read those,
 // so fall back to auth's private RPC introspection method, which validates the

@@ -455,7 +455,7 @@ function ProjectIntegrationsContent() {
         <div className="space-y-1">
           <h2 className="text-base font-medium">Built-in Integrations</h2>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Iterate-managed capabilities are available without creating a connection. Keys stay
+            iterate-managed capabilities are available without creating a connection. Keys stay
             server-side and usage is charged to this project.
           </p>
         </div>

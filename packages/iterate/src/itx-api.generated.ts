@@ -182,7 +182,7 @@ export interface Project {
   mcp: McpClientCollection;
   /** Ad-hoc OpenAPI clients: connect(spec). */
   openapi: OpenApiCollection;
-  /** Parallel API, preconfigured with Iterate's platform API key. */
+  /** Parallel API, preconfigured with iterate's platform API key. */
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
@@ -779,7 +779,7 @@ export interface ProjectIntegrations {
   telegram: IntegrationFamily<TelegramConnection>;
   /** Waitrose account connections. */
   waitrose: IntegrationFamily<WaitroseConnection>;
-  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   parallel: OpenApiRpc;
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
    * Transformations. Like `parallel`, these ride the deployment's own
@@ -2564,7 +2564,7 @@ export type GmailConnection = {
   }>;
 };
 
-/** The normal all-in-one Octokit package with Iterate supplying GitHub App
+/** The normal all-in-one Octokit package with iterate supplying GitHub App
  * installation auth and transport. Both REST and GraphQL are available. */
 export type GithubConnection = { octokit: import("octokit").Octokit };
 
@@ -2581,7 +2581,7 @@ export type TelegramConnection = {
   sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;
 };
 
-/** Iterate's small, connection-scoped Waitrose client. */
+/** iterate's small, connection-scoped Waitrose client. */
 export type WaitroseConnection = {
   addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;
   removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;

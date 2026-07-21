@@ -112,7 +112,7 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   await page.goto(internalUrl);
   // A named app's first use may still need its own cold worker start. The
   // platform's building page is visible progress; 120s matches hello above.
-  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 120_000 });
+  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 120_000 });
   await page.getByText("This app is available to project members.").waitFor();
   const signInResponse = await signInResponsePromise;
   const overlay = page.locator("iterate-worker-status[data-iterate-worker-overlay]");
@@ -171,7 +171,7 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   // the internal app did. After auth, worker-bundler transforms the
   // package-backed server and compiles the browser entry.
   await page.goto(appUrl("todo", slug, baseURL!));
-  await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 60_000 });
+  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 60_000 });
   await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 });
   // The cross-origin callback briefly has neither this heading nor a loading
   // marker. Preserve the real cold-build deadline instead of letting

@@ -165,7 +165,7 @@ function normalizeProjectCustomDomainInput(input: {
     throw new Error("Enter a valid DNS hostname, such as garple.com.");
   }
   if (isReservedProjectHostname(hostname, input.projectHostnameBases)) {
-    throw new Error(`"${hostname}" is reserved for Iterate project hostnames.`);
+    throw new Error(`"${hostname}" is reserved for iterate project hostnames.`);
   }
   return hostname;
 }
@@ -209,7 +209,7 @@ function CustomDomainRow({
           <p className="truncate font-medium">{domain.hostname}</p>
           <p className="text-xs text-muted-foreground">
             {direct
-              ? "Served directly by Iterate — no DNS setup required"
+              ? "Served directly by iterate — no DNS setup required"
               : `SSL ${domain.sslStatus ?? "unknown"} / hostname ${domain.hostnameStatus ?? "unknown"}`}
           </p>
         </div>
