@@ -238,8 +238,8 @@ export function StreamFeedView({
         {totalCount === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
-              {isPending ? <Spinner className="size-4" /> : null}
-              <EmptyTitle>{isPending ? pendingLabel : "Nothing here yet"}</EmptyTitle>
+              <Spinner className="size-4" />
+              <EmptyTitle>{isPending ? pendingLabel : "Waiting for events…"}</EmptyTitle>
               {isPending ? null : (
                 <EmptyDescription>
                   {filtersNarrow ? "No feed items match the current filters." : emptyLabel}

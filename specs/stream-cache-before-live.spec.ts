@@ -3,7 +3,7 @@ import { spinnerWaiter } from "middlewright";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
-test("a new agent stream stays initializing while its connection opens", async ({
+test("an empty agent feed waits for matching events after subscribing", async ({
   baseURL,
   helpers,
   page,
@@ -11,28 +11,33 @@ test("a new agent stream stays initializing while its connection opens", async (
   await using fixture = await helpers.createFixture("agent-initializing");
   using admin = await connectAdminItx(baseURL!);
   using project = admin.projects.get(fixture.project.id);
-  const agentPath = `/agents/initializing-${crypto.randomUUID().slice(0, 8)}`;
-  await project.agents.get(agentPath).create();
+  const agentPath = `/agents/waiting-${crypto.randomUUID().slice(0, 8)}`;
+  using agent = project.agents.get(agentPath);
 
-  let restoreConnections = false;
-  const stalledSockets: WebSocketRoute[] = [];
-  await page.routeWebSocket(
-    (url) => url.pathname === "/api",
-    (socket) => {
-      if (restoreConnections) socket.connectToServer();
-      else stalledSockets.push(socket);
-    },
-  );
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     await page.goto(`/projects/${fixture.project.slug}/agents/streams${agentPath}`);
-    await page.getByText("Initializing agent", { exact: true }).waitFor({ timeout: 5_000 });
-    await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
-    await expect.poll(() => stalledSockets.length).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        page.evaluate((key) => {
+          const read = (
+            window as {
+              __streamRuntimeDebug?: () => Record<string, unknown>;
+            }
+          ).__streamRuntimeDebug;
+          const entry = read?.()[key] as { connectionStatus?: string } | undefined;
+          return entry?.connectionStatus;
+        }, `${fixture.project.id} ${agentPath} browser-stream-mirror`),
+      )
+      .toBe("subscribed");
 
-    restoreConnections = true;
-    await Promise.all(stalledSockets.map((socket) => socket.close({ code: 1012 })));
+    await page.getByText("Waiting for events…", { exact: true }).waitFor({ timeout: 5_000 });
+    await page.getByText("Nothing here yet").waitFor({ state: "hidden" });
+
+    await agent.create();
+    await agent.chat.sendMessage("The agent is ready.");
+    await page.getByText("The agent is ready.", { exact: true }).waitFor({ timeout: 30_000 });
     await page
-      .getByText("Initializing agent", { exact: true })
+      .getByText("Waiting for events…", { exact: true })
       .waitFor({ state: "hidden", timeout: 30_000 });
   });
 });
