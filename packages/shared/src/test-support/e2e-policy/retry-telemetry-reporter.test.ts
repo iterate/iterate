@@ -12,6 +12,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("records module timing when Vitest omits the queued callback", () => {
+  const reporter = new RetryTelemetryReporter();
+  const testModule = {
+    moduleId: "/repo/single-file.e2e.test.ts",
+    children: { allTests: () => [] },
+  };
+
+  expect(() => {
+    reporter.onTestModuleStart(testModule);
+    reporter.onTestModuleEnd(testModule);
+  }).not.toThrow();
+});
+
 it("records the first failed attempt when a retry passes", () => {
   const file = join(tmpdir(), `retry-telemetry-${process.pid}-${Date.now()}.json`);
   process.env.E2E_RETRY_TELEMETRY_FILE = file;

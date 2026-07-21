@@ -110,15 +110,15 @@ export class RetryTelemetryReporter {
   }
 
   onTestModuleCollected(testModule: ReportedTestModule): void {
-    this.moduleTimes.get(testModule)!.collectedAtMs = Date.now();
+    this.moduleTime(testModule).collectedAtMs = Date.now();
   }
 
   onTestModuleStart(testModule: ReportedTestModule): void {
-    this.moduleTimes.get(testModule)!.startedAtMs = Date.now();
+    this.moduleTime(testModule).startedAtMs = Date.now();
   }
 
   onTestModuleEnd(testModule: ReportedTestModule): void {
-    this.moduleTimes.get(testModule)!.finishedAtMs = Date.now();
+    this.moduleTime(testModule).finishedAtMs = Date.now();
   }
 
   onHookStart(hook: ReportedHookContext): void {
@@ -231,6 +231,19 @@ export class RetryTelemetryReporter {
     } catch (error) {
       console.error("[retry-telemetry] failed to record test telemetry:", error);
     }
+  }
+
+  private moduleTime(testModule: object) {
+    const existing = this.moduleTimes.get(testModule);
+    if (existing) return existing;
+    const created: {
+      queuedAtMs?: number;
+      collectedAtMs?: number;
+      startedAtMs?: number;
+      finishedAtMs?: number;
+    } = {};
+    this.moduleTimes.set(testModule, created);
+    return created;
   }
 }
 
