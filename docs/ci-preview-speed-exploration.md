@@ -81,6 +81,29 @@ version readiness. This exploration adds first-class PostHog run, lane, and
 phase events for configuration, command, readiness, and reuse proof while
 preserving the aggregate duration.
 
+The first instrumented all-app run on the already-leased `preview-6`, Depot
+job [`262mkptj04`](https://depot.dev/orgs/0p91s0lz49/workflows/dp39260qtj?job=262mkptj04),
+passed in 4m38s. PostHog received the following ledger for head `a311b1e`:
+
+| App             | Config | Command | Readiness | Reuse proof |   Total |
+| --------------- | -----: | ------: | --------: | ----------: | ------: |
+| OS              |  0.31s |  46.43s |    55.48s |           - | 102.22s |
+| Streams example |  0.33s |  13.10s |    94.16s |           - | 107.59s |
+| Auth            |  0.00s |  15.88s |     0.31s |           - |  16.19s |
+| Semaphore       |  0.00s |  12.50s |     0.19s |           - |  12.70s |
+| Dummy Petshop   |  0.00s |       - |         - |       0.23s |   0.25s |
+
+The deploy run itself was 111.61s. OS e2e was 149.7s (69s Vitest, 143s
+Playwright), Streams 61.8s, Semaphore 22.8s, Auth 12.1s, and Dummy Petshop
+5.7s. All apps and tests passed without a code-update reset. This is a warm
+slot timing sample, not evidence that the fresh-slot correctness failure is
+resolved.
+
+Before the preview command, the standard runner spent 4.8s in dependency and
+Doppler installation and 10.0s from job start to starting that command. That
+is small beside Cloudflare readiness, but isolated enough for an inexpensive
+baked-image A/B test.
+
 ### Fresh-slot correctness baseline
 
 Depot run [`jfq7cp9kfk`](https://depot.dev/orgs/0p91s0lz49/workflows/p5bl4dpj76?job=qr4sf7mn3h&attempt=hld2q92zdj)
@@ -104,6 +127,18 @@ gate is rejected, but making it still broader cannot provide a finite proof
 over arbitrary identities. The architecture experiments must therefore avoid
 replacing live stateful namespaces on the common path, or the operation layer
 must explicitly make restart recovery atomic and idempotent.
+
+There is a second, sharper limit: the ten waves make 250 observations over 241
+distinct identities and the complete-set revalidation repeats those same
+identities, for 500 green RPCs, but `deploymentVersion()` only reads Worker
+metadata. It performs no Durable Object storage operation. Cloudflare's
+documented update behavior permits a superseded isolate to finish non-storage
+work and then throw `Durable Object reset because its code was updated` on its
+first storage access. The gate therefore proves that sampled DO code answered,
+not that those objects crossed the storage/global-uniqueness handoff. A
+storage-fenced probe (`ctx.storage.get` before returning the version) is a
+useful diagnostic experiment, but remains a bounded sample rather than a
+global proof.
 
 ## Hypotheses and experiments
 
@@ -187,6 +222,7 @@ the exploration is active.
 | 2026-07-21 21:53 | Already current at `767baafc3`.            | No additional changes.                                                                                   |
 | 2026-07-21 22:02 | Already current at `767baafc3`.            | No additional changes.                                                                                   |
 | 2026-07-21 22:08 | Merged `23d0ae822` from `origin/main`.     | PR #2234 enlarged preview favicon markers; no pipeline speedup.                                          |
+| 2026-07-21 22:12 | Already current at `23d0ae822`.            | No additional changes.                                                                                   |
 
 ## Decision log
 
@@ -207,4 +243,5 @@ the exploration is active.
 | 2026-07-21 | Merge latest `main` during exploration.      | Inherited a 57% OS Vitest improvement and unified telemetry before duplicating that work.                                           | Continue the 10-minute merge cadence.                                                                      |
 | 2026-07-21 | Query seven days of preview phase telemetry. | OS deploy p50/p90 is 143.6s/183.7s; non-OS deploys are at most 16.2s p50. OS tests are independently 165.9s p50.                    | Treat deployment and test execution as separate workstreams.                                               |
 | 2026-07-21 | Restore and split deployment telemetry.      | Added deploy run/lane events plus config, command, readiness, and reuse-proof phase events.                                         | Use the next preview run as the attributable baseline.                                                     |
+| 2026-07-21 | Instrumented warm-slot all-app baseline.     | 4m38s green; deploy run 111.61s. OS was 46.43s command + 55.48s readiness; Streams was 13.10s command + 94.16s readiness.           | Cloudflare readiness, not local setup, dominates; preserve this head as the control for later comparisons. |
 | 2026-07-21 | Fresh-slot all-app baseline on `preview-6`.  | The readiness gate passed, then real OS Durable Objects emitted 23 code-update resets and one test failed after a non-atomic retry. | Treat the current gate as a finite sample, not global convergence; prioritize immutable/state-host splits. |

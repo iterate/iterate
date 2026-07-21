@@ -10,6 +10,12 @@ type WorkflowJob = {
     image?: string;
     size?: string;
   };
+  steps?: Array<{
+    name?: string;
+    run?: string;
+    uses?: string;
+    with?: Record<string, unknown>;
+  }>;
   "timeout-minutes"?: number;
 };
 
@@ -120,6 +126,25 @@ describe("Depot deployment safety", () => {
 });
 
 describe("Depot validation capacity", () => {
+  it("starts preview deploy/e2e from the baked workspace", () => {
+    const workflow = loadWorkflow(".depot/workflows/cloudflare-previews.yml");
+    const job = workflow.jobs.preview;
+
+    expect(job["runs-on"]).toEqual({
+      size: "16x64",
+      image: "0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree",
+    });
+
+    const checkout = job.steps?.find((step) => step.uses === "actions/checkout@v4");
+    expect(checkout?.with).toMatchObject({ clean: false });
+
+    const reconcile = job.steps?.find((step) => step.name === "Reconcile dependencies (baked)");
+    expect(reconcile?.run).toBe("pnpm install --frozen-lockfile --prefer-offline");
+    expect(job.steps?.map((step) => step.name)).not.toEqual(
+      expect.arrayContaining(["Setup pnpm", "Setup Node", "Install Doppler CLI"]),
+    );
+  });
+
   it("runs every workspace test script, including the iterate CLI", () => {
     const packageJson = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as {
       scripts: { test: string };

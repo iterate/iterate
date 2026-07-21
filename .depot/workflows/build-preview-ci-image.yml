@@ -2,11 +2,11 @@ name: Build Preview CI Image
 
 on:
   schedule:
-    # Weekly (Mondays 04:17 UTC). Mainline checks and production deploys use
-    # this snapshot; preview deploy/e2e uses Depot's standard runners. The
-    # reconcile step in each consumer validates the baked workspace against
-    # the checked-out lockfile, so weekly baking keeps startup fast without a
-    # daily image build. See docs/depot-ci.md.
+    # Weekly (Mondays 04:17 UTC). Mainline checks, production deploys, and
+    # preview deploy/e2e use this snapshot. The reconcile step in each consumer
+    # validates the baked workspace against the checked-out lockfile, so weekly
+    # baking keeps startup fast without a daily image build. See
+    # docs/depot-ci.md.
     - cron: "17 4 * * 1"
   workflow_dispatch: {}
 

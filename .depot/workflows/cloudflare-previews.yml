@@ -86,9 +86,12 @@ jobs:
       (github.event.action != 'labeled' || github.event.label.name == 'preview') &&
         (github.event.action != 'unlabeled' || github.event.label.name == 'preview')
     name: Preview / deploy + e2e
-    # The overlapping test pools peaked below ten cores on the 32-core runner;
-    # use the supported 16-core shape and keep allocation out of the long tail.
-    runs-on: depot-ubuntu-24.04-16
+    # The overlapping test pools peaked below ten cores. Keep the 16-core
+    # shape, but start from the same baked workspace used by mainline checks
+    # and production deploys so setup does not redownload the toolchain.
+    runs-on:
+      size: 16x64
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     # Hard backstop on one attempt. Each parallel sub-lane retains its own
     # tighter watchdog; this outer bound catches setup, deploy, and reporting
     # runaways while leaving enough time to preserve failure artifacts.
@@ -100,6 +103,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          clean: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       # Permanent breaking-change floor: an old branch would deploy Auth first,
       # then fail or deploy an OS revision that cannot call the default RPC
@@ -114,19 +118,8 @@ jobs:
             echo "This branch predates preview deployment epoch $expected. Rebase onto main before deploying." >&2
             exit 1
           fi
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
       # ONE step for deploy + e2e: `preview run` shares a single resolved PR
       # head between the two phases, so a push can no longer race into a gap
       # between separate deploy and test steps (that gap used to need a whole

@@ -274,9 +274,11 @@ The baked image is built by `.depot/workflows/build-preview-ci-image.yml` using
 `scripts/depot-ci/bake-preview-ci-image.sh`.
 
 It contains Node, pnpm, workspace dependencies, Doppler CLI, and the preview
-browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`, or
-`8x32` from measured workload demand. Jobs that consume it must keep the image
-and checkout behavior:
+browser. A snapshot is independent of sandbox size: choose `2x8`, `4x16`,
+`8x32`, or `16x64` from measured workload demand. Preview deploy/e2e retains
+`16x64` for its overlapping browser and Vitest pools; its first experiment
+with the image measures startup independently from Cloudflare convergence.
+Jobs that consume it must keep the image and checkout behavior:
 
 ```yaml
 runs-on:
