@@ -1294,11 +1294,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
-      "import {\n" +
-      "  IterateWorkerEntrypoint,\n" +
-      "  type StatefulDynamicWorkerRef,\n" +
-      "  type StreamEvent,\n" +
-      "} from \"iterate/sdk\";\n" +
+      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
       "import {\n" +
       "  githubConnectionStreamPath,\n" +
@@ -1314,24 +1310,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "//\n" +
       "// Hence, the essence of an iterate project can be expressed as two functions:\n" +
       "// { fetch, processEvent }\n" +
-      "\n" +
-      "const repoFiles = { type: \"repo\", repoPath: \"/repos/config\" } as const;\n" +
-      "\n" +
-      "/** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */\n" +
-      "export const todoAppRef = {\n" +
-      "  className: \"TodoApp\",\n" +
-      "  // \"-live\" keeps clear of a retired predecessor's durable identity.\n" +
-      "  durableWorkerKey: \"app-todo-live\",\n" +
-      "  path: \"/\",\n" +
-      "  source: {\n" +
-      "    createApp: {\n" +
-      "      client: \"apps/todo/client.tsx\",\n" +
-      "      files: repoFiles,\n" +
-      "      server: \"apps/todo/server.tsx\",\n" +
-      "    },\n" +
-      "  },\n" +
-      "  type: \"stateful\",\n" +
-      "} satisfies StatefulDynamicWorkerRef;\n" +
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
@@ -1368,7 +1346,20 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
-      "      return this.fetchDynamicWorker(req, todoAppRef);\n" +
+      "      return this.fetchDynamicWorker(req, {\n" +
+      "        type: \"stateful\",\n" +
+      "        className: \"TodoApp\",\n" +
+      "        // \"-live\" keeps clear of a retired predecessor's durable identity.\n" +
+      "        durableWorkerKey: \"app-todo-live\",\n" +
+      "        path: \"/\",\n" +
+      "        source: {\n" +
+      "          createApp: {\n" +
+      "            client: \"apps/todo/client.tsx\",\n" +
+      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
+      "            server: \"apps/todo/server.tsx\",\n" +
+      "          },\n" +
+      "        },\n" +
+      "      });\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
       "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +

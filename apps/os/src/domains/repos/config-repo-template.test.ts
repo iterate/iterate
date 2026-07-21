@@ -6,7 +6,6 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
-import { todoAppRef } from "../../../config-repo-template/worker.ts";
 import {
   guestbookAppRef,
   guestbookCreationEvents,
@@ -20,7 +19,6 @@ import {
   reviewBotSubscriptionEvents,
 } from "../../../config-repo-template/apps/review-bot/src/review-bot-ref.ts";
 import { ReviewBotProcessorContract } from "../../../config-repo-template/apps/review-bot/src/review-bot.ts";
-import { TodoApp } from "../../../config-repo-template/apps/todo/server.tsx";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
@@ -75,10 +73,9 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
 });
 
 test("browser pairs stay two-file createApp apps behind the thin router", () => {
-  expect(todoAppRef.source.createApp).toMatchObject({
-    client: "apps/todo/client.tsx",
-    server: "apps/todo/server.tsx",
-  });
+  // The todo ref is inlined in worker.ts (one consumer); its rename risk is
+  // covered live by the seeded-apps spec. The guestbook ref is shared with
+  // its wake subscription, so it stays assertable.
   expect(guestbookAppRef.source.createApp).toMatchObject({
     client: "apps/guestbook/client.tsx",
     server: "apps/guestbook/server.tsx",
@@ -111,7 +108,6 @@ test("modular createWorker refs point at apps/ entrypoints, not the root worker 
   expect(reviewBotAppRef("install-789").source.createWorker.entryPoint).toBe(
     "apps/review-bot/src/review-bot-app.ts",
   );
-  expect("createApp" in todoAppRef.source).toBe(true);
   expect("createApp" in guestbookAppRef.source).toBe(true);
 });
 
@@ -122,7 +118,6 @@ test("app modules load and export the classes their refs name", () => {
   // exports — a rename can never strand a persisted ref or wake expression
   // pointing at a class the build no longer exports.
   expect(reviewBotAppRef("install-789").className).toBe(ReviewBotApp.name);
-  expect(todoAppRef.className).toBe(TodoApp.name);
   expect(guestbookAppRef.className).toBe(GuestbookApp.name);
 });
 

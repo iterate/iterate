@@ -1,8 +1,4 @@
-import {
-  IterateWorkerEntrypoint,
-  type StatefulDynamicWorkerRef,
-  type StreamEvent,
-} from "iterate/sdk";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 import {
   githubConnectionStreamPath,
@@ -18,24 +14,6 @@ import {
 //
 // Hence, the essence of an iterate project can be expressed as two functions:
 // { fetch, processEvent }
-
-const repoFiles = { type: "repo", repoPath: "/repos/config" } as const;
-
-/** LiveState + Cap'n Web todos in a SQLite Durable Object (`apps/todo`). */
-export const todoAppRef = {
-  className: "TodoApp",
-  // "-live" keeps clear of a retired predecessor's durable identity.
-  durableWorkerKey: "app-todo-live",
-  path: "/",
-  source: {
-    createApp: {
-      client: "apps/todo/client.tsx",
-      files: repoFiles,
-      server: "apps/todo/server.tsx",
-    },
-  },
-  type: "stateful",
-} satisfies StatefulDynamicWorkerRef;
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
   // The base class delivers committed events on ANY stream here at least once and in
@@ -72,7 +50,20 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      return this.fetchDynamicWorker(req, todoAppRef);
+      return this.fetchDynamicWorker(req, {
+        type: "stateful",
+        className: "TodoApp",
+        // "-live" keeps clear of a retired predecessor's durable identity.
+        durableWorkerKey: "app-todo-live",
+        path: "/",
+        source: {
+          createApp: {
+            client: "apps/todo/client.tsx",
+            files: { type: "repo", repoPath: "/repos/config" },
+            server: "apps/todo/server.tsx",
+          },
+        },
+      });
     }
     if (app === "guestbook") {
       return this.fetchDynamicWorker(req, guestbookAppRef);
