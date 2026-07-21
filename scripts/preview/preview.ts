@@ -351,6 +351,7 @@ async function deployPreviewApps({
       async (app) => {
         return await deployPreviewAppWithStatus({
           app,
+          existingEntry: current.state.apps[app.slug] ?? null,
           commandEnvironment: {
             ...runtime.commandEnvironment,
             // apps/os/scripts/deploy.ts turns this into
@@ -1366,6 +1367,14 @@ export type CloudflarePreviewApp = {
     projectHostnameBases?: string[];
   };
   paths: string[];
+  /**
+   * Skip this app's deploy when the slot already serves an identical build: a
+   * prior recorded "deployed" entry whose publicUrl matches this slot and
+   * whose fingerprint (git object ids of these paths at HEAD) is unchanged.
+   * For fixture apps that almost never change (dummy-petshop) — the app's
+   * e2e smoke still runs against the existing worker.
+   */
+  contentFingerprintPaths?: string[];
   /** Apps co-selected so this app deploys and tests against one coherent head. */
   previewDependencies?: CloudflarePreviewAppSlug[];
   /**
@@ -1905,6 +1914,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       return { baseUrl: env.baseUrl };
     },
     paths: ["apps/dummy-petshop/**"],
+    // The fixture's content barely ever changes; envs.ts rides along because
+    // it decides the generated wrangler routes.
+    contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e"],
@@ -2007,6 +2019,8 @@ export const CloudflarePreviewAppEntry = z.object({
   workerSizeKib: z.number().nonnegative().finite().nullable().optional(),
   /** Wrangler-reported gzip size of the deployed worker, in KiB. */
   workerGzipKib: z.number().nonnegative().finite().nullable().optional(),
+  /** Content fingerprint of the deployed sources (contentFingerprintPaths). */
+  deployedFingerprint: z.string().trim().min(1).nullable().optional(),
   /**
    * Main's deployed gzip size in KiB at deploy time, read from the
    * `worker-size/<app>` commit status main deploys publish — the baseline for
@@ -3501,10 +3515,29 @@ async function releaseLeaseDespiteTeardownFailure(input: {
   }
 }
 
+/** Git object ids of the app's fingerprint paths at HEAD — content-addressed,
+ * so an unchanged fixture app can skip its deploy entirely. */
+function previewAppContentFingerprint(
+  app: PreviewAppRuntime,
+  repositoryRoot: string,
+): string | null {
+  if (!app.contentFingerprintPaths?.length) return null;
+  return execFileSync(
+    "git",
+    ["rev-parse", ...app.contentFingerprintPaths.map((path) => `HEAD:${path}`)],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  )
+    .trim()
+    .split("\n")
+    .join("+");
+}
+
 async function deployPreviewAppWithStatus(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  /** This app's entry from the PR's recorded state, for the unchanged-skip. */
+  existingEntry: CloudflarePreviewAppEntry | null;
   /** Main's published size baseline for this app, when one exists. */
   mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
@@ -3552,6 +3585,7 @@ async function deployPreviewApp(input: {
   app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
+  existingEntry: CloudflarePreviewAppEntry | null;
   mainWorkerSize: WorkerSizeInfo | null;
   pullRequestHeadSha: string;
   repositoryRoot: string;
@@ -3574,6 +3608,29 @@ async function deployPreviewApp(input: {
     shortSha: input.pullRequestHeadSha.slice(0, 7),
     updatedAt: new Date().toISOString(),
   } as const;
+
+  const fingerprint = previewAppContentFingerprint(input.app, input.repositoryRoot);
+  if (
+    fingerprint !== null &&
+    input.existingEntry?.status === "deployed" &&
+    input.existingEntry.publicUrl === appConfig.baseUrl &&
+    input.existingEntry.deployedFingerprint === fingerprint
+  ) {
+    // Same slot, same content, last run fully green: the worker already
+    // serving is byte-identical to what this deploy would upload. Skip the
+    // wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
+    logPreview(
+      `deploy skipped: ${input.app.slug} unchanged since ${input.existingEntry.shortSha ?? "the recorded deploy"} on this slot (fingerprint ${fingerprint.slice(0, 12)}…)`,
+    );
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      deployedFingerprint: fingerprint,
+      workerSizeKib: input.existingEntry.workerSizeKib ?? null,
+      workerGzipKib: input.existingEntry.workerGzipKib ?? null,
+      mainWorkerGzipKib: input.existingEntry.mainWorkerGzipKib ?? null,
+      status: "awaiting-tests",
+    });
+  }
 
   const deployResult = await runPreviewDeployCommand({
     app: input.app,
@@ -3641,6 +3698,7 @@ async function deployPreviewApp(input: {
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
     ...sizeFields,
+    deployedFingerprint: fingerprint,
     status: "awaiting-tests",
   });
 }
