@@ -39,7 +39,7 @@ test("a failed conditional clear keeps both failures observable", async () => {
   });
 });
 
-test("push egress rejects a Secret revision newer than the journaled device attempt", () => {
+test("push egress rejects a Secret revision newer than the stream-recorded device attempt", () => {
   expect(() => assertPushTokenSecretRevision(12, 11)).toThrow(
     "secret changed before the guarded fetch began",
   );

@@ -1,16 +1,15 @@
 import { createPrivateKey, createSign, generateKeyPairSync } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { z } from "zod";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import {
   buildApprovalMessage,
   bytesToBase64,
   canonicalJson,
   derSignatureToRaw,
-  EgressRule,
   evaluateGrant,
   matchEgressRule,
   verifyApprovalSignature,
+  type EgressRule,
   type HumanApprovalKey,
 } from "./egress-approvals.ts";
 
@@ -80,23 +79,27 @@ describe("matchEgressRule", () => {
     expect(matchEgressRule([rule({ ruleKey: "all" })], request())?.ruleKey).toBe("all");
   });
 
-  test("a rule that omits approvalTimeoutMs folds to a finite default, never NaN", () => {
+  test("a rule that omits approvalTimeoutMs reduces to a finite default, never NaN", () => {
     // The egress door computes `deadline = Date.now() + rule.approvalTimeoutMs`.
-    // A rule reaches project state only through the reduce (which parses the
-    // event payload with `z.array(EgressRule)`) or checkpoint hydration (which
-    // re-parses the whole fold through the contract's stateSchema — the same
-    // `z.array(EgressRule)`). Both apply `.default(600_000)`, so a missing
-    // timeout is always filled. Were it ever left undefined the deadline would
-    // be NaN: the held fetch would hang forever and the post-deadline sweep
-    // would page resolution events without end.
+    // A rule reaches project state only through reduce (which parses the
+    // egress-rules-configured payload through the contract) or checkpoint
+    // hydration (which re-parses the whole reduced state through the
+    // contract's stateSchema — the same rule schema). Both apply
+    // `.default(600_000)`, so a missing timeout is always filled. Were it
+    // ever left undefined the deadline would be NaN: the held fetch would
+    // hang forever and the post-deadline sweep would page resolution events
+    // without end.
     const timeoutless = {
       ruleKey: "stripe-writes",
       verdict: "hold" as const,
       match: { hosts: ["api.stripe.com"] },
     };
 
-    // Reduce gate: the per-rule parse the event payloadSchema runs.
-    expect(z.array(EgressRule).parse([timeoutless])[0].approvalTimeoutMs).toBe(600_000);
+    // Reduce gate: the parse the event payloadSchema runs.
+    const parsed = ProjectProcessorContract.events[
+      "events.iterate.com/project/egress-rules-configured"
+    ].payloadSchema.parse({ rules: [timeoutless] });
+    expect(parsed.rules[0]!.approvalTimeoutMs).toBe(600_000);
 
     // Checkpoint-hydration gate: the state schema re-parses the fold on load.
     const state = ProjectProcessorContract.stateSchema.parse({ egressRules: [timeoutless] });

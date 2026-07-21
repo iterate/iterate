@@ -44,7 +44,7 @@ export function onboardingAgentStartupEvents(): AgentEventInput[] {
 
 type OnboardingAgentHandle = {
   append(...events: AgentEventInput[]): Promise<StreamEvent[]>;
-  create(): Promise<void>;
+  create(): Promise<unknown>;
 };
 
 /** Ensure generic birth, then idempotently install the onboarding startup facts. */

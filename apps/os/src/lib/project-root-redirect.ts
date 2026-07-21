@@ -1,4 +1,5 @@
 import type { ProjectDeploymentStatus } from "../project-deployment-status.ts";
+import type { ProjectRpcTarget } from "../rpc-targets.ts";
 
 export type RootRedirectProject = {
   id: string;
@@ -39,4 +40,16 @@ export function chooseRootProjectRedirect(input: {
   }
 
   return { kind: "projects" };
+}
+
+/**
+ * Commit a missing project's birth before the root SSR redirect, without
+ * waiting for the bootstrap saga's `project/ready` event. The onboarding page
+ * renders that remaining progress from live state.
+ */
+export async function createMissingRootRedirectProject(
+  project: Pick<ProjectRpcTarget, "create">,
+  args: Parameters<ProjectRpcTarget["create"]>[0],
+): Promise<void> {
+  await project.create(args, { waitUntilReady: false });
 }

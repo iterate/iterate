@@ -48,7 +48,7 @@ function requireAdminApiSecret() {
 async function ensureProject(input: { baseUrl: URL; slug: string }) {
   using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
   try {
-    await itx.projects.create({ slug: input.slug });
+    await itx.projects.get(input.slug).create({});
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     const message = error instanceof Error ? error.message : String(error);

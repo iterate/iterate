@@ -216,7 +216,7 @@ The working recipe to browse OS as a minted identity:
 # 1. create a project via the operator path (admin API secret)
 (cd apps/os && doppler run --project os --config dev -- pnpm cli itx run \
   --base-url http://localhost:<port> \
-  --eval 'return await itx.projects.create({ slug: "my-proj" }).__describe()' # note the returned projectId
+  --eval 'const project = await itx.projects.get("my-proj").create({}); return await project.__describe()' # note the returned projectId
 )
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —

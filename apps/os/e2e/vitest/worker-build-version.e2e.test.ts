@@ -12,9 +12,9 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test("a dynamic worker's env carries its content-addressed build version", async () => {
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({
-    slug: `worker-version-${crypto.randomUUID().slice(0, 8)}`,
-  });
+  using project = await itx.projects
+    .get(`worker-version-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   await project.projectId;
 
   const probeRef = (marker: string): DynamicWorkerRef => ({

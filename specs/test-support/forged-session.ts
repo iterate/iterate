@@ -135,7 +135,9 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,
   });
-  using created = session.projects.create({ projectId: freshTestProjectId(), slug: input.slug });
+  using created = await session.projects
+    .get(input.slug)
+    .create({ projectId: freshTestProjectId() });
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 

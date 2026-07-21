@@ -22,7 +22,7 @@
 
 import { routeIntegrationWebhook } from "./integration-streams.ts";
 import { verifySlackSignature } from "./slack-signature.ts";
-import { parseJsonRecord, readString, SLACK_WEBHOOK_RECEIVED_EVENT_TYPE } from "./utils.ts";
+import { parseJsonRecord, readString } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH = "/api/integrations/slack/webhook";
@@ -74,7 +74,7 @@ export async function fetchSlackWebhook(input: {
         },
         slackTeamId: teamId,
       },
-      type: SLACK_WEBHOOK_RECEIVED_EVENT_TYPE,
+      type: "events.iterate.com/slack/webhook-received",
     },
     externalId: teamId,
     routerCreatedEventType: "events.iterate.com/slack/created",

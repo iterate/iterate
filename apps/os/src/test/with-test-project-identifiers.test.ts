@@ -5,26 +5,28 @@ import {
 } from "../../e2e/test-support/with-test-project-identifiers.ts";
 
 function createSession() {
-  const create = vi.fn((input: { projectId?: string; slug: string }) => input);
+  const create = vi.fn((input: { projectId?: string }) => input);
+  const project = { create, [Symbol.dispose]: vi.fn() };
+  const get = vi.fn((_slug: string) => project);
   const session = {
     dup: vi.fn(),
-    projects: { create },
+    projects: { get },
     [Symbol.dispose]: vi.fn(),
   };
   session.dup.mockReturnValue(session);
-  return { create, session };
+  return { create, get, project, session };
 }
 
 describe("withTestProjectIdentifiers", () => {
   test("gives every project create a collision-resistant caller-owned id", () => {
-    const { create, session } = createSession();
+    const { create, get, session } = createSession();
     const wrapped = withTestProjectIdentifiers(session);
 
-    wrapped.projects.create({ slug: "parallel-e2e" });
+    wrapped.projects.get("parallel-e2e").create({});
 
+    expect(get).toHaveBeenCalledWith("parallel-e2e");
     expect(create).toHaveBeenCalledWith({
       projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
-      slug: "parallel-e2e",
     });
   });
 
@@ -32,11 +34,10 @@ describe("withTestProjectIdentifiers", () => {
     const { create, session } = createSession();
     const wrapped = withTestProjectIdentifiers(session);
 
-    wrapped.projects.create({ projectId: "prj_explicit", slug: "explicit" });
+    wrapped.projects.get("explicit").create({ projectId: "prj_explicit" });
 
     expect(create).toHaveBeenCalledWith({
       projectId: "prj_explicit",
-      slug: "explicit",
     });
   });
 
@@ -48,11 +49,10 @@ describe("withTestProjectIdentifiers", () => {
     };
 
     const authenticated = withTestProjectIdentifiers(root).authenticate({ type: "test" });
-    authenticated.projects.create({ slug: "authenticated" });
+    authenticated.projects.get("authenticated").create({});
 
     expect(create).toHaveBeenCalledWith({
       projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
-      slug: "authenticated",
     });
   });
 
@@ -60,12 +60,24 @@ describe("withTestProjectIdentifiers", () => {
     const { create, session } = createSession();
     const wrapped = withTestProjectIdentifiers(session);
 
-    wrapped.dup().projects.create({ slug: "duplicate" });
+    wrapped.dup().projects.get("duplicate").create({});
 
     expect(create).toHaveBeenCalledWith({
       projectId: expect.stringMatching(/^prj_[0-9a-f]{32}$/),
-      slug: "duplicate",
     });
+  });
+
+  test("disposes a prospective project handle with its original receiver", () => {
+    const { project, session } = createSession();
+    let disposeReceiver: unknown;
+    project[Symbol.dispose].mockImplementation(function (this: unknown) {
+      disposeReceiver = this;
+    });
+
+    withTestProjectIdentifiers(session).projects.get("disposable")[Symbol.dispose]();
+
+    expect(project[Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(disposeReceiver).toBe(project);
   });
 
   test("disposes the underlying session with its original receiver", () => {

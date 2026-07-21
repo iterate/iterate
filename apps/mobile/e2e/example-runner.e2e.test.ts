@@ -23,7 +23,7 @@ test("phone example runner: egress-rules-configured runs for real against a real
     secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
   });
   const slug = `mobile-examples-e2e-${Date.now().toString(36)}`;
-  const created = await adminSession.projects.create({ slug });
+  const created = await adminSession.projects.get(slug).create({});
   const { projectId } = await created.__describe();
 
   const token = await mintForgedAccessToken({

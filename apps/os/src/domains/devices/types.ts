@@ -27,7 +27,7 @@ type PublicDeviceEventType =
   | "events.iterate.com/device/notification-requested"
   | "events.iterate.com/device/notification-opened";
 
-/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */
+/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */
 export type DeviceAppendInput = Extract<
   ConsumedInput<DeviceProcessorContract>,
   { type: PublicDeviceEventType }

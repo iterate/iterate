@@ -22,13 +22,13 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test("an external client authenticates with the project-secret credential and gets exactly its project", async () => {
   using session = withItxSession();
   using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = admin.projects.create({
-    slug: `remote-ingress-${crypto.randomUUID().slice(0, 8)}`,
-  });
+  using project = await admin.projects
+    .get(`remote-ingress-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   const projectId = await project.projectId;
-  using other = admin.projects.create({
-    slug: `remote-ingress-other-${crypto.randomUUID().slice(0, 8)}`,
-  });
+  using other = await admin.projects
+    .get(`remote-ingress-other-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   const otherProjectId = await other.projectId;
 
   // The pairing ceremony: the born ingress secret has visibility
@@ -108,13 +108,13 @@ test.skipIf(!process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET?.trim())(
     const sessionSecret = process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET!.trim();
     using session = withItxSession();
     using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = admin.projects.create({
-      slug: `remote-session-${crypto.randomUUID().slice(0, 8)}`,
-    });
+    using project = await admin.projects
+      .get(`remote-session-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     const projectId = await project.projectId;
-    using other = admin.projects.create({
-      slug: `remote-session-other-${crypto.randomUUID().slice(0, 8)}`,
-    });
+    using other = await admin.projects
+      .get(`remote-session-other-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     const otherProjectId = await other.projectId;
 
     const sign = (claims: Record<string, unknown>, expiresInSeconds = 900) =>

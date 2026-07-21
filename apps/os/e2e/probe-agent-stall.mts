@@ -30,7 +30,7 @@ async function probeOne(tag: string): Promise<{ ok: boolean; ms: number; tag: st
   const slug = `stall-probe-${tag}-${Math.random().toString(36).slice(2, 7)}`;
   const { session, root } = connectAdmin();
   try {
-    using created = root.projects.create({ slug });
+    using created = await root.projects.get(slug).create({});
     const { projectId } = await created.__describe();
     const agentPath = "/agents/probe";
     using agent = connectItx({ agentPath, auth, baseUrl, projectId });

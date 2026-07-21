@@ -30,9 +30,9 @@ test("ephemeral live delivery originates zero subscriber-side frames", async () 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = publisherItx.projects.create({
-    slug: `wire-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
-  });
+  using project = await publisherItx.projects
+    .get(`wire-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
+    .create({});
   const { projectId } = await project.__describe();
 
   // Subscriber: a separate session with every decoded ws frame recorded.
@@ -91,9 +91,9 @@ test("warm ephemeral delivery latency: measure and bound append→delivered", as
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = publisherItx.projects.create({
-    slug: `wire-lat-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
-  });
+  using project = await publisherItx.projects
+    .get(`wire-lat-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
+    .create({});
   const { projectId } = await project.__describe();
 
   using subscriberProject = withItxSession({

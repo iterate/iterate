@@ -22,7 +22,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   const projectId = freshTestProjectId();
 
   using session = createAdminOsItx({ baseUrl });
-  using created = session.projects.create({ projectId, slug });
+  using created = await session.projects.get(slug).create({ projectId });
   const description = await created.__describe();
   const project = { id: description.projectId, slug };
 

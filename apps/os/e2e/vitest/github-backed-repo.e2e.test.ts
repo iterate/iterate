@@ -22,7 +22,7 @@ test("github pushes about a linked repository cross-post onto the repo stream", 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-github-repo-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-github-repo-${RUN_SUFFIX}-${marker}`).create({});
 
   // A real repo, so the repo processor is live on the target stream and must
   // coexist with (ignore) the cross-posted webhook events.

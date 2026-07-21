@@ -43,8 +43,6 @@ import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.
 import {
   buildApprovalMessage,
   evaluateGrant,
-  HumanApprovalGrantedPayload,
-  HumanApprovalRejectedPayload,
   matchEgressRule,
   sha256Hex,
   type EgressRule,
@@ -560,14 +558,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     },
   ): Promise<"granted" | "rejected" | null> {
     if (event.type === "events.iterate.com/project/human-approval-rejected") {
-      const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+      const rejection = ProjectProcessorContract.events[
+        "events.iterate.com/project/human-approval-rejected"
+      ].payloadSchema.safeParse(event.payload);
       return rejection.success &&
         rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
         ? "rejected"
         : null;
     }
 
-    const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
+    const grant = ProjectProcessorContract.events[
+      "events.iterate.com/project/human-approval-granted"
+    ].payloadSchema.safeParse(event.payload);
     if (
       !grant.success ||
       grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset

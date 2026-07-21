@@ -10,9 +10,9 @@ export function freshTestProjectId(): `prj_${string}` {
 
 /**
  * Decorate a Cap'n Web session without changing its public type. The wrapper
- * follows authenticated and duplicated session stubs, and only changes
- * `projects.create`: missing IDs become collision-resistant caller-owned IDs;
- * explicit IDs pass through exactly as supplied.
+ * follows authenticated and duplicated session stubs, and changes only
+ * `projects.get(slug).create`: missing IDs become collision-resistant
+ * caller-owned IDs; explicit IDs pass through exactly as supplied.
  */
 export function withTestProjectIdentifiers<T extends object>(stub: T): T {
   return new Proxy(stub, {
@@ -47,10 +47,26 @@ function withProjectCreateIdentifiers<T extends object>(projects: T): T {
   return new Proxy(projects, {
     get(target, key, receiver) {
       const value = Reflect.get(target, key, receiver);
-      if (key !== "create" || typeof value !== "function") return value;
+      if (key !== "get" || typeof value !== "function") return value;
 
-      return (input: unknown, ...rest: unknown[]) =>
-        Reflect.apply(value, target, [withProjectId(input), ...rest]);
+      return (...args: unknown[]) =>
+        withProjectHandleIdentifiers(Reflect.apply(value, target, args) as object);
+    },
+  });
+}
+
+function withProjectHandleIdentifiers<T extends object>(project: T): T {
+  return new Proxy(project, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (key === "create" && typeof value === "function") {
+        return (input: unknown, ...rest: unknown[]) =>
+          Reflect.apply(value, target, [withProjectId(input), ...rest]);
+      }
+      if (key === Symbol.dispose && typeof value === "function") {
+        return (...args: unknown[]) => Reflect.apply(value, target, args);
+      }
+      return value;
     },
   });
 }

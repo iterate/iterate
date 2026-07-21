@@ -55,17 +55,9 @@ import { SlackProcessorContract } from "./slack-processor-contract.ts";
 import { callProjectTelegramBotApi, telegramApiBaseUrl } from "./telegram-api.ts";
 import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 import {
-  GITHUB_CONNECTED_EVENT_TYPE,
   GITHUB_CONNECTION_EGRESS_URLS,
-  GITHUB_DISCONNECTED_EVENT_TYPE,
-  GOOGLE_CONNECTED_EVENT_TYPE,
   GOOGLE_CONNECTION_EGRESS_URLS,
-  GOOGLE_DISCONNECTED_EVENT_TYPE,
   GOOGLE_OAUTH_TOKEN_URL,
-  SLACK_CONNECTED_EVENT_TYPE,
-  SLACK_DISCONNECTED_EVENT_TYPE,
-  TELEGRAM_CONNECTED_EVENT_TYPE,
-  TELEGRAM_DISCONNECTED_EVENT_TYPE,
   githubConnectionSecretPath,
   googleConnectionSecretPath,
   integrationCoordinatesFromStreamPath,
@@ -455,7 +447,7 @@ async function recordSlackConnection(input: {
     // never re-folds, the team never re-claims). The OAuth code exchange is
     // single-use, so the callback cannot double-fire these appends.
     connectedEvent: {
-      type: SLACK_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/slack/connected",
       payload: {
         connection: input.connection,
         externalId: input.teamId,
@@ -582,7 +574,7 @@ async function completeGithubConnect(input: {
       },
     ],
     connectedEvent: {
-      type: GITHUB_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/connected",
       payload: {
         connection,
         externalId: installationId,
@@ -745,7 +737,7 @@ async function completeGoogleConnect(input: {
       },
     ],
     connectedEvent: {
-      type: GOOGLE_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/google/connected",
       payload: {
         connection,
         email: userInfo.email,
@@ -849,7 +841,7 @@ export async function connectTelegram(input: {
     // No idempotency keys on the connected/claim facts — same reasoning as
     // Slack: a disconnect->reconnect cycle must append fresh facts.
     connectedEvent: {
-      type: TELEGRAM_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/connected",
       payload: {
         botFirstName: bot.firstName,
         botId: bot.id,
@@ -886,7 +878,7 @@ export async function connectTelegram(input: {
     await recordDisconnection({
       connection: foreignClaim.connection,
       disconnectedEvent: {
-        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/telegram/disconnected",
         payload: {
           botId: bot.id,
           botUsername: bot.username,
@@ -937,7 +929,7 @@ export async function connectTelegram(input: {
     await recordDisconnection({
       connection,
       disconnectedEvent: {
-        type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        type: "events.iterate.com/telegram/disconnected",
         payload: {
           botId: bot.id,
           connection,
@@ -1072,9 +1064,9 @@ export async function getConnectionStatus(input: {
   switch (input.provider) {
     case "slack": {
       const fact = await latestLifecycleFact({
-        connectedType: SLACK_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/slack/connected",
         connection: input.connection,
-        disconnectedType: SLACK_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/slack/disconnected",
         projectId: input.projectId,
         slug: "slack",
       });
@@ -1091,9 +1083,9 @@ export async function getConnectionStatus(input: {
     }
     case "github": {
       const fact = await latestLifecycleFact({
-        connectedType: GITHUB_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/github/connected",
         connection: input.connection,
-        disconnectedType: GITHUB_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/github/disconnected",
         projectId: input.projectId,
         slug: "github",
       });
@@ -1107,9 +1099,9 @@ export async function getConnectionStatus(input: {
     }
     case "telegram": {
       const fact = await latestLifecycleFact({
-        connectedType: TELEGRAM_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/telegram/connected",
         connection: input.connection,
-        disconnectedType: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/telegram/disconnected",
         projectId: input.projectId,
         slug: "telegram",
       });
@@ -1128,9 +1120,9 @@ export async function getConnectionStatus(input: {
     }
     case "google": {
       const fact = await latestLifecycleFact({
-        connectedType: GOOGLE_CONNECTED_EVENT_TYPE,
+        connectedType: "events.iterate.com/google/connected",
         connection: input.connection,
-        disconnectedType: GOOGLE_DISCONNECTED_EVENT_TYPE,
+        disconnectedType: "events.iterate.com/google/disconnected",
         projectId: input.projectId,
         slug: "google",
       });
@@ -1271,7 +1263,7 @@ async function disconnectSlack(input: {
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: SLACK_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/slack/disconnected",
       payload: {
         connection: input.connection,
         externalId: status.externalId ?? undefined,
@@ -1301,7 +1293,7 @@ async function disconnectGithub(input: {
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: GITHUB_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/disconnected",
       payload: { connection: input.connection, projectId: input.projectId },
     },
     projectId: input.projectId,
@@ -1330,7 +1322,7 @@ async function disconnectTelegram(input: {
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: TELEGRAM_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/telegram/disconnected",
       payload: {
         botId,
         botUsername: (status.metadata.botUsername as string | undefined) ?? undefined,
@@ -1358,7 +1350,7 @@ async function disconnectGoogle(input: {
   await recordDisconnection({
     connection: input.connection,
     disconnectedEvent: {
-      type: GOOGLE_DISCONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/google/disconnected",
       payload: { projectId: input.projectId },
     },
     projectId: input.projectId,

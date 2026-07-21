@@ -3,7 +3,39 @@ import {
   agentWorkspacePath,
   normalizeWorkspaceMountKeys,
   normalizeWorkspacePath,
+  workspaceCreationEvents,
 } from "./utils.ts";
+
+describe("workspaceCreationEvents", () => {
+  test("builds the created/configured/subscription batch with stable identity keys", () => {
+    const first = workspaceCreationEvents({
+      mounts: { "/cfg": { policy: "read-only", repoPath: "/repos/config" } },
+      path: "/workspaces/example",
+      projectId: "prj_test",
+    });
+    const retryWithDifferentConfig = workspaceCreationEvents({
+      mounts: { "/": { policy: "read-only", repoPath: "/repos/config" } },
+      path: "/workspaces/example",
+      projectId: "prj_test",
+    });
+
+    expect(first.map((event) => event.type)).toEqual([
+      "events.iterate.com/workspace/created",
+      "events.iterate.com/workspace/configured",
+      "events.iterate.com/stream/subscription-configured",
+    ]);
+    expect(first.map((event) => event.idempotencyKey)).toEqual(
+      retryWithDifferentConfig.map((event) => event.idempotencyKey),
+    );
+    expect(first[1]?.payload).toEqual({
+      config: {
+        mounts: {
+          "/cfg": { policy: "read-only", repoPath: "/repos/config" },
+        },
+      },
+    });
+  });
+});
 
 describe("normalizeWorkspacePath", () => {
   test("accepts /workspaces/ paths, arbitrarily nested", () => {

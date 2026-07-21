@@ -9,19 +9,20 @@ filesystems for agents and tooling.
   `/workspaces/**` path; that path is its Durable Object name AND its stream
   path. `workspace/created` is the birth certificate (carrying the complete
   initial config); `workspace/configured` patches it. `WorkspaceProcessor` is
-  a pure fold — reduce only, no side effects — hosted by the DO under the
+  a pure reducer — reduce only, no side effects — hosted by the DO under the
   standard registry/runner machinery.
-- **First touch births.** `itx.workspaces.get(path)` needs no create step:
-  the first operation appends the birth certificate with the DEFAULT mount
-  table — the config repo mounted at `"/"`, committable — which makes a fresh
-  workspace behave exactly like the classic single-parent overlay. Existing
-  agent workspaces heal onto this system the same way (their persisted
-  `["workspaces", ["get", path]]` capability expressions keep working).
-  `itx.workspaces.create({ path, mounts })` is idempotent and runs entirely
-  inside the workspace DO's serialized authority: the birth certificate is
-  ALWAYS the default table (an identical body on every append, so the
-  idempotency key can never hit the stream's different-body rejection), and a
-  custom table lands as one `configured` patch on top.
+- **Birth is explicit.** `itx.workspaces.get(path)` only addresses a possibly
+  nonexistent handle. `await handle.create({ mounts? })` appends one atomic
+  batch: the birth certificate with the DEFAULT mount table — the config repo
+  mounted at `"/"`, committable — an optional `workspace/configured` patch
+  carrying the caller's supplied mounts, and the Workspace processor
+  subscription. The supplied mounts patch over the default table, so omitting
+  or adding mounts never removes the default root mount. It waits the processor
+  through the batch and returns the same handle. Filesystem and configuration
+  methods reject loudly before creation;
+  no read, write, or first touch can birth a workspace. Agent creation
+  explicitly creates the agent's own workspace before the agent handle is
+  returned.
 - **The mount table routes everything.** `mounts` is a map of mount path →
   `{ repoPath, policy }`. Reads try the private local layer (DO-SQLite via
   `@cloudflare/shell`, R2 spill past ~1.5MB under the `workspace-v2/` bucket

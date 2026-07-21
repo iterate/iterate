@@ -68,7 +68,7 @@ none. `ItxProps = { context, access?, cap? }` where `access` only matters on
 global-context handles. Project-context handles imply access to exactly that
 project regardless of what props claim — the restorer overwrites, mirroring
 the old "config worker can't escalate scopes" rule. Org-membership flows stay
-in oRPC for now; `itx.projects.create` is admin-only.
+in oRPC for now; `itx.projects.get(slug).create` is admin-only.
 
 ## D8: Worker caps gain network access via ProjectEgress (they had none)
 
@@ -332,26 +332,25 @@ been circling:
   dispatches; the code payload only crosses RPC inside the loader's
   cold-isolate miss callback. The DO is where the worker's source of truth
   lives, nothing more.
-- **Project creation is event-sourced and explicitly born.** `projects.create`
-  appends `project/created` (the processor birth certificate) plus its
-  subscription. The processor explicitly births the root capability host,
-  scheduler, config repo, and email router; `project/ready` records
-  completion. The default call waits through birth and readiness. Pass
-  `waitUntilReady: false` to return as soon as the project exists (identity
-  registered, directory primed, birth events appended); create still drives
-  processor birth via a post-response nudge so the saga never depends on the
-  caller. `itx.waitUntilReady()` is the composable wait, and `itx.identity()`
-  pipelines the canonical slug through the create round trip — the dashboard
-  uses exactly that to land on the project home checklist immediately and
-  render progress from live processor state.
+- **Project creation is event-sourced and explicitly born.**
+  `projects.get(slug)` returns a prospective handle without side effects.
+  `handle.create()` registers the slug, adopts the directory-issued project
+  ID, then atomically appends the Project and Notification birth certificates
+  plus both subscriptions. The Project processor explicitly births the root
+  capability host, scheduler, config repo, and email router; `project/ready`
+  records completion. Create always waits both root processors through the
+  batch, then waits for readiness by default and returns the same handle.
+  Callers that render bootstrap progress themselves pass
+  `{ waitUntilReady: false }` as the second argument to skip only the final
+  ready barrier.
   The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd
   itself does not pipeline calls through property accesses on raw stubs
   (capnweb's RpcTarget IS cloudflare:workers' inside workerd). Callers that need routing before the processor catches up
-  (dashboard, itx.projects.create) insert the D1 projects row themselves
-  first, as they always did. The worker build never gates creation (ingress
-  self-heals builds); `config-worker-built` remains the historical event
+  (dashboard, `itx.projects.get(slug).create`) insert the D1 projects row themselves
+  first, as they always did. The default worker readiness probe gates create;
+  ingress also self-heals builds. `config-worker-built` remains the historical event
   string. The DO keeps NO bespoke tables: the processor snapshot is the
   project's durable state (with a pure `projectFacts()` + D1-slug fallback
   for cold snapshots), and "config worker" is now just **the worker**

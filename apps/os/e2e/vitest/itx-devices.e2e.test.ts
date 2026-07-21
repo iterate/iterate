@@ -7,7 +7,7 @@ test("public itx discovers an enrolled device and appends a notification request
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `device-itx-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`device-itx-${crypto.randomUUID()}`).create({});
   const projectId = (await project.__describe()).projectId;
   using phone = project.devices.get("phone-test-installation");
 

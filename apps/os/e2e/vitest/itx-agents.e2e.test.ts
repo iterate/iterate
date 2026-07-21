@@ -19,21 +19,35 @@ test("agent create installs only generic machinery; later events configure it", 
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`agent-create-${crypto.randomUUID()}`).create({});
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
-  await expect(
-    (
-      agent as unknown as {
-        create(input: { unexpected: true }): Promise<void>;
-      }
-    ).create({ unexpected: true }),
-  ).rejects.toThrow(
-    "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
-  );
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
 
-  await agent.create();
-  await expect(agent.create()).resolves.toBeUndefined();
+  // create() resolves with the same agent handle, so create chains.
+  using created = await agent.create({ note: "birth facts ride the certificate" });
+  const createdSnapshot = await created.processor.snapshot();
+  expect(createdSnapshot.state).toMatchObject({
+    birthCertificate: { createdAtOffset: expect.any(Number) },
+  });
+  const [birthEvent] = await created.stream.getEvents({
+    eventTypes: ["events.iterate.com/agent/created"],
+  });
+  expect(birthEvent?.payload).toEqual({ note: "birth facts ride the certificate" });
+  // An identical-payload retry dedupes on the birth idempotency keys …
+  using retried = await agent.create({ note: "birth facts ride the certificate" });
+  expect((await retried.processor.snapshot()).state).toMatchObject({
+    birthCertificate: createdSnapshot.state.birthCertificate,
+  });
+  // … while a different payload over the existing agent fails loudly (the
+  // stream rejects a same-key-different-body created event).
+  await expect(
+    (async () => {
+      await agent.create({ note: "a conflicting birth certificate" });
+    })(),
+  ).rejects.toThrow();
+  expect((await agent.processor.snapshot()).state).toMatchObject({
+    birthCertificate: createdSnapshot.state.birthCertificate,
+  });
 
   await expect(
     (
@@ -97,7 +111,7 @@ test("Agent scripts update their summary through the typed append door", async (
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-update-summary" });
+  using project = await itx.projects.get("agent-update-summary").create({});
   const agentPath = `/agents/update-summary-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -151,7 +165,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-project-tool" });
+  using project = await itx.projects.get("agent-project-tool").create({});
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -249,7 +263,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: `agent-create-replay-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`agent-create-replay-${crypto.randomUUID()}`).create({});
   const agentPath = `/agents/create-replay-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
@@ -356,7 +370,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-only-tools" });
+  using project = await itx.projects.get("agent-only-tools").create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -497,7 +511,7 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
+  using project = await itx.projects.get("dynamic-worker-scope-cache").create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -556,7 +570,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "cross-scope-provide" });
+  using project = await itx.projects.get("cross-scope-provide").create({});
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -604,7 +618,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "worker-births-agents" });
+  using project = await itx.projects.get("worker-births-agents").create({});
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
@@ -687,7 +701,7 @@ test("Project worker processEventBatch receives events from every project stream
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "project-worker-process-event" });
+  using project = await itx.projects.get("project-worker-process-event").create({});
   const marker = `cross-post-${crypto.randomUUID()}`;
   // NOT the root stream: every project stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must

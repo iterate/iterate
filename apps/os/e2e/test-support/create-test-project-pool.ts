@@ -1,6 +1,7 @@
 import type { RpcStub } from "capnweb";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Session } from "../../src/itx-api.generated.ts";
+import { freshTestProjectId } from "./with-test-project-identifiers.ts";
 
 type ProjectPoolState = {
   availableSlots: ProjectSlot[];
@@ -100,7 +101,7 @@ function releaseSlot(state: ProjectPoolState, slot: ProjectSlot): void {
 
 async function createProject(session: RpcStub<Session>, slugPrefix: string): Promise<string> {
   const slug = uniqueFixtureSlug(slugPrefix, { maxPrefixLength: 20 });
-  using project = session.projects.create({ slug });
+  using project = await session.projects.get(slug).create({ projectId: freshTestProjectId() });
   const { projectId } = await project.__describe();
   console.log(`[project-pool] created ${slug} (${projectId})`);
   return projectId;

@@ -16,7 +16,7 @@ test("OpenAPI built-in connects directly and mounts as a described capability", 
   });
 
   try {
-    using project = itx.projects.create({ slug: `openapi-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`openapi-${crypto.randomUUID()}`).create({});
     const secretPath = `/secrets/openapi/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -107,7 +107,7 @@ test("MCP built-in connects directly and mounts as a described capability", asyn
   });
 
   try {
-    using project = itx.projects.create({ slug: `mcp-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`mcp-${crypto.randomUUID()}`).create({});
     const secretPath = `/secrets/mcp/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -192,7 +192,7 @@ test("itx expression capabilities mount MCP and OpenAPI built-ins through connec
   });
 
   try {
-    using project = itx.projects.create({ slug: `expr-builtins-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`expr-builtins-${crypto.randomUUID()}`).create({});
     const secretPath = `/secrets/expr-builtins/${crypto.randomUUID()}`;
     using secret = project.secrets.get(secretPath);
     await secret.create({
@@ -273,7 +273,7 @@ test("itx expression capabilities mount project workers, streams, method aliases
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `expr-project-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`expr-project-${crypto.randomUUID()}`).create({});
 
   const workerRef = {
     entrypoint: "Worker",
@@ -426,7 +426,7 @@ test("itx expression capabilities resolve aliases against the current itx host p
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `expr-agent-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`expr-agent-${crypto.randomUUID()}`).create({});
   const agentPath = `/agents/expr-agent-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -468,7 +468,7 @@ test("itx expression capabilities reject self-aliases at provide time", async ()
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `expr-self-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`expr-self-${crypto.randomUUID()}`).create({});
 
   await expect(
     project.provideCapability({

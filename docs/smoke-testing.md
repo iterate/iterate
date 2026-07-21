@@ -60,7 +60,7 @@ throwaway project first; full walkthrough in
 
 ```bash
 doppler run --project os --config prd -- pnpm cli itx run \
-  --eval 'return await itx.projects.create({ slug: `agent-smoke-${Date.now()}` }).__describe()'
+  --eval 'const slug = `agent-smoke-${Date.now()}`; const project = await itx.projects.get(slug).create({}); return await project.__describe()'
 
 doppler run --project os --config prd -- pnpm cli itx agent-smoke \
   --project <prj_id> --agent-path /agents/smoke --message "PING"

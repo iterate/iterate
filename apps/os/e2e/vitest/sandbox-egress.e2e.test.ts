@@ -32,7 +32,7 @@ test.skipIf(deployedBaseUrl() === null)(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `sandbox-egress-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`sandbox-egress-${crypto.randomUUID()}`).create({});
 
     const material = `sandbox-egress-material-${crypto.randomUUID()}`;
     const secretPath = `/secrets/sandbox-egress/${crypto.randomUUID()}`;
@@ -60,10 +60,10 @@ test.skipIf(deployedBaseUrl() === null)(
     const curlCommand = `curl -sS --max-time 60 ${shellDoubleQuote(echo.url)} -H ${shellDoubleQuote(proofHeader)}`;
     const issuerCommand = `echo | openssl s_client -connect ${echoUrl.hostname}:443 -servername ${echoUrl.hostname} 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null || echo no-openssl`;
 
-    const { path: sandboxPath } = await project.sandboxes.create({
+    const sandboxPath = `/sandboxes/${sandboxName}`;
+    await project.sandboxes.get(sandboxPath).create({
       env: { CODEX_API_KEY: secretPlaceholder },
       instanceType: "lite",
-      name: sandboxName,
     });
     const sandbox = (await project.sandboxes.get(
       sandboxPath,

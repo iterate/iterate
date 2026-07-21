@@ -13,15 +13,15 @@ Sandboxes are project-scoped Cloudflare Sandbox containers, kept like
 **pets**: each one is explicitly created with a name and a Cloudflare instance type, lives at a
 stable path, and has an imperative lifecycle. Nothing on the platform mints a
 sandbox implicitly — agents don't get one at birth, and `get()` refuses paths
-that were never created.
+that were never created when a birth-requiring method is called.
 
 ```ts
 // Create once (strict: an existing or destroyed name is an error) …
-const { path } = await itx.sandboxes.create({ name: "main", instanceType: "basic" });
+const path = "/sandboxes/main";
+const sandbox = await itx.sandboxes.get(path).create({ instanceType: "basic" });
 
-// … then address it by path, forever. get() returns the BARE
-// @cloudflare/sandbox stub — the SDK's whole surface, nothing wrapped on top.
-const sandbox = await itx.sandboxes.get(path); // "/sandboxes/main"
+// … then address it by path, forever. The handle dynamically replays the
+// @cloudflare/sandbox SDK's whole surface onto the claimed container stub.
 await sandbox.exec("echo hi"); // first command boots the container
 await sandbox.gitCheckout("https://github.com/acme/repo", { targetDir: "/workspace/repo" });
 await sandbox.startProcess("bun server.js");
@@ -72,12 +72,12 @@ Every lifecycle verb appears on the sandbox's own stream as a
 `<verb>-requested` / past-tense pair (the command, then the reality — see
 `sandbox-processor-contract.ts`):
 
-| Command                                                                        | What happens                                                                                                                                                  | Events                                                                                           |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `itx.sandboxes.create({ name, instanceType?, sleepAfter?, keepAlive?, env? })` | Durable record written; no container boots. Strict — destroyed names are retired, not recycled.                                                               | `create-requested` (on the `/sandboxes` catalogue) → `created` (+ `configured` when `env` given) |
-| `start()`                                                                      | Boot the container now, restore `/workspace`, apply env vars. Also happens implicitly when a command reaches a stopped sandbox.                               | `start-requested` → `started` (implicit wakes emit `started` only)                               |
-| `sleep()`                                                                      | Snapshot `/workspace` to R2, then tear the container down. The sandbox stays created. The idle timer (`sleepAfter`, default 10m) does the same automatically. | `sleep-requested` → `backup-created` → `stopped`                                                 |
-| `destroy()`                                                                    | Permanent: container torn down, record tombstoned, `get()` refuses the path forever.                                                                          | `destroy-requested` → `stopped` → `destroyed`                                                    |
+| Command                                                                            | What happens                                                                                                                                                  | Events                                                                                                                 |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `itx.sandboxes.get(path).create({ instanceType?, sleepAfter?, keepAlive?, env? })` | Durable record written; no container boots. Strict — destroyed names are retired, not recycled.                                                               | `create-requested` (on the `/sandboxes` catalogue) → one atomic `created` + optional `configured` + subscription batch |
+| `start()`                                                                          | Boot the container now, restore `/workspace`, apply env vars. Also happens implicitly when a command reaches a stopped sandbox.                               | `start-requested` → `started` (implicit wakes emit `started` only)                                                     |
+| `sleep()`                                                                          | Snapshot `/workspace` to R2, then tear the container down. The sandbox stays created. The idle timer (`sleepAfter`, default 10m) does the same automatically. | `sleep-requested` → `backup-created` → `stopped`                                                                       |
+| `destroy()`                                                                        | Permanent: container torn down, record tombstoned, `get()` refuses the path forever.                                                                          | `destroy-requested` → `stopped` → `destroyed`                                                                          |
 
 `started`/`stopped` are the authoritative signal (they also fire for implicit
 wakes and idle sleeps); the `-requested` events are the record of who asked.
@@ -88,7 +88,7 @@ completions that drive UI state are appended and folded before their lifecycle
 boundary returns. `SandboxProcessor` is hosted by the Sandbox Durable Object
 and folds the events into a small projection (`status`, `running`,
 `instanceType`, `lastBackupId`, `env`) exposed through
-`itx.sandboxes.processor(path)` and `itx.sandboxes.liveState(path)`. It takes no
+`itx.sandboxes.get(path).processor` and `itx.sandboxes.get(path).liveState`. It takes no
 actions, disables recovery so it does not compete for the Containers SDK's
 alarm, and receives durable stream wakes through the sandbox collection.
 
@@ -247,17 +247,20 @@ warning otherwise). Per-class `instance_type` and `max_instances` are set in
 `scripts/generate-wrangler-config.ts` (`SANDBOX_MAX_INSTANCES`) — deploy-time
 memory quota is validated per account, so preview caps are small.
 
-## Identity: why `get()` is async
+## Identity: address first, route after the claim
 
 Every domain object derives identity from its Durable Object name
 (`{projectId}.iterate{path}`). Container-backed Durable Objects are the
 exception: the runtime does not reliably surface `ctx.id.name` to them (the
 local dev runtime drops it entirely), which is why the upstream SDK's
 `getSandbox()` helper pushes the name in rather than reading it. We do the
-same, at create: `itx.sandboxes.create` records the identity write-once, and
-`itx.sandboxes.get(path)` awaits `assertCreated({ projectId, path })` on the
-stub before handing it out — which is also what enforces "pets are created,
-never minted by addressing". Consequence: dial sandboxes through
+same, at create: `itx.sandboxes.get(path).create` records the identity write-once, and
+`itx.sandboxes.get(path)` returns a local address handle without choosing a
+container namespace. `create()` writes the catalogue claim and identity;
+later birth-requiring calls resolve that claim and await
+`assertCreated({ projectId, path })` on the selected stub. This enforces "pets
+are created, never minted by addressing" while keeping `get()` side-effect
+free. Consequence: dial sandboxes through
 `itx.sandboxes` — a raw `env.SANDBOX_*.getByName(...)` stub that was never
 created refuses every command.
 
@@ -284,8 +287,8 @@ Smoke test (against a project you created locally):
 ```bash
 doppler run --project os --config dev -- pnpm --dir apps/os cli itx run \
   --context prj_… \
-  -e 'const { path } = await itx.sandboxes.create({ name: "smoke", instanceType: "lite" });
-      const sb = await itx.sandboxes.get(path);
+  -e 'const path = "/sandboxes/smoke";
+      const sb = await itx.sandboxes.get(path).create({ instanceType: "lite" });
       const r = await sb.exec("ls /");
       return { exitCode: r.exitCode, stdout: r.stdout };'
 ```
