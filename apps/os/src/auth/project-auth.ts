@@ -4,6 +4,7 @@ import type {
   ValidateProjectAppSessionInput,
 } from "@iterate-com/auth-contract/worker";
 import { ItxAuthenticationError } from "../auth.ts";
+import { ITERATE_MARK_SVG } from "../domains/workers/worker-serve-overlay.ts";
 import { isSameOriginBrowserRequest } from "./operator-session.ts";
 
 /** A declarative access rule for a project-host web app. */
@@ -149,7 +150,7 @@ export async function handleProjectAuthFetch(input: {
     return_to: `${url.pathname}${url.search}`,
   })}`;
   const response = isHtmlNavigation(input.request)
-    ? loginPage(login, input.osBaseUrl)
+    ? loginPage(login)
     : Response.json({ authenticated: false, login }, { headers: noStoreHeaders(), status: 401 });
   if (token) response.headers.append("set-cookie", expiredCookie(url));
   return response;
@@ -357,20 +358,51 @@ function expiredCookie(url: URL) {
   ].join("; ");
 }
 
-function loginPage(login: string, osBaseUrl: string | undefined) {
-  const returnTo = new URL(login, "https://project.invalid").searchParams.get("return_to") ?? "/";
+function loginPage(login: string) {
+  const nonce = randomNonce();
   const headers = htmlHeaders();
-  // Chromium applies form-action to the entire redirect chain, not just the
-  // same-origin form target. Permit the configured OS origin so the local
-  // login endpoint can hand the navigation to Iterate without weakening any
-  // other CSP directive.
-  const formAction = osBaseUrl ? `'self' ${new URL(osBaseUrl).origin}` : "'self'";
+  // The sign-in button is a plain link ON PURPOSE. Chromium applies a form's
+  // form-action CSP to the submission's ENTIRE redirect chain, and the
+  // logged-out leg of this navigation crosses OS and the iterate-auth origin
+  // — a form submit died silently at the auth hop (observed live,
+  // 2026-07-21). Anchors are outside form-action entirely, so the policy
+  // stays maximally strict: nothing loads but the nonce'd stylesheet.
   headers.set(
     "content-security-policy",
-    `default-src 'none'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
+    `default-src 'none'; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
   );
   return new Response(
-    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in</title></head><body><main><h1>Sign in to Iterate</h1><p>This app is available to project members.</p><form action="${LOGIN_PATH}" method="get"><input name="return_to" type="hidden" value="${escapeHtml(returnTo)}"><button type="submit">Continue with Iterate</button></form></main></body></html>`,
+    `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sign in</title>
+    <style nonce="${nonce}">
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #fff; color: #0a0a0a; font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; }
+      main { padding: 32px 24px; width: 100%; max-width: 400px; box-sizing: border-box; }
+      header { display: flex; align-items: center; gap: 16px; }
+      .mark { width: 48px; height: 48px; border-radius: 22.37%; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); flex-shrink: 0; }
+      h1 { margin: 0; font-size: 17px; font-weight: 600; }
+      p { margin: 0; color: #737373; font-size: 14px; }
+      a { display: block; margin-top: 24px; padding: 11px 16px; background: #0a0a0a; color: #fff; border-radius: 10px; font-weight: 500; text-decoration: none; text-align: center; }
+      a:hover { background: #262626; }
+      a:focus-visible { outline: 2px solid #0a0a0a; outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        ${ITERATE_MARK_SVG}
+        <div>
+          <h1>Sign in to iterate</h1>
+          <p>This app is available to project members.</p>
+        </div>
+      </header>
+      <a href="${escapeHtml(login)}">Continue with iterate</a>
+    </main>
+  </body>
+</html>`,
     { headers },
   );
 }
