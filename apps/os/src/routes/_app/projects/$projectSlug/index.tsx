@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { z } from "zod";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { ProjectCreationProgress } from "~/components/project-creation-progress.tsx";
 import { ProjectDashboard } from "~/components/project-dashboard.tsx";
