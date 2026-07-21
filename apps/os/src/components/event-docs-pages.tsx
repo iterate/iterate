@@ -415,25 +415,6 @@ export function EventDocPage({ event }: { event: EventDoc }) {
           <DocSection title="Payload schema">
             <SchemaView schema={event.payloadJsonSchema} />
           </DocSection>
-          <DocSection title="Examples">
-            {event.examples.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No examples documented for this event type yet.
-              </p>
-            ) : (
-              <div className="space-y-4">
-                {event.examples.map((example, index) => (
-                  <div key={example.description} className="space-y-2">
-                    <p className="text-sm text-muted-foreground">{example.description}</p>
-                    <JsonBlock value={example.payload} />
-                    {index === 0 ? (
-                      <CommittedEventExample event={event} payload={example.payload} />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-          </DocSection>
         </section>
         <aside className="space-y-4">
           <InfoList
@@ -441,7 +422,6 @@ export function EventDocPage({ event }: { event: EventDoc }) {
               ["URL path", event.href],
               ["Owned by", event.processor.contractSlug],
               ["Event path", event.eventPath],
-              ["Examples", String(event.examples.length)],
             ]}
           />
           <DocSection title="Owned by">
@@ -456,39 +436,6 @@ export function EventDocPage({ event }: { event: EventDoc }) {
         </aside>
       </main>
     </EventDocsShell>
-  );
-}
-
-/**
- * The first example payload wrapped in the committed-event envelope, so
- * readers see what an actual stream row for this type looks like. Offset,
- * createdAt, and path are assigned by the stream at commit time; the values
- * here are illustrative.
- */
-function CommittedEventExample({ event, payload }: { event: EventDoc; payload: unknown }) {
-  const committedEvent = {
-    type: event.type,
-    payload,
-    metadata: {},
-    source: {
-      processor: {
-        slug: event.processor.contractSlug,
-        version: event.processor.version ?? "0.1.0",
-      },
-    },
-    offset: 42,
-    createdAt: "2026-07-09T12:34:56.789Z",
-    path: "<stream path>",
-  };
-  return (
-    <details className="rounded-md border">
-      <summary className="cursor-pointer px-4 py-2 text-sm text-muted-foreground hover:text-foreground">
-        As a committed stream event (envelope fields are illustrative)
-      </summary>
-      <div className="border-t p-2">
-        <JsonBlock value={committedEvent} bare />
-      </div>
-    </details>
   );
 }
 
@@ -538,9 +485,6 @@ function EventListRow({
 }) {
   const preview = payloadPreview(event.payloadJsonSchema);
   const meta: string[] = [];
-  if (event.examples.length > 0) {
-    meta.push(`${event.examples.length} example${event.examples.length === 1 ? "" : "s"}`);
-  }
   if (showCrossReferences) {
     if (event.emittedBy.length > 0) meta.push(`emitted by ${event.emittedBy.length}`);
     if (event.consumedBy.length > 0) meta.push(`consumed by ${event.consumedBy.length}`);

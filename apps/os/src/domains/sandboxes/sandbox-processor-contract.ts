@@ -93,111 +93,45 @@ export const SandboxProcessorContract = defineProcessorContract({
             "Initial env-var map, applied as if by setEnvVars (key → getSecret placeholder or non-secret literal; null unsets). Never raw secret material — this lands on a durable stream.",
         }),
       }),
-      examples: [
-        {
-          description:
-            'itx.sandboxes.get("/sandboxes/main").create claims a basic instance that sleeps after 10 idle minutes, with a getSecret-placeholder env var substituted only at egress.',
-          payload: {
-            path: "/sandboxes/main",
-            instanceType: "basic",
-            sleepAfter: "10m",
-            env: {
-              GH_TOKEN: 'getSecret("/secrets/integrations/github/acme", { field: "accessToken" })',
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/sandbox/created": {
       description:
         "The sandbox exists: identity and configuration are durably stored and itx.sandboxes.get(path) resolves it. No container is running yet — the first command (or start()) boots one.",
       payloadSchema: sandboxBirthCertificateSchema(),
-      examples: [
-        {
-          description: "A basic sandbox finished setup and is ready to boot on the first command.",
-          payload: { config: { instanceType: "basic" } },
-        },
-      ],
     },
     "events.iterate.com/sandbox/start-requested": {
       description:
         "start() was called: boot the container now (rather than lazily on the first command). `started` confirms the boot.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description: "start() was called to boot the container ahead of the first command.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/started": {
       description:
         "The sandbox container booted (the SDK's onStart hook) — after an explicit start() OR implicitly because a command reached a stopped sandbox. /workspace is restored from the newest snapshot before commands run.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description:
-            "A command reached a stopped sandbox, so a fresh container booted implicitly.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/sleep-requested": {
       description:
         "sleep() was called (Cloudflare's word for what the idle timer does, on demand): snapshot /workspace, then tear the container down. The sandbox stays created — the next start (or command) boots a fresh container and restores the snapshot. The SDK's stop() forwards here so no spelling skips the snapshot.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description:
-            "sleep() was called: snapshot /workspace, then tear the container down until the next command.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/stopped": {
       description:
         "The sandbox container exited (the SDK's onStop hook) — after an explicit sleep(), the idle timer (sleepAfter), or a destroy. May be appended on a LATER wake: the SDK delivers a stop that happened while the Durable Object was hibernated on the next wake.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description: "The idle timer expired and the container exited.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/kill-requested": {
       description:
         "kill() was called: the current Durable Object incarnation is deliberately aborted after this fact is durably reduced. The container lifecycle and reduced running state are unchanged; the next request boots a fresh object around the same sandbox.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description:
-            "An operator requested a Durable Object restart while leaving the running container alone.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/destroy-requested": {
       description: "destroy() was called: tear the sandbox down permanently. `destroyed` confirms.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description: "destroy() was called: tear the sandbox down permanently.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/destroyed": {
       description:
         "The sandbox is permanently gone: container torn down and the identity tombstoned — the path can never be created again (pick a new name). Workspace snapshots in R2 age out on their ttl.",
       payloadSchema: z.object({}),
-      examples: [
-        {
-          description:
-            "The teardown landed: the container is gone and the path is tombstoned forever.",
-          payload: {},
-        },
-      ],
     },
     "events.iterate.com/sandbox/workspace-restored": {
       description:
@@ -207,13 +141,6 @@ export const SandboxProcessorContract = defineProcessorContract({
           description: "The restored R2 snapshot's id (the SDK's random UUID).",
         }),
       }),
-      examples: [
-        {
-          description:
-            "A fresh container restored /workspace from the newest snapshot (backup ids are the SDK's random UUIDs).",
-          payload: { backupId: "3f2c9a4e-8b1d-4e7a-9c6f-2d5b8a1e4f7c" },
-        },
-      ],
     },
     "events.iterate.com/sandbox/backup-created": {
       description:
@@ -224,12 +151,6 @@ export const SandboxProcessorContract = defineProcessorContract({
             "The new R2 snapshot's id (the SDK's random UUID) — the next restore source.",
         }),
       }),
-      examples: [
-        {
-          description: "The idle timer snapshotted /workspace to R2 before stopping the container.",
-          payload: { backupId: "3f2c9a4e-8b1d-4e7a-9c6f-2d5b8a1e4f7c" },
-        },
-      ],
     },
     "events.iterate.com/sandbox/backup-failed": {
       description:
@@ -237,13 +158,6 @@ export const SandboxProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         error: z.string().meta({ description: "What the snapshot attempt reported." }),
       }),
-      examples: [
-        {
-          description:
-            "The snapshot could not be archived; the previous good backup remains the restore source.",
-          payload: { error: "createBackup failed: container exited before the archive completed" },
-        },
-      ],
     },
     "events.iterate.com/sandbox/configured": {
       description:
@@ -254,18 +168,6 @@ export const SandboxProcessorContract = defineProcessorContract({
             "The entries set in THIS change (key → getSecret placeholder / literal; null unsets the key) — not the full resulting map.",
         }),
       }),
-      examples: [
-        {
-          description:
-            "setEnvVars set GH_TOKEN to a getSecret placeholder (substituted only at egress) and unset DEBUG.",
-          payload: {
-            env: {
-              GH_TOKEN: 'getSecret("/secrets/integrations/github/acme", { field: "accessToken" })',
-              DEBUG: null,
-            },
-          },
-        },
-      ],
     },
   },
   consumes: [

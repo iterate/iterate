@@ -70,13 +70,6 @@ export const TelegramAgentProcessorContract = defineProcessorContract({
           text: z.string().meta({ description: "The message text to deliver." }),
         })
         .loose(),
-      examples: [
-        {
-          description:
-            "An agent reply on its own session stream; chat_id is filled from the path on delivery.",
-          payload: { text: "The deploy is green — all three checks passed." },
-        },
-      ],
     },
   },
   // TelegramProcessorContract brings the forwarded webhook, the send marker,
