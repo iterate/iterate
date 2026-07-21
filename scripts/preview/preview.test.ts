@@ -222,6 +222,26 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewSharedPaths).toContain("patches/**");
   });
 
+  test("reads every app's public preview origin from envs.ts", () => {
+    expect(
+      Object.fromEntries(
+        Object.entries(cloudflarePreviewApps).map(([slug, app]) => [
+          slug,
+          app.resolvePreviewAppConfig("preview_3"),
+        ]),
+      ),
+    ).toEqual({
+      auth: { baseUrl: "https://auth.iterate-preview-3.com" },
+      "dummy-petshop": { baseUrl: "https://dummy-petshop.iterate-preview-3.com" },
+      os: {
+        baseUrl: "https://os.iterate-preview-3.com",
+        projectHostnameBases: ["iterate-preview-3.app"],
+      },
+      semaphore: { baseUrl: "https://semaphore.iterate-preview-3.com" },
+      "streams-example-app": { baseUrl: "https://streams.iterate-preview-3.com" },
+    });
+  });
+
   test("runs the auth OAuth provider e2e against its deployed preview", () => {
     // The auth lane runs the full apps/auth/e2e suite (authorize → code →
     // token exchange), not a discovery curl: a bare metadata probe is what
@@ -281,10 +301,6 @@ describe("preview workflow scope", () => {
       previewTestDependencyBaseUrlEnvVars: {
         "dummy-petshop": "PETSHOP_BASE_URL",
       },
-    });
-    expect(os.resolvePreviewAppConfig?.("preview_3")).toEqual({
-      baseUrl: "https://os.iterate-preview-3.com",
-      projectHostnameBases: ["iterate-preview-3.app"],
     });
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),

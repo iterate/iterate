@@ -13,7 +13,14 @@ import {
   deploymentReadinessProbeWaveCount,
 } from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
-import { dummyPetshopEnvs, envs as osEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
+import {
+  authEnvs,
+  dummyPetshopEnvs,
+  envs as osEnvs,
+  previewEnvironmentSlotNumbers,
+  semaphoreEnvs,
+  streamsExampleEnvs,
+} from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -1351,11 +1358,10 @@ export type CloudflarePreviewApp = {
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   /**
-   * Resolve non-secret public app config from the repo instead of Doppler.
-   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
-   * is the sole source of truth can opt into that source directly.
+   * Resolve non-secret public app config from envs.ts. Doppler supplies only
+   * secrets; readiness probes merge their bearer token into this config.
    */
-  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+  resolvePreviewAppConfig: (dopplerConfig: string) => {
     baseUrl: string;
     projectHostnameBases?: string[];
   };
@@ -1750,6 +1756,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // self-cleans; there is nothing slot-scoped to erase on release.
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = semaphoreEnvs[dopplerConfig as keyof typeof semaphoreEnvs];
+      if (!env) {
+        throw new Error(`Unknown Semaphore environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.baseUrl };
+    },
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
@@ -1780,6 +1793,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "auth",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = authEnvs[dopplerConfig as keyof typeof authEnvs];
+      if (!env) {
+        throw new Error(`Unknown Auth environment ${JSON.stringify(dopplerConfig)}.`);
+      }
+      return { baseUrl: env.authBaseUrl };
+    },
     paths: ["apps/auth/**", "apps/auth-contract/**"],
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
@@ -1801,6 +1821,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const env = streamsExampleEnvs[dopplerConfig as keyof typeof streamsExampleEnvs];
+      if (!env) {
+        throw new Error(
+          `Unknown streams-example-app environment ${JSON.stringify(dopplerConfig)}.`,
+        );
+      }
+      return { baseUrl: env.baseUrl };
+    },
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
@@ -3637,8 +3666,8 @@ async function readPreviewAppConfig(input: {
     }
     return parsed;
   };
-  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
-  if (repoConfig && !input.app.previewReadyBearerTokenEnvVar) {
+  const repoConfig = input.app.resolvePreviewAppConfig(input.dopplerConfig);
+  if (!input.app.previewReadyBearerTokenEnvVar) {
     return parsePreviewAppConfig(repoConfig);
   }
 
@@ -3691,7 +3720,7 @@ async function readPreviewAppConfig(input: {
 
   const dopplerConfig: unknown = JSON.parse(result.stdout);
   return parsePreviewAppConfig(
-    repoConfig && typeof dopplerConfig === "object" && dopplerConfig !== null
+    typeof dopplerConfig === "object" && dopplerConfig !== null
       ? {
           ...dopplerConfig,
           baseUrl: repoConfig.baseUrl,
