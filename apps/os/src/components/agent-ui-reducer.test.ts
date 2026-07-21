@@ -493,7 +493,14 @@ describe("agent-ui reducer", () => {
       },
       {
         type: "events.iterate.com/stream/subscriber-connected",
-        payload: { subscriptionKey: "browser:tab-1", direction: "inbound" },
+        payload: {
+          subscriptionKey: "browser:tab-1",
+          direction: "inbound",
+          subscriber: {
+            description: "browser",
+            user: { email: "jonas@example.com", name: "Jonas Temple" },
+          },
+        },
       },
       {
         type: "events.iterate.com/stream/subscriber-disconnected",
@@ -507,7 +514,44 @@ describe("agent-ui reducer", () => {
       connected: true,
       processor: { slug: "agent", version: "0.1.0" },
     });
-    expect(state.presence[1]).toMatchObject({ subscriptionKey: "browser:tab-1", connected: false });
+    expect(state.presence[1]).toMatchObject({
+      subscriptionKey: "browser:tab-1",
+      connected: false,
+      user: { email: "jonas@example.com", name: "Jonas Temple" },
+    });
+  });
+
+  test("clears stale subscriber metadata when a subscription key reconnects", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: {
+          subscriptionKey: "browser:tab-1",
+          direction: "inbound",
+          subscriber: {
+            description: "browser",
+            user: { email: "jonas@example.com", name: "Jonas Temple" },
+          },
+        },
+      },
+      {
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: {
+          subscriptionKey: "browser:tab-1",
+          direction: "inbound",
+          subscriber: { description: "browser" },
+        },
+      },
+    ]);
+
+    expect(state.presence).toEqual([
+      {
+        subscriptionKey: "browser:tab-1",
+        direction: "inbound",
+        connected: true,
+        description: "browser",
+      },
+    ]);
   });
 
   test("does not show the bootstrap stream wake in the agent feed", () => {
