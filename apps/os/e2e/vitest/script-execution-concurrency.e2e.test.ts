@@ -16,7 +16,8 @@ const SCRIPT_COUNT = 20;
 const SCRIPT_HOLD_MS = 30_000;
 const MAX_CONCURRENT_COMPLETION_MS = 50_000;
 
-test(
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip(
   "concurrent long-running itx scripts all complete",
   { timeout: 90_000 },
   async ({ expect }) => {

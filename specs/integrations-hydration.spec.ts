@@ -1,7 +1,8 @@
 import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
-test("hydrates the client-only integrations route without rebuilding the shell", async ({
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("hydrates the client-only integrations route without rebuilding the shell", async ({
   helpers,
   page,
 }) => {

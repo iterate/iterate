@@ -97,7 +97,8 @@ describe("deployed dummy-petshop", () => {
     expect(await consent.text()).toContain("Approve");
   });
 
-  test("full OAuth dance: authorize → Basic-auth code exchange → API → refresh", async () => {
+  // Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+  test.skip("full OAuth dance: authorize → Basic-auth code exchange → API → refresh", async () => {
     const client = await mintClient();
     const code = await authorizeCode(client.clientId, "E2E Human");
 
@@ -121,7 +122,8 @@ describe("deployed dummy-petshop", () => {
     expect(refreshed.status).toBe(200);
   });
 
-  test("access tokens really expire (2s TTL) and refresh revives access", async () => {
+  // Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+  test.skip("access tokens really expire (2s TTL) and refresh revives access", async () => {
     const client = await mintClient(2);
     const code = await authorizeCode(client.clientId, "Short Lived");
     const tokens = await (

@@ -213,7 +213,8 @@ test("global streams reject webhook subscriptions before commit", async () => {
   await expectNoSubscriptionConfiguredEvent(stream, subscriptionKey);
 });
 
-test("subscription and subscribe inputs are validated at the door", async () => {
+// Quarantined by tasks/quarantined-preview-e2e-retry-flakes.md.
+test.skip("subscription and subscribe inputs are validated at the door", async () => {
   // Three cheap gates, one project: a NaN replay cursor (NaN binds as SQL
   // NULL downstream — a live-looking subscription that delivers nothing), and
   // cursor-policy knobs on a wake config (silently-ignored config must not

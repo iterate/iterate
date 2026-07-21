@@ -7,7 +7,7 @@ tags: [ci, e2e, playwright, vitest, quarantine, flake]
 
 # Restore preview tests quarantined after live failures
 
-Eighteen live preview tests were quarantined on 2026-07-21 while landing PR
+Twenty-four live preview tests were quarantined on 2026-07-21 while landing PR
 #2169. Its new retry accounting did exactly what the testing policy requires:
 a failed first attempt made the preview proof red instead of silently treating
 the retry as success. A separate retry-disabled test exhausted its bounded
@@ -121,14 +121,54 @@ both source examples are unchanged from `main`. The synchronized failure
 signature is a post-deploy Durable Object reset cluster, not a regression in
 this PR, and is quarantined explicitly rather than certified by retries.
 
+The sixth exact-head run was
+[Depot job g2s2b7l0vz](https://depot.dev/orgs/0p91s0lz49/workflows/plcsp87wzl?job=g2s2b7l0vz)
+at commit `36fc91896e41a6e67b95de6a97ff782439f5ec8a`. Dummy Petshop deployed
+in 6.2s, but its 2.8s test lane exposed two OAuth failures:
+
+- `full OAuth dance: authorize → Basic-auth code exchange → API → refresh`
+  decoded an error-shaped token response, so `access_token` was `undefined`.
+- `access tokens really expire (2s TTL) and refresh revives access` decoded
+  the same response shape, so `expires_in` was `undefined` instead of `2`.
+
+The assertions predate this PR and the cases passed throughout the preceding
+exact-head proofs. An immediate direct rerun of all six cases against the same
+deployed URL and exact Worker version passed 6/6 in 9.68s. That makes the two
+failures transient deployment-shaped coverage debt; they are skipped here
+instead of accepting a lucky rerun as the PR's proof.
+
+The same run completed the remaining OS lanes in 168.7s and exposed four more
+passed-on-retry failures:
+
+- `a timed-out sandbox command terminates its entire process group` returned
+  `internal error; reference = c0olv80287d6pg0lmncfkk8f`; the Vitest result
+  consumed 22.825s across its attempts.
+- `concurrent long-running itx scripts all complete` exhausted its 90s test
+  timeout; its retry passed after the result consumed 140.950s in total.
+- `subscription and subscribe inputs are validated at the door` returned
+  `internal error; reference = nh5vmhql4n6imse6dhj5ojo3`; the Vitest result
+  consumed 24.102s across its attempts.
+- `hydrates the client-only integrations route without rebuilding the shell`
+  left `<body data-hydrated="false">` visible for its 30s wait. The first
+  attempt failed in 42.2s and the retry passed in 10.9s.
+
+The sandbox, concurrency, and hydration test bodies are unchanged from
+`main`. The subscription-validation body is unchanged; this branch adds an
+idempotency key in its shared event fixture, but the same validation path
+passed immediately on retry. These remain explicit coverage debt rather than
+allowing transient second attempts to certify the PR.
+
 ## Quarantined coverage
 
-- The seven Playwright tests above use narrow `test.skip` markers.
-- The repo-history, AI Gateway, project fast-path, and itx worker-composition
-  Vitest tests use narrow `test.skip` markers.
+- The eight Playwright tests above use narrow `test.skip` markers.
+- The repo-history, AI Gateway, project fast-path, itx worker-composition,
+  sandbox-timeout, script-concurrency, and subscription-validation Vitest
+  tests use narrow `test.skip` markers.
 - The seven generated catalogue cases remain discoverable but are registered
   with Vitest's skipped test API. Other catalogue examples and runtimes still
   run.
+- The two Dummy Petshop OAuth cases use narrow `test.skip` markers; the other
+  four deployed-service cases still run.
 
 ## Work
 
@@ -152,6 +192,16 @@ this PR, and is quarantined explicitly rather than certified by retries.
 - Correlate the synchronized post-deploy reset cluster with the exact Worker
   version and deployment-readiness boundary, and determine why tests can begin
   before the old/new Durable Object reset has settled.
+- Capture the Dummy Petshop token endpoint status and body on failure, then
+  correlate it with the exact Worker version, seal-key rollout, and state
+  Durable Object incarnation immediately after deployment.
+- Resolve both recorded server-internal references and determine whether the
+  sandbox and subscription failures share a post-deploy reset boundary.
+- Reproduce the 20-script concurrency timeout under full preview load and
+  identify which execution owns the extra 90-second tail.
+- Correlate the integrations hydration stall with its document/assets,
+  browser console, and `/api` WebSocket trace from the retained Playwright
+  artifact.
 - Split independent product defects into focused tasks once each failure is
   reduced; keep this task as the checklist owning every skip until then.
 
