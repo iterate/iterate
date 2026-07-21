@@ -281,6 +281,23 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return (await this.#collab.readFileBytes(path)) ?? this.#core.readFileBytes(path);
   }
 
+  /**
+   * Batched reads for board-style consumers: ONE RPC for the whole file set
+   * instead of a call per file through a client chain. Live sessions route
+   * exactly like readFile; missing paths map to null. Bounded loudly.
+   */
+  async readFiles(paths: string[]): Promise<Record<string, string | null>> {
+    await this.#assertCreated();
+    if (paths.length > 10_000) throw new Error("readFiles caps at 10000 paths per call");
+    const entries = await Promise.all(
+      paths.map(async (path) => {
+        const live = await this.#collab.readFile(path);
+        return [path, live ?? (await this.#core.readFile(path))] as const;
+      }),
+    );
+    return Object.fromEntries(entries);
+  }
+
   /** A path's mount content at HEAD — what uncommitted work diffs against. */
   async readBase(path: string): Promise<string | null> {
     await this.#assertCreated();

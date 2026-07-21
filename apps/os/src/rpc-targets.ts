@@ -1831,6 +1831,7 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         processor: "The workspace stream processor (snapshot/state).",
         readBase: "A path's mount content at HEAD — what uncommitted work diffs against.",
         readFile: "One file's contents; null when missing (routes through a live collab session).",
+        readFiles: "Batched reads for board-style consumers — one RPC, missing paths map to null.",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
         reset:
           "Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST.",
@@ -1926,6 +1927,11 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /** A path's mount content at HEAD — the base uncommitted work diffs against. */
   readBase(path: string): Promise<string | null> {
     return this.durableObjectStub.readBase(path);
+  }
+
+  /** Batched file reads (board seeds): one RPC, missing paths map to null. */
+  readFiles(paths: string[]): Promise<Record<string, string | null>> {
+    return this.durableObjectStub.readFiles(paths);
   }
 
   /** One file's raw bytes from the merged view; null when missing. */

@@ -1495,6 +1495,8 @@ export interface Workspace {
   collab: WorkspaceCollab;
   /** A path's mount content at HEAD — the base uncommitted work diffs against. */
   readBase(path: string): Promise<string | null>;
+  /** Batched file reads (board seeds): one RPC, missing paths map to null. */
+  readFiles(paths: string[]): Promise<Record<string, string | null>>;
   /** One file's raw bytes from the merged view; null when missing. */
   readFileBytes(path: string): Promise<Uint8Array | null>;
   /** Whether a path exists in the merged view. */
