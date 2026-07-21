@@ -457,6 +457,14 @@ that origin as `APP_CONFIG_BASE_URL` into each app's e2e process. Do not add
 intentionally never had them, and requiring them made a correctly provisioned
 slot fail before its deploy command started.
 
+Exact-repository subscription lookup is part of config-repo creation, so a
+transient Cloudflare listing failure must not poison the repository's terminal
+state. Idempotent Cloudflare API reads retry 408, 429, and 5xx responses twice
+with bounded delay and a warning for each absorbed attempt. Mutations are never
+replayed. If project creation still records `repos/create-failed`, inspect that
+fact instead of rerunning the same deterministic smoke project: the failure is
+durable and the project will correctly remain unready.
+
 Now update Slack from bootstrap to full manifests, complete Slack installation
 through OS, and verify each GitHub App's `/app` identity and webhook URL.
 

@@ -15,10 +15,12 @@ slot production pool. Google has persisted both callback types for every slot;
 GitHub App identity/webhooks and every Slack manifest URL are verified. Draft
 PR #2182 requested and claimed preview-14 through the normal `preview` label
 path. Its targeted cleanup completed in 14 seconds and all five apps deployed.
-Four app e2e lanes now pass. OS accepts the repository-owned test origin and
-its remaining authentication failure was a stale Playwright role (`button`
-for a rendered link); the corrected real preview-14 scenario passes without a
-retry. Remaining work is one fully green preview-14 run, real OS-side
+All 59 browser scenarios pass on preview-14. The remaining OS failure is now
+explained: one transient Cloudflare event-subscription GET 500 was journaled as
+a terminal config-repo creation failure, so the stable smoke project could
+never become ready on later retries. A bounded, observable retry for
+idempotent Cloudflare API reads is implemented and covered test-first.
+Remaining work is its green preview-14 deployment proof, real OS-side
 GitHub/Slack/Google canaries, lifecycle cleanup, and the separately approved
 shared-session-root migration.
 
@@ -524,3 +526,17 @@ the recorded projection.
   After merging current `main` (including its project-create fast path), the
   complete real-member/project-app authentication scenario passed against
   preview-14 in 37 seconds with retries disabled.
+- 2026-07-21: The first full rerun failed during Cloudflare's deployment
+  handover: an internal Durable Object storage reset was followed by
+  machine-move and network-loss errors. A stable-deployment rerun passed every
+  completed scenario but hit the local eight-minute orchestration ceiling
+  after Watchman spent sixty seconds falling back to its node crawler.
+- 2026-07-21: Depot attempt 2 passed all 59 browser tests and 161 of 162 OS
+  Vitest assertions. The one failure reused smoke project
+  `preview-mcp-smoke-9ae15adc`; its config repo had durably recorded
+  `repos/create-failed` after Cloudflare returned HTTP 500/code 15000 while
+  reading exact-subscription page 8. That terminal fact correctly kept the
+  project unready, but retrying the preview could never heal it. Cloudflare API
+  reads now retry transient 408/429/5xx responses at most twice, log every
+  absorbed attempt, and never replay mutations. The new regression is green
+  alongside 47 event/repo processor tests.

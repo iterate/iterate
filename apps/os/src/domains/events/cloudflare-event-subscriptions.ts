@@ -182,30 +182,48 @@ export function createCloudflareAccountApi(input: {
   apiToken: string;
 }): CloudflareAccountApi {
   return async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const response = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${input.accountId}${path}`,
-      {
-        ...init,
-        headers: {
-          authorization: `Bearer ${input.apiToken}`,
-          ...(init?.body && typeof init.body === "string"
-            ? { "content-type": "application/json" }
-            : {}),
-          ...init?.headers,
+    const method = (init?.method || "GET").toUpperCase();
+    const attempts = method === "GET" ? 3 : 1;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${input.accountId}${path}`,
+        {
+          ...init,
+          headers: {
+            authorization: `Bearer ${input.apiToken}`,
+            ...(init?.body && typeof init.body === "string"
+              ? { "content-type": "application/json" }
+              : {}),
+            ...init?.headers,
+          },
         },
-      },
-    );
-    const body = (await response.json().catch(() => null)) as {
-      errors?: unknown;
-      result?: unknown;
-      success?: boolean;
-    } | null;
-    if (!response.ok || body?.success === false) {
+      );
+      const body = (await response.json().catch(() => null)) as {
+        errors?: unknown;
+        result?: unknown;
+        success?: boolean;
+      } | null;
+      if (response.ok && body?.success !== false) return body?.result as T;
+
+      if (
+        attempt < attempts &&
+        (response.status === 408 || response.status === 429 || response.status >= 500)
+      ) {
+        console.warn("Cloudflare API read failed transiently; retrying", {
+          attempt,
+          method,
+          path,
+          status: response.status,
+        });
+        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+        continue;
+      }
+
       throw new Error(
-        `Cloudflare API ${init?.method ?? "GET"} ${path} failed (${response.status}): ${JSON.stringify(body?.errors ?? body).slice(0, 500)}`,
+        `Cloudflare API ${method} ${path} failed (${response.status}): ${JSON.stringify(body?.errors || body).slice(0, 500)}`,
       );
     }
-    return body?.result as T;
+    throw new Error(`Cloudflare API ${method} ${path} exhausted its bounded read attempts.`);
   };
 }
 
