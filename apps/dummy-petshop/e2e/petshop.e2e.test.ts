@@ -10,9 +10,9 @@
  * 2-second TTL, refresh, legacy-login, and verify webhook signing via the
  * echoed payload+signature.
  *
- * Every step scopes to a freshly minted client where possible; the one
- * global toggle exercised (fail-token-endpoint) is consumed immediately so
- * concurrent runs against the same deployment rarely collide.
+ * Every mutable operation scopes to a freshly minted client, including
+ * fail-token-endpoint, so concurrent suites cannot consume each other's
+ * injected failure.
  */
 import { createHmac } from "node:crypto";
 import { mergeCloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
@@ -183,9 +183,14 @@ describe("deployed dummy-petshop", () => {
 
   test("fail-token-endpoint fails exactly the next N calls", async () => {
     const client = await mintClient();
-    expect((await shop("/__backdoor/fail-token-endpoint", postJson({ times: 1 }))).status).toBe(
-      200,
-    );
+    expect(
+      (
+        await shop(
+          "/__backdoor/fail-token-endpoint",
+          postJson({ clientId: client.clientId, times: 1 }),
+        )
+      ).status,
+    ).toBe(200);
     const first = await exchange(client, { grant_type: "refresh_token", refresh_token: "junk" });
     expect(first.status).toBe(500);
     const second = await exchange(client, { grant_type: "refresh_token", refresh_token: "junk" });
