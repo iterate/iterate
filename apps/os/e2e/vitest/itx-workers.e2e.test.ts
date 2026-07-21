@@ -12,7 +12,9 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("dynamic-worker-project").create({});
+  using project = await itx.projects
+    .get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   const description = await project.__describe();
 
   // The seeded root worker now routes via x-iterate-app (static homepage
@@ -24,11 +26,13 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     const body = (await response.json()) as { app: string; path: string };
     return {
       repo: await itx.repo.whoami(),
+      sandboxCreate: typeof itx.sandboxes.get("/sandboxes/surface-probe").create,
       worker: `${body.app} fetched ${body.path}`,
     };
   });
   expect(scriptResult.success()).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
+    sandboxCreate: "function",
     worker: "hello fetched /script",
   });
 
@@ -249,7 +253,9 @@ test("deleting the main worker file makes the next project worker build fail", a
     secret: adminSecret(),
   });
 
-  using project = await itx.projects.get("deleted-worker-source").create({});
+  using project = await itx.projects
+    .get(`deleted-worker-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   // The seeded root worker serves a static homepage; this warm-up only needs
   // proof the seeded worker.ts is live before we delete it.
   const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));

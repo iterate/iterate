@@ -184,7 +184,11 @@ export function scriptWorkerRef(input: {
       const guardedSandboxes = new Proxy(sandboxes, {
         get(target, property) {
           if (property !== "get") return Reflect.get(target, property, target);
-          return async (...args) => sandboxWithExecutionDeadline(await target.get(...args));
+          // Collection.get() is deliberately synchronous: capnweb returns a
+          // pipelined handle whose methods (including create) can be called
+          // before any round trip. Awaiting it here turns that handle into a
+          // plain Promise and erases the handle-level surface.
+          return (...args) => sandboxWithExecutionDeadline(target.get(...args));
         },
       });
       return new Proxy(itx, {

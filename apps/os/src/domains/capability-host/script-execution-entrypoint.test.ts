@@ -53,5 +53,7 @@ describe("scriptWorkerRef", () => {
     expect(main).toContain("return target.exec(command, { ...options, timeout })");
     expect(main).toContain('if (property === "execStream")');
     expect(main).toContain("sandbox.execStream is unavailable inside scripts");
+    expect(main).toContain("return (...args) => sandboxWithExecutionDeadline(target.get(...args))");
+    expect(main).not.toContain("sandboxWithExecutionDeadline(await target.get(...args))");
   });
 });

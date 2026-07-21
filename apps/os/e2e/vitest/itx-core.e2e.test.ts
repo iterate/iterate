@@ -52,8 +52,8 @@ test("Authenticated internal auth itx can create project and append to stream", 
     secret: adminSecret(),
   });
 
-  // TODO project slug should be derived from tests etc as in apps/os
-  using project = await itx.projects.get("alice-project").create({});
+  const projectSlug = `alice-project-${crypto.randomUUID().slice(0, 8)}`;
+  using project = await itx.projects.get(projectSlug).create({});
   const description = await project.__describe();
   expect(description.projectId).toMatch(/prj_[0-9a-f-]+$/);
   expect(description.name).toMatch(/prj_[0-9a-f-]+\.iterate\/$/);
@@ -61,7 +61,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   // projects.get accepts a slug OR a prj_ id — both resolve the SAME project
   // (the browser addresses by the URL slug; ids still work). An unknown slug is
   // a genuine miss and fails loudly instead of minting a phantom namespace.
-  expect(await itx.projects.get("alice-project").__describe()).toMatchObject({
+  expect(await itx.projects.get(projectSlug).__describe()).toMatchObject({
     projectId: description.projectId,
   });
   expect(await itx.projects.get(description.projectId).__describe()).toMatchObject({
@@ -70,11 +70,18 @@ test("Authenticated internal auth itx can create project and append to stream", 
   await expect(itx.projects.get("no-such-project-xyz").__describe()).rejects.toThrow(
     /does not exist/,
   );
-  expect(messages).toContainEqual([
-    expect.any(Number),
-    "out",
-    ["push", ["pipeline", 1, ["projects", "create"], [{ slug: "alice-project" }]]],
-  ]);
+  // Explicit creation is two pipelined operations: pure addressing on the
+  // collection, followed by create on the returned project handle.
+  expect(messages).toEqual(
+    expect.arrayContaining([
+      [
+        expect.any(Number),
+        "out",
+        ["push", ["pipeline", expect.any(Number), ["projects", "get"], [projectSlug]]],
+      ],
+      [expect.any(Number), "out", ["push", ["pipeline", expect.any(Number), ["create"], [{}]]]],
+    ]),
+  );
 
   using stream = project.streams.get("/");
 
