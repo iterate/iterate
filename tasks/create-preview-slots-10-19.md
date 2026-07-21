@@ -19,7 +19,8 @@ scan exceeds the shared Cloudflare API budget when preview jobs overlap; a
 five-minute cooldown did not help while other handovers were active. Cleanup
 now relies on Cloudflare's atomic rejection to name only actual binding owners,
 with focused fail-closed tests. Remaining work is deploying that fix, rerunning
-preview-14, real OS-side GitHub/Slack/Google canaries, and the separately
+preview-14 after fixing its repository-owned URL lookup, real OS-side
+GitHub/Slack/Google canaries, and the separately
 approved shared-session-root migration.
 
 ## Goal
@@ -500,3 +501,11 @@ the recorded projection.
   reads; named-reference and unclassified-failure tests keep the path fail-
   closed. The runbook records the new invariant and removes the ineffective
   cooldown advice.
+- 2026-07-21: The next run erased preview-14 in 14 seconds, proving the targeted
+  cleanup under production-shaped load. OS and Semaphore then failed before
+  their deploy commands because preview orchestration required a Doppler
+  `APP_CONFIG_BASE_URL` even though their routes and public origins live only
+  in `envs.ts`. Auth, Streams, and Dummy Petshop deployed successfully. Merged
+  current `main`; orchestration now resolves every public origin from `envs.ts`
+  and merges only readiness bearer secrets from Doppler. Regression tests cover
+  an origin absent from Doppler and the origin-plus-bearer combination.

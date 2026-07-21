@@ -449,6 +449,13 @@ The deploy smoke owns that bounded retry. Auth's post-deploy OAuth-client seed
 retries only Cloudflare 522–526 on a bounded 78-second schedule; an
 unclassified status such as 500 remains an immediate failure.
 
+Preview orchestration resolves every public app origin from `envs.ts`, the
+same source that generates Worker routes. It reads Doppler only for readiness
+bearer secrets and merges those with the repository-owned origin. Do not add
+`APP_CONFIG_BASE_URL` duplicates to each Doppler child: OS and Semaphore
+intentionally never had them, and requiring them made a correctly provisioned
+slot fail before its deploy command started.
+
 Now update Slack from bootstrap to full manifests, complete Slack installation
 through OS, and verify each GitHub App's `/app` identity and webhook URL.
 

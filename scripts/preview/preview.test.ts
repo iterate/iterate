@@ -43,6 +43,7 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  mergePreviewAppConfig,
   previewProvisionedIntegrationSecrets,
   readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
@@ -324,6 +325,45 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- apps/dummy-petshop/**");
+  });
+
+  test("resolves repository-owned preview origins without duplicating them in Doppler", async () => {
+    await expect(
+      readPreviewAppConfig({
+        app: cloudflarePreviewApps.semaphore,
+        commandEnvironment: {},
+        dopplerConfig: "preview_14",
+        repositoryRoot: repoRoot,
+      }),
+    ).resolves.toEqual({
+      baseUrl: "https://semaphore.iterate-preview-14.com",
+      projectHostnameBases: [],
+    });
+
+    expect(cloudflarePreviewApps.os.resolvePreviewAppConfig?.("preview_14")).toEqual({
+      baseUrl: "https://os.iterate-preview-14.com",
+      projectHostnameBases: ["iterate-preview-14.app"],
+    });
+  });
+
+  test("combines an envs.ts origin with a Doppler readiness bearer", () => {
+    expect(
+      mergePreviewAppConfig({
+        dopplerConfig: {
+          baseUrl: null,
+          projectHostnameBases: [],
+          readinessBearerToken: "deployment-secret",
+        },
+        repositoryConfig: {
+          baseUrl: "https://os.iterate-preview-14.com",
+          projectHostnameBases: ["iterate-preview-14.app"],
+        },
+      }),
+    ).toEqual({
+      baseUrl: "https://os.iterate-preview-14.com",
+      projectHostnameBases: ["iterate-preview-14.app"],
+      readinessBearerToken: "deployment-secret",
+    });
   });
 
   test("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {
