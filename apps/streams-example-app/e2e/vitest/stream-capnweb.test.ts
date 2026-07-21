@@ -7,9 +7,13 @@
 import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "iterate/sdk";
-import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
+import {
+  e2eStreamPath,
+  e2eStreamPathLabel,
+  toStreamWebSocketUrl,
+  withStreamConnectionFromNode,
+} from "../helpers.ts";
 import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
-import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { WebSocketFrame } from "../../src/lib/stream-connection.ts";
 
 class TestSubscriptionCallback extends RpcTarget {

@@ -1,4 +1,5 @@
 import type { RpcStub } from "capnweb";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { connectItx, type ItxWebSocketMessage } from "iterate/node";
 import type { ItxAuthCredentials } from "../../src/auth.ts";
 import type {
@@ -94,8 +95,9 @@ export function withItxSession(
     | ProjectItxSessionInput = {},
 ): RpcStub<Agent> | RpcStub<Session> | RpcStub<ProjectRpcTarget> | RpcStub<UnauthenticatedOs> {
   const baseUrl = requireAppBaseUrl();
-  if (!("auth" in input)) return connectItx({ ...input, baseUrl });
-  if (!("projectId" in input)) return connectItx({ ...input, baseUrl });
-  if (!("agentPath" in input)) return connectItx({ ...input, baseUrl });
-  return connectItx({ ...input, baseUrl });
+  const headers = cloudflareWorkerVersionOverrideHeaders(process.env);
+  if (!("auth" in input)) return connectItx({ ...input, baseUrl, headers });
+  if (!("projectId" in input)) return connectItx({ ...input, baseUrl, headers });
+  if (!("agentPath" in input)) return connectItx({ ...input, baseUrl, headers });
+  return connectItx({ ...input, baseUrl, headers });
 }

@@ -9,7 +9,14 @@ import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
-import { dummyPetshopEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
+import {
+  authEnvs,
+  dummyPetshopEnvs,
+  envs,
+  previewEnvironmentSlotNumbers,
+  semaphoreEnvs,
+  streamsExampleEnvs,
+} from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
@@ -21,6 +28,10 @@ import {
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
+import {
+  E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV,
+  renderCloudflareWorkerVersionOverrides,
+} from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -416,6 +427,35 @@ function resolvePreviewTestBaseUrlEnvironment({
   });
 }
 
+function resolvePreviewTestWorkerVersionOverrides(input: {
+  apps: Partial<Record<CloudflarePreviewAppSlug, CloudflarePreviewAppEntry>>;
+  appSlugs: readonly CloudflarePreviewAppSlugType[];
+  dopplerConfig: string;
+  headSha: string;
+}): string {
+  return renderCloudflareWorkerVersionOverrides(
+    input.appSlugs.map((appSlug) => {
+      const entry = input.apps[appSlug];
+      const expectedWorkerName = cloudflarePreviewApps[appSlug].resolvePreviewAppConfig(
+        input.dopplerConfig,
+      ).workerName;
+      if (
+        entry?.headSha !== input.headSha ||
+        entry.deployedWorkerName !== expectedWorkerName ||
+        !entry.deployedWorkerVersion
+      ) {
+        throw new Error(
+          `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.headSha.slice(0, 7)}. Re-run preview deploy.`,
+        );
+      }
+      return {
+        versionId: entry.deployedWorkerVersion,
+        workerName: entry.deployedWorkerName,
+      };
+    }),
+  );
+}
+
 async function testPreviewApps({
   context,
   runtime,
@@ -554,6 +594,12 @@ async function testPreviewApps({
     };
   }
   logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
+  const workerVersionOverrides = resolvePreviewTestWorkerVersionOverrides({
+    apps: recorded.apps,
+    appSlugs: testableApps.map((app) => app.slug),
+    dopplerConfig: environmentConfigLease.dopplerConfig,
+    headSha: context.pullRequestHeadSha,
+  });
 
   // Preview e2e commands are full app-level suites. They run concurrently:
   // each app deploys its own workers, and the non-OS suites are seconds-long
@@ -586,6 +632,7 @@ async function testPreviewApps({
         environmentConfigLease.dopplerConfig,
         "--",
         "env",
+        `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
         ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
@@ -1279,13 +1326,14 @@ export type CloudflarePreviewApp = {
   destroyCommandArgs: readonly [string, ...string[]];
   dopplerProject: string;
   /**
-   * Resolve non-secret public app config from the repo instead of Doppler.
-   * Most apps mirror this into APP_CONFIG_BASE_URL; apps whose envs.ts entry
-   * is the sole source of truth can opt into that source directly.
+   * Resolve the public URL and Worker script from the repo's typed envs.ts.
+   * Deploy scripts consume that same map, so orchestration never forks the
+   * deployment identity through a second Doppler config read.
    */
-  resolvePreviewAppConfig?: (dopplerConfig: string) => {
+  resolvePreviewAppConfig: (dopplerConfig: string) => {
     baseUrl: string;
     projectHostnameBases?: string[];
+    workerName: string;
   };
   paths: string[];
   /** Apps co-selected so this app deploys and tests against one coherent head. */
@@ -1533,6 +1581,18 @@ export const cloudflarePreviewSharedPaths = [
 /** Trigger preview workflow runs; apps here are not necessarily redeployed. */
 export const cloudflarePreviewAdditionalTriggerPaths = ["apps/auth-example/**"] as const;
 
+function requirePreviewEnvironment<T>(
+  appSlug: CloudflarePreviewAppSlugType,
+  dopplerConfig: string,
+  environments: Readonly<Record<string, T>>,
+): T {
+  const environment = environments[dopplerConfig];
+  if (!environment) {
+    throw new Error(`Unknown ${appSlug} environment ${JSON.stringify(dopplerConfig)}.`);
+  }
+  return environment;
+}
+
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   os: {
     slug: "os",
@@ -1541,6 +1601,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const environment = requirePreviewEnvironment("os", dopplerConfig, envs);
+      return {
+        baseUrl: environment.baseUrl,
+        projectHostnameBases: environment.projectHostnameBases,
+        workerName: environment.osWorkerName,
+      };
+    },
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
@@ -1570,8 +1638,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // Petshop. Co-select both; every deploy starts concurrently and OS derives
     // Auth's public signing key directly from Doppler.
     previewDependencies: ["auth", "dummy-petshop"],
-    // The active Durable Object barrier replaces the former blind 40s hold;
-    // retry-clean historical full-fleet deploys completed around 72s.
+    // Require wrangler's exact edge version to stay visible for a quiet
+    // interval. Tests then pin that immutable version explicitly.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
@@ -1657,6 +1725,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // self-cleans; there is nothing slot-scoped to erase on release.
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const environment = requirePreviewEnvironment("semaphore", dopplerConfig, semaphoreEnvs);
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
+    },
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
@@ -1687,6 +1759,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "auth",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const environment = requirePreviewEnvironment("auth", dopplerConfig, authEnvs);
+      return { baseUrl: environment.authBaseUrl, workerName: environment.authWorkerName };
+    },
     paths: ["apps/auth/**", "apps/auth-contract/**"],
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
@@ -1708,6 +1784,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     deployCommandArgs: ["pnpm", "run-script", "deploy"],
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "streams-example-app",
+    resolvePreviewAppConfig: (dopplerConfig) => {
+      const environment = requirePreviewEnvironment(
+        "streams-example-app",
+        dopplerConfig,
+        streamsExampleEnvs,
+      );
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
+    },
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
@@ -1771,11 +1855,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "dummy-petshop",
     resolvePreviewAppConfig: (dopplerConfig) => {
-      const env = dummyPetshopEnvs[dopplerConfig as keyof typeof dummyPetshopEnvs];
-      if (!env) {
-        throw new Error(`Unknown dummy-petshop environment ${JSON.stringify(dopplerConfig)}.`);
-      }
-      return { baseUrl: env.baseUrl };
+      const environment = requirePreviewEnvironment(
+        "dummy-petshop",
+        dopplerConfig,
+        dummyPetshopEnvs,
+      );
+      return { baseUrl: environment.baseUrl, workerName: environment.workerName };
     },
     paths: ["apps/dummy-petshop/**"],
     previewReadyUrlPath: "/",
@@ -1873,6 +1958,9 @@ export const CloudflarePreviewAppEntry = z.object({
   shortSha: z.string().trim().min(1).nullable().optional(),
   cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
   deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Public Worker script and immutable Wrangler version proven by this entry. */
+  deployedWorkerName: z.string().trim().min(1).nullable().optional(),
+  deployedWorkerVersion: z.uuid().nullable().optional(),
   testDurationMs: z.number().nonnegative().finite().nullable().optional(),
   /** Rendered retry telemetry for the last test run (renderPreviewRetrySummary). */
   testRetries: z.string().trim().min(1).nullable().optional(),
@@ -2968,8 +3056,8 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean }) {
     ]);
 
     setDopplerSecrets("auth", config, {
-      // readPreviewAppConfig reads APP_CONFIG_BASE_URL to learn the app's public
-      // URL. Origins/routes themselves are generated from the root envs.ts.
+      // Runtime consumers still receive their public origin through Doppler;
+      // deployment orchestration derives the same value from root envs.ts.
       APP_CONFIG_BASE_URL: authOrigin,
       AUTH_SEED_OAUTH_CLIENTS: seed,
       APP_CONFIG_AUTH_APP_ORIGIN: authOrigin,
@@ -3373,12 +3461,9 @@ async function deployPreviewApp(input: {
   runUrl: string | null;
   signal?: AbortSignal;
 }) {
-  const appConfig = await readPreviewAppConfig({
+  const appConfig = readPreviewAppConfig({
     app: input.app,
-    commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
-    signal: input.signal,
-    repositoryRoot: input.repositoryRoot,
   });
   const baseEntry = {
     appDisplayName: input.app.displayName,
@@ -3417,15 +3502,15 @@ async function deployPreviewApp(input: {
     });
   }
 
-  const deployedWorkerVersion = input.app.previewReadyWorkerVersion
-    ? parseLastDeployedWorkerVersionId(`${deployResult.stdout}\n${deployResult.stderr}`)
-    : null;
-  if (input.app.previewReadyWorkerVersion && !deployedWorkerVersion) {
+  const deployedWorkerVersion = parseLastDeployedWorkerVersionId(
+    `${deployResult.stdout}\n${deployResult.stderr}`,
+  );
+  if (!deployedWorkerVersion) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
       message:
-        "Preview deployment succeeded, but wrangler did not report the Worker version required by the readiness check.",
+        "Preview deployment succeeded, but wrangler did not report the exact Worker version required by preview tests.",
       status: "deploy-failed",
     });
   }
@@ -3455,68 +3540,19 @@ async function deployPreviewApp(input: {
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
     ...sizeFields,
+    deployedWorkerName: appConfig.workerName,
+    deployedWorkerVersion,
     status: "awaiting-tests",
   });
 }
 
-async function readPreviewAppConfig(input: {
-  app: PreviewAppRuntime;
-  commandEnvironment: NodeJS.ProcessEnv;
-  dopplerConfig: string;
-  repositoryRoot: string;
-  signal?: AbortSignal;
-}) {
+function readPreviewAppConfig(input: { app: PreviewAppRuntime; dopplerConfig: string }) {
   const PreviewAppConfig = z.object({
     baseUrl: z.string().trim().url(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+    workerName: z.string().trim().min(1),
   });
-  const parsePreviewAppConfig = (value: unknown) => PreviewAppConfig.parse(value);
-  const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
-  if (repoConfig) {
-    return parsePreviewAppConfig(repoConfig);
-  }
-
-  const script = [
-    "function parseStringArrayEnv(value) {",
-    "  if (!value?.trim()) return [];",
-    "  const parsed = JSON.parse(value);",
-    "  return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];",
-    "}",
-    "function parseAppConfig() {",
-    "  if (!process.env.APP_CONFIG?.trim()) return {};",
-    "  return JSON.parse(process.env.APP_CONFIG);",
-    "}",
-    "const appConfig = parseAppConfig();",
-    "const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
-    "const config = {",
-    "  baseUrl: process.env.APP_CONFIG_BASE_URL || appConfig.baseUrl || null,",
-    "  projectHostnameBases: envBases.length > 0 ? envBases : Array.isArray(appConfig.projectHostnameBases) ? appConfig.projectHostnameBases.filter((entry) => typeof entry === 'string') : [],",
-    "};",
-    "console.log(JSON.stringify(config));",
-  ].join("\n");
-  const result = await runCommand({
-    args: [
-      "run",
-      "--project",
-      input.app.dopplerProject,
-      "--config",
-      input.dopplerConfig,
-      "--",
-      "node",
-      "-e",
-      script,
-    ],
-    command: "doppler",
-    echoOutput: false,
-    environment: input.commandEnvironment,
-    signal: input.signal,
-    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
-  });
-  if (result.exitCode !== 0) {
-    throw new Error("Failed to read preview app config.");
-  }
-
-  return parsePreviewAppConfig(JSON.parse(result.stdout));
+  return PreviewAppConfig.parse(input.app.resolvePreviewAppConfig(input.dopplerConfig));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -5167,6 +5203,7 @@ export const previewInternals = {
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestWorkerVersionOverrides,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
   selectPreviewSlotDataOwners,

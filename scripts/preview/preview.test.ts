@@ -49,6 +49,7 @@ const {
   resolvePreviewCompareBaseSha,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
@@ -153,7 +154,7 @@ describe("preview workflow scope", () => {
     });
   });
 
-  test("runs the dummy-petshop live e2e against its deployed preview", async () => {
+  test("runs the dummy-petshop live e2e against its deployed preview", () => {
     const petshop = cloudflarePreviewApps["dummy-petshop"];
 
     expect(petshop).toMatchObject({
@@ -163,16 +164,15 @@ describe("preview workflow scope", () => {
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
       previewTestCommandArgs: ["pnpm", "test:e2e"],
     });
-    await expect(
+    expect(
       readPreviewAppConfig({
         app: petshop,
-        commandEnvironment: {},
         dopplerConfig: "preview_3",
-        repositoryRoot: repoRoot,
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       projectHostnameBases: [],
+      workerName: "dummy-petshop-preview-3",
     });
     // Only the deploy workflow is path-filtered; cleanup deliberately has no
     // paths list (it must run for every closed PR — see the cleanup-trigger
@@ -250,6 +250,50 @@ describe("preview workflow scope", () => {
     });
 
     expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+  });
+
+  test("pins tests to every current-head deployment's exact Worker version", () => {
+    const headSha = "current-head";
+    const osVersion = "11111111-1111-4111-8111-111111111111";
+    const authVersion = "22222222-2222-4222-8222-222222222222";
+    const entry = (
+      appSlug: "auth" | "os",
+      appDisplayName: string,
+      deployedWorkerName: string,
+      deployedWorkerVersion: string,
+    ) =>
+      CloudflarePreviewAppEntry.parse({
+        appDisplayName,
+        appSlug,
+        deployedWorkerName,
+        deployedWorkerVersion,
+        headSha,
+        publicUrl: `https://${appSlug}.iterate-preview-7.com`,
+        status: "awaiting-tests",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+      });
+    const apps = {
+      auth: entry("auth", "Auth", "auth-preview-7", authVersion),
+      os: entry("os", "OS", "os-preview-7", osVersion),
+    };
+
+    expect(
+      resolvePreviewTestWorkerVersionOverrides({
+        apps,
+        appSlugs: ["os", "auth"],
+        dopplerConfig: "preview_7",
+        headSha,
+      }),
+    ).toBe(`auth-preview-7="${authVersion}",os-preview-7="${osVersion}"`);
+
+    expect(() =>
+      resolvePreviewTestWorkerVersionOverrides({
+        apps: { ...apps, os: { ...apps.os, deployedWorkerVersion: null } },
+        appSlugs: ["os", "auth"],
+        dopplerConfig: "preview_7",
+        headSha,
+      }),
+    ).toThrow(/exact os-preview-7 deployment identity is missing or stale/);
   });
 
   test("refuses to run OS e2e against a missing or stale Petshop deployment", () => {
@@ -954,6 +998,8 @@ describe("cloudflare preview state helpers", () => {
       runUrl: "https://github.com/iterate/iterate/actions/runs/123",
       shortSha: "abcdef0",
       deployDurationMs: 12_345,
+      deployedWorkerName: "os-preview-2",
+      deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
       testDurationMs: 678,
       status: "deployed",
       updatedAt: "2026-04-02T10:00:00.000Z",

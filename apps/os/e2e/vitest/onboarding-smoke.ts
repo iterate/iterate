@@ -18,6 +18,7 @@
  * silently absorbed — the 90s tail is a real product-latency signal.
  */
 import { fileURLToPath } from "node:url";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { connectItx } from "iterate/node";
 import {
   ensureOnboardingAgentReady,
@@ -36,7 +37,10 @@ if (!secret) throw new Error("need APP_CONFIG_ADMIN_API_SECRET (run under dopple
 async function attemptOnboardingSmoke(): Promise<void> {
   const marker = Math.random().toString(36).slice(2, 8);
 
-  using session = connectItx({ baseUrl });
+  using session = connectItx({
+    baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  });
   const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
   using project = await root.projects.get(`onboarding-smoke-${marker}`).create({});

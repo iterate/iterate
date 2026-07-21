@@ -15,6 +15,7 @@
  * concurrent runs against the same deployment rarely collide.
  */
 import { createHmac } from "node:crypto";
+import { mergeCloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { describe, expect, test } from "vitest";
 
 function requirePetshopBaseUrl(): string {
@@ -31,7 +32,11 @@ function requirePetshopBaseUrl(): string {
 
 const baseUrl = requirePetshopBaseUrl();
 const shop = (path: string, init?: RequestInit) =>
-  fetch(new URL(path, baseUrl), { redirect: "manual", ...init });
+  fetch(new URL(path, baseUrl), {
+    redirect: "manual",
+    ...init,
+    headers: mergeCloudflareWorkerVersionOverrideHeaders(init?.headers, process.env),
+  });
 const postJson = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 const bearer = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
 

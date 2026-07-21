@@ -4,6 +4,7 @@ import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
@@ -119,6 +120,7 @@ export async function connectAdminItx(baseUrl: string) {
   return connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
 }
 
@@ -133,6 +135,7 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
   using session = connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
   using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();

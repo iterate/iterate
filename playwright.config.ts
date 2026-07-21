@@ -6,6 +6,7 @@ import {
   SPEC_EXPECT_TIMEOUT_MS,
   SPEC_TEST_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { localOsDevServer } from "./apps/os/scripts/dev.ts";
 
 const videoMode = process.env.VIDEO_MODE === "1";
@@ -63,6 +64,7 @@ export default defineConfig({
     // the app visibly reports progress (see e2e-policy/budgets.ts).
     actionTimeout: videoMode ? 10_000 : SPEC_ACTION_TIMEOUT_MS,
     baseURL: osBaseUrl,
+    extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),
     screenshot: "only-on-failure",
     // Preserve the original failure's network evidence; successful attempts
     // still discard their traces.

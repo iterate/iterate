@@ -1,3 +1,5 @@
+import { mergeCloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { withStreamConnectionFromNode as connectFromNode } from "../src/lib/node-stream-connection.ts";
 import { streamViewSearch } from "../src/lib/stream-view-search.ts";
 import { normalizeStreamPath, streamRpcPath } from "../src/lib/stream-rpc.ts";
 
@@ -25,6 +27,13 @@ export function toStreamWebSocketUrl(args: { path: string; projectId?: string })
   const token = process.env.STREAMS_PLAYGROUND_TOKEN?.trim();
   if (token) url.searchParams.set("access_token", token);
   return url.toString();
+}
+
+export function withStreamConnectionFromNode(args: { url: string | URL }) {
+  return connectFromNode({
+    ...args,
+    headers: mergeCloudflareWorkerVersionOverrideHeaders(undefined, process.env),
+  });
 }
 
 export function streamRoute(args: { path: string; projectId?: string; view?: string }) {
