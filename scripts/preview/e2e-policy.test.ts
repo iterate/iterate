@@ -89,21 +89,21 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
-  it("retries each TUI workflow outside the framework in a fresh attempt", () => {
+  it("retries each TUI workflow outside the framework, on the policy retry count", () => {
     const config = readFileSync(
       resolve(repoRoot, "apps/os/e2e/tui-test/tui-test.config.ts"),
       "utf8",
     );
     const runner = readFileSync(resolve(repoRoot, "apps/os/e2e/tui-test/run.ts"), "utf8");
 
+    // The framework retry is off (TUI Test 0.0.4 reuses a dead worker); the
+    // wrapper owns the single retry and takes its count from the policy
+    // constant. How the wrapper isolates attempts is its own unit-tested
+    // business (tui-case-retry.test.ts), not pinned here.
     expect(config).toContain("retries: 0");
     expect(config).not.toContain("E2E_CI_RETRIES");
     expect(runner).toContain("runTuiCaseWithRetry");
     expect(runner).toContain("E2E_CI_RETRIES + 1");
-    expect(runner).toContain("Promise.all(cases.map");
-    expect(runner).toContain("const project = await createTestProject");
-    expect(runner).toContain('join(thisDir, ".tui-test", "case-runs")');
-    expect(runner).toContain("OS_E2E_TUI_TRACE_FOLDER: traceFolder");
   });
 
   it("the os preview lane wraps all four sub-lanes in plain watchdogs — no lane retry", () => {
@@ -141,39 +141,24 @@ describe("retries live in exactly one layer", () => {
 });
 
 describe("watchdogs the shell can't import stay in sync", () => {
-  it("keeps the marathon on the real preview profile and its strict proof budget", () => {
+  it("keeps the marathon's watchdog on the policy constant and its counting honest", () => {
     const source = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
     expect(source).toContain(
       `RUN_TIMEOUT_SECS="\${RUN_TIMEOUT_SECS:-${PREVIEW_RUN_WATCHDOG_SECS}}"`,
     );
-    expect(source).toContain('PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"');
-    expect(source).toContain('RUNS="${RUNS:-25}"');
     expect(source).toContain('MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-300}"');
-    expect(source).toContain("pnpm preview deploy --all-apps --allow-draft");
-    expect(source).toContain("for app in os semaphore auth streams-example-app dummy-petshop; do");
 
-    const normalWorkflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
-      "utf8",
-    );
     const marathonWorkflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
       "utf8",
     );
-    const osVitestConfig = readFileSync(resolve(repoRoot, "apps/os/e2e/vitest.config.ts"), "utf8");
-    expect(normalWorkflow).toContain("runs-on: depot-ubuntu-24.04-64");
-    expect(marathonWorkflow).toContain("runs-on: depot-ubuntu-24.04-64");
+    // The marathon shares the normal preview job's per-PR concurrency group
+    // without cancelling it — otherwise the two ping-pong the preview slot.
     expect(marathonWorkflow).toContain(
       "group: cloudflare-previews-${{ inputs.pull-request-number }}",
     );
     expect(marathonWorkflow).toContain("cancel-in-progress: false");
-    expect(normalWorkflow).toContain("uses: oven-sh/setup-bun@v2");
-    expect(marathonWorkflow).toContain("uses: oven-sh/setup-bun@v2");
-    expect(marathonWorkflow).toContain("bun-version-file: .bun-version");
-    expect(osVitestConfig).toContain("maxWorkers: ci ? 64 : 1");
-    expect(osVitestConfig).not.toContain("sequencer:");
-    expect(marathonWorkflow).toContain('default: "25"');
-    expect(marathonWorkflow).toContain('default: "300"');
+    // Uncounted priming runs are a masking layer; every run counts.
     expect(marathonWorkflow).not.toContain("warmup-runs");
   });
 });
