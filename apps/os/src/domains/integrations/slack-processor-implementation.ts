@@ -94,37 +94,31 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
               streamPath,
             },
           };
-          blockProcessorWhile(
-            "this forward is the only copy of the Slack message on its way to the agent; a failed append must hold the checkpoint for replay",
-            async () => {
-              await append(routeEvent);
-              if (this.projectId === null) {
-                throw new Error("Slack router cannot create a project agent without a project id");
-              }
-              await appendTo(
-                streamPath,
-                ...slackAgentCreationEvents({
-                  channel: route.channel,
-                  connection,
-                  path: streamPath,
-                  projectId: this.projectId,
-                  threadTs: route.threadTs,
-                }),
-                routeEvent,
-                forwardedWebhookEvent,
-              );
-            },
-          );
+          blockProcessorWhile(async () => {
+            await append(routeEvent);
+            if (this.projectId === null) {
+              throw new Error("Slack router cannot create a project agent without a project id");
+            }
+            await appendTo(
+              streamPath,
+              ...slackAgentCreationEvents({
+                channel: route.channel,
+                connection,
+                path: streamPath,
+                projectId: this.projectId,
+                threadTs: route.threadTs,
+              }),
+              routeEvent,
+              forwardedWebhookEvent,
+            );
+          });
           return;
         }
 
         // Known route: forward the original webhook unchanged.
-        blockProcessorWhile(
-          "this forward is the only copy of the Slack message on its way to the agent; a failed append must hold the checkpoint for replay",
-          async () => {
-            await appendTo(streamPath, forwardedWebhookEvent);
-          },
-        );
+        blockProcessorWhile(async () => {
+          await appendTo(streamPath, forwardedWebhookEvent);
+        });
         return;
       }
       // slack/created and slack/thread-route-configured matter only through

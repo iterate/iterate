@@ -37,26 +37,24 @@ export class NotificationProcessor extends StreamProcessor<NotificationProcessor
     const { event, append, blockProcessorWhile } = args;
     switch (event?.type) {
       case "events.iterate.com/project/human-approval-requested": {
-        blockProcessorWhile(
-          "the notification request derives from this one approval event; a dropped append would silently skip notifying the humans",
-          () =>
-            append({
-              type: "events.iterate.com/notification/requested",
-              idempotencyKey: this.idempotencyKey("approval-requested", event),
-              payload: {
-                audience: { kind: "project" },
-                title: "Approval needed",
-                // Host only, never the full URL: paths and query strings can
-                // leak intent details onto lock screens. An unparseable
-                // "URL" (custom hold rules pass free text) renders verbatim.
-                body: `${event.payload.method} ${approvalRequestHost(event.payload.url)} is waiting for approval.`,
-                destination: {
-                  kind: "approvals",
-                  approvalRequestEventOffset: event.offset,
-                },
-                expiresAt: Date.parse(event.payload.expiresAt),
+        blockProcessorWhile(() =>
+          append({
+            type: "events.iterate.com/notification/requested",
+            idempotencyKey: this.idempotencyKey("approval-requested", event),
+            payload: {
+              audience: { kind: "project" },
+              title: "Approval needed",
+              // Host only, never the full URL: paths and query strings can
+              // leak intent details onto lock screens. An unparseable
+              // "URL" (custom hold rules pass free text) renders verbatim.
+              body: `${event.payload.method} ${approvalRequestHost(event.payload.url)} is waiting for approval.`,
+              destination: {
+                kind: "approvals",
+                approvalRequestEventOffset: event.offset,
               },
-            }),
+              expiresAt: Date.parse(event.payload.expiresAt),
+            },
+          }),
         );
         break;
       }

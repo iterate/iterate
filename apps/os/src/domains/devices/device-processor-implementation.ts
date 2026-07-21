@@ -87,45 +87,39 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
 
     switch (event?.type) {
       case "events.iterate.com/device/created":
-        blockProcessorWhile(
-          "the created event is delivered once; a dropped cross-post would leave the device out of the project catalog and never subscribed to notification intents",
-          () =>
-            appendTo(
-              "/",
-              {
-                type: "events.iterate.com/device/created",
-                idempotencyKey: this.idempotencyKey("catalog-created", event),
-                payload: event.payload,
-              },
-              notificationIntentCrossPost({
-                idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
-                path: this.path,
-              }),
-            ),
+        blockProcessorWhile(() =>
+          appendTo(
+            "/",
+            {
+              type: "events.iterate.com/device/created",
+              idempotencyKey: this.idempotencyKey("catalog-created", event),
+              payload: event.payload,
+            },
+            notificationIntentCrossPost({
+              idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+              path: this.path,
+            }),
+          ),
         );
         break;
       case "events.iterate.com/device/push-token-updated":
-        blockProcessorWhile(
-          "the token update is delivered once; a dropped re-arm would leave a re-enrolled device unsubscribed from notification intents",
-          () =>
-            appendTo(
-              "/",
-              notificationIntentCrossPost({
-                idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
-                path: this.path,
-              }),
-            ),
+        blockProcessorWhile(() =>
+          appendTo(
+            "/",
+            notificationIntentCrossPost({
+              idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+              path: this.path,
+            }),
+          ),
         );
         break;
       case "events.iterate.com/device/revoked":
-        blockProcessorWhile(
-          "the revocation is delivered once; a dropped removal would keep copying notification intents to a revoked device",
-          () =>
-            appendTo("/", {
-              type: "events.iterate.com/stream/subscription-removed",
-              idempotencyKey: this.idempotencyKey("notification-intent-cross-post-removed", event),
-              payload: { subscriptionKey: `notification-intent:${this.path}` },
-            }),
+        blockProcessorWhile(() =>
+          appendTo("/", {
+            type: "events.iterate.com/stream/subscription-removed",
+            idempotencyKey: this.idempotencyKey("notification-intent-cross-post-removed", event),
+            payload: { subscriptionKey: `notification-intent:${this.path}` },
+          }),
         );
         break;
       // notification-requested / attempt-started / ticket-observed / settled /

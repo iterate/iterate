@@ -147,10 +147,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // holding the frame keeps a failed settle append retryable via the
     // transport's redelivery; a dropped background attempt would strand the
     // obligation until something else happened to wake the stream.
-    blockProcessorWhile(
-      "the settle appends must land before this head event's deferred commit, or a lost settlement would strand its script obligation",
-      () => this.#startOrSettleOpenScriptRuns(args),
-    );
+    blockProcessorWhile(() => this.#startOrSettleOpenScriptRuns(args));
   }
 
   /**

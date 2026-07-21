@@ -94,12 +94,9 @@ export class SchedulerProcessor extends StreamProcessor<
     // silently lost repoint. The await is load-bearing — a bare synchronous
     // call here would NOT be awaited before the frame's final commit.
     if (!delivery.caughtUp) return;
-    blockProcessorWhile(
-      "the alarm must reflect the reduced state about to be acknowledged; a failed repoint must fail the frame so the transport redelivers it",
-      async () => {
-        await this.deps.repointAlarm(nextWakeAtMs(state, this.deps.now()));
-      },
-    );
+    blockProcessorWhile(async () => {
+      await this.deps.repointAlarm(nextWakeAtMs(state, this.deps.now()));
+    });
   }
 
   // ------------------------------------------------------------------ reduce

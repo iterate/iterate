@@ -450,7 +450,7 @@ describe("StreamProcessorRunner batch-division invariance", () => {
   /** Effect-per-event + obligation-drive-at-head hooks (all onto the sibling). */
   const effectHooks: TaskHooks = {
     onProcess: (args, eventKey) => {
-      args.blockProcessorWhile("test per-event echo", () =>
+      args.blockProcessorWhile(() =>
         args.appendTo(SIBLING, {
           type: ECHOED,
           idempotencyKey: eventKey("echo"),
@@ -460,7 +460,7 @@ describe("StreamProcessorRunner batch-division invariance", () => {
     },
     onHead: (args, stableKey) => {
       for (const id of args.state.open) {
-        args.blockProcessorWhile("test at-head drive", () =>
+        args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
             idempotencyKey: stableKey(`drive:${id}`),
@@ -556,7 +556,7 @@ describe("StreamProcessorRunner side-effect ordering", () => {
       onProcess: (args) => {
         const offset = args.event.offset;
         log.push(`process:${offset}`);
-        args.blockProcessorWhile("test ordering probe", async () => {
+        args.blockProcessorWhile(async () => {
           log.push(`block-start:${offset}`);
           await tick(); // a real async gap — ordering must survive macrotasks
           log.push(`block-end:${offset}`);
@@ -620,7 +620,7 @@ describe("StreamProcessorRunner crash/redelivery", () => {
   function gatedEchoHooks(state: { gateOffset?: number; gate?: Promise<void> }): TaskHooks {
     return {
       onProcess: (args, eventKey) => {
-        args.blockProcessorWhile("test gated echo", async () => {
+        args.blockProcessorWhile(async () => {
           if (args.event.offset === state.gateOffset && state.gate !== undefined) {
             await state.gate;
           }
@@ -740,7 +740,7 @@ describe("StreamProcessorRunner reduce-only refold", () => {
     const hooks: TaskHooks = {
       onProcess: (args, eventKey) => {
         effectCalls += 1;
-        args.blockProcessorWhile("test per-event echo", () =>
+        args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: ECHOED,
             idempotencyKey: eventKey("echo"),
@@ -922,8 +922,7 @@ describe("StreamProcessorRunner monotonic progress fence", () => {
       journal,
       hooks: {
         onProcess: (args) => {
-          if (args.event.offset === 1)
-            args.blockProcessorWhile("test wedge gate", () => gate.promise);
+          if (args.event.offset === 1) args.blockProcessorWhile(() => gate.promise);
         },
       },
     });
@@ -967,7 +966,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       onHead: (args, stableKey) => {
         headCalls.push({ open: [...args.state.open], event: args.event?.offset ?? null });
         for (const id of args.state.open) {
-          args.blockProcessorWhile("test at-head drive", () =>
+          args.blockProcessorWhile(() =>
             args.appendTo(SIBLING, {
               type: DRIVEN,
               idempotencyKey: stableKey(`drive:${id}`),
@@ -1054,12 +1053,10 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
         if (headAttempts === 1) {
           // The at-head pass's own blocking work fails (or the incarnation
           // dies mid-blocker — same durable outcome).
-          args.blockProcessorWhile("test failing at-head blocker", () =>
-            Promise.reject(new Error("at-head work failed")),
-          );
+          args.blockProcessorWhile(() => Promise.reject(new Error("at-head work failed")));
           return;
         }
-        args.blockProcessorWhile("test at-head drive", () =>
+        args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
             idempotencyKey: stableKey("drive:a"),
@@ -1108,7 +1105,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
         // args.event is NULL here — this is the event-less at-head pass.
         headCalls.push({ open: [...args.state.open], event: args.event?.offset ?? null });
         for (const id of args.state.open) {
-          args.blockProcessorWhile("test at-head drive", () =>
+          args.blockProcessorWhile(() =>
             args.appendTo(SIBLING, {
               type: DRIVEN,
               idempotencyKey: stableKey(`drive:${id}`),
@@ -1153,7 +1150,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
 
     const hooks: TaskHooks = {
       onProcess: (args) => {
-        args.blockProcessorWhile("test per-event append", () =>
+        args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: ECHOED,
             idempotencyKey: "test-task/per-event",
@@ -1162,7 +1159,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
         );
       },
       onHead: (args) => {
-        args.blockProcessorWhile("test at-head append", () =>
+        args.blockProcessorWhile(() =>
           args.appendTo(SIBLING, {
             type: DRIVEN,
             idempotencyKey: "test-task/at-head",
@@ -1256,7 +1253,7 @@ describe("StreamProcessorRunner parse-failure lane", () => {
         onHead: (args, stableKey) => {
           headCalls.push([...args.state.open]);
           for (const id of args.state.open) {
-            args.blockProcessorWhile("test at-head drive", () =>
+            args.blockProcessorWhile(() =>
               args.appendTo(SIBLING, {
                 type: DRIVEN,
                 idempotencyKey: stableKey(`drive:${id}`),
@@ -1445,7 +1442,7 @@ describe("StreamProcessorRunner recovery wiring", () => {
     const background = deferred();
     const hooks: TaskHooks = {
       onProcess: (args) => {
-        args.blockProcessorWhile("test keepalive blocker", () => tick());
+        args.blockProcessorWhile(() => tick());
         args.runInBackground(() => background.promise);
       },
     };
