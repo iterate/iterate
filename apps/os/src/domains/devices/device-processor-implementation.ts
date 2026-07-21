@@ -1,4 +1,4 @@
-import { StreamProcessor } from "iterate/processors";
+import { isIdempotencyConflict, StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import {
   DeviceProcessorContract,
@@ -394,18 +394,17 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
             pushTokenSecretUpdatedOffset: state.pushTokenSecret.updatedOffset,
           })
         : false;
-    if (pushTokenInvalid || settlements.length > 0) {
-      await this.append(
-        ...(pushTokenInvalidated
-          ? [
-              {
-                type: "events.iterate.com/device/revoked" as const,
-                idempotencyKey: this.idempotencyKey("push-token-invalid"),
-                payload: { reason: "push-token-invalid" as const },
-              },
-            ]
-          : []),
-        ...settlements.map(({ outcome, requestOffset }) => ({
+    if (pushTokenInvalidated) {
+      await this.append({
+        type: "events.iterate.com/device/revoked",
+        idempotencyKey: this.idempotencyKey("push-token-invalid"),
+        payload: { reason: "push-token-invalid" },
+      });
+    }
+    if (settlements.length > 0) {
+      await this.#appendUnlessLostIdempotencyRace(
+        (...events) => this.append(...events),
+        settlements.map(({ outcome, requestOffset }) => ({
           type: "events.iterate.com/device/notification-settled" as const,
           idempotencyKey: this.idempotencyKey(`notification-settled@${requestOffset}`),
           payload: { requestOffset, outcome },
@@ -458,28 +457,29 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
                 pushTokenSecretUpdatedOffset: input.pushTokenSecretUpdatedOffset,
               })
             : false;
-        await this.append(
-          ...(pushTokenInvalidated
-            ? [
-                {
-                  type: "events.iterate.com/device/revoked" as const,
-                  idempotencyKey: this.idempotencyKey("push-token-invalid"),
-                  payload: { reason: "push-token-invalid" as const },
+        if (pushTokenInvalidated) {
+          await this.append({
+            type: "events.iterate.com/device/revoked",
+            idempotencyKey: this.idempotencyKey("push-token-invalid"),
+            payload: { reason: "push-token-invalid" },
+          });
+        }
+        await this.#appendUnlessLostIdempotencyRace(
+          (...events) => this.append(...events),
+          [
+            {
+              type: "events.iterate.com/device/notification-settled",
+              idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
+              payload: {
+                requestOffset: input.requestOffset,
+                outcome: {
+                  kind: "rejected-by-expo",
+                  error: ticket.error,
+                  message: ticket.message,
                 },
-              ]
-            : []),
-          {
-            type: "events.iterate.com/device/notification-settled",
-            idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
-            payload: {
-              requestOffset: input.requestOffset,
-              outcome: {
-                kind: "rejected-by-expo",
-                error: ticket.error,
-                message: ticket.message,
               },
             },
-          },
+          ],
         );
         return;
       }
@@ -507,8 +507,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
     try {
       await append(...events);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/idempotency key .* already names a different event/.test(message)) throw error;
+      if (!isIdempotencyConflict(error)) throw error;
     }
   }
 }

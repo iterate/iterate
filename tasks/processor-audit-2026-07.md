@@ -31,7 +31,7 @@ Each finding below has a stable ID for PR references. Status values: `open`,
 
 ### A1. Idempotency-conflict tolerance is a message regex, copy-pasted 4×
 
-**Status:** open. **Found independently by 4 of 5 reviews.**
+**Status:** in-pr. **Found independently by 4 of 5 reviews.**
 
 The "losing an idempotency race is success" dance ends in the byte-identical
 line
@@ -90,7 +90,7 @@ concept.
 
 ### A2. Devices: race tolerance is asymmetric across writers of the same keys
 
-**Status:** open.
+**Status:** in-pr.
 
 Device's at-head sweep tolerates the settle race
 (`device-processor-implementation.ts:178`), but the two other writers of the
