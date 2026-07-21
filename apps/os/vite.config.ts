@@ -17,6 +17,8 @@ writeWranglerConfig();
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
+const deployedEnvironment = process.env.CLOUDFLARE_ENV?.trim();
+const uploadPostHogSourceMaps = deployedEnvironment === "prd";
 
 // Container-backed Durable Objects (the sandbox class) pair every container
 // with a `proxy-everything` egress sidecar. Upstream defaults to linux/amd64;
@@ -66,7 +68,10 @@ export default defineConfig({
         chunkFileNames: safeRollupChunkFileName,
       },
     },
-    sourcemap: true,
+    // Preview versions are ephemeral and retain full Cloudflare traces/logs;
+    // generating and uploading hundreds of PostHog maps used to dominate the
+    // preview build. Production keeps the existing symbolication contract.
+    sourcemap: deployedEnvironment ? uploadPostHogSourceMaps : true,
   },
   resolve: {
     tsconfigPaths: true,
@@ -123,9 +128,9 @@ export default defineConfig({
   ],
 });
 
-/** Upload both browser and Worker maps only during a real deploy build. */
+/** Upload both browser and Worker maps only for the production deploy build. */
 function posthogSourceMaps(): Plugin[] {
-  if (!process.env.CLOUDFLARE_ENV) return [];
+  if (!uploadPostHogSourceMaps) return [];
 
   return [
     // This is the official Rollup/Vite plugin. Its runtime hooks are compatible;

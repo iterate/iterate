@@ -4,7 +4,7 @@ import type { Itx } from "../itx/itx-react.ts";
 const EVENT_PAGE_SIZE = 500;
 
 type AgentReadinessHandle = {
-  create(): PromiseLike<void>;
+  create(): PromiseLike<unknown>;
   processor: {
     snapshot(): PromiseLike<{ state: { birthCertificate: unknown | null } }>;
   };

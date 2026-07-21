@@ -32,7 +32,7 @@ vi.mock("@iterate-com/ui/components/serialized-object-code-block", () => ({
   ),
 }));
 
-import { StreamStatePanel } from "./stream-state-panel.tsx";
+import { PresenceAvatar, StreamStatePanel } from "./stream-state-panel.tsx";
 
 const mountedRoots: Array<ReturnType<typeof createRoot>> = [];
 const reactEnvironment = globalThis as typeof globalThis & {
@@ -48,6 +48,28 @@ afterEach(async () => {
     for (const root of mountedRoots.splice(0)) root.unmount();
   });
   document.body.replaceChildren();
+});
+
+test("presence avatars render an authenticated user's picture with an initials fallback", async () => {
+  const { host, root } = mountPanel();
+  const entry: AgentUiPresenceEntry = {
+    subscriptionKey: "browser:tab-1",
+    direction: "inbound",
+    connected: true,
+    description: "browser",
+    user: {
+      email: "jonas@example.com",
+      name: "Jonas Temple",
+      picture: "https://example.com/jonas.png",
+    },
+  };
+
+  await act(async () => root.render(<PresenceAvatar entry={entry} busy={false} />));
+
+  expect(host.querySelector("[data-slot=avatar-image]")?.getAttribute("src")).toBe(
+    entry.user?.picture,
+  );
+  expect(host.querySelector("[data-slot=avatar-fallback]")?.textContent).toBe("JT");
 });
 
 test("a pushed runtime update does not reload or blank a focused processor snapshot", async () => {

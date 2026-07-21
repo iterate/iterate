@@ -26,8 +26,6 @@ import {
   integrationConnectionStreamPath,
   readRecord,
   readString,
-  SLACK_CONNECTED_EVENT_TYPE,
-  SLACK_DISCONNECTED_EVENT_TYPE,
   slackBotTokenSecretPath,
 } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
@@ -349,9 +347,9 @@ async function connectedSlackTeamId(input: {
   const event = await latestStreamEventOfTypes(
     input.projectId,
     integrationConnectionStreamPath("slack", input.connection),
-    [SLACK_CONNECTED_EVENT_TYPE, SLACK_DISCONNECTED_EVENT_TYPE],
+    ["events.iterate.com/slack/connected", "events.iterate.com/slack/disconnected"],
   );
-  if (event?.type !== SLACK_CONNECTED_EVENT_TYPE) return null;
+  if (event?.type !== "events.iterate.com/slack/connected") return null;
   return readString(readRecord(event.payload)?.teamId) ?? null;
 }
 

@@ -19,6 +19,7 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs, envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -534,14 +535,11 @@ export function localDevAuthJwks(input: {
   const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
-  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
-    string,
-    unknown
-  > & { d?: string };
-  if (!publicJwk.kid || !publicJwk.kty) {
-    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
-  }
-  return JSON.stringify({ keys: [publicJwk] });
+  return bakeStaticAuthJwks({
+    envName: "dev",
+    dopplerConfig: process.env.DOPPLER_CONFIG ?? "local dev",
+    secrets: { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk },
+  });
 }
 
 export const config = {

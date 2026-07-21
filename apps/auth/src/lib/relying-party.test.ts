@@ -8,6 +8,7 @@ const auth = createIterateAuth({
   clientId: "relying-party-test",
   clientSecret: "secret",
   issuer: "https://auth.example.test/api/auth",
+  jwks: { keys: [] },
   redirectURI: "https://app.example.test/api/iterate-auth/callback",
 });
 
@@ -87,6 +88,7 @@ describe("relying-party credential resolution", () => {
       clientId: "relying-party-session-test",
       clientSecret: "secret",
       issuer,
+      jwks: { keys: [] },
       redirectURI: `${resource}/api/iterate-auth/callback`,
     };
     const discoveryUrl = `${issuer}/.well-known/openid-configuration`;

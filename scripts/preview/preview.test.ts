@@ -141,17 +141,17 @@ describe("preview deploy ordering", () => {
     ).toEqual([["semaphore"]]);
   });
 
-  test("deploys auth and dummy-petshop before OS", () => {
+  test("deploys OS and its selected dependencies in one batch", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["auth", "dummy-petshop"], ["os"]]);
+    ).toEqual([["os", "auth", "dummy-petshop"]]);
   });
 
-  test("keeps auth dependents parallel after auth is ready", () => {
+  test("deploys the whole selected fleet in one batch", () => {
     expect(
       orderPreviewDeployBatches([
         cloudflarePreviewApps.os,
@@ -160,10 +160,7 @@ describe("preview deploy ordering", () => {
         cloudflarePreviewApps.auth,
         cloudflarePreviewApps["dummy-petshop"],
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([
-      ["auth", "dummy-petshop"],
-      ["os", "semaphore", "streams-example-app"],
-    ]);
+    ).toEqual([["os", "semaphore", "streams-example-app", "auth", "dummy-petshop"]]);
   });
 });
 
@@ -235,7 +232,10 @@ describe("preview workflow scope", () => {
       paths: expect.arrayContaining([
         ".bun-version",
         "apps/dummy-petshop/**",
+        "apps/mobile/**",
+        "playwright.config.ts",
         "packages/iterate/**",
+        "specs/**",
       ]),
       previewDependencies: ["auth", "dummy-petshop"],
       previewTestDependencyBaseUrlEnvVars: {
@@ -245,6 +245,9 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- packages/iterate/**");
+    expect(
+      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
+    ).toContain("- specs/**");
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("bun-version-file: .bun-version");
@@ -267,6 +270,28 @@ describe("preview workflow scope", () => {
       "OS_BASE_URL=https://os.iterate-preview-7.com",
       "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
     ]);
+  });
+
+  test("selects OS and its dependencies for a root Playwright-only change", async () => {
+    const apps = await selectPreviewAppsForPullRequest({
+      githubToken: "test-token",
+      previousState: {
+        apps: {},
+        environmentConfigLease: null,
+        notice: null,
+      },
+      pullRequestBaseSha: "base-sha",
+      pullRequestHeadSha: "current-head",
+      pullRequestNumber: 2140,
+      repositoryFullName: "iterate/iterate",
+      fetchCompare: async () => ({
+        status: "ahead",
+        changedFilenames: ["specs/forged-session-repl.spec.ts"],
+      }),
+      probeAppServing: async () => ({ ok: true, detail: "HTTP 200" }),
+    });
+
+    expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
   });
 
   test("refuses to run OS e2e against a missing or stale Petshop deployment", () => {
@@ -493,45 +518,64 @@ describe("preview test commands", () => {
     expect(workflow).not.toContain("            /tmp/marathon");
   });
 
-  test("keeps the OS TUI, vitest, and Playwright sub-lanes sequential", () => {
+  test("starts every isolated OS sub-lane in parallel", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    // Only the chromium download runs in the background: it does not touch the
-    // deployed slot. The three remote suites must not overlap their independent
-    // worker pools and accidentally exceed the slot's tested concurrency.
-    const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts >";
-    const e2eLane = "pnpm e2e --project node >";
+    const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
+    const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts";
+    const e2eLane = "pnpm e2e --project node";
     const playwrightSpec = "pnpm --dir ../.. spec";
 
     expect(script).toContain(playwrightInstall);
+    expect(script).toContain(smokeLane);
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
+    expect(script).toContain("env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
     expect(script).toContain('wait "$PW_INSTALL_PID"');
-    expect(script).not.toContain("TUI_PID");
-    expect(script).not.toContain("E2E_PID");
+    expect(script).toContain("SMOKE_PID");
+    expect(script).toContain("TUI_PID");
+    expect(script).toContain("E2E_PID");
+    expect(script).toContain('wait "$SMOKE_PID"');
+    expect(script).toContain('wait "$TUI_PID"');
+    expect(script).toContain('wait "$E2E_PID"');
+    expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
-    // Install kicks off first; each remote suite finishes before the next one
-    // starts, and the install is joined before Playwright needs Chromium.
-    expect(script.indexOf(playwrightInstall)).toBeLessThan(script.indexOf(tuiLane));
-    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(e2eLane));
-    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
-    expect(script.indexOf(tuiLane)).toBeLessThan(script.indexOf(playwrightSpec));
-    expect(script.indexOf(e2eLane)).toBeLessThan(script.indexOf(playwrightSpec));
+    // Each background lane starts before any join. Playwright starts as soon
+    // as Chromium is ready while those remote lanes are still running.
+    for (const lane of [smokeLane, tuiLane, e2eLane]) {
+      expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
+    }
+    expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
+    expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$E2E_PID"'));
   });
 
-  test("budgets the serialized OS preview lane from its measured green floor", () => {
+  test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
-      previewDeployBudgetMs: 115_000,
-      previewTestBudgetMs: 560_000,
+      previewDeployBudgetMs: 90_000,
+      previewReadyBearerTokenEnvVar: "APP_CONFIG_ADMIN_API_SECRET",
+      previewReadyWorkerVersion: {
+        probeQueryParam: "deployment-probe",
+        probeWaveCount: 10,
+        stableForMs: 10_000,
+      },
+      previewTestBudgetMs: 100_000,
+    });
+    expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
+      previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+      previewReadyWorkerVersion: {
+        probeQueryParam: "deployment-probe",
+        probeWaveCount: 10,
+        stableForMs: 10_000,
+      },
     });
 
     const workflow = parseYaml(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ) as { jobs: { preview: { "timeout-minutes": number } } };
-    // The ceiling leaves room for one retry of the slowest remote spec; 15
-    // minutes killed a 55/56-green run mid-retry and lost its artifacts.
+    // This is a diagnostic backstop, not the expected duration. Individual
+    // lanes retain tighter watchdogs and only tests own retries.
     expect(workflow.jobs.preview["timeout-minutes"]).toBe(20);
   });
 });
@@ -594,6 +638,296 @@ describe("preview readiness URLs", () => {
       await expect(readiness).resolves.toEqual({ ok: true });
       expect(fetchMock).toHaveBeenCalledTimes(4);
     } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("proves every Durable Object wave in parallel and retries only failed waves", async () => {
+    vi.useFakeTimers();
+    let waveOneAttempts = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const wave = new URL(String(input)).searchParams.get("deployment-probe");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer readiness-secret");
+      if (wave === "1" && waveOneAttempts++ === 0) {
+        return Response.json(
+          {
+            deploymentProbeWave: 1,
+            deploymentProbeWaveCount: 3,
+            settlingReason: "durable-object-lifecycle",
+          },
+          {
+            status: 503,
+            headers: { "x-iterate-worker-version": "expected-version" },
+          },
+        );
+      }
+      return Response.json(
+        {
+          deploymentProbeWave: Number(wave),
+          deploymentProbeWaveCount: 3,
+        },
+        {
+          status: 200,
+          headers: { "x-iterate-worker-version": "expected-version" },
+        },
+      );
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        readinessBearerToken: "readiness-secret",
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 3,
+          stableForMs: 2_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(
+        fetchMock.mock.calls.map(([input]) =>
+          new URL(String(input)).searchParams.get("deployment-probe"),
+        ),
+      ).toEqual(["0", "1", "2", "1", "0", "1", "2"]);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("rejects a partially configured wave barrier instead of silently taking the simple path", async () => {
+    await expect(
+      waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          stableForMs: 2_000,
+        } as never,
+      }),
+    ).rejects.toThrow(/probeQueryParam and probeWaveCount together/);
+  });
+
+  test("fails immediately on an unclassified server error instead of retrying it as rollout", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json(
+        { error: "application bug" },
+        {
+          status: 500,
+          headers: { "x-iterate-worker-version": "expected-version" },
+        },
+      ),
+    );
+
+    try {
+      await expect(
+        waitForHttpReadiness({
+          signal: undefined,
+          timeoutMs: 10_000,
+          url: new URL("https://os.iterate-preview-8.com/api/health"),
+          workerVersion: {
+            expected: "expected-version",
+            probeQueryParam: "deployment-probe",
+            probeWaveCount: 1,
+            stableForMs: 2_000,
+          },
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining('HTTP 500: {"error":"application bug"}'),
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("retries an old Worker's server response without requiring its newer settling schema", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: "old readiness response" },
+          {
+            status: 503,
+            headers: { "x-iterate-worker-version": "previous-version" },
+          },
+        ),
+      )
+      .mockImplementation(async (input) => {
+        const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
+        return Response.json(
+          { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
+          {
+            status: 200,
+            headers: { "x-iterate-worker-version": "expected-version" },
+          },
+        );
+      });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("retries an unattributed framework error within the bounded rollout window", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            message: "HTTPError",
+            status: 500,
+            unhandled: true,
+          },
+          { status: 500 },
+        ),
+      )
+      .mockImplementation(async (input) => {
+        const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
+        return Response.json(
+          { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
+          {
+            status: 200,
+            headers: { "x-iterate-worker-version": "expected-version" },
+          },
+        );
+      });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 10_000,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(readiness).resolves.toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("reports the last unattributed framework error when the rollout window expires", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json(
+        {
+          message: "HTTPError",
+          reference: "8hluru350urjpunkhe9eq8e0",
+          status: 500,
+          unhandled: true,
+        },
+        { status: 500 },
+      ),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 1_500,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(readiness).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining("8hluru350urjpunkhe9eq8e0"),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      error.mockRestore();
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  test("cannot report ready when final wave validation finishes after the deadline", async () => {
+    vi.useFakeTimers();
+    let requestCount = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (requestCount++ > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
+      return Response.json(
+        { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
+        {
+          status: 200,
+          headers: { "x-iterate-worker-version": "expected-version" },
+        },
+      );
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const readiness = waitForHttpReadiness({
+        signal: undefined,
+        timeoutMs: 2_500,
+        url: new URL("https://os.iterate-preview-8.com/api/health"),
+        workerVersion: {
+          expected: "expected-version",
+          probeQueryParam: "deployment-probe",
+          probeWaveCount: 1,
+          stableForMs: 1_000,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(readiness).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining("deadline expired during complete-set revalidation"),
+      });
+    } finally {
+      error.mockRestore();
       fetchMock.mockRestore();
       vi.useRealTimers();
     }

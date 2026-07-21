@@ -10,7 +10,7 @@
 import { computeHmacHex, timingSafeStringEqual } from "../secrets/utils.ts";
 import { routeIntegrationWebhook } from "./integration-streams.ts";
 import { githubWebhookAssociations } from "./github-webhook-associations.ts";
-import { GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE, parseJsonRecord } from "./utils.ts";
+import { parseJsonRecord } from "./utils.ts";
 import type { AppConfig } from "~/config.ts";
 
 const WEBHOOK_PATH = "/api/integrations/github/webhook";
@@ -65,7 +65,7 @@ export async function fetchGithubWebhook(input: {
         },
         installationId,
       },
-      type: GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
+      type: "events.iterate.com/github/webhook-received",
     },
     externalId: installationId,
     slug: "github",

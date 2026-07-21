@@ -58,7 +58,7 @@ test("phone approver: enrolled key signs a real held request and the door releas
   const echo = await startEgressEcho();
   try {
     const slug = `mobile-approver-e2e-${Date.now().toString(36)}`;
-    const project = await adminSession.projects.create({ slug });
+    const project = await adminSession.projects.get(slug).create({});
     const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
@@ -152,7 +152,7 @@ test("phone approver: a rejection refuses the held request without signing anyth
   const echo = await startEgressEcho();
   try {
     const slug = `mobile-approver-reject-e2e-${Date.now().toString(36)}`;
-    const project = await adminSession.projects.create({ slug });
+    const project = await adminSession.projects.get(slug).create({});
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 

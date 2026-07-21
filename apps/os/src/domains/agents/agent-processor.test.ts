@@ -306,6 +306,63 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.events(REQUESTED)).toHaveLength(2);
   });
 
+  it("interrupt racing a NON-streamed completion: the cancelled settlement still carries the full text", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(1);
+
+    // Park the success batch at the substrate door: the completion resolves
+    // with its full text (no chunks ever streamed — the unified transport's
+    // non-ReadableStream fallback), but the assistant+settled append has not
+    // committed. This is the window an interrupt races into and wins the
+    // settle key.
+    const realAppend = h.stream.append.bind(h.stream);
+    let releaseSuccessBatch = () => {};
+    const successBatchHeld = new Promise<void>((resolve) => {
+      releaseSuccessBatch = resolve;
+    });
+    h.stream.append = async (...inputs) => {
+      if (inputs.some((input) => input.idempotencyKey?.includes("assistant-context@"))) {
+        await successBatchHeld;
+      }
+      return realAppend(...inputs);
+    };
+
+    await h.play(
+      () => h.llm.respond("The complete non-streamed answer."),
+      ["append", userMessage("actually stop", { behaviour: "interrupt-current-request" })],
+      () => releaseSuccessBatch(),
+    );
+
+    // The interrupt won the settle key, and the dropped success batch took
+    // `completion.text` with it — but the text survives because the resolved
+    // completion is recorded as the in-flight partial BEFORE the success
+    // append is awaited. (Chunk accumulation alone left partialText empty
+    // here: nothing streamed, so the whole response used to vanish.)
+    expect(h.events(SETTLED)).toMatchObject([
+      {
+        payload: {
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "The complete non-streamed answer.",
+          },
+        },
+      },
+    ]);
+    const preserved = h
+      .state()
+      .contextItems.find((item) => item.payload.content.includes("partial output follows"));
+    expect(preserved!.payload.content).toContain("The complete non-streamed answer.");
+
+    // The interrupting message's own turn sees what the user never saw lost.
+    await h.play(["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(2);
+    expect(h.llm.calls[1]!.messages.map((message) => message.content).join("\n")).toContain(
+      "The complete non-streamed answer.",
+    );
+  });
+
   it("mirrors a visible web message into assistant history so the model sees what it sent", async () => {
     const h = makeAgentHarness();
     const files = [
@@ -1651,7 +1708,7 @@ describe("AgentProcessor stream facts", () => {
     expect(AgentLiveState.safeParse({ unexpected: true }).success).toBe(false);
 
     // agent/created is deliberately open (provenance may ride along), but the
-    // fold keeps policy out of the birth certificate: a smuggled config is
+    // reduce keeps policy out of the birth certificate: a smuggled config is
     // inert — configuration only ever enters through agent/configured.
     const h = makeAgentHarness();
     await h.play([
@@ -1663,6 +1720,22 @@ describe("AgentProcessor stream facts", () => {
     ]);
     expect(h.state().birthCertificate).not.toBeNull();
     expect(h.state().config.llm.model).not.toBe("smuggled-model");
+  });
+
+  it("a second birth certificate is a no-op: the first one wins", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", { type: "events.iterate.com/agent/created", payload: {} }],
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/created",
+          payload: { note: "impostor" },
+        },
+      ],
+    );
+
+    expect(h.state().birthCertificate).toEqual({ createdAtOffset: 1 });
   });
 });
 

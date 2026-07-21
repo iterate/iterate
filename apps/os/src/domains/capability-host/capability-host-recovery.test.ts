@@ -1,15 +1,15 @@
 // Script-execution recovery: the capability-host processor's at-head
-// reconciliation (`onCaughtUp`) of journaled script obligations against this
+// processEvent pass compares stream-committed script obligations against this
 // incarnation's live executions — the same doctrine as the LLM providers, with
 // the script-specific policy that a `started` obligation is settled as failure
 // and NEVER re-run (scripts may have half-executed non-idempotent effects).
 //
 // The processor is driven the way production drives it: a REAL
 // createStreamProcessorRegistry (runner + durableObjectRecovery + keepalive
-// alarm) over a fake DurableObjectState, the in-memory MemoryStream journal,
+// alarm) over a fake DurableObjectState, the in-memory MemoryStream,
 // and a virtual clock — the same harness shape as
 // stream-processor-registry.test.ts. `crash()` is an eviction: in-flight work
-// dies; the journal, KV progress, and the durable alarm survive.
+// dies; the stream, KV progress, and the durable alarm survive.
 
 import { describe, expect, it, vi } from "vitest";
 import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
@@ -130,10 +130,10 @@ function makeHarness() {
     get registry() {
       return registry;
     },
-    /** The runner's committed fold — the read the DO's registry serves. */
+    /** The runner's committed reduced state — the read the DO's registry serves. */
     state: () => registry.reads(processor).currentState,
     /** Evict the incarnation: registry, runner, and in-flight script bodies
-     * die; the journal, KV progress, and the durable alarm survive. */
+     * die; the stream, KV progress, and the durable alarm survive. */
     crash() {
       pending = [];
       boot();
@@ -180,8 +180,8 @@ function makeHarness() {
   return harness;
 }
 
-describe("script execution reconciliation", () => {
-  it("does not refold retired lifecycle events into current script obligations", async () => {
+describe("script execution recovery at head", () => {
+  it("does not reduce retired lifecycle events into current script obligations", async () => {
     const h = makeHarness();
     await h.stream.append(
       {
@@ -422,8 +422,8 @@ describe("script execution reconciliation", () => {
       ran.push(code);
       return { status: "succeeded" as const, result: 42 };
     };
-    // Recovery reads the head FOLD, not any particular batch: the caught-up
-    // pass after this delivery finds the undriven obligation and runs it.
+    // Recovery reads the head REDUCED STATE, not any particular batch: the
+    // caught-up pass after this delivery finds the undriven obligation and runs it.
     await h.deliverPending();
     await vi.waitFor(() => {
       expect(h.stream.events.some((event) => event.type === T.completed)).toBe(true);
@@ -451,11 +451,10 @@ describe("script execution reconciliation", () => {
     expect(h.stream.events.some((event) => event.type === T.completed)).toBe(false);
     expect(h.state().scriptExecutions["exec-5"]).toMatchObject({ status: "requested" });
 
-    // The stream recovers; the next caught-up pass retries the whole attempt
-    // from the fold. The trigger is a CONSUMED lifecycle re-check event
-    // (`stream/woken` — a stream restart) reaching head: the reconcile only
-    // fires when a consumed event is delivered at head, never on a fold no
-    // consumed event carried it to.
+    // The stream recovers; the next at-head pass retries the whole attempt
+    // from the reduced state. The trigger is any append reaching head —
+    // here `stream/woken` (a stream restart), which the contract does NOT
+    // consume: the runner's event-less at-head pass fires for it anyway.
     h.stream.failAppendsOfType = undefined;
     await h.stream.append({
       type: "events.iterate.com/stream/woken",
@@ -546,8 +545,8 @@ describe("script execution reconciliation", () => {
       expect(h.stream.events.filter((event) => event.type === T.completed)).toHaveLength(1);
     });
 
-    // A fresh incarnation replaying the WHOLE journal (durable progress
-    // erased): the fold re-creates and re-settles the obligation in order;
+    // A fresh incarnation replaying the WHOLE stream (durable progress
+    // erased): the replay re-creates and re-settles the obligation in order;
     // the idempotent completion append collapses at the dedup layer.
     h.kv.clear();
     h.crash();
@@ -560,10 +559,10 @@ describe("script execution reconciliation", () => {
 });
 
 describe("eviction recovery end to end", () => {
-  it("died owing work → keepalive alarm → revived fact → its delivery reaches head → onCaughtUp settles the orphan", async () => {
+  it("died owing work → keepalive alarm → revived fact → its delivery reaches head → the at-head pass settles the orphan", async () => {
     const h = makeHarness();
     // Incarnation 1 starts the script and HANGS mid-body: the started fact is
-    // journaled, the attempt rides the keepalive, the revival alarm is armed.
+    // committed, the attempt rides the keepalive, the revival alarm is armed.
     h.run.impl = () => new Promise<never>(() => {});
     await h.stream.append({
       type: T.requested,
@@ -573,20 +572,20 @@ describe("eviction recovery end to end", () => {
     await vi.waitFor(() => {
       expect(h.stream.events.some((event) => event.type === T.started)).toBe(true);
     });
-    // Fold the started fact too, so the acknowledged cursor sits AT HEAD:
+    // Reduce the started fact too, so the acknowledged cursor sits AT HEAD:
     // the zero-lag wedge — after the eviction, no ordinary redelivery exists
     // to hand this processor a recovery turn.
     await h.deliverPending();
     expect((await h.wake()).checkpointOffset).toBe(h.head());
     expect(h.alarm.at).not.toBeNull();
 
-    h.crash(); // the in-flight body dies; journal, KV, and the alarm survive
+    h.crash(); // the in-flight body dies; stream, KV, and the alarm survive
     h.run.impl = () => {
       throw new Error("must not re-run an orphaned script");
     };
     await h.advance(KEEPALIVE_ALARM_LEAD_MS + 1);
 
-    // durableObjectRecovery's revival pass journaled the processor-scoped
+    // durableObjectRecovery's revival pass appended the processor-scoped
     // fact — the ONLY thing that creates a delivery turn at zero lag.
     const revived = h.stream.events.filter((event) => event.type === T.revived);
     expect(revived).toHaveLength(1);
@@ -596,9 +595,10 @@ describe("eviction recovery end to end", () => {
       version: "v-test",
     });
 
-    // Its ordinary delivery drives the runner to head; onCaughtUp compares
-    // the fold's `started` obligation against the (empty) live-execution set
-    // and settles it as an orphan failure — the body is never re-run.
+    // Its ordinary delivery drives the runner to head; the at-head pass
+    // compares the reduced state's `started` obligation against the (empty)
+    // live-execution set and settles it as an orphan failure — the body is
+    // never re-run.
     await h.deliverPending();
     await vi.waitFor(() => {
       const completed = h.stream.events.find((event) => event.type === T.completed);

@@ -102,9 +102,13 @@ cover only the shared Cloudflare resource/deploy skeleton.
    inbound-email catch-all until deploy because Cloudflare does not accept a
    route to a missing script.
 3. Commit envs.ts (wrangler.jsonc is generated on demand, never committed).
-4. Deploy auth first (`pnpm --dir apps/auth run deploy --env <name>`), then
-   os (its deploy bakes auth's JWKS, fails fast if auth isn't serving, and
-   requires the post-upload inbound-email catch-all to reconcile).
+4. After Doppler and resources are ready, deploy auth and os concurrently.
+   Both consume one Doppler-owned signing key; os derives only its public half
+   and never waits for auth's JWKS endpoint. A brand-new environment still
+   needs the auth service to exist before Cloudflare can resolve os's service
+   binding, but subsequent revisions have no JWT-driven deployment order. The
+   os deploy also requires the post-upload inbound-email catch-all to
+   reconcile.
 
 ## Cloudflare accounts
 

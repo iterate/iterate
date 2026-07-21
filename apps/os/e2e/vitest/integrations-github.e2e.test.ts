@@ -57,7 +57,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `github-${RUN}` });
+    using project = await itx.projects.get(`github-${RUN}`).create({});
     await project.__describe();
 
     const connectionPath = `/secrets/integrations/mygithub-${RUN}/acme`;

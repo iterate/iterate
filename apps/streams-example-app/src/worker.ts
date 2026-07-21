@@ -7,6 +7,14 @@ import { parseStreamRpcRequest } from "./lib/stream-rpc.ts";
 import { parseConfig } from "./config.ts";
 import { createStreamsIterateAuth, resolveRequestAdmin } from "./iterate-auth.ts";
 import { trustedInternalAuthContext } from "~/auth.ts";
+import {
+  deploymentReadinessProbeIndexes,
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWave,
+  deploymentReadinessRequestAuthorized,
+  deploymentReadinessResponse,
+} from "~/deployment-readiness.ts";
+import { DurableObjectNameCodec } from "~/domains/durable-object-names.ts";
 import { StreamRpcTarget } from "~/rpc-targets.ts";
 import { resolveStreamPath } from "~/domains/streams/utils.ts";
 
@@ -66,7 +74,50 @@ export default createServerEntry({
     const url = new URL(request.url);
 
     if (url.pathname === "/api/__internal/health") {
-      return new Response("ok", { headers: { "content-type": "text/plain" } });
+      const version = workerEnv.CF_VERSION_METADATA?.id ?? "unversioned";
+      const probeSequence = url.searchParams.get(deploymentReadinessProbeQueryParam);
+      if (probeSequence === null) {
+        return new Response("ok", {
+          headers: {
+            "cache-control": "no-store",
+            "content-type": "text/plain",
+            "x-iterate-worker-version": version,
+          },
+        });
+      }
+
+      const expectedToken = parseConfig(workerEnv).iterateAuth?.clientSecret.exposeSecret();
+      if (!deploymentReadinessRequestAuthorized(request, expectedToken)) {
+        return deploymentProbeErrorResponse({ error: "unauthorized", status: 401, version });
+      }
+      const probeWave = deploymentReadinessProbeWave(probeSequence);
+      if (probeWave === null) {
+        return deploymentProbeErrorResponse({
+          error: "invalid-probe-wave",
+          status: 400,
+          version,
+        });
+      }
+
+      const probes = deploymentReadinessProbeIndexes(probeWave).map((probe) => {
+        const stub = workerEnv.STREAM.getByName(
+          DurableObjectNameCodec.stringify(
+            {
+              path: "/deployment-readiness",
+              projectId: null,
+              props: { probe: String(probe) },
+            },
+            { allowNullProjectId: true },
+          ),
+        );
+        return { name: `STREAM:${probe}`, readVersion: () => stub.deploymentVersion() };
+      });
+      return await deploymentReadinessResponse({
+        app: "streams-example-app",
+        probes,
+        version,
+        wave: probeWave,
+      });
     }
 
     // Parsed per request, NOT at module scope (matching apps/os): a fresh
@@ -148,3 +199,16 @@ export default createServerEntry({
     return withAuthHeaders(response);
   },
 });
+
+function deploymentProbeErrorResponse(input: { error: string; status: number; version: string }) {
+  return Response.json(
+    { ok: false, app: "streams-example-app", error: input.error, version: input.version },
+    {
+      status: input.status,
+      headers: {
+        "cache-control": "no-store",
+        "x-iterate-worker-version": input.version,
+      },
+    },
+  );
+}

@@ -67,7 +67,7 @@ function ProjectSandboxDetailContent() {
   const { project, routeConfig } = Route.useLoaderData();
   const sandboxPath = `/sandboxes/${params.sandboxId}`;
   const sandboxState = useLiveState(
-    (itx) => itx.sandboxes.liveState(sandboxPath),
+    (itx) => itx.sandboxes.get(sandboxPath).liveState,
     (state) => state,
     [sandboxPath],
   );

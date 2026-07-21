@@ -76,7 +76,7 @@ export const AppConfig = z.object({
       issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
-      jwks: JSONWebKeySet.optional(),
+      jwks: JSONWebKeySet,
       resource: publicValue(z.url()).optional(),
       emailOtpEnabled: publicValue(z.boolean().default(false)),
     })

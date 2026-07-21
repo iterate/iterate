@@ -57,7 +57,8 @@ import {
   isRepoNotSeededError,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
-import { REPO_DEFAULT_BRANCH, RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { linkRepoToGithub } from "./github-link.ts";
 import {
@@ -107,6 +108,11 @@ type RepoHead = {
 };
 
 export class RepoDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!, { allowNullProjectId: true });
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),

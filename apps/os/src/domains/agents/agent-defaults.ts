@@ -4,15 +4,14 @@
 // processor exists on a stream.
 
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
+import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
-import {
-  CapabilityHostProcessorContract,
-  capabilityFallbackForScope,
-} from "../capability-host/capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
@@ -382,11 +381,22 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
   });
 }
 
+/** The `agent/created` payload — the agent's birth certificate (a loose
+ * object of caller-authored birth facts; `{}` is the norm). */
+export type AgentCreateInput = z.input<
+  (typeof AgentProcessorContract.events)["events.iterate.com/agent/created"]["payloadSchema"]
+>;
+
 /**
  * Build the complete creation batch for one agent stream. Every agent has the
  * same agent + capability-host pair; a router may add one explicitly named
  * sibling processor and its birth certificate. The stream path remains only
  * an address and never selects a processor.
+ *
+ * The created event's idempotency key is payload-free on purpose: a repeated
+ * create with the identical payload dedupes and resolves, while a create over
+ * an EXISTING agent with a different payload is rejected by the stream's
+ * same-key-different-body rule — the loud duplicate-create failure.
  */
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
@@ -394,6 +404,8 @@ export function agentCreationForPath<
 >(input: {
   agentPath: string;
   projectId: string;
+  /** The `agent/created` birth certificate payload. Defaults to `{}`. */
+  payload?: AgentCreateInput;
   /** Events that must commit in the same creation batch. */
   initialEvents?: readonly InitialEvent[];
   /**
@@ -425,20 +437,19 @@ export function agentCreationForPath<
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
     idempotencyKey: `agent/created:${projectId}:${agentPath}`,
-    payload: {},
+    payload: input.payload ?? {},
   });
-  const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
-    type: "events.iterate.com/capability-host/created",
-    idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
-    // A capability miss at the agent's scope re-resolves directly at the
-    // project root host — one hop, journaled at birth, no path walking.
-    payload: { config: {}, fallback: capabilityFallbackForScope(agentPath) },
-  });
+  // The agent's own capability scope: the shared capability-host birth batch
+  // (created + processor subscription), with the default one-hop fallback to
+  // the project root host journaled at birth — no path walking.
+  const [capabilityHostBirthCertificate, capabilityHostSubscription] = capabilityHostCreationEvents(
+    { path: agentPath, projectId },
+  );
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
-    // call, so agent birth never touches the workspace Durable Object. (No
-    // sandbox mount: sandboxes are pets, created explicitly via
-    // itx.sandboxes.create.)
+    // call. AgentRpcTarget.create explicitly births that addressed workspace
+    // before returning the agent handle. (No sandbox mount: sandboxes are
+    // pets, created explicitly via itx.sandboxes.get(path).create.)
     type: "events.iterate.com/capability-host/capability-provided",
     idempotencyKey: `capability-host/workspace-provided:v${AGENT_WORKSPACE_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: {
@@ -468,7 +479,17 @@ export function agentCreationForPath<
     // prompt budget test holds the line). System context never wakes the LLM
     // by itself.
     type: "events.iterate.com/agents/context-added",
-    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}`,
+    // The body embeds directory-derived project facts, so the occurrence
+    // identity must carry them too: a create replayed after the directory
+    // record changed (or with facts where a router birth had none) appends a
+    // fresh superseding occurrence in the same keyed slot instead of tripping
+    // the stream's same-key-different-body rejection. Fact-less births keep
+    // the bare key, so router replays dedupe exactly as before.
+    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}${
+      project === undefined
+        ? ""
+        : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
+    }`,
     payload: {
       role: "system",
       key: "agent/boot-context",
@@ -496,12 +517,6 @@ export function agentCreationForPath<
     idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
     processor: ["agents", ["get", agentPath], "processor"],
     processorSlug: AgentProcessorContract.slug,
-  });
-  const capabilityHostSubscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
-    durableObjectName,
-    idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-    processor: ["capabilityHosts", ["get", agentPath], "processor"],
-    processorSlug: CapabilityHostProcessorContract.slug,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",

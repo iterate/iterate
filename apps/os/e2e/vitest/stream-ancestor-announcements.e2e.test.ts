@@ -11,7 +11,7 @@ test("a newborn stream announces itself to every ancestor", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `announce-birth-${marker}` });
+  using project = await itx.projects.get(`announce-birth-${marker}`).create({});
   using root = project.streams.get("/");
   using parent = project.streams.get(`/announce-birth-${marker}`);
   using child = project.streams.get(childPath);
@@ -45,7 +45,7 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `announce-heal-${marker}` });
+  using project = await itx.projects.get(`announce-heal-${marker}`).create({});
   using root = project.streams.get("/");
   using child = project.streams.get(childPath);
 

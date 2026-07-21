@@ -21,9 +21,9 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({
-    slug: `scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
-  });
+  using project = await itx.projects
+    .get(`scheduler-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
+    .create({});
 
   const view = await project.scheduler.set({
     key,
@@ -108,9 +108,9 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({
-    slug: `scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`,
-  });
+  using project = await itx.projects
+    .get(`scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
+    .create({});
 
   await project.scheduler.set({
     key,

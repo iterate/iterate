@@ -336,8 +336,8 @@ export interface SemaphoreEnv {
   baseUrl: string;
   /**
    * The env's apps/auth deployment. Semaphore is a relying party of the same
-   * issuer as os: deploys bake the issuer's JWKS and requests authenticate
-   * with iterate sessions or bearer access tokens.
+   * issuer as os: deploys derive its public signing key from Doppler, and
+   * requests authenticate with iterate sessions or bearer access tokens.
    */
   authBaseUrl: string;
   resources: {
@@ -427,8 +427,8 @@ export interface StreamsExampleEnv {
   baseUrl: string;
   /**
    * The env's apps/auth deployment. The playground is a relying party of the
-   * same issuer as os: deploys bake the issuer's JWKS and requests
-   * authenticate with iterate sessions or bearer access tokens.
+   * same issuer as os: deploys derive its public signing key from Doppler, and
+   * requests authenticate with iterate sessions or bearer access tokens.
    */
   authBaseUrl: string;
 }

@@ -203,7 +203,7 @@ function getOrCreateProject(
     `const existing = projects.find((p) => (byId ? p.id === ref : p.slug === ref));`,
     `if (existing) return existing;`,
     `if (byId) throw new Error("No project with id " + ref + " on this deployment.");`,
-    `const project = await itx.projects.create({ slug: ref });`,
+    `const project = await itx.projects.get(ref).create({});`,
     `const description = await project.__describe();`,
     `return { id: description.projectId, slug: ref, organizationId: null, organizationSlug: null, organizationName: null };`,
   ].join("\n");

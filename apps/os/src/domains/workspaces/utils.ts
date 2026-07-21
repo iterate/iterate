@@ -66,7 +66,7 @@ function defaultWorkspaceMounts(): Record<string, WorkspaceMount> {
 
 /**
  * The mount-table door guard, shared by `create` and `configure`: raw stream
- * appends bypass it (and merely fold into config), but every platform door
+ * appends bypass it (and merely reduce into config), but every platform door
  * validates here so a bad table fails loudly at the caller instead of quietly
  * mis-routing reads. Returns the table with normalized mount-point keys.
  * Values may be partial (configure patches) or null (unmount) — `repoPath` is
@@ -98,28 +98,49 @@ export function normalizeWorkspaceMountKeys<
 }
 
 /**
- * The two events that birth a workspace: the `workspace/created` birth
- * certificate plus the processor subscription that wires the workspace's
- * Durable Object to its stream. Every birth path (first touch and the
- * explicit create door, which both run inside the DO) appends this SAME
- * certificate, so races collapse on the idempotencyKey; custom mount tables
- * are `workspace/configured` patches on top, never certificate variants.
+ * The complete atomic workspace birth batch: the `workspace/created` birth
+ * certificate, an optional initial `workspace/configured` patch merged over
+ * the default mount table, and the processor subscription. The created and
+ * configured keys contain identity only: identical retries dedupe, while a
+ * retry with a different initial table fails through the stream's
+ * same-key-different-body check.
  */
-export function workspaceCreationEvents(input: { path: string; projectId: string }) {
+export function workspaceCreationEvents(input: {
+  mounts?: Record<string, WorkspaceMount>;
+  path: string;
+  projectId: string;
+}) {
+  const desiredMounts =
+    input.mounts === undefined
+      ? undefined
+      : WorkspaceProcessorContract.stateSchema.shape.config.parse({
+          mounts: normalizeWorkspaceMountKeys(input.mounts),
+        }).mounts;
+  const defaultMounts = defaultWorkspaceMounts();
   return [
     WorkspaceProcessorContract.buildEvent({
       type: "events.iterate.com/workspace/created",
-      // The certificate body is ALWAYS the default table — identical on every
-      // append, so this key can never hit the stream's different-body
-      // idempotency rejection. Custom tables are `configured` patches.
       idempotencyKey: `workspace-created:${input.projectId}:${input.path}`,
-      payload: { config: { mounts: defaultWorkspaceMounts() } },
+      payload: { config: { mounts: defaultMounts } },
     }),
+    ...(desiredMounts === undefined
+      ? []
+      : [
+          WorkspaceProcessorContract.buildEvent({
+            type: "events.iterate.com/workspace/configured",
+            idempotencyKey: `workspace-configured-at-creation:${input.projectId}:${input.path}`,
+            payload: { config: { mounts: desiredMounts } },
+          }),
+        ]),
     buildDurableObjectProcessorSubscriptionConfiguredEvent({
       durableObjectName: DurableObjectNameCodec.stringify({
         path: input.path,
         projectId: input.projectId,
       }),
+      idempotencyKey: `stream/subscription-configured:${DurableObjectNameCodec.stringify({
+        path: input.path,
+        projectId: input.projectId,
+      })}#${WorkspaceProcessorContract.slug}`,
       processor: ["workspaces", ["get", input.path], "processor"],
       processorSlug: WorkspaceProcessorContract.slug,
     }),

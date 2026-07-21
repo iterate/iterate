@@ -13,6 +13,7 @@ export {
   TUI_TEST_TIMEOUT_MS,
 } from "./budgets.ts";
 export {
+  compactRetryFailure,
   RetryTelemetryReporter,
   type RetriedTestRecord,
   type RetryTelemetryFile,

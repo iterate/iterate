@@ -244,7 +244,7 @@ freshness:
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
   Auth + OS gets 45 minutes because its bounded worst case includes both
-  deployments, JWKS propagation, and four sequential smoke probes.
+  deployments and four sequential smoke probes.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
   on `8x32` (parallel oxlint/typecheck/knip). Unit tests use `4x16` — measured
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to

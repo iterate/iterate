@@ -50,7 +50,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `petshop-${RUN}` });
+    using project = await itx.projects.get(`petshop-${RUN}`).create({});
     await project.__describe();
 
     for (const instance of instances) {
@@ -131,7 +131,7 @@ test.skipIf(shouldSkipPetshopE2e())(
 
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `petshop-fp-${RUN}` });
+    using project = await itx.projects.get(`petshop-fp-${RUN}`).create({});
     await project.__describe();
 
     const code = await petshopAuthorize({ clientId, redirectUri: REDIRECT_URI });

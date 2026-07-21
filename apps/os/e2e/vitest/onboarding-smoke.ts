@@ -1,8 +1,7 @@
 /**
  * Smoke: create a project as admin and watch the onboarding agent greet.
- * Runs manually and as the preview test lane's sequential entry gate
- * (scripts/preview/preview.ts), where it pays the create-saga cold-start
- * costs before the concurrent suites begin.
+ * Runs manually and as an independent preview sub-lane alongside the other
+ * isolated suites.
  *
  *   doppler run -- pnpm exec tsx e2e/vitest/onboarding-smoke.ts [baseUrl]
  *
@@ -40,7 +39,7 @@ async function attemptOnboardingSmoke(): Promise<void> {
   using session = connectItx({ baseUrl });
   const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
-  using project = root.projects.create({ slug: `onboarding-smoke-${marker}` });
+  using project = await root.projects.get(`onboarding-smoke-${marker}`).create({});
   const description = await project.__describe();
   console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
 

@@ -19,8 +19,7 @@ await itx.secrets.get(secretPath).update({
   egress: { urls: ["https://api.openai.com"] },
   material: openAiApiKey,
 });
-await itx.sandboxes.create({
-  name: "codex",
+await itx.sandboxes.get("/sandboxes/codex").create({
   instanceType: "lite",
   env: { CODEX_API_KEY: `getSecret("${secretPath}")` },
 });

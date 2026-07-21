@@ -1,13 +1,7 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { parse, serialize } from "hono/utils/cookie";
-import {
-  createLocalJWKSet,
-  createRemoteJWKSet,
-  jwtVerify,
-  type JSONWebKeySet,
-  type JWTVerifyGetKey,
-} from "jose";
+import { createLocalJWKSet, jwtVerify, type JSONWebKeySet, type JWTVerifyGetKey } from "jose";
 import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
 import { expandOAuthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
@@ -35,7 +29,7 @@ export type IterateAuthConfig = {
   clientId: string;
   clientSecret: string;
   redirectURI: string;
-  jwks?: JSONWebKeySet;
+  jwks: JSONWebKeySet;
   resource?: string | string[];
   logoutReturnToOrigins?: string[];
   cookiePrefix?: string;
@@ -51,7 +45,7 @@ const OAuthState = z.object({
 
 type OAuthState = z.infer<typeof OAuthState>;
 
-/** Key resolver handed to jose's jwtVerify (local baked set, remote set, or the stale-bake fallback chain built in createIterateAuth). */
+/** Local key resolver handed to jose's jwtVerify. */
 type JWKS = JWTVerifyGetKey;
 
 /** Internal dependency boundary used by the owning package's tests. */
@@ -854,27 +848,10 @@ export function createIterateAuth(config: IterateAuthConfig): IterateAuth {
     );
   }
 
-  const issuer = config.issuer ?? DEFAULT_ISSUER;
-  // Prefer the baked JWKS (no network roundtrip, and it is the only set that
-  // carries the identity-forge key), but fall back to the issuer's live JWKS
-  // when a token's kid is unknown: the baked set goes stale if the issuer's
-  // key set changes after this worker was deployed (observed on preview-2 on
-  // 2026-07-04 — see docs/preview-e2e-flake-hunt.md), and without the
-  // fallback every verification fails until the next redeploy.
-  const jwks: JWTVerifyGetKey = (() => {
-    if (!config.jwks) return createRemoteJWKSet(new URL(`${issuer}/jwks`));
-    const local = createLocalJWKSet(config.jwks);
-    let remote: JWTVerifyGetKey | undefined;
-    return async (protectedHeader, token) => {
-      try {
-        return await local(protectedHeader, token);
-      } catch (error) {
-        if ((error as { code?: string }).code !== "ERR_JWKS_NO_MATCHING_KEY") throw error;
-        remote ??= createRemoteJWKSet(new URL(`${issuer}/jwks`));
-        return await remote(protectedHeader, token);
-      }
-    };
-  })();
+  // Every relying party receives the public half of Auth's Doppler-owned
+  // signing key. Missing trust configuration is a startup/configuration error,
+  // never an implicit network dependency on whichever Auth version is live.
+  const jwks: JWTVerifyGetKey = createLocalJWKSet(config.jwks);
   const infra = createOAuthInfra(config, jwks);
 
   const fetchAuthRoute = createAuthHandler(config, infra);

@@ -6,6 +6,13 @@ test("no override seeds the template verbatim", () => {
   expect(projectRepoSeedFiles(undefined)).toBe(PROJECT_REPO_INITIAL_FILES);
 });
 
+test("the seed keeps the root worker and tasks app proxy", () => {
+  const worker = projectRepoSeedFiles(undefined).find((file) => file.path === "worker.ts");
+  expect(worker?.content).toContain('if (app === "tasks")');
+  expect(worker?.content).toContain('itx.kv.get("tasks-app-origin")');
+  expect(worker?.content).toContain('"tasks.iterate.workers.dev"');
+});
+
 test("an override re-points the iterate dependency in every manifest that carries it", () => {
   const spec = "https://pkg.pr.new/iterate/iterate/iterate@1758";
   const files = projectRepoSeedFiles(spec);

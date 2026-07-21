@@ -16,11 +16,11 @@ test.skipIf(deployedBaseUrl() === null)(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({ slug: `sandbox-timeout-${crypto.randomUUID()}` });
+    using project = await itx.projects.get(`sandbox-timeout-${crypto.randomUUID()}`).create({});
 
-    const { path: sandboxPath } = await project.sandboxes.create({
+    const sandboxPath = `/sandboxes/timeout-proof-${crypto.randomUUID()}`;
+    await project.sandboxes.get(sandboxPath).create({
       instanceType: "lite",
-      name: `timeout-proof-${crypto.randomUUID()}`,
     });
     const sandbox = (await project.sandboxes.get(
       sandboxPath,
@@ -94,9 +94,9 @@ test.skipIf(deployedBaseUrl() === null)(
     // public agent door before exercising the capability host.
     await agent.create();
     const sandboxName = `script-timeout-${crypto.randomUUID()}`;
-    const { path: sandboxPath } = await itx.sandboxes.create({
+    const sandboxPath = `/sandboxes/${sandboxName}`;
+    await itx.sandboxes.get(sandboxPath).create({
       instanceType: "lite",
-      name: sandboxName,
     });
     const sandbox = (await itx.sandboxes.get(
       sandboxPath,

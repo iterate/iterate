@@ -156,7 +156,12 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   await page.goto(appUrl("todo", slug, baseURL!));
   await page.getByRole("heading", { name: "Sign in to Iterate" }).waitFor({ timeout: 60_000 });
   await page.getByRole("button", { name: "Continue with Iterate" }).click({ timeout: 30_000 });
-  await page.getByRole("heading", { name: "Todo" }).waitFor({ timeout: 120_000 });
+  // The cross-origin callback briefly has neither this heading nor a loading
+  // marker. Preserve the real cold-build deadline instead of letting
+  // spinner-waiter collapse the wait to its no-spinner fast-fail.
+  await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    await page.getByRole("heading", { name: "Todo" }).waitFor({ timeout: 120_000 });
+  });
 
   const todoTitle = `todo-${crypto.randomUUID().slice(0, 8)}`;
   const composer = page.getByLabel("New todo");

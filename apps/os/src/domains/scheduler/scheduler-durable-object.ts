@@ -39,15 +39,21 @@ const INGEST_WAIT_TIMEOUT_MS = 15_000;
  * scheduler deletes its alarm and sleeps for good until the next set.
  *
  * The domain alarm IS the scheduler's recovery: every fire re-derives the due
- * set (and the orphaned-execution sweep) from the fold, so the processor is
- * registered WITHOUT keepalive recovery — there is no revival fact to consume;
- * a lost incarnation's in-flight executions are re-launched by the next wake.
+ * set (and the orphaned-execution sweep) from the reduced state, so the
+ * processor is registered WITHOUT keepalive recovery — there is no revival
+ * fact to consume; a lost incarnation's in-flight executions are re-launched
+ * by the next wake.
  *
  * The command methods (set/cancel/trigger/list) are the itx write path: they
  * append, pull the event through ingestion, and only then return — so a
  * successful set is read-your-writes visible AND provably alarm-armed.
  */
 export class SchedulerDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = parseSchedulerDurableObjectName(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
@@ -63,11 +69,12 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   // The DO constructs the processor — no host-injected readState/writeState;
   // the runner owns durable progress. NO keepalive recovery on purpose: the
   // scheduler's DOMAIN alarm is its recovery. While anything is pending the
-  // fold keeps `nextWakeAtMs` non-null (heartbeat-capped), the at-head repoint
-  // is awaited before the frame commits, and every fire's triggerDue re-derives
-  // the due set AND re-launches orphaned pending executions from the fold — so
-  // `runInBackground` executions lost to an eviction are recovered without a
-  // `stream/processor-revived` fact (see the registry module doc's recovery rule).
+  // reduced state keeps `nextWakeAtMs` non-null (heartbeat-capped), the
+  // at-head repoint is awaited before the frame commits, and every fire's
+  // triggerDue re-derives the due set AND re-launches orphaned pending
+  // executions from that state — so `runInBackground` executions lost to an
+  // eviction are recovered without a `stream/processor-revived` fact (see the
+  // registry module doc's recovery rule).
   readonly #schedulerProcessor = this.#registry.register(
     new SchedulerProcessor({
       stream: this.#stream,
@@ -92,7 +99,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
       // alarm() below, which is idempotent and re-arms this slice.
       readAlarm: async () => this.#registry.getAlarmSlice("scheduler"),
       repointAlarm: (atMs) => this.#registry.setAlarmSlice("scheduler", atMs),
-      // Runner-backed fold reads (triggerDue, executions, views): lazy
+      // Runner-backed committed-state reads (triggerDue, executions, views): lazy
       // closures because #reads is built from the registered processor below.
       // The explicit return annotations break the field-initializer inference
       // cycle (these closures read #reads, which is built from this field).
@@ -113,7 +120,7 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     // The shared alarm may be firing for a keepalive slice, the scheduler's,
     // or both — run both handlers; each is idempotent and re-derives its own
     // next fire time (the registry services every runner, then the scheduler
-    // re-derives its due set from the fold and re-arms its slice).
+    // re-derives its due set from the reduced state and re-arms its slice).
     await this.#registry.handleAlarm(alarmInfo);
     try {
       await this.#registry.catchUp(PROCESSOR_SLUG);
@@ -133,10 +140,13 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   async setSchedule(input: ScheduleSetPayload): Promise<ScheduleView> {
     await this.#registry.catchUp(PROCESSOR_SLUG);
     await this.#schedulerProcessor.assertCreated();
-    // Fail loudly at set time; raw appends bypass this and park via the reducer.
+    // Fail loudly at set time; raw appends bypass this and park via reduce.
     assertValidRecurrence(input.recurrence);
     const [event] = await this.#stream.append(
-      this.#schedulerProcessor.buildScheduleSetEvent(input),
+      SchedulerProcessorContract.buildEvent({
+        type: "events.iterate.com/scheduler/schedule-set",
+        payload: input,
+      }),
     );
     await this.#waitUntilProcessed(event!.offset);
     const view = await this.#schedulerProcessor.getScheduleView(input.key);
@@ -148,7 +158,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     await this.#registry.catchUp(PROCESSOR_SLUG);
     await this.#schedulerProcessor.assertCreated();
     const [event] = await this.#stream.append(
-      this.#schedulerProcessor.buildScheduleCancelledEvent(key),
+      SchedulerProcessorContract.buildEvent({
+        type: "events.iterate.com/scheduler/schedule-cancelled",
+        payload: { key },
+      }),
     );
     await this.#waitUntilProcessed(event!.offset);
   }
@@ -187,8 +200,8 @@ export class SchedulerDurableObject extends DurableObject<Env> {
   }
 
   // catchUp swallows failures by design (it serves stale state to reads), so
-  // the write path adds a hard wait: the command only returns once the fold
-  // provably includes the event it just appended.
+  // the write path adds a hard wait: the command only returns once the
+  // committed reduced state provably includes the event it just appended.
   async #waitUntilProcessed(offset: number): Promise<void> {
     await this.#registry.catchUp(PROCESSOR_SLUG);
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });

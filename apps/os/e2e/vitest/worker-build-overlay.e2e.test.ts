@@ -10,9 +10,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({
-      slug: `build-overlay-${crypto.randomUUID().slice(0, 8)}`,
-    });
+    using project = await itx.projects
+      .get(`build-overlay-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     const { projectId } = await project.__describe();
 
     const fetchHome = async () => {

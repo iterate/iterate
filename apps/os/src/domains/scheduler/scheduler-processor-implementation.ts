@@ -1,11 +1,11 @@
 import { tracing } from "cloudflare:workers";
-import { StreamProcessor, type ProcessorReads } from "iterate/processors";
+import { StreamProcessor } from "iterate/processors";
+import type { ProcessEventArgs, ProcessorReads, ReduceArgs } from "iterate/processors";
 import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import type { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import type { ScheduleView } from "./types.ts";
 import {
   SchedulerProcessorContract,
-  type ScheduleSetPayload,
   type SchedulerProcessorState,
 } from "./scheduler-processor-contract.ts";
 import {
@@ -17,65 +17,45 @@ import {
 } from "./recurrence.ts";
 
 /**
- * Runtime dependencies the hosting Durable Object injects. Everything
- * time- or platform-shaped is injected so unit tests run the processor with a
- * fake clock, a spy alarm, and a stub script runner.
- */
-export type SchedulerProcessorDeps = {
-  /** Script runner; scripts execute at project-root itx scope (see the DO). */
-  dynamicWorkers: Pick<DynamicWorkerRunner, "invokeCapability">;
-  /** Injectable clock. Only Trigger emission reads it — reduce never does. */
-  now: () => number;
-  /**
-   * Repoint (or, with null, delete) the scheduler's slice of the platform
-   * alarm. Called at the head of every delivery (`processEvent` under
-   * `delivery.caughtUp`, as a blockProcessorWhile closure) and after every
-   * triggerDue(). The at-head await is load-bearing: a failed repoint must
-   * fail the frame so the transport redelivers it.
-   */
-  repointAlarm: (atMs: number | null) => void | Promise<void>;
-  /** Next armed alarm time, for runtime-state inspection only. */
-  readAlarm: () => Promise<number | null>;
-  /**
-   * RUNNER-backed reads of the committed fold. Under registry drive the
-   * runner owns both cursors and the processor instance's internal checkpoint
-   * never advances, so every fold read the scheduler makes OUTSIDE a hook's
-   * own args — triggerDue's due/sweep decisions, an execution's
-   * latest-code-wins resolution and read-your-writes barrier, the view
-   * builders — must go through the runner's committed progress. The hosting
-   * DO wires this to `registry.reads(processor)` (lazily — `reads()` needs
-   * the registered processor); the unit harness wires it to the driving
-   * StreamProcessorRunner.
-   */
-  reads: Pick<ProcessorReads<SchedulerProcessorState>, "snapshot" | "waitUntilEvent">;
-};
-
-/**
- * The Scheduler's stream processor: reduces the four scheduler events into
- * `{ schedules, pendingTriggers }`, launches itx-script executions for
- * pending Triggers, and derives the next Durable Object alarm from state.
+ * The Scheduler's stream processor — durable time as stream events.
  *
- * Execution semantics:
+ * HOW IT WORKS, end to end:
  *
- * - At-least-once per Trigger. `trigger-requested` marks the executionId
- *   pending in reduced state; a Durable Object restart mid-run clears the
- *   in-memory in-flight set, so the next wake's sweep (triggerDue) re-launches
- *   anything still pending. Before invoking, an execution checks the stream
- *   for its completion's idempotency key, so a checkpoint-loss replay cannot
- *   re-run history. Actions must be idempotent per executionId.
- * - Latest-code-wins. The script is resolved from reduced state at execution
- *   time, never snapshotted into the request: a re-set between request and
- *   execution runs the new code, and a cancelled Schedule's in-flight Trigger
- *   completes as `skipped`. `trigger-completed.definedAtOffset` records which
- *   `schedule-set` event's code actually ran.
- * - Completion appends are idempotency-keyed by executionId, so a raced
- *   double-execution still commits exactly one outcome event.
+ * `schedule-set` / `schedule-cancelled` events reduce into `state.schedules`
+ * (one entry per key, carrying the Action code, the recurrence, and the
+ * pre-computed `nextTriggerAt`). The hosting Durable Object's alarm is derived
+ * from that reduced state at the head of every delivery and re-armed after
+ * every wake; when it fires, the DO calls {@link triggerDue}, which appends one
+ * `trigger-requested` event per due Schedule — idempotency-keyed by
+ * (key, defining set-event offset, due time), so a crashed wake re-running
+ * against un-advanced state can never double-request an occurrence.
+ *
+ * Each `trigger-requested` event reduces the occurrence into
+ * `state.pendingTriggers` and advances its Schedule's clock; its delivery
+ * through `processEvent` launches the actual execution in the background. The
+ * execution first waits for its own frame's commit (a read-your-writes
+ * barrier), then checks the stream for its completion's idempotency key (so a
+ * checkpoint-loss replay of historical requests can never re-run history),
+ * resolves the NEWEST Action for the key from committed reduced state
+ * (latest-code-wins — a re-set between request and execution runs the new
+ * code; a cancelled Schedule's in-flight Trigger completes as `skipped`), runs
+ * the script, and appends `trigger-completed` — idempotency-keyed by
+ * executionId, so a raced double-execution still commits exactly one outcome.
+ *
+ * Execution is at-least-once per Trigger: the in-flight set is deliberately
+ * in-memory only, so a Durable Object restart mid-run clears it, and the next
+ * alarm wake's sweep ({@link triggerDue}) re-launches anything still pending.
+ * Actions must be idempotent per executionId. There is no keepalive revival —
+ * the domain alarm IS the scheduler's recovery: while anything is pending the
+ * reduced state keeps the next wake non-null (heartbeat-capped), and every
+ * fire re-derives the due set and the orphan sweep from that state.
  */
 export class SchedulerProcessor extends StreamProcessor<
-  typeof SchedulerProcessorContract,
+  SchedulerProcessorContract,
   SchedulerProcessorDeps
 > {
   readonly contract = SchedulerProcessorContract;
+
   /**
    * ExecutionIds currently running in THIS instance. Deliberately not durable:
    * after a restart it is empty, which is exactly the signal that every
@@ -84,20 +64,51 @@ export class SchedulerProcessor extends StreamProcessor<
   readonly #inflightExecutions = new Set<string>();
   /** Consecutive alarm wakes that made no progress; drives the barren-wake backoff. */
   #consecutiveBarrenWakes = 0;
-  /** Checkpoint seen by the previous triggerDue — the progress signal for the backoff. */
+  /** Committed offset seen by the previous triggerDue — the progress signal for the backoff. */
   #lastWakeCheckpointOffset: number | null = null;
 
+  // ------------------------------------------------------------ processEvent
+  protected override processEvent(args: ProcessEventArgs<SchedulerProcessorContract>): undefined {
+    const { event, state, delivery, blockProcessorWhile } = args;
+    if (state.birthCertificate === null) return;
+
+    switch (event?.type) {
+      case "events.iterate.com/scheduler/trigger-requested":
+        // No gate here — #execute does all the gating after its barrier:
+        // pending recheck against committed state, plus a completion-existence
+        // read so a checkpoint-loss replay cannot re-run history. The barrier
+        // offset makes the execution wait for this frame's commit
+        // (latest-code-wins reads the runner's committed state via deps.reads).
+        this.#launchExecution(event.payload.executionId, event.offset);
+        break;
+      // created / schedule-set / schedule-cancelled / trigger-completed: no
+      // per-event effect — they matter through the reduced state below.
+    }
+
+    // AT-HEAD alarm derivation: `delivery.caughtUp` means `state` is the whole
+    // observed reduction, so the next wake is recomputed from it on every
+    // at-head frame (the registry's alarm-slice set is a no-op for an
+    // unchanged time, so the cadence is cheap). This is state-derived work but
+    // deliberately NOT a droppable background attempt: the alarm is the only
+    // thing that guarantees a later wake, so nothing else would re-derive a
+    // silently lost repoint. The await is load-bearing — a bare synchronous
+    // call here would NOT be awaited before the frame's final commit.
+    if (!delivery.caughtUp) return;
+    blockProcessorWhile(async () => {
+      await this.deps.repointAlarm(nextWakeAtMs(state, this.deps.now()));
+    });
+  }
+
+  // ------------------------------------------------------------------ reduce
+  // Pure projection, one switch, cases inline. Total: raw appends with bad
+  // recurrences park visibly (`nextTriggerAt: null`) instead of throwing.
   protected override reduce({
     event,
     state,
-  }: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["reduce"]>[0] & {
-    state: SchedulerProcessorState;
-  }): SchedulerProcessorState {
+  }: ReduceArgs<SchedulerProcessorContract>): SchedulerProcessorState {
     switch (event.type) {
       case "events.iterate.com/scheduler/created":
-        if (state.birthCertificate !== null) {
-          throw new Error("scheduler received more than one created event");
-        }
+        if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
       case "events.iterate.com/scheduler/schedule-set": {
         const payload = event.payload;
@@ -166,35 +177,6 @@ export class SchedulerProcessor extends StreamProcessor<
     }
   }
 
-  protected override processEvent(
-    args: Parameters<StreamProcessor<typeof SchedulerProcessorContract>["processEvent"]>[0],
-  ): undefined {
-    if (args.state.birthCertificate === null) return;
-    const { event } = args;
-    // AT-HEAD alarm derivation: `delivery.caughtUp` means `args.state` is the
-    // whole observed fold. It rides a `blockProcessorWhile` closure, which the runner awaits
-    // BEFORE the frame's final commit — the alarm always reflects the fold
-    // that is about to be acknowledged, and a failed repoint fails the frame
-    // so the transport redelivers it (the await is as load-bearing as the old
-    // per-batch repoint's was; a bare synchronous call here would NOT be
-    // awaited). Re-arming an unchanged time is a no-op in the registry's
-    // slice reconcile, so the every-at-head-frame cadence is cheap.
-    if (args.delivery.caughtUp) {
-      args.blockProcessorWhile(async () => {
-        await this.deps.repointAlarm(nextWakeAtMs(args.state, this.deps.now()));
-      });
-    }
-    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
-    if (event === null) return;
-    if (event.type !== "events.iterate.com/scheduler/trigger-requested") return;
-    // No gate here — #execute does all the gating after its barrier: pending
-    // recheck against committed state, plus a completion-existence read so a
-    // checkpoint-loss replay cannot re-run history. The barrier offset makes
-    // the execution wait for this frame's commit (latest-code-wins reads the
-    // runner's committed fold via deps.reads).
-    this.#launchExecution(event.payload.executionId, event.offset);
-  }
-
   // The processor-contributed runtime bag only — the hosting registry pins
   // the runner's snapshot under it before it leaves over RPC.
   override async getRuntimeState() {
@@ -210,12 +192,13 @@ export class SchedulerProcessor extends StreamProcessor<
    * Request a Trigger for every due Schedule, sweep orphaned pending
    * executions, and re-arm the alarm. The hosting Durable Object calls this
    * from `alarm()` after a catch-up; the appended trigger-requested events
-   * flow back through ingestion, which is where executions actually launch.
+   * flow back through delivery, which is where executions actually launch.
    */
   async triggerDue(): Promise<{ requested: number }> {
     // Runner-backed self-load: after a restart this can run before any
     // delivery, and the due/sweep decisions below must see the durable
-    // committed fold (the runner's load performs any pending refold too).
+    // committed reduced state (the runner's load performs any pending
+    // re-reduction too).
     const { state } = await this.deps.reads.snapshot();
     assertSchedulerCreated(state);
     const now = this.deps.now();
@@ -231,14 +214,14 @@ export class SchedulerProcessor extends StreamProcessor<
         ),
         key,
       }));
-      // A wake that crashed after appending re-runs against an un-advanced
-      // fold. Its retry body can never match the committed one (fresh
-      // executionId, wall-clock requestedAt), and the stream REJECTS a
+      // A wake that crashed after appending re-runs against un-advanced
+      // reduced state. Its retry body can never match the committed one
+      // (fresh executionId, wall-clock requestedAt), and the stream REJECTS a
       // same-key append with a different body — so OBSERVE the committed
       // requests (independent point reads, in parallel) and skip them
-      // instead of re-appending; catch-up folds them. An event occupying the
-      // key that is NOT this occurrence's trigger request (a raw append, a
-      // past producer bug) means the occurrence can never commit under its
+      // instead of re-appending; catch-up reduces them. An event occupying
+      // the key that is NOT this occurrence's trigger request (a raw append,
+      // a past producer bug) means the occurrence can never commit under its
       // key — surface that LOUDLY instead of passing it off as deduplicated
       // work: strict append would have exposed exactly this collision.
       const committed = await Promise.all(
@@ -284,11 +267,12 @@ export class SchedulerProcessor extends StreamProcessor<
     for (const executionId of Object.keys(state.pendingTriggers)) {
       this.#launchExecution(executionId);
     }
-    // A wake that finds schedules due while the fold has not advanced since
-    // the previous wake is making no progress (wedged ingest, poison batch):
-    // back off toward the heartbeat instead of re-arming at the minimum delay
-    // forever. Any checkpoint movement resets the backoff. The cursor is read
-    // AFTER the appends, exactly where the old instance read sat.
+    // A wake that finds schedules due while the reduced state has not
+    // advanced since the previous wake is making no progress (wedged
+    // delivery, poison batch): back off toward the heartbeat instead of
+    // re-arming at the minimum delay forever. Any committed-offset movement
+    // resets the backoff. The offset is read AFTER the appends, exactly where
+    // the pre-append read sat.
     const { offset: checkpointOffset } = await this.deps.reads.snapshot();
     const barren = due.length > 0 && this.#lastWakeCheckpointOffset === checkpointOffset;
     this.#lastWakeCheckpointOffset = checkpointOffset;
@@ -302,27 +286,12 @@ export class SchedulerProcessor extends StreamProcessor<
     return { requested: due.length };
   }
 
-  /** Build a validated `schedule-set` append input (the DO appends it). */
-  buildScheduleSetEvent(payload: ScheduleSetPayload) {
-    return this.contract.buildEvent({
-      type: "events.iterate.com/scheduler/schedule-set",
-      payload,
-    });
-  }
-
-  /** Build a validated `schedule-cancelled` append input. */
-  buildScheduleCancelledEvent(key: string) {
-    return this.contract.buildEvent({
-      type: "events.iterate.com/scheduler/schedule-cancelled",
-      payload: { key },
-    });
-  }
-
   /**
-   * Build a manual "run now" `trigger-requested` for an existing key.
-   * Deliberately not idempotency-keyed: every manual trigger is a new Trigger.
-   * Note the reduce consequence: a manual trigger advances a recurring
-   * Schedule's clock and consumes a one-shot.
+   * Build a manual "run now" `trigger-requested` for an existing key (the
+   * hosting Durable Object appends it). Deliberately not idempotency-keyed:
+   * every manual trigger is a new Trigger. Note the reduce consequence: a
+   * manual trigger advances a recurring Schedule's clock and consumes a
+   * one-shot.
    */
   async buildManualTriggerEvent(key: string) {
     const { state } = await this.deps.reads.snapshot();
@@ -381,25 +350,26 @@ export class SchedulerProcessor extends StreamProcessor<
   async #execute(executionId: string, barrierOffset: number): Promise<void> {
     // Read-your-writes barrier: launched from inside a frame, this runs
     // concurrently with the commit that makes the trigger visible in the
-    // committed fold. Sweep-launched executions pass 0 and short-circuit.
-    // Both the barrier and every fold read below are RUNNER-backed
-    // (deps.reads): instance reads never advance under runner drive.
+    // committed reduced state. Sweep-launched executions pass 0 and
+    // short-circuit. Both the barrier and every state read below are
+    // RUNNER-backed (deps.reads): instance reads never advance under runner
+    // drive.
     await this.deps.reads.waitUntilEvent({ offset: barrierOffset, timeoutMs: 30_000 });
     const { state } = await this.deps.reads.snapshot();
     const pending = state.pendingTriggers[executionId];
     if (pending === undefined) return; // already completed (e.g. by a raced sweep)
     const completionIdempotencyKey = this.idempotencyKey(`trigger-completed:${executionId}`);
-    // A checkpoint-loss replay redelivers historical requests whose completions
-    // sit in LATER catch-up pages — still pending as far as the fold knows.
-    // The stream itself always has the truth: one indexed read prevents
-    // re-running history.
+    // A checkpoint-loss replay redelivers historical requests whose
+    // completions sit in LATER catch-up pages — still pending as far as the
+    // reduced state knows. The stream itself always has the truth: one
+    // indexed read prevents re-running history.
     const alreadyCompleted = await this.stream.getEvent({
       idempotencyKey: completionIdempotencyKey,
     });
     if (alreadyCompleted !== undefined) return;
 
-    // Latest-code-wins: resolve the Action NOW — a fresh committed-fold read,
-    // not the request-time fold and not the pre-barrier read above.
+    // Latest-code-wins: resolve the Action NOW — a fresh committed-state
+    // read, not the request-time state and not the pre-barrier read above.
     const { state: freshState } = await this.deps.reads.snapshot();
     const entry = freshState.schedules[pending.key];
     let outcome: {
@@ -467,14 +437,57 @@ export class SchedulerProcessor extends StreamProcessor<
   }
 }
 
+// -----------------------------------------------------------------------------
+// Injected dependencies.
+// -----------------------------------------------------------------------------
+
+/**
+ * Runtime dependencies the hosting Durable Object injects. Everything
+ * time- or platform-shaped is injected so unit tests run the processor with a
+ * fake clock, a spy alarm, and a stub script runner.
+ */
+export type SchedulerProcessorDeps = {
+  /** Script runner; scripts execute at project-root itx scope (see the DO). */
+  dynamicWorkers: Pick<DynamicWorkerRunner, "invokeCapability">;
+  /** Injectable clock. Only Trigger emission reads it — reduce never does. */
+  now: () => number;
+  /**
+   * Repoint (or, with null, delete) the scheduler's slice of the platform
+   * alarm. Called at the head of every delivery (`processEvent` under
+   * `delivery.caughtUp`, as a blockProcessorWhile closure) and after every
+   * triggerDue(). The at-head await is load-bearing: a failed repoint must
+   * fail the frame so the transport redelivers it.
+   */
+  repointAlarm: (atMs: number | null) => void | Promise<void>;
+  /** Next armed alarm time, for runtime-state inspection only. */
+  readAlarm: () => Promise<number | null>;
+  /**
+   * RUNNER-backed reads of the committed reduced state. Under registry drive
+   * the runner owns both cursors and the processor instance's internal
+   * checkpoint never advances, so every state read the scheduler makes
+   * OUTSIDE a hook's own args — triggerDue's due/sweep decisions, an
+   * execution's latest-code-wins resolution and read-your-writes barrier, the
+   * view builders — must go through the runner's committed progress. The
+   * hosting DO wires this to `registry.reads(processor)` (lazily — `reads()`
+   * needs the registered processor); the unit harness wires it to the driving
+   * StreamProcessorRunner.
+   */
+  reads: Pick<ProcessorReads<SchedulerProcessorState>, "snapshot" | "waitUntilEvent">;
+};
+
+// -----------------------------------------------------------------------------
+// Pure helpers.
+// -----------------------------------------------------------------------------
+
 function assertSchedulerCreated(state: SchedulerProcessorState): void {
   if (state.birthCertificate === null) {
     throw new Error("scheduler has not been created");
   }
 }
 
-/** One key's Schedule from an explicit fold as the public view shape, or
- * undefined — pure so both view methods serve one consistent snapshot. */
+/** One key's Schedule from an explicit state snapshot as the public view
+ * shape, or undefined — pure so both view methods serve one consistent
+ * snapshot. */
 function scheduleViewFromState(
   state: SchedulerProcessorState,
   key: string,

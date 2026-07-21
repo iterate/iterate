@@ -186,10 +186,10 @@ ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
 `APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and
 `APP_CONFIG_ITERATE_AUTH__*` OAuth/client values back to Doppler. It does not
-write `APP_CONFIG_ITERATE_AUTH__JWKS`: OS deploys fetch the live auth JWKS
-directly, merge the forge public key, and fail closed if auth's JWKS endpoint
-remains unavailable after the deploy retry window. Local dev derives its forge
-JWKS binding from `AUTH_FORGE_PRIVATE_JWK` at generated-Wrangler-config time.
+write `APP_CONFIG_ITERATE_AUTH__JWKS`: generated local config and deployed OS
+derive the public JWKS directly from the environment's Doppler-owned
+`AUTH_FORGE_PRIVATE_JWK`. Auth signs with the private half; OS receives only
+the public half and never fetches Auth during deploy or verification.
 
 It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 `AUTH_CLIENT_SYNC_TARGETS` filters targets;

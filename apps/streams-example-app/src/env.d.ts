@@ -1,4 +1,5 @@
 interface StreamStagingEnv {
+  CF_VERSION_METADATA?: { id: string; tag?: string };
   STREAM: DurableObjectNamespace<import("./worker").StreamDurableObject>;
 }
 

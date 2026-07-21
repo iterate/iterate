@@ -395,5 +395,6 @@ the recorded projection.
   assignment now erases an adopted slot unless it matches the PR's recorded
   provenance. Artifact creation now runs exact-subscription setup only before
   the first push, preserving interrupted-create recovery without making seeded
-  repository lookup depend on Cloudflare's subscriptions API. All 2,048 OS
-  unit tests, three new creation-boundary tests, and OS typecheck pass locally.
+  repository lookup depend on Cloudflare's subscriptions API. After merging
+  current `main`, all 2,113 OS unit tests, 120 preview-tool tests, full
+  monorepo typecheck, lint, and format checks pass locally.

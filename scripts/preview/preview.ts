@@ -8,6 +8,10 @@ import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import {
+  deploymentReadinessProbeQueryParam,
+  deploymentReadinessProbeWaveCount,
+} from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { dummyPetshopEnvs, previewEnvironmentSlotNumbers } from "../../envs.ts";
 import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
@@ -16,6 +20,7 @@ import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
+  compactRetryFailure,
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
@@ -1319,6 +1324,18 @@ export const CloudflarePreviewAppSlug = z.enum([
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
 
+type PreviewReadyWorkerVersion =
+  | {
+      probeQueryParam?: undefined;
+      probeWaveCount?: undefined;
+      stableForMs: number;
+    }
+  | {
+      probeQueryParam: string;
+      probeWaveCount: number;
+      stableForMs: number;
+    };
+
 export type CloudflarePreviewApp = {
   slug: CloudflarePreviewAppSlug;
   displayName: string;
@@ -1341,6 +1358,7 @@ export type CloudflarePreviewApp = {
     projectHostnameBases?: string[];
   };
   paths: string[];
+  /** Apps co-selected so this app deploys and tests against one coherent head. */
   previewDependencies?: CloudflarePreviewAppSlug[];
   /**
    * Public URLs of deployed preview dependencies that the app's e2e command
@@ -1351,13 +1369,15 @@ export type CloudflarePreviewApp = {
   previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
+  /** Doppler env var sent as a bearer only to the app's active rollout probe. */
+  previewReadyBearerTokenEnvVar?: string;
   /**
    * Require the readiness route to report wrangler's newly deployed Worker
-   * version continuously before tests start. Cloudflare can serve the new
-   * edge Worker while Durable Objects are still rolling from the previous
-   * version; this barrier keeps that reset window out of the test phase.
+   * version before tests start. Apps with Durable Objects expose a finite set
+   * of probe waves: the orchestrator checks every wave in parallel, waits the
+   * stability interval, then revalidates the complete set.
    */
-  previewReadyWorkerVersion?: { stableForMs: number };
+  previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
@@ -1394,6 +1414,7 @@ export type PreviewRetrySummary = {
     name: string;
     retryCount: number;
     passedAfterRetry: boolean;
+    firstFailure?: string;
   }[];
 };
 
@@ -1421,6 +1442,7 @@ async function readVitestRetryTelemetry(
         fullName: z.string(),
         retryCount: z.number().int().positive(),
         passedAfterRetry: z.boolean(),
+        firstFailure: z.string().optional(),
       }),
     ),
   });
@@ -1430,6 +1452,7 @@ async function readVitestRetryTelemetry(
     name: record.fullName,
     retryCount: record.retryCount,
     passedAfterRetry: record.passedAfterRetry,
+    ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
   }));
 }
 
@@ -1448,7 +1471,15 @@ async function readPlaywrightRetryTelemetry(
     suites?: PlaywrightJsonSuite[];
     specs?: {
       title?: string;
-      tests?: { status?: string; results?: { retry?: number }[] }[];
+      tests?: {
+        status?: string;
+        results?: {
+          retry?: number;
+          status?: string;
+          error?: unknown;
+          errors?: unknown[];
+        }[];
+      }[];
     }[];
   };
   const report = JSON.parse(await readFile(filePath, "utf8")) as {
@@ -1460,11 +1491,19 @@ async function readPlaywrightRetryTelemetry(
       for (const test of spec.tests ?? []) {
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
         if (retryCount > 0) {
+          const failedResult = test.results?.find(
+            (result) =>
+              result.status === "failed" || result.error !== undefined || result.errors?.length,
+          );
+          const firstFailure = compactRetryFailure(
+            failedResult?.error ?? failedResult?.errors?.[0],
+          );
           retried.push({
             lane,
             name: spec.title ?? "(unknown spec)",
             retryCount,
             passedAfterRetry: test.status === "flaky",
+            ...(firstFailure ? { firstFailure } : {}),
           });
         }
       }
@@ -1506,7 +1545,7 @@ function renderPreviewRetrySummary(summary: PreviewRetrySummary): string | null 
   const details = summary.retried
     .map(
       (record) =>
-        `${record.name} (${record.lane} x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})`,
+        `${record.name} (${record.lane} x${record.retryCount}${record.passedAfterRetry ? "" : ", still failed"})${record.firstFailure ? ` — ${record.firstFailure}` : ""}`,
     )
     .join(" · ");
   return `${summary.retried.length} retried: ${details}`;
@@ -1579,13 +1618,24 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
-    // A 2xx alone is not a deployment barrier: Cloudflare can still be
-    // propagating the new code to Durable Object nodes after wrangler exits.
-    // Hold the exact deployed version steady at the edge before creating any
-    // projects, otherwise the first object calls can be reset mid-saga.
-    previewReadyWorkerVersion: { stableForMs: 10_000 },
+    previewReadyBearerTokenEnvVar: "APP_CONFIG_ADMIN_API_SECRET",
+    // Cloudflare rolls Durable Object namespaces independently from the edge.
+    // Exercise every namespace's bounded placement waves, then revalidate the
+    // exact version after a quiet interval before any project burst begins.
+    previewReadyWorkerVersion: {
+      probeQueryParam: deploymentReadinessProbeQueryParam,
+      probeWaveCount: deploymentReadinessProbeWaveCount,
+      stableForMs: 10_000,
+    },
     paths: [
       "apps/os/**",
+      // The root Playwright suite is part of OS preview e2e. A test or
+      // harness-only change must produce fresh evidence instead of inheriting
+      // the previous head's result.
+      "specs/**",
+      "playwright.config.ts",
+      // The suite also builds and exercises the mobile web app locally.
+      "apps/mobile/**",
       // The PTY lane executes OpenTUI under the repo-pinned Bun runtime.
       ".bun-version",
       // OS imports iterate/react, and its preview e2e lane builds and runs the
@@ -1597,16 +1647,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/dummy-petshop/**",
       "apps/os/src/domains/streams/**",
     ],
-    // OS bakes auth JWKS and binds auth's default RPC entrypoint, and its
-    // integration e2e talks to the slot's deployed dummy Petshop. Both must
-    // finish deploying before OS starts.
+    // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
+    // Petshop. Co-select both; every deploy starts concurrently and OS derives
+    // Auth's public signing key directly from Doppler.
     previewDependencies: ["auth", "dummy-petshop"],
-    // Budgets sit ~25% above the observed green floor after the TUI, Vitest,
-    // and Playwright lanes became sequential to cap deployed-slot load
-    // (deploy 89–92s, e2e 431–441s as of 2026-07-18). Crossing them warns,
-    // never fails.
-    previewDeployBudgetMs: 115_000,
-    previewTestBudgetMs: 560_000,
+    // The active Durable Object barrier replaces the former blind 40s hold;
+    // retry-clean historical full-fleet deploys completed around 72s.
+    previewDeployBudgetMs: 90_000,
+    previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
@@ -1622,8 +1670,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "set -euo pipefail",
-        // Remove stale retry-telemetry files FIRST — before any step that can
-        // exit the lane early (the smoke gate below). They survive from a
+        // Remove stale retry-telemetry files before any lane starts. They survive from a
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
@@ -1632,27 +1679,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // let it overlap the smoke and the vitest lane; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
-        // Create-saga smoke: one sequential real project create pays the
-        // cold-start costs (cold DO chain, repo seed, worker probe) that
-        // otherwise surface as rotating "saw 0 events" timeout flakes across
-        // the concurrent e2e suites (see tasks/os-cold-create-latency.md),
-        // and fails loudly if the slot is broken before the suites start.
-        // The curl-round HTTP warmups that used to run alongside it were
-        // treating symptoms of zombie routes (routes dead at the edge →
-        // 522s) — structurally gone now that deploys never delete workers
-        // (routes are declared in wrangler config; DNS is create-only).
-        // Keep the gate visible and separately bounded. Before this watchdog,
-        // an RPC wedge before waitForEvent's 90s greeting timeout produced no
-        // suite output and survived until Depot killed the entire 10m job.
-        `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts 2>&1 | tee /tmp/os-preview-smoke.log`,
-        // The built-package PTY spec, e2e vitest lane, and Playwright specs all
-        // hit the same deployed slot. They provision independent projects,
-        // but that does not make their aggregate load independent: overlapping
-        // vitest's eight in-flight tests with Playwright's eight workers caused
-        // project-processor self-pull timeouts while both suites stayed clean
-        // in isolation. Run the three remote suites sequentially so the slot's
-        // tested peak is eight. The browser download above still overlaps the
-        // remote work because it does not touch the slot.
+        // Smoke, TUI, Vitest, and Playwright own isolated state, so start them
+        // together. The examples matrix shares one project but marker-isolates
+        // every mutable resource.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -1667,16 +1696,20 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // Retry telemetry: the TUI and vitest lanes write the same compact
         // JSON shape (stale files were removed at the top of this script) for
         // preview.ts to fold into the PR body alongside Playwright's report.
-        `TUI_OK=0; E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts > /tmp/os-preview-tui.log 2>&1 || TUI_OK=$?`,
-        `E2E_OK=0; E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node > /tmp/os-preview-vitest.log 2>&1 || E2E_OK=$?`,
-        'wait "$PW_INSTALL_PID" || { cat /tmp/os-preview-pw-install.log; exit 1; }',
-        // Capture every lane's exit without aborting (set -e), then replay the
-        // redirected logs and fail once all three suites have had a chance to
-        // report their own result.
-        `SPEC_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?`,
+        'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        `run_logged_lane smoke /tmp/os-preview-smoke.log timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
+        'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
+        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
+        'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
+        'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
+        "cat /tmp/os-preview-smoke.log",
         "cat /tmp/os-preview-vitest.log",
         "cat /tmp/os-preview-tui.log",
-        '[ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
+        '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
     collectRetryTelemetry: async ({ repositoryRoot }) => {
@@ -1706,8 +1739,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
-    // Semaphore bakes the slot's auth JWKS at deploy time (relying-party
-    // auth, same as OS), so auth must finish before semaphore starts.
+    // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -1727,8 +1759,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
   // so e2e starts from a completely clean, controlled slate. OAuth client
   // credentials are constants in Doppler (`preview provision-auth-preview-configs`);
-  // the auth deploy reseeds them into its database on every run, so auth and
-  // OS tests can run after both apps have finished deploying.
+  // the auth deploy reseeds them into its database on every run. Auth and its
+  // relying parties share one Doppler signing key and can deploy concurrently.
   auth: {
     slug: "auth",
     displayName: "Auth",
@@ -1759,6 +1791,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "streams-example-app",
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
+    previewReadyUrlPath: "/api/__internal/health",
+    previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
+    previewReadyWorkerVersion: {
+      probeQueryParam: deploymentReadinessProbeQueryParam,
+      probeWaveCount: deploymentReadinessProbeWaveCount,
+      stableForMs: 10_000,
+    },
     previewTestBaseUrlEnvVar: "WORKER_URL",
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3
@@ -1853,6 +1892,7 @@ const defaultPreviewLeaseMs = 3 * 60 * 60 * 1000;
 // Keep this long enough for first issuance of supported hostnames while still
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
+const previewReadinessRequestTimeoutMs = 10_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewDeployConcurrency = 5;
 const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease" as const;
@@ -2936,6 +2976,24 @@ function resolveAuthPreviewRootSecret(input: {
 }
 
 async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
+  const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
+  if (!authSigningPrivateJwk) {
+    throw new Error("_shared/preview is missing AUTH_FORGE_PRIVATE_JWK");
+  }
+
+  // This is deliberately inherited, not copied: every app's preview
+  // environment root inherits _shared/preview, giving key rotation one source
+  // of truth. Fail closed if that topology has drifted instead of writing a
+  // second app-local copy that could later shadow the shared key.
+  for (const project of ["auth", "os", "semaphore", "streams-example-app"]) {
+    const effectiveKey = getDopplerSecret(project, "preview", "AUTH_FORGE_PRIVATE_JWK");
+    if (effectiveKey !== authSigningPrivateJwk) {
+      throw new Error(
+        `${project}/preview must inherit AUTH_FORGE_PRIVATE_JWK from _shared/preview`,
+      );
+    }
+  }
+
   const rootValues: Record<string, string> = {
     APP_CONFIG_EMAIL_OTP_ENABLED: "true",
   };
@@ -2949,20 +3007,6 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
   setDopplerSecrets("auth", "preview", rootValues);
   console.log("auth/preview root config ensured");
 
-  // Semaphore and the streams playground are relying parties of each slot's
-  // auth deployment: their deploys bake the forge public key into the JWKS,
-  // and their e2e mints admin bearer tokens with the private half. Seed the
-  // key once at each preview root so every preview_N branch config inherits
-  // it.
-  const forgePrivateJwk =
-    getDopplerSecret("semaphore", "preview", "AUTH_FORGE_PRIVATE_JWK") ||
-    getDopplerSecret("os", "preview", "AUTH_FORGE_PRIVATE_JWK");
-  if (!forgePrivateJwk) throw new Error("os/preview is missing AUTH_FORGE_PRIVATE_JWK");
-  setDopplerSecrets("semaphore", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
-  console.log("semaphore/preview root config ensured");
-  setDopplerSecrets("streams-example-app", "preview", { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk });
-  console.log("streams-example-app/preview root config ensured");
-
   for (const slot of input.slots) {
     const config = `preview_${slot}`;
     const authOrigin = `https://auth.iterate-preview-${slot}.com`;
@@ -2975,9 +3019,9 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
     const semaphoreClientId = `semaphore-preview-${slot}`;
     const streamsExampleClientId = `streams-example-app-preview-${slot}`;
 
-    ensureDopplerConfig("auth", config);
-    ensureDopplerConfig("semaphore", config);
-    ensureDopplerConfig("streams-example-app", config);
+    ensureDopplerConfig("auth", config, "preview");
+    ensureDopplerConfig("semaphore", config, "preview");
+    ensureDopplerConfig("streams-example-app", config, "preview");
 
     const existingSeed = input.rotate
       ? null
@@ -3057,28 +3101,12 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: streamsExampleClientSecret,
     });
 
-    if (input.rotate) {
-      clearAuthPreviewJwks({ config, slot });
-    }
-
     console.log(
       `slot ${slot}: auth/${config} + os/${config} + semaphore/${config} + streams-example-app/${config} ensured (clients ${clientId}, ${semaphoreClientId}, ${streamsExampleClientId})`,
     );
   }
 
   console.log("done");
-}
-
-// Better Auth encrypts jwks rows with APP_CONFIG_BETTER_AUTH_SECRET; after a
-// rotation the old rows can no longer be decrypted, so they must be cleared.
-function clearAuthPreviewJwks(input: { config: string; slot: number }) {
-  runDoppler([
-    ...["run", "--project", "auth", "--config", input.config, "--"],
-    ...["pnpm", "--dir", "apps/auth", "exec", "wrangler", "d1", "execute"],
-    `auth-preview-${input.slot}-auth-db`,
-    ...["--remote", "--command", "delete from jwks;"],
-  ]);
-  console.log(`slot ${input.slot}: cleared auth JWKS rows after Better Auth secret rotation`);
 }
 
 function runDoppler(args: string[], input?: string) {
@@ -3114,14 +3142,17 @@ function setDopplerSecrets(project: string, config: string, secrets: Record<stri
   runDoppler(args);
 }
 
-function ensureDopplerConfig(project: string, config: string) {
+function ensureDopplerConfig(project: string, config: string, environment: string) {
   const existing = runDoppler(["configs", "--project", project, "--json"]);
-  const names = (JSON.parse(existing) as { name: string }[]).map((dopplerConfig) => {
-    return dopplerConfig.name;
-  });
-  if (!names.includes(config)) {
-    runDoppler(["configs", "create", config, "--project", project]);
+  const configs = JSON.parse(existing) as { environment: string; name: string }[];
+  const current = configs.find((dopplerConfig) => dopplerConfig.name === config);
+  if (!current) {
+    runDoppler(["configs", "create", config, "--project", project, "--environment", environment]);
     console.log(`created config ${project}/${config}`);
+  } else if (current.environment !== environment) {
+    throw new Error(
+      `${project}/${config} belongs to ${current.environment}, expected ${environment}`,
+    );
   }
 }
 
@@ -3509,13 +3540,14 @@ async function deployPreviewApp(input: {
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
+    readinessBearerToken: appConfig.readinessBearerToken,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
     workerVersion:
       deployedWorkerVersion && input.app.previewReadyWorkerVersion
         ? {
             expected: deployedWorkerVersion,
-            stableForMs: input.app.previewReadyWorkerVersion.stableForMs,
+            ...input.app.previewReadyWorkerVersion,
           }
         : undefined,
   });
@@ -3545,12 +3577,25 @@ async function readPreviewAppConfig(input: {
   const PreviewAppConfig = z.object({
     baseUrl: z.string().trim().url(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+    readinessBearerToken: z.string().trim().min(1).optional(),
   });
+  const parsePreviewAppConfig = (value: unknown) => {
+    const parsed = PreviewAppConfig.parse(value);
+    if (input.app.previewReadyBearerTokenEnvVar && !parsed.readinessBearerToken) {
+      throw new Error(
+        `Preview readiness requires Doppler secret ${input.app.previewReadyBearerTokenEnvVar}.`,
+      );
+    }
+    return parsed;
+  };
   const repoConfig = input.app.resolvePreviewAppConfig?.(input.dopplerConfig);
   if (repoConfig) {
-    return PreviewAppConfig.parse(repoConfig);
+    return parsePreviewAppConfig(repoConfig);
   }
 
+  const readinessBearerTokenEnvVar = JSON.stringify(
+    input.app.previewReadyBearerTokenEnvVar ?? null,
+  );
   const script = [
     "function parseStringArrayEnv(value) {",
     "  if (!value?.trim()) return [];",
@@ -3563,9 +3608,12 @@ async function readPreviewAppConfig(input: {
     "}",
     "const appConfig = parseAppConfig();",
     "const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
+    `const readinessBearerTokenEnvVar = ${readinessBearerTokenEnvVar};`,
+    "const readinessBearerToken = readinessBearerTokenEnvVar ? process.env[readinessBearerTokenEnvVar]?.trim() : undefined;",
     "const config = {",
     "  baseUrl: process.env.APP_CONFIG_BASE_URL || appConfig.baseUrl || null,",
     "  projectHostnameBases: envBases.length > 0 ? envBases : Array.isArray(appConfig.projectHostnameBases) ? appConfig.projectHostnameBases.filter((entry) => typeof entry === 'string') : [],",
+    "  ...(readinessBearerToken ? { readinessBearerToken } : {}),",
     "};",
     "console.log(JSON.stringify(config));",
   ].join("\n");
@@ -3588,10 +3636,11 @@ async function readPreviewAppConfig(input: {
     workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
   if (result.exitCode !== 0) {
-    throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
+    // stdout may contain the readiness bearer; never include command output.
+    throw new Error("Failed to read preview app config.");
   }
 
-  return PreviewAppConfig.parse(JSON.parse(result.stdout));
+  return parsePreviewAppConfig(JSON.parse(result.stdout));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -4648,10 +4697,10 @@ const previewServingProbeTimeoutMs = 15_000;
 /** The real {@link PreviewAppServingProbe}: a single GET, no polling — this checks a deploy that already passed readiness once. */
 async function probePreviewAppServingOnce(url: URL): Promise<{ ok: boolean; detail: string }> {
   try {
-    const { status } = await fetchReadinessResponse(
-      url,
-      AbortSignal.timeout(previewServingProbeTimeoutMs),
-    );
+    const { status } = await fetchReadinessResponse(url, {
+      signal: AbortSignal.timeout(previewServingProbeTimeoutMs),
+      timeoutMs: previewServingProbeTimeoutMs,
+    });
     return { ok: status >= 200 && status < 300, detail: `HTTP ${status}` };
   } catch (error) {
     return { ok: false, detail: formatPreviewErrorMessage(error) };
@@ -4854,27 +4903,9 @@ function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugTy
 }
 
 function orderPreviewDeployBatches(apps: readonly PreviewAppRuntime[]) {
-  const selectedSlugs = new Set(apps.map((app) => app.slug));
-  const pendingSlugs = new Set(selectedSlugs);
-  const batches: PreviewAppRuntime[][] = [];
-
-  while (pendingSlugs.size > 0) {
-    const batch = apps.filter(
-      (app) =>
-        pendingSlugs.has(app.slug) &&
-        (app.previewDependencies ?? []).every(
-          (dependency) => !selectedSlugs.has(dependency) || !pendingSlugs.has(dependency),
-        ),
-    );
-    if (batch.length === 0) {
-      throw new Error(`Preview app dependencies contain a cycle: ${[...pendingSlugs].join(", ")}`);
-    }
-
-    batches.push(batch);
-    for (const app of batch) pendingSlugs.delete(app.slug);
-  }
-
-  return batches;
+  // Dependencies select a coherent set; they are not ordering constraints.
+  // Each app's deploy command owns its readiness checks, so start the fleet together.
+  return apps.length === 0 ? [] : [[...apps]];
 }
 
 async function mapWithConcurrency<T, Result>(
@@ -4901,9 +4932,10 @@ async function mapWithConcurrency<T, Result>(
 async function waitForPreviewAppReadiness(params: {
   publicUrl: string;
   readyUrlPath?: string;
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
-  workerVersion?: { expected: string; stableForMs: number };
+  workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -4912,6 +4944,7 @@ async function waitForPreviewAppReadiness(params: {
 
   for (const url of urls) {
     const readiness = await waitForHttpReadiness({
+      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
       url,
@@ -4947,19 +4980,56 @@ function parseLastDeployedWorkerVersionId(output: string): string | null {
 }
 
 async function waitForHttpReadiness(params: {
+  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
-  workerVersion?: { expected: string; stableForMs: number };
+  workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
 }) {
+  const startedAt = Date.now();
   const deadline = Date.now() + params.timeoutMs;
+  const hasProbeQueryParam = params.workerVersion?.probeQueryParam !== undefined;
+  const hasProbeWaveCount = params.workerVersion?.probeWaveCount !== undefined;
+
+  if (hasProbeQueryParam !== hasProbeWaveCount) {
+    throw new Error(
+      "Worker-version readiness must configure probeQueryParam and probeWaveCount together.",
+    );
+  }
+
+  if (hasProbeQueryParam && hasProbeWaveCount && params.workerVersion) {
+    const { probeQueryParam, probeWaveCount } = params.workerVersion;
+    if (probeQueryParam === undefined || probeWaveCount === undefined) {
+      throw new Error("Worker-version readiness probe configuration is incomplete.");
+    }
+    return await waitForWorkerVersionProbeWaves({
+      deadline,
+      readinessBearerToken: params.readinessBearerToken,
+      signal: params.signal,
+      startedAt,
+      url: params.url,
+      workerVersion: {
+        expected: params.workerVersion.expected,
+        probeQueryParam,
+        probeWaveCount,
+        stableForMs: params.workerVersion.stableForMs,
+      },
+    });
+  }
+
   let lastFailure = "No response received yet.";
   let matchingWorkerVersionSince: number | null = null;
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetchReadinessResponse(params.url, params.signal);
+      const response = await fetchReadinessResponse(params.url, {
+        readinessBearerToken: params.readinessBearerToken,
+        signal: params.signal,
+        timeoutMs: readinessRequestTimeoutMs(deadline),
+      });
       if (response.status >= 200 && response.status < 300) {
+        params.signal?.throwIfAborted();
+        if (Date.now() >= deadline) break;
         if (!params.workerVersion) {
           return { ok: true as const };
         }
@@ -4983,14 +5053,16 @@ async function waitForHttpReadiness(params: {
         }
       } else {
         matchingWorkerVersionSince = null;
-        lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+        lastFailure =
+          `Readiness check returned ${response.status} for ${params.url.toString()}` +
+          formatReadinessResponseDetail(response);
       }
     } catch (error) {
       matchingWorkerVersionSince = null;
       lastFailure = formatPreviewErrorMessage(error);
     }
 
-    await sleep(1_000, params.signal);
+    await sleep(Math.min(1_000, Math.max(0, deadline - Date.now())), params.signal);
   }
 
   return {
@@ -4999,36 +5071,365 @@ async function waitForHttpReadiness(params: {
   };
 }
 
+type WorkerVersionProbeResult = {
+  failure: string | null;
+  terminal: boolean;
+  wave: number;
+};
+
+/**
+ * Exercise every bounded Durable Object readiness wave concurrently. A wave
+ * that has already reported the exact deployment stays out of the hot retry
+ * set; once every wave has passed, one complete set is checked again after the
+ * stability interval. A slow request cannot let readiness expire without
+ * revisiting the last failed wave.
+ */
+async function waitForWorkerVersionProbeWaves(params: {
+  deadline: number;
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  startedAt: number;
+  url: URL;
+  workerVersion: {
+    expected: string;
+    probeQueryParam: string;
+    probeWaveCount: number;
+    stableForMs: number;
+  };
+}) {
+  const { probeWaveCount } = params.workerVersion;
+  if (!Number.isSafeInteger(probeWaveCount) || probeWaveCount < 1 || probeWaveCount > 64) {
+    throw new Error("Worker-version readiness probeWaveCount must be an integer from 1 to 64.");
+  }
+
+  const allWaves = Array.from({ length: probeWaveCount }, (_, wave) => wave);
+  let pendingWaves = new Set(allWaves);
+  let lastFailure = "No probe wave has completed yet.";
+  let lastProgress = "";
+  let lastProgressAt = 0;
+
+  while (Date.now() < params.deadline) {
+    const results = await probeWorkerVersionWaves({
+      deadline: params.deadline,
+      expectedWorkerVersion: params.workerVersion.expected,
+      probeQueryParam: params.workerVersion.probeQueryParam,
+      probeWaveCount,
+      readinessBearerToken: params.readinessBearerToken,
+      signal: params.signal,
+      url: params.url,
+      waves: [...pendingWaves],
+    });
+    const terminalFailure = results.find((result) => result.terminal);
+    if (terminalFailure?.failure) {
+      return {
+        message: `Preview readiness failed at ${params.url.toString()}. ${terminalFailure.failure}`,
+        ok: false as const,
+      };
+    }
+    for (const result of results) {
+      if (result.failure === null) pendingWaves.delete(result.wave);
+    }
+
+    if (pendingWaves.size > 0) {
+      const failures = results.filter((result) => result.failure !== null);
+      lastFailure = describeWorkerVersionProbeFailures(failures);
+      const progress = `${probeWaveCount - pendingWaves.size}/${probeWaveCount}`;
+      const now = Date.now();
+      if (progress !== lastProgress || now - lastProgressAt >= 10_000) {
+        console.error(
+          `[preview] readiness ${params.url.origin}: ${progress} Durable Object probe waves have served version ${params.workerVersion.expected}; ${lastFailure}`,
+        );
+        lastProgress = progress;
+        lastProgressAt = now;
+      }
+      await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
+      continue;
+    }
+
+    const remainingStabilityBudgetMs = params.deadline - Date.now();
+    if (remainingStabilityBudgetMs < params.workerVersion.stableForMs) {
+      lastFailure =
+        `All waves served the expected version, but only ${Math.max(0, remainingStabilityBudgetMs)}ms ` +
+        `remained for the required ${params.workerVersion.stableForMs}ms stability interval.`;
+      break;
+    }
+    console.error(
+      `[preview] readiness ${params.url.origin}: all ${probeWaveCount} Durable Object probe waves served ${params.workerVersion.expected}; revalidating after ${formatDurationMs(params.workerVersion.stableForMs)}`,
+    );
+    await sleep(params.workerVersion.stableForMs, params.signal);
+    params.signal?.throwIfAborted();
+    if (Date.now() >= params.deadline) {
+      lastFailure = "The readiness deadline expired before complete-set revalidation began.";
+      break;
+    }
+
+    const validationResults = await probeWorkerVersionWaves({
+      deadline: params.deadline,
+      expectedWorkerVersion: params.workerVersion.expected,
+      probeQueryParam: params.workerVersion.probeQueryParam,
+      probeWaveCount,
+      readinessBearerToken: params.readinessBearerToken,
+      signal: params.signal,
+      url: params.url,
+      waves: allWaves,
+    });
+    params.signal?.throwIfAborted();
+    const terminalValidationFailure = validationResults.find((result) => result.terminal);
+    if (terminalValidationFailure?.failure) {
+      return {
+        message:
+          `Preview readiness failed at ${params.url.toString()}. ` +
+          terminalValidationFailure.failure,
+        ok: false as const,
+      };
+    }
+    const validationFailures = validationResults.filter((result) => result.failure !== null);
+    if (validationFailures.length === 0 && Date.now() < params.deadline) {
+      console.error(
+        `[preview] readiness ${params.url.origin}: all ${probeWaveCount} waves remained exact; ready after ${formatDurationMs(Date.now() - params.startedAt)}`,
+      );
+      return { ok: true as const };
+    }
+    if (Date.now() >= params.deadline) {
+      lastFailure = "The readiness deadline expired during complete-set revalidation.";
+      break;
+    }
+
+    pendingWaves = new Set(validationFailures.map((result) => result.wave));
+    lastFailure = describeWorkerVersionProbeFailures(validationFailures);
+    console.error(
+      `[preview] readiness ${params.url.origin}: complete-set revalidation found ${lastFailure}; retrying only those waves`,
+    );
+    lastProgress = "";
+    await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
+  }
+
+  return {
+    message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
+    ok: false as const,
+  };
+}
+
+async function probeWorkerVersionWaves(params: {
+  deadline: number;
+  expectedWorkerVersion: string;
+  probeQueryParam: string;
+  probeWaveCount: number;
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  url: URL;
+  waves: readonly number[];
+}): Promise<WorkerVersionProbeResult[]> {
+  return await Promise.all(
+    params.waves.map(async (wave) => {
+      const requestUrl = new URL(params.url);
+      requestUrl.searchParams.set(params.probeQueryParam, String(wave));
+      try {
+        const response = await fetchReadinessResponse(requestUrl, {
+          readinessBearerToken: params.readinessBearerToken,
+          signal: params.signal,
+          timeoutMs: readinessRequestTimeoutMs(params.deadline),
+        });
+        if (response.status < 200 || response.status >= 300) {
+          const recognizedSettlingResponse =
+            response.settlingReason === "durable-object-lifecycle" ||
+            response.settlingReason === "probe-timeout" ||
+            response.settlingReason === "version-mismatch";
+          // During edge rollout Cloudflare can return a framework-generated 5xx
+          // without the Worker's version header. That response cannot be
+          // attributed to the deployment we are proving, so keep it inside the
+          // bounded rollout window. An unexplained 5xx explicitly served by the
+          // expected version is an application failure and remains terminal.
+          const servedByExpectedWorker = response.workerVersion === params.expectedWorkerVersion;
+          const terminal =
+            [400, 401, 403].includes(response.status) ||
+            (response.status >= 500 && !recognizedSettlingResponse && servedByExpectedWorker);
+          return {
+            failure:
+              `wave ${wave} returned HTTP ${response.status}` +
+              formatReadinessResponseDetail(response),
+            terminal,
+            wave,
+          };
+        }
+        if (response.workerVersion !== params.expectedWorkerVersion) {
+          return {
+            failure: `wave ${wave} served Worker version ${response.workerVersion ?? "<missing>"}`,
+            terminal: false,
+            wave,
+          };
+        }
+        if (
+          response.deploymentProbeWave !== wave ||
+          response.deploymentProbeWaveCount !== params.probeWaveCount
+        ) {
+          return {
+            failure:
+              `wave ${wave} returned probe identity ` +
+              `${response.deploymentProbeWave ?? "<missing>"}/` +
+              `${response.deploymentProbeWaveCount ?? "<missing>"}; ` +
+              `expected ${wave}/${params.probeWaveCount}`,
+            terminal: true,
+            wave,
+          };
+        }
+        return { failure: null, terminal: false, wave };
+      } catch (error) {
+        return {
+          failure: `wave ${wave} failed: ${formatPreviewErrorMessage(error)}`,
+          terminal: false,
+          wave,
+        };
+      }
+    }),
+  );
+}
+
+function describeWorkerVersionProbeFailures(results: readonly WorkerVersionProbeResult[]) {
+  const descriptions = results
+    .map((result) => result.failure)
+    .filter((failure): failure is string => failure !== null);
+  return descriptions.length === 0 ? "no failed waves" : descriptions.join("; ");
+}
+
 async function fetchReadinessResponse(
   url: URL,
-  signal: AbortSignal | undefined,
-): Promise<{ status: number; workerVersion: string | null }> {
+  options: {
+    readinessBearerToken?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
+): Promise<ReadinessResponse> {
+  const requestTimeoutSignal = AbortSignal.timeout(
+    Math.max(1, options.timeoutMs ?? previewReadinessRequestTimeoutMs),
+  );
+  const requestSignal = options.signal
+    ? AbortSignal.any([options.signal, requestTimeoutSignal])
+    : requestTimeoutSignal;
+  const headers = options.readinessBearerToken
+    ? { authorization: `Bearer ${options.readinessBearerToken}` }
+    : undefined;
   try {
     const response = await fetch(url, {
       cache: "no-store",
+      headers,
       method: "GET",
       redirect: "follow",
-      signal,
+      signal: requestSignal,
     });
-    return {
+    return parseReadinessResponse({
+      body: await readBoundedResponseBody(response),
       status: response.status,
       workerVersion: response.headers.get(workerVersionReadinessHeader),
-    };
+    });
   } catch (error) {
     if (!isDnsLookupError(error)) {
       throw error;
     }
 
-    return await requestReadinessWithDnsResolve(url, signal);
+    return await requestReadinessWithDnsResolve({
+      readinessBearerToken: options.readinessBearerToken,
+      signal: requestSignal,
+      url,
+    });
   }
 }
 
-async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
+type ReadinessResponse = {
+  body: string;
+  deploymentProbeWave: number | null;
+  deploymentProbeWaveCount: number | null;
+  settlingReason: string | null;
+  status: number;
+  workerVersion: string | null;
+};
+
+const readinessResponseBodyLimit = 4_096;
+
+async function readBoundedResponseBody(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+  let truncated = false;
+  while (bytesRead < readinessResponseBodyLimit) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const remaining = readinessResponseBodyLimit - bytesRead;
+    chunks.push(value.subarray(0, remaining));
+    bytesRead += Math.min(value.byteLength, remaining);
+    if (value.byteLength > remaining) {
+      truncated = true;
+      await reader.cancel();
+      break;
+    }
+  }
+
+  if (bytesRead >= readinessResponseBodyLimit && !truncated) {
+    const { done } = await reader.read();
+    truncated = !done;
+    if (truncated) await reader.cancel();
+  }
+  const body = new TextDecoder().decode(concatenateBytes(chunks, bytesRead));
+  return truncated ? `${body}…` : body;
+}
+
+function concatenateBytes(chunks: readonly Uint8Array[], length: number): Uint8Array {
+  const combined = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return combined;
+}
+
+function parseReadinessResponse(input: {
+  body: string;
+  status: number;
+  workerVersion: string | null;
+}): ReadinessResponse {
+  let parsed: unknown = null;
+  try {
+    parsed = input.body ? JSON.parse(input.body) : null;
+  } catch {
+    // Non-JSON proxy and platform errors remain useful as bounded diagnostics.
+  }
+  const record =
+    typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
+  return {
+    ...input,
+    deploymentProbeWave: readSafeInteger(record?.deploymentProbeWave),
+    deploymentProbeWaveCount: readSafeInteger(record?.deploymentProbeWaveCount),
+    settlingReason: typeof record?.settlingReason === "string" ? record.settlingReason : null,
+  };
+}
+
+function readSafeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) ? (value as number) : null;
+}
+
+function formatReadinessResponseDetail(response: ReadinessResponse): string {
+  const detail = response.body.trim().replace(/\s+/g, " ");
+  return detail ? `: ${detail}` : "";
+}
+
+function readinessRequestTimeoutMs(deadline: number): number {
+  return Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now()));
+}
+
+async function requestReadinessWithDnsResolve(input: {
+  readinessBearerToken?: string;
+  signal?: AbortSignal;
+  url: URL;
+}) {
+  const { signal, url } = input;
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
   }
 
-  const addresses = await dns.resolve4(url.hostname);
+  const addresses = await awaitWithAbort(dns.resolve4(url.hostname), signal);
   const address = addresses[0];
   if (!address) {
     throw new Error(`No A record found for ${url.hostname}`);
@@ -5038,11 +5439,15 @@ async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | un
   const resolvedUrl = new URL(url);
   resolvedUrl.hostname = address;
 
-  return await new Promise<{ status: number; workerVersion: string | null }>((resolve, reject) => {
+  return await new Promise<ReadinessResponse>((resolve, reject) => {
+    const headers: Record<string, string> = { Host: url.host };
+    if (input.readinessBearerToken) {
+      headers.authorization = `Bearer ${input.readinessBearerToken}`;
+    }
     const req = request(
       resolvedUrl,
       {
-        headers: { Host: url.host },
+        headers,
         method: "GET",
         servername: url.hostname,
         signal,
@@ -5053,12 +5458,52 @@ async function requestReadinessWithDnsResolve(url: URL, signal: AbortSignal | un
         const workerVersion = Array.isArray(rawWorkerVersion)
           ? (rawWorkerVersion[0] ?? null)
           : (rawWorkerVersion ?? null);
-        response.resume();
-        response.on("end", () => resolve({ status: statusCode, workerVersion }));
+        let body = "";
+        let truncated = false;
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          const remaining = readinessResponseBodyLimit - body.length;
+          if (remaining > 0) body += chunk.slice(0, remaining);
+          if (chunk.length > remaining) truncated = true;
+        });
+        response.on("error", reject);
+        response.on("end", () =>
+          resolve(
+            parseReadinessResponse({
+              body: truncated ? `${body}…` : body,
+              status: statusCode,
+              workerVersion,
+            }),
+          ),
+        );
       },
     );
     req.on("error", reject);
     req.end();
+  });
+}
+
+async function awaitWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await promise;
+  signal.throwIfAborted();
+
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason ?? new Error("Aborted"));
+    };
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
   });
 }
 
@@ -5190,15 +5635,21 @@ function canRunPreviewTests(entry: z.infer<typeof CloudflarePreviewAppEntry> | u
 
 async function sleep(ms: number, signal?: AbortSignal) {
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(resolve, ms);
+    let timeout: ReturnType<typeof setTimeout>;
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const onDone = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      clearTimeout(timeout);
+      cleanup();
+      reject(signal?.reason ?? new Error("Aborted"));
+    };
+    timeout = setTimeout(onDone, ms);
     if (!signal) {
       return;
     }
-
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason ?? new Error("Aborted"));
-    };
 
     if (signal.aborted) {
       onAbort();

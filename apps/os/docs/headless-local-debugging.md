@@ -35,9 +35,9 @@ Gotchas:
 - The Doppler scope for `apps/auth` must resolve to a config that exists. If
   `pnpm dev-all` dies with `Could not find requested config 'dev_<you>'`, point it
   at the shared dev config: `doppler configure set config dev --scope apps/auth`.
-- A loopback issuer signs tokens with the **local** auth keys, so a static
-  production JWKS can't verify them. `apps/os/scripts/deploy.ts` detects a loopback
-  issuer and skips the static JWKS (falls back to runtime JWKS fetch).
+- Local Auth and OS read the same `AUTH_FORGE_PRIVATE_JWK`. Auth signs with its
+  private half and generated OS config derives the public JWKS, exactly like a
+  deployment; no live JWKS fallback is involved.
 
 ## Headless browser without touching the user's Chrome
 
