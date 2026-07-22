@@ -5,6 +5,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
   CloudflarePreviewAppEntry,
+  CloudflarePreviewAppSlug,
   CloudflarePreviewSlotDisplay,
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
@@ -62,6 +63,7 @@ const {
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
+  selectPreviewAppsForTesting,
   selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
@@ -453,7 +455,7 @@ describe("preview workflow scope", () => {
             publicUrl: "https://dummy-petshop.iterate-preview-7.com",
           },
         },
-        headSha,
+        requiredDeploymentHeadSha: headSha,
       }),
     ).toEqual([
       "APP_CONFIG_BASE_URL=https://os.iterate-preview-7.com",
@@ -513,7 +515,7 @@ describe("preview workflow scope", () => {
         apps,
         appSlugs: ["os", "auth"],
         dopplerConfig: "preview_7",
-        headSha,
+        requiredDeploymentHeadSha: headSha,
       }),
     ).toBe(`auth-preview-7="${authVersion}",os-preview-7="${osVersion}"`);
 
@@ -522,7 +524,7 @@ describe("preview workflow scope", () => {
         apps: { ...apps, os: { ...apps.os, deployedWorkerVersion: null } },
         appSlugs: ["os", "auth"],
         dopplerConfig: "preview_7",
-        headSha,
+        requiredDeploymentHeadSha: headSha,
       }),
     ).toThrow(/exact os-preview-7 deployment identity is missing or stale/);
   });
@@ -541,9 +543,69 @@ describe("preview workflow scope", () => {
             publicUrl: "https://dummy-petshop.iterate-preview-7.com",
           },
         },
-        headSha: "current-head",
+        requiredDeploymentHeadSha: "current-head",
       }),
     ).toThrow(/PETSHOP_BASE_URL requires dummy-petshop deployed at head current/);
+  });
+
+  test("reruns every app suite when unchanged deployments come from an older head", () => {
+    const oldHead = "older-deployment-head";
+    const osVersion = "11111111-1111-4111-8111-111111111111";
+    const authVersion = "22222222-2222-4222-8222-222222222222";
+    const apps = {
+      auth: CloudflarePreviewAppEntry.parse({
+        appDisplayName: "Auth",
+        appSlug: "auth",
+        deployedWorkerName: "auth-preview-7",
+        deployedWorkerVersion: authVersion,
+        headSha: oldHead,
+        publicUrl: "https://auth.iterate-preview-7.com",
+        status: "deployed",
+        updatedAt: "2026-07-22T00:00:00.000Z",
+      }),
+      "dummy-petshop": CloudflarePreviewAppEntry.parse({
+        appDisplayName: "Dummy Petshop",
+        appSlug: "dummy-petshop",
+        deployedWorkerName: "dummy-petshop-preview-7",
+        deployedWorkerVersion: "33333333-3333-4333-8333-333333333333",
+        headSha: oldHead,
+        publicUrl: "https://dummy-petshop.iterate-preview-7.com",
+        status: "deployed",
+        updatedAt: "2026-07-22T00:00:00.000Z",
+      }),
+      os: CloudflarePreviewAppEntry.parse({
+        appDisplayName: "OS",
+        appSlug: "os",
+        deployedWorkerName: "os-preview-7",
+        deployedWorkerVersion: osVersion,
+        headSha: oldHead,
+        publicUrl: "https://os.iterate-preview-7.com",
+        status: "deployed",
+        updatedAt: "2026-07-22T00:00:00.000Z",
+      }),
+    };
+
+    expect(selectPreviewAppsForTesting(apps).map((app) => app.slug)).toEqual([
+      "auth",
+      "dummy-petshop",
+      "os",
+    ]);
+    expect(
+      resolvePreviewTestWorkerVersionOverrides({
+        apps,
+        appSlugs: ["auth", "os"],
+        dopplerConfig: "preview_7",
+      }),
+    ).toBe(`auth-preview-7="${authVersion}",os-preview-7="${osVersion}"`);
+    expect(
+      resolvePreviewTestBaseUrlEnvironment({
+        app: cloudflarePreviewApps.os,
+        apps,
+      }),
+    ).toEqual([
+      "APP_CONFIG_BASE_URL=https://os.iterate-preview-7.com",
+      "PETSHOP_BASE_URL=https://dummy-petshop.iterate-preview-7.com",
+    ]);
   });
 
   test("rejects pre-RPC branches before the preview orchestrator can deploy Auth", () => {
@@ -1099,17 +1161,27 @@ describe("preview retry selection", () => {
     },
     {
       // An awaiting-tests entry at any head is a deploy whose tests never ran
-      // (a cancelled run). Redeploying it at the current head is idempotent
-      // and is what keeps `test`'s "no app recorded at this head" skip honest
-      // (observed 2026-07-10: a cancelled run's deploy landed, the next
-      // push's non-app diff selected nothing, and the check went green over
-      // deployments that never passed tests).
+      // (a cancelled run). Redeploying it at the current head is the only
+      // valid route back to a tested state (observed 2026-07-10: a cancelled
+      // run's deploy landed, the next push's non-app diff selected nothing,
+      // and the check went green over deployments that never passed tests).
       name: "re-runs awaiting-tests apps whatever head deployed them — their e2e never ran",
       recorded: {
         appDisplayName: "OS",
         appSlug: "os",
         headSha: "old-head",
         status: "awaiting-tests" as const,
+      },
+      expected: ["os", "auth", "dummy-petshop"],
+    },
+    {
+      name: "redeploys legacy green rows that cannot pin an immutable Worker version",
+      recorded: {
+        appDisplayName: "OS",
+        appSlug: "os",
+        headSha: "old-head",
+        publicUrl: "https://os.iterate-preview-7.com",
+        status: "deployed" as const,
       },
       expected: ["os", "auth", "dummy-petshop"],
     },
@@ -1120,7 +1192,7 @@ describe("preview retry selection", () => {
           apps: {
             [recorded.appSlug]: { ...recorded, updatedAt: "2026-05-01T00:00:00.000Z" },
           },
-          environmentConfigLease: null,
+          environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
           notice: null,
         },
       }).map((app) => app.slug),
@@ -1143,9 +1215,13 @@ describe("preview deploy selection", () => {
     displayName: string,
     overrides: Partial<CloudflarePreviewAppEntry> = {},
   ) {
+    const appSlug = CloudflarePreviewAppSlug.parse(slug);
     return CloudflarePreviewAppEntry.parse({
       appDisplayName: displayName,
-      appSlug: slug,
+      appSlug,
+      deployedWorkerName:
+        cloudflarePreviewApps[appSlug].resolvePreviewAppConfig("preview_7").workerName,
+      deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
       headSha: currentHead,
       publicUrl: `https://${slug}.iterate-preview-7.com`,
       shortSha: "current",
@@ -1165,7 +1241,7 @@ describe("preview deploy selection", () => {
       ...selectionInput,
       previousState: {
         apps: { os: recordedApp("os", "OS"), auth: recordedApp("auth", "Auth") },
-        environmentConfigLease: null,
+        environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
         notice: null,
       },
       fetchCompare: compareMustNotRun,
@@ -1240,7 +1316,7 @@ describe("preview deploy selection", () => {
             status: "tests-failed" as const,
           }),
         },
-        environmentConfigLease: null,
+        environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
         notice: null,
       },
       fetchCompare: compareMustNotRun,
