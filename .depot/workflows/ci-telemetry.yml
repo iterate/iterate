@@ -1,4 +1,9 @@
 name: CI telemetry sync
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  pull-requests: read
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -14,8 +19,7 @@ jobs:
     timeout-minutes: 10
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      DEPOT_CI_TELEMETRY_TOKEN: ${{ secrets.DEPOT_CI_TELEMETRY_TOKEN }}
-      GH_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
       # The 15-minute cadence rereads 24 hours for outage tolerance. Manual
       # backfills default to seven days and are idempotent.
       CI_TELEMETRY_LOOKBACK_DAYS: "1"
@@ -28,4 +32,10 @@ jobs:
       - name: Reconcile dependencies (baked)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Backfill GitHub, Depot, and review-bot telemetry
-        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/sync-ci-telemetry.ts
+        run: |-
+          set -euo pipefail
+          export DEPOT_CI_TELEMETRY_TOKEN
+          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)"
+          doppler run --project _shared --config prd \
+            --preserve-env=DEPOT_CI_TELEMETRY_TOKEN,GITHUB_TOKEN -- \
+            pnpm tsx scripts/ci/sync-ci-telemetry.ts

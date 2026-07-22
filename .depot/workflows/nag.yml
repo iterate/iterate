@@ -1,4 +1,8 @@
 name: Nag about PRs
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -21,7 +25,7 @@ jobs:
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      ITERATE_BOT_GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

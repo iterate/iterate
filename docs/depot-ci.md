@@ -12,8 +12,8 @@ runtime logic in normal scripts under `scripts/ci` instead of embedding large
 Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
 failure-rate analysis lives in PostHog; see
 [CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
-scheduled backfill, dedicated Depot organization token and its scope caveat,
-and CLI/MCP queries.
+scheduled backfill, Doppler-managed Depot organization token and its scope
+caveat, and CLI/MCP queries.
 
 ## Quick Links
 
@@ -33,8 +33,9 @@ and CLI/MCP queries.
 - CI scripts: `scripts/ci/*.ts`
 - Custom image:
   `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`
-- Secrets and variables are managed with `depot ci secrets` and `depot ci vars`,
-  not GitHub Actions secrets.
+- `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
+  credentials live in Doppler; GitHub supplies a short-lived job token.
+- Non-secret variables are managed with `depot ci vars`.
 
 The only GitHub Actions workflow left is `.github/workflows/claude-assistant.yml`.
 It is not CI; it exists because Depot CI does not support issue/comment events
@@ -107,9 +108,16 @@ Manage secrets:
 
 ```bash
 depot ci secrets list --org 0p91s0lz49
-printf '%s' "$VALUE" | depot ci secrets add NAME --org 0p91s0lz49
-depot ci secrets remove NAME --org 0p91s0lz49
 ```
+
+The list must contain only `DOPPLER_TOKEN`. Do not copy GitHub, Depot API,
+Cloudflare, Slack, PostHog, or other service credentials into Depot. Put them
+in the appropriate Doppler config; CI reaches them through the bootstrap
+token. GitHub operations use `${{ github.token }}` and workflow-level
+`permissions` instead of a stored bot token. The CI telemetry collector is the
+non-obvious case: its Depot organization token lives in `_shared/preview`, but
+the collector sends under `_shared/prd` so it reaches the canonical PostHog
+project. See [CI and test telemetry](ci-test-telemetry.md) for the exact setup.
 
 ## Wait For CI
 
