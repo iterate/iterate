@@ -8,7 +8,7 @@ import {
   posthogSubscriptionEvent,
 } from "./posthog.ts";
 
-const posthogEventName = (event: StreamEvent) => `append:${event.type}`;
+const POSTHOG_STREAM_APPEND_EVENT = "stream:append";
 const POSTHOG_SUBSCRIPTION_KEY = "iterate-platform-posthog";
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
@@ -122,7 +122,7 @@ describe("first-party PostHog stream integration", () => {
     expect(requests[0]!.batch).toHaveLength(1);
     const occurrence = requests[0]!.batch[0]!;
     expect(occurrence).toMatchObject({
-      event: posthogEventName(durable),
+      event: POSTHOG_STREAM_APPEND_EVENT,
     });
     expect(occurrence.properties).toEqual({
       $geoip_disable: true,
@@ -163,7 +163,7 @@ describe("first-party PostHog stream integration", () => {
     expect(mixedFetch).toHaveBeenCalledOnce();
     expect(mixed[0]!.batch).toHaveLength(1);
     expect(mixed[0]!.batch[0]).toMatchObject({
-      event: posthogEventName(durable),
+      event: POSTHOG_STREAM_APPEND_EVENT,
       properties: {
         stream_event: durable,
       },
@@ -193,7 +193,7 @@ describe("first-party PostHog stream integration", () => {
 
     const occurrence = requests[0]!.batch[0]!;
     const properties = occurrence.properties as Record<string, unknown>;
-    expect(occurrence.event).toBe(posthogEventName(oversized));
+    expect(occurrence.event).toBe(POSTHOG_STREAM_APPEND_EVENT);
     expect(properties).toMatchObject({
       stream_event_original_json_bytes: jsonBytes(oversized),
       stream_event_truncated: true,
@@ -255,7 +255,7 @@ describe("first-party PostHog stream integration", () => {
     });
     const capturedBirth = requests[0]!.batch[2]!;
     expect(capturedBirth).toMatchObject({
-      event: posthogEventName(created),
+      event: POSTHOG_STREAM_APPEND_EVENT,
       properties: {
         $groups: { project: "prj_123" },
       },
@@ -289,7 +289,7 @@ describe("first-party PostHog stream integration", () => {
     expect(requests[0]!.batch).toHaveLength(1);
     const capturedBirth = requests[0]!.batch[0]!;
     expect(capturedBirth).toMatchObject({
-      event: posthogEventName(created),
+      event: POSTHOG_STREAM_APPEND_EVENT,
     });
     expect(JSON.stringify((capturedBirth.properties as Record<string, unknown>).stream_event)).toBe(
       JSON.stringify(created),
