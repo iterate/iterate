@@ -65,6 +65,22 @@ The repo Durable Object used to equate every read with _possessing the whole rep
 
 Prod (deployed pair, before this branch merged — clone lane): the same iterate/iterate cold read was **36.9 s**, re-paid after every push; warm 438 ms.
 
+### Production, after the merge (2026-07-23, tasks.iterate.workers.dev → os.iterate.com)
+
+| Scenario                                                       | Result                             |
+| -------------------------------------------------------------- | ---------------------------------- |
+| iterate/iterate board, cold (fresh workspace + repo store)     | 8.7 s once, durable                |
+| iterate/iterate board, warm                                    | 466 ms                             |
+| write → commit → board reload (the flow that used to re-clone) | 55 ms / ~280 ms / **233 ms**       |
+| **10,018-file prd repo**: 10 × 1,000-file batched commits      | committed clean; `listFiles` 69 ms |
+| 10k board seed through the tasks vessel (2 × 5k chunked reads) | **~1.1 s** end to end              |
+| write + commit at 10k scale                                    | 51 ms / 963 ms                     |
+
+Two findings from the prod pressure run:
+
+- **The 10,001st task broke the board** — the vessel's single `readFiles` call hit the platform's 10,000-path cap and threw. Fixed in iterate/tasks (`9c8366b`): the board seed reads in 5,000-path chunks, two lanes at a time. The cap itself stays (it bounds one RPC's work honestly).
+- **Back-to-back commits on a GitHub-linked repo wait ~12 s** — every commit schedules a full GitHub mirror push ON the repo DO's serialized write chain, so the next commit queues behind a clone+push to GitHub. Pre-existing main behavior (the lazy lane made it _visible_ by making commits fast); prod `/repos/iterate` has additionally diverged from its GitHub source, so those mirror pushes cannot fast-forward. Follow-up candidates: move the mirror push off the write chain, or mirror from the lazy store without a clone.
+
 ## Known limitations (ranked; documented, not hidden)
 
 1. **Kernel-scale repos fail at the SERVICE, not the client.** Artifacts' upload-pack returns HTTP 500 after ~73 s for the 281 MB-pack kernel snapshot — real `git clone --depth 1` fails identically, so the clone lane is equally dead. The practical ceiling sits somewhere between a ~20 MB pack (works, fast) and a ~281 MB pack (server 500). Pushing the same repo INTO Artifacts worked (6 min), so ingest and serving limits differ. Follow-up if kernel-scale becomes real: manifest-first cold sync (batched tree-only wants — the arbitrary-oid want primitive already supports it) + blob-on-demand, which also sidesteps the isolate-memory point below.
