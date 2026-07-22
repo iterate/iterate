@@ -10,7 +10,7 @@ test("can enter the dashboard with a forged session", async ({ helpers, page }) 
 
 test("loads project navigation only when it opens", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("lazy-project-navigation", {
-    readiness: "core",
+    readiness: "full",
   });
   const dialogRequests: string[] = [];
   page.on("request", (request) => {
@@ -33,7 +33,7 @@ test("loads project navigation only when it opens", async ({ helpers, page }) =>
 test("opening OS returns to the most recently active project", async ({ helpers, page }) => {
   await using fixture = await helpers.createFixture("recent-project", {
     projectCount: 2,
-    readiness: "core",
+    readiness: "full",
   });
   const recent = fixture.projects[1]!;
 
@@ -45,7 +45,7 @@ test("opening OS returns to the most recently active project", async ({ helpers,
 });
 
 test("project settings is available under /settings", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("project-settings", { readiness: "core" });
+  await using fixture = await helpers.createFixture("project-settings", { readiness: "full" });
 
   await page.goto(`/projects/${fixture.project.slug}/settings`);
   await page.getByTestId("project-settings-panel").waitFor();

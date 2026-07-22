@@ -133,7 +133,7 @@ test("reactivity page processor panel goes live and repaints from a server push"
   page,
 }) => {
   await using projectFixture = await helpers.createFixture("reactivity-processor", {
-    readiness: "core",
+    readiness: "full",
   });
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);

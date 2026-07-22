@@ -5,7 +5,7 @@ test("project home hydrates the dashboard and REPL still server-renders", async 
   helpers,
   page,
 }) => {
-  await using fixture = await helpers.createFixture("project-route-ssr", { readiness: "core" });
+  await using fixture = await helpers.createFixture("project-route-ssr", { readiness: "full" });
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
 
