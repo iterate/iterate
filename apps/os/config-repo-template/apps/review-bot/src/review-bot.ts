@@ -10,6 +10,7 @@
 // collapse.
 import { z } from "zod";
 import { defineProcessorContract, StreamProcessor } from "iterate/processors";
+import type { ProcessEventArgs } from "iterate/processors";
 import type { Project, StreamEvent, StreamEventInput } from "iterate/sdk";
 
 // Record keys are stable rule IDs: duplicate identities are structurally
@@ -77,6 +78,7 @@ export const ReviewBotProcessorContract = defineProcessorContract({
   consumes: ["events.iterate.com/github/webhook-received"],
   emits: [],
 });
+export type ReviewBotProcessorContract = typeof ReviewBotProcessorContract;
 
 type ReviewBotProcessorDeps = {
   /** Opens the project itx handle the webhook router acts through. */
@@ -93,15 +95,13 @@ type ReviewBotProcessorDeps = {
  * idempotency keys collapse the re-run (the at-least-once contract).
  */
 export class ReviewBotProcessor extends StreamProcessor<
-  typeof ReviewBotProcessorContract,
+  ReviewBotProcessorContract,
   ReviewBotProcessorDeps
 > {
   readonly contract = ReviewBotProcessorContract;
 
-  protected override processEvent({
-    blockProcessorWhile,
-    event,
-  }: Parameters<StreamProcessor<typeof ReviewBotProcessorContract>["processEvent"]>[0]): undefined {
+  protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {
+    const { blockProcessorWhile, event } = args;
     if (event === null || event.type !== "events.iterate.com/github/webhook-received") return;
     // First-hand facts only: a copy carrying cross-post provenance is another
     // stream's history (e.g. the agent-stream copy this router itself
