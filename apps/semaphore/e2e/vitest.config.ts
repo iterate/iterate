@@ -21,6 +21,6 @@ export default defineConfig({
     // for the deploy-adjacent websocket lanes (os, streams-example-app);
     // semaphore's e2e is a plain HTTP contract check.
     retry: process.env.CI ? E2E_CI_RETRIES : 0,
-    reporters: ["default", new RetryTelemetryReporter()],
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
   },
 });

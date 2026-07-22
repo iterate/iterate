@@ -148,6 +148,7 @@ function makeJournal(homePath = HOME) {
   /** EVERY append attempt, deduped or not — the at-least-once evidence. */
   const attempts: { path: string; event: StreamEventInput; deduped: boolean }[] = [];
   const failNext = new Map<string, Error>();
+  let failNextRead: Error | undefined;
   let createdAtClock = 0;
 
   const rowsFor = (path: string): StreamEvent[] => {
@@ -201,6 +202,11 @@ function makeJournal(homePath = HOME) {
         const limit = args?.limit ?? 500;
         return {
           next: () => {
+            if (failNextRead !== undefined) {
+              const error = failNextRead;
+              failNextRead = undefined;
+              return Promise.reject(error);
+            }
             const page = rowsFor(path)
               .filter(
                 (row) =>
@@ -236,6 +242,9 @@ function makeJournal(homePath = HOME) {
     },
     failNextAppendTo(path: string, error: Error) {
       failNext.set(path, error);
+    },
+    failNextReadWith(error: Error) {
+      failNextRead = error;
     },
   };
 }
@@ -1323,6 +1332,41 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
     expect(snapshot.offset).toBe(committed.offset);
     expect(snapshot.state.open).toContain("ryw");
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(committed.offset);
+  });
+
+  it("offset form rejects a failed self-pull promptly instead of parking until its timeout", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const controller = new AbortController();
+    try {
+      const harness = makeHarness();
+      const storageReset = new Error(
+        "Internal error while starting up Durable Object storage caused object to be reset",
+      );
+      harness.journal.failNextReadWith(storageReset);
+
+      const waiting = harness.runner.waitUntilEvent({
+        offset: 8,
+        timeoutMs: 75_000,
+        signal: controller.signal,
+      });
+      const outcome = await Promise.race([
+        waiting.then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        ),
+        tick().then(() => ({ status: "still-parked" as const })),
+      ]);
+
+      // Always settle the old implementation's parked promise so a red test
+      // leaves neither a timer nor an unhandled rejection behind.
+      controller.abort();
+      await waiting.catch(() => undefined);
+
+      expect(outcome).toEqual({ error: storageReset, status: "rejected" });
+    } finally {
+      controller.abort();
+      consoleError.mockRestore();
+    }
   });
 });
 

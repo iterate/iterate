@@ -50,10 +50,18 @@ describe("environmentFaviconHref", () => {
 });
 
 describe("environmentFaviconSvg", () => {
-  it("shrinks a multi-digit preview marker to fit its badge", () => {
+  it("renders a single-character marker in a badge scaled to twice its original size", () => {
+    const svg = environmentFaviconSvg({ background: FAVICON_BACKGROUNDS.dev, marker: "J" });
+
+    expect(svg).toContain('r="192"');
+    expect(svg).toContain('font-size="300"');
+    expect(svg).toContain(">J</text>");
+  });
+
+  it("shrinks a multi-digit preview marker to fit its enlarged badge", () => {
     const svg = environmentFaviconSvg({ background: FAVICON_BACKGROUNDS.preview, marker: "12" });
 
-    expect(svg).toContain('font-size="112"');
+    expect(svg).toContain('font-size="224"');
     expect(svg).toContain(">12</text>");
   });
 });

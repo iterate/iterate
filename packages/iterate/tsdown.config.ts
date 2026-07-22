@@ -22,19 +22,6 @@ export default defineConfig([
     copy: [{ from: "src/enclave-approver.swift", to: "dist" }],
   },
   {
-    // No dts here: the generated itx contract crashes rolldown-plugin-dts's
-    // babel printer (getter signatures). Declarations come from
-    // `tsc -p tsconfig.sdk.json` in the build script instead.
-    entry: ["src/sdk.ts"],
-    format: "esm",
-    deps: {
-      neverBundle: ["cloudflare:workers"],
-    },
-    dts: false,
-    sourcemap: true,
-    clean: false,
-  },
-  {
     entry: ["src/worker.ts"],
     format: "esm",
     deps: {
@@ -46,13 +33,22 @@ export default defineConfig([
     copy: [{ from: "src/worker.d.mts", to: "dist" }],
   },
   {
-    // The stream-processor machinery + its node test harness. Worker-targeted
-    // (the registry imports cloudflare:workers tracing), so cloudflare:*
-    // stays external; zod/capnweb are ordinary dependencies and stay external
-    // like every library entry. No module-state sharing with the client
-    // entries (the shared live-state modules are stateless codecs), so a
-    // separate config object is safe. No dts for the sdk reason above.
+    // The sdk + stream-processor machinery + its node test harness, ONE
+    // config object on purpose: sdk.ts hosts createProcessorHost, which
+    // constructs the registry/runner over processor instances built from the
+    // `iterate/processors` entry — rolldown must split that machinery into
+    // shared chunks so all four entries hold ONE StreamProcessor class.
+    // Separate objects would inline private copies, and the runner's static
+    // driver touches processor PRIVATE FIELDS, which throw across class
+    // copies ("Receiver must be an instance of class anonymous" from a live
+    // guestbook). Worker-targeted (the registry imports cloudflare:workers
+    // tracing), so cloudflare:* stays external; zod/capnweb are ordinary
+    // dependencies and stay external like every library entry. No dts: the
+    // generated itx contract crashes rolldown-plugin-dts's babel printer
+    // (getter signatures); declarations come from `tsc -p tsconfig.sdk.json`
+    // in the build script instead.
     entry: {
+      sdk: "src/sdk.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",

@@ -59,8 +59,11 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
-const RETIRED_ARTIFACT_EVENTS_QUEUE_SUFFIX = "-events";
 const RETIRED_QUEUE_PAGE_SIZE = 100;
+const RETIRED_WORKER_QUEUE_CONSUMERS = [
+  { label: "Artifact event", suffix: "-events" },
+  { label: "AI Search index-write", suffix: "-search-index-writes" },
+] as const;
 
 const RetiredQueue = z.object({
   queue_id: z.string(),
@@ -74,51 +77,60 @@ const RetiredQueueConsumer = z.object({
 });
 
 /**
- * Cloudflare refuses a handler-less Worker upload while the previous Queue
- * consumer still targets that script. Detach only that exact retired
- * consumer before the first post-quarantine deploy; later deploys are a
- * read-only no-op. The queue and its producer subscriptions are deliberately
- * left for the audited one-off cleanup tracked by the quarantine task.
+ * Cloudflare refuses a handler-less Worker upload while a previous Queue
+ * consumer still targets that script. Detach only the exact consumers left
+ * behind by retired features; later deploys are read-only no-ops. The queues
+ * themselves are deliberately left for separately audited resource cleanup.
  */
-export async function detachRetiredArtifactEventQueueConsumer(input: {
+export async function detachRetiredWorkerQueueConsumers(input: {
   cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
   workerName: string;
-}): Promise<"absent" | "detached"> {
-  const queueName = `${input.workerName}${RETIRED_ARTIFACT_EVENTS_QUEUE_SUFFIX}`;
-  let queue: z.infer<typeof RetiredQueue> | undefined;
-  for (let page = 1; queue === undefined; page += 1) {
+}): Promise<Array<{ queueName: string; status: "absent" | "detached" }>> {
+  const retiredQueues = RETIRED_WORKER_QUEUE_CONSUMERS.map(({ label, suffix }) => ({
+    label,
+    queueName: `${input.workerName}${suffix}`,
+  }));
+  const queueNames = new Set(retiredQueues.map(({ queueName }) => queueName));
+  const queuesByName = new Map<string, z.infer<typeof RetiredQueue>>();
+  for (let page = 1; queuesByName.size < queueNames.size; page += 1) {
     const queues = z
       .array(RetiredQueue)
       .parse(await input.cf(`/queues?per_page=${RETIRED_QUEUE_PAGE_SIZE}&page=${page}`));
-    queue = queues.find((candidate) => candidate.queue_name === queueName);
+    for (const queue of queues) {
+      if (queueNames.has(queue.queue_name)) queuesByName.set(queue.queue_name, queue);
+    }
     if (queues.length < RETIRED_QUEUE_PAGE_SIZE) break;
   }
-  if (!queue) {
-    console.log(`retired Artifact event Queue absent: ${queueName}`);
-    return "absent";
-  }
 
-  const consumers = z
-    .array(RetiredQueueConsumer)
-    .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
-  const consumer = consumers.find(
-    (candidate) =>
-      candidate.type === "worker" &&
-      (candidate.script === input.workerName || candidate.script_name === input.workerName),
-  );
-  if (!consumer) {
-    console.log(`retired Artifact event Queue consumer absent: ${queueName}`);
-    return "absent";
-  }
+  return Promise.all(
+    retiredQueues.map(async ({ label, queueName }) => {
+      const queue = queuesByName.get(queueName);
+      if (!queue) {
+        console.log(`retired ${label} Queue absent: ${queueName}`);
+        return { queueName, status: "absent" } as const;
+      }
 
-  await input.cf(
-    `/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`,
-    { method: "DELETE" },
+      const consumers = z
+        .array(RetiredQueueConsumer)
+        .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
+      const consumer = consumers.find(
+        (candidate) =>
+          candidate.type === "worker" &&
+          (candidate.script === input.workerName || candidate.script_name === input.workerName),
+      );
+      if (!consumer) {
+        console.log(`retired ${label} Queue consumer absent: ${queueName}`);
+        return { queueName, status: "absent" } as const;
+      }
+
+      await input.cf(
+        `/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`,
+        { method: "DELETE" },
+      );
+      console.log(`detached retired ${label} Queue consumer: ${queueName} -> ${input.workerName}`);
+      return { queueName, status: "detached" } as const;
+    }),
   );
-  console.log(
-    `detached retired Artifact event Queue consumer: ${queueName} -> ${input.workerName}`,
-  );
-  return "detached";
 }
 
 /** Preview OS always runs its first-party integration proof against the
@@ -295,7 +307,7 @@ export default async function deploy(
       // an existing deployment: Cloudflare retains its consumer and rejects
       // the handler-less upload. This exact, idempotent detach is the rollout
       // migration; it never creates or reconciles subscriptions.
-      await detachRetiredArtifactEventQueueConsumer({
+      await detachRetiredWorkerQueueConsumers({
         cf: ctx.cf,
         workerName: ctx.env.osWorkerName,
       });

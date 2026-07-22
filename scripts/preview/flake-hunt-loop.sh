@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Prove the real preview critical path repeatedly: deploy the full fleet, run
-# every e2e lane, and fail on the first test failure or five-minute tail.
-set -uo pipefail
+# Dispatch the canonical Depot preview workflow repeatedly. Every iteration is
+# a normal Cloudflare Preview run: fresh Depot runner, full-fleet deploy, all
+# e2e lanes, artifacts, GitHub check timings, and PostHog telemetry.
+set -euo pipefail
 
 PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"
 RUNS="${RUNS:-25}"
 MAX_RUN_DURATION_SECS="${MAX_RUN_DURATION_SECS:-300}"
 RUN_TIMEOUT_SECS="${RUN_TIMEOUT_SECS:-600}"
-MAX_SLOT_RECLAIMS="${MAX_SLOT_RECLAIMS:-2}"
-LOG_DIR="${LOG_DIR:-/tmp/flake-hunt}"
-SUMMARY_FILE="$LOG_DIR/summary.tsv"
+POLL_INTERVAL_SECS="${POLL_INTERVAL_SECS:-5}"
+DEPOT_ORG="${DEPOT_ORG:-0p91s0lz49}"
+DEPOT_REPO="${DEPOT_REPO:-iterate/iterate}"
+REF="${REF:-$(git branch --show-current)}"
 
 require_positive_integer() {
   local name=$1 value=$2
@@ -23,158 +25,167 @@ require_positive_integer PR_NUMBER "$PR_NUMBER"
 require_positive_integer RUNS "$RUNS"
 require_positive_integer MAX_RUN_DURATION_SECS "$MAX_RUN_DURATION_SECS"
 require_positive_integer RUN_TIMEOUT_SECS "$RUN_TIMEOUT_SECS"
-require_positive_integer MAX_SLOT_RECLAIMS "$MAX_SLOT_RECLAIMS"
+require_positive_integer POLL_INTERVAL_SECS "$POLL_INTERVAL_SECS"
 
-# Match the normal preview workflow: one retry belongs to each test framework,
-# never to an app lane or a whole preview run.
-export CI=true
+if [ -z "$REF" ]; then
+  echo "REF is required when the current checkout is detached" >&2
+  exit 64
+fi
 
+command -v depot >/dev/null || { echo "depot CLI is required" >&2; exit 69; }
+command -v node >/dev/null || { echo "node is required" >&2; exit 69; }
+
+if [ -z "${LOG_DIR:-}" ]; then
+  LOG_DIR=$(mktemp -d /tmp/preview-e2e-marathon.XXXXXX)
+fi
 mkdir -p "$LOG_DIR"
-printf 'run\tattempt\tstatus\tduration_seconds\tretries\tstarted_at\tfinished_at\tdeploy_log\ttest_log\n' >"$SUMMARY_FILE"
+SUMMARY_FILE="$LOG_DIR/summary.tsv"
+printf 'run\tstatus\tduration_seconds\tretries\thead_sha\trun_id\tattempt_id\tcreated_at\tstarted_at\tfinished_at\tlog\tmetadata\n' >"$SUMMARY_FILE"
 
-kill_tree() {
-  local pid=$1 child
-  for child in $(pgrep -P "$pid" 2>/dev/null); do
-    kill_tree "$child"
-  done
-  kill -KILL "$pid" 2>/dev/null
+json_run_id() {
+  node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).run_id; if (!value) process.exit(1); process.stdout.write(value)' "$1"
 }
 
-run_with_watchdog() {
-  local timeout_seconds=$1 log=$2
-  shift 2
+json_status() {
+  node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).status; if (!value) process.exit(1); process.stdout.write(value)' "$1"
+}
 
-  "$@" >"$log" 2>&1 &
-  local command_pid=$!
-  (
-    sleep "$timeout_seconds"
-    echo "WATCHDOG: killing command tree after ${timeout_seconds}s" >>"$log"
-    kill_tree "$command_pid"
-  ) &
-  local watchdog_pid=$!
+json_attempt_id() {
+  node -e '
+    const fs = require("node:fs");
+    const status = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const workflow = status.workflows?.find((item) => item.workflow_path === "cloudflare-previews.yml");
+    const job = workflow?.jobs?.find((item) => item.job_key === "cloudflare-previews.yml:preview");
+    const attempt = job?.attempts?.at(-1);
+    if (!attempt?.attempt_id) process.exit(1);
+    process.stdout.write(attempt.attempt_id);
+  ' "$1"
+}
 
-  wait "$command_pid"
-  local exit_code=$?
-  kill "$watchdog_pid" 2>/dev/null
-  wait "$watchdog_pid" 2>/dev/null
-  return "$exit_code"
+json_run_field() {
+  node -e '
+    const fs = require("node:fs");
+    const run = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const value = run[process.argv[2]];
+    if (typeof value !== "string" || value.length === 0) process.exit(1);
+    process.stdout.write(value);
+  ' "$1" "$2"
 }
 
 retry_count() {
   local log=$1 annotations onboarding
+  # Depot's finite log export renders GitHub workflow commands as
+  # `##[notice]`/`##[warning]`. Keep the raw command fallback for older CLI
+  # exports, but never sum both representations of the same annotations.
   annotations=$(
-    sed -nE 's/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\1/p' "$log" |
+    sed -nE 's/.*##\[(notice|warning)\][^:]+: ([0-9]+) retried:.*/\2/p' "$log" |
       awk '{ total += $1 } END { print total + 0 }'
   )
-  onboarding=$(grep -cF '[retry-telemetry] onboarding smoke passed on attempt 2/2' "$log")
+  if [ "$annotations" -eq 0 ]; then
+    annotations=$(
+      sed -nE 's/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\1/p' "$log" |
+        awk '{ total += $1 } END { print total + 0 }'
+    )
+  fi
+  onboarding=$(grep -cF '[retry-telemetry] onboarding smoke passed on attempt 2/2' "$log" || true)
   echo $((annotations + onboarding))
 }
 
 record_result() {
-  local run=$1 attempt=$2 status=$3 duration=$4 retries=$5 started=$6 finished=$7 deploy_log=$8 test_log=$9
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$run" "$attempt" "$status" "$duration" "$retries" "$started" "$finished" "$deploy_log" "$test_log" >>"$SUMMARY_FILE"
+  local run=$1 status=$2 duration=$3 retries=$4 head_sha=$5 run_id=$6 attempt_id=$7 created=$8 started=$9 finished=${10} log=${11} metadata=${12}
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$run" "$status" "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created" "$started" "$finished" "$log" "$metadata" >>"$SUMMARY_FILE"
 }
 
-slot_reclaims=0
-run=1
-attempt=1
-
-while [ "$run" -le "$RUNS" ]; do
+expected_head_sha="${EXPECTED_HEAD_SHA:-}"
+for run in $(seq 1 "$RUNS"); do
   run_label=$(printf '%03d' "$run")
-  attempt_label=$(printf '%02d' "$attempt")
-  deploy_log="$LOG_DIR/run-$run_label-attempt-$attempt_label-deploy.log"
-  test_log="$LOG_DIR/run-$run_label-attempt-$attempt_label-test.log"
-  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  started_epoch=$(date +%s)
+  dispatch_file="$LOG_DIR/run-$run_label-dispatch.json"
+  status_file="$LOG_DIR/run-$run_label-status.json"
+  metadata_file="$LOG_DIR/run-$run_label-metadata.json"
+  log_file="$LOG_DIR/run-$run_label.log"
+  observed_started_epoch=$(date +%s)
 
-  echo "run $run/$RUNS: deploying the full fleet (attempt $attempt)"
-  run_with_watchdog "$RUN_TIMEOUT_SECS" "$deploy_log" \
-    doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
-    --pull-request-number "$PR_NUMBER"
-  deploy_exit=$?
-
-  if [ "$deploy_exit" -ne 0 ] || grep -qE 'deploy-failed|claim-failed' "$deploy_log"; then
-    finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    duration=$(( $(date +%s) - started_epoch ))
-    status=DEPLOY_FAIL
-    if grep -q '^WATCHDOG:' "$deploy_log"; then status=WATCHDOG; fi
-    record_result "$run" "$attempt" "$status" "$duration" 0 "$started_at" "$finished_at" "$deploy_log" "-"
-    echo "run $run: $status exit=$deploy_exit (${duration}s) — $deploy_log"
+  echo "run $run/$RUNS: dispatching canonical cloudflare-previews.yml at $REF"
+  if ! depot ci dispatch \
+    --org "$DEPOT_ORG" \
+    --repo "$DEPOT_REPO" \
+    --workflow cloudflare-previews.yml \
+    --ref "$REF" \
+    --input "pull-request-number=$PR_NUMBER" \
+    --output json >"$dispatch_file"; then
+    record_result "$run" DISPATCH_FAIL 0 0 - - - - - - - "$dispatch_file"
+    echo "run $run: DISPATCH_FAIL — $dispatch_file" >&2
     exit 1
   fi
+  run_id=$(json_run_id "$dispatch_file")
+  echo "run $run/$RUNS: Depot run $run_id"
 
-  elapsed=$(( $(date +%s) - started_epoch ))
-  remaining=$((RUN_TIMEOUT_SECS - elapsed))
-  if [ "$remaining" -le 0 ]; then
-    finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    record_result "$run" "$attempt" WATCHDOG "$elapsed" 0 "$started_at" "$finished_at" "$deploy_log" "-"
-    echo "run $run: WATCHDOG after deploy (${elapsed}s) — $deploy_log"
-    exit 1
-  fi
-
-  echo "run $run/$RUNS: running every e2e lane in parallel (${remaining}s watchdog remaining)"
-  run_with_watchdog "$remaining" "$test_log" \
-    doppler run --project _shared --config prd -- pnpm preview test \
-    --pull-request-number "$PR_NUMBER"
-  test_exit=$?
-
-  finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  duration=$(( $(date +%s) - started_epoch ))
-  retries=$(retry_count "$test_log")
-
-  # The ownership guard fires before tests when another PR claims this slot.
-  # No test attempt occurred, so restoring the environment is not a retry.
-  if grep -q 'no longer belongs to' "$test_log"; then
-    record_result "$run" "$attempt" SLOT_STOLEN "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
-    slot_reclaims=$((slot_reclaims + 1))
-    if [ "$slot_reclaims" -gt "$MAX_SLOT_RECLAIMS" ]; then
-      echo "run $run: FAIL — slot re-claim budget exhausted (${duration}s)"
-      exit 1
-    fi
-    echo "run $run: slot claimed externally; re-running uncounted (${duration}s)"
-    attempt=$((attempt + 1))
-    continue
-  fi
-
-  if grep -q 'skipped: true' "$test_log"; then
-    record_result "$run" "$attempt" SKIPPED "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
-    echo "run $run: SKIPPED — no tests ran (${duration}s)"
-    exit 2
-  fi
-
-  testable_line=$(grep -m1 'testable apps:' "$test_log" || true)
-  missing=""
-  for app in os semaphore auth streams-example-app dummy-petshop; do
-    case "$testable_line" in
-      *"$app"*) ;;
-      *) missing="$missing $app" ;;
+  while true; do
+    depot ci status "$run_id" --org "$DEPOT_ORG" --output json >"$status_file"
+    status=$(json_status "$status_file")
+    case "$status" in
+      pending|queued|running)
+        elapsed=$(( $(date +%s) - observed_started_epoch ))
+        if [ "$elapsed" -ge "$RUN_TIMEOUT_SECS" ]; then
+          depot ci cancel "$run_id" --org "$DEPOT_ORG" >/dev/null 2>&1 || true
+          record_result "$run" WATCHDOG "$elapsed" 0 - "$run_id" - - - - - "$status_file"
+          echo "run $run: WATCHDOG after ${elapsed}s — Depot run $run_id cancelled" >&2
+          exit 1
+        fi
+        sleep "$POLL_INTERVAL_SECS"
+        ;;
+      *) break ;;
     esac
   done
-  if [ -z "$testable_line" ] || [ -n "$missing" ]; then
-    record_result "$run" "$attempt" PARTIAL "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
-    echo "run $run: PARTIAL — missing:${missing:- unknown} (${duration}s)"
-    exit 3
+
+  attempt_id=$(json_attempt_id "$status_file" || true)
+  if [ -z "$attempt_id" ]; then
+    record_result "$run" OBSERVATION_FAIL 0 0 - "$run_id" - - - - - "$status_file"
+    echo "run $run: OBSERVATION_FAIL — canonical preview attempt missing from Depot run $run_id" >&2
+    exit 1
   fi
 
-  if [ "$test_exit" -ne 0 ]; then
-    status=TEST_FAIL
-    if grep -q '^WATCHDOG:' "$test_log"; then status=WATCHDOG; fi
-    record_result "$run" "$attempt" "$status" "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
-    echo "run $run: $status exit=$test_exit (${duration}s, retries=$retries) — $test_log"
+  depot ci logs "$attempt_id" --org "$DEPOT_ORG" --output-file "$log_file"
+  depot ci run show "$run_id" --org "$DEPOT_ORG" --output json >"$metadata_file"
+  created_at=$(json_run_field "$metadata_file" created_at)
+  started_at=$(json_run_field "$metadata_file" started_at)
+  finished_at=$(json_run_field "$metadata_file" finished_at)
+  head_sha=$(json_run_field "$metadata_file" head_sha)
+  duration=$(
+    node -e 'const [start,end]=process.argv.slice(1).map(Date.parse); process.stdout.write(String(Math.ceil((end-start)/1000)))' "$created_at" "$finished_at"
+  )
+  retries=$(retry_count "$log_file")
+
+  if [ -z "$expected_head_sha" ]; then
+    expected_head_sha="$head_sha"
+  elif [ "$head_sha" != "$expected_head_sha" ]; then
+    record_result "$run" HEAD_MOVED "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: HEAD_MOVED ($head_sha, expected $expected_head_sha); streak rejected — Depot run $run_id" >&2
+    exit 4
+  fi
+
+  if [ "$status" != finished ]; then
+    record_result "$run" WORKFLOW_FAIL "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: WORKFLOW_FAIL (${duration}s, retries=$retries) — Depot run $run_id; $log_file" >&2
     exit 1
+  fi
+
+  if [ "$retries" -gt 0 ]; then
+    record_result "$run" RETRIED "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: RETRIED (${duration}s, retries=$retries); streak rejected — Depot run $run_id; $log_file" >&2
+    exit 6
   fi
 
   if [ "$duration" -ge "$MAX_RUN_DURATION_SECS" ]; then
-    record_result "$run" "$attempt" SLOW "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
-    echo "run $run: SLOW (${duration}s, budget <${MAX_RUN_DURATION_SECS}s, retries=$retries)"
+    record_result "$run" SLOW "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+    echo "run $run: SLOW (${duration}s, budget <${MAX_RUN_DURATION_SECS}s) — Depot run $run_id" >&2
     exit 5
   fi
 
-  record_result "$run" "$attempt" PASS "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
-  echo "run $run: PASS (${duration}s, retries=$retries)"
-  run=$((run + 1))
-  attempt=1
+  record_result "$run" PASS "$duration" "$retries" "$head_sha" "$run_id" "$attempt_id" "$created_at" "$started_at" "$finished_at" "$log_file" "$metadata_file"
+  echo "run $run: PASS (${duration}s, retries=0) — Depot run $run_id"
 done
 
-echo "all $RUNS full preview runs green and each completed in <${MAX_RUN_DURATION_SECS}s"
+echo "all $RUNS canonical preview workflows passed without retries and each completed in <${MAX_RUN_DURATION_SECS}s"
+echo "ledger: $SUMMARY_FILE"
