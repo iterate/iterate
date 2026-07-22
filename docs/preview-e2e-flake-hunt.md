@@ -55,7 +55,8 @@ starting a new proof—accepted streaks are never inferred across ledgers.
 ## Round 10 (2026-07-23, post-#2263)
 
 This round starts from `origin/main` at
-`707903ca74da1d9eece8b519933902f36780d486`. PR #2263 fixed the false-green
+`7b41300708f49146603fea09766fca64a07f1eb8`, including the lazy repository lane
+from PR #2262. PR #2263 fixed the false-green
 boundary exposed by PR #2262: a head that selected no deployment work reused an
 older head's test result and returned success in six seconds. Deployment reuse
 is still allowed, but every triggered PR head now executes every runnable app
