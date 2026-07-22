@@ -15,7 +15,7 @@ export type ParkedSubscription = {
 
 /** The per-subscription runtime shape this warning reads — a subset of the
  * stream's `SubscriptionRuntimeState`. */
-export type SubscriptionRuntimeFacts = {
+type SubscriptionRuntimeFacts = {
   parkedAtOffset: number | null;
   lag: number;
   attempt: number;
