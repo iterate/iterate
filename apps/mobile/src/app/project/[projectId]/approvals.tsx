@@ -344,11 +344,7 @@ function ApprovalCard({
               >
                 <Text style={styles.chevron}>{details.data.body ? "▾" : "▸"}</Text>
                 <Text style={styles.detailTitle}>
-                  {request.payload.body === undefined
-                    ? "Request body preview"
-                    : body.truncated
-                      ? "Request body prefix"
-                      : "Request body"}
+                  {body.truncated ? "Request body prefix" : "Request body"}
                 </Text>
                 {request.payload.body?.encoding === "base64" || body.truncated ? (
                   <Text style={styles.detailHint}>
