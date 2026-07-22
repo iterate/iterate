@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-Complete. New approvals carry their exact script source, matched-policy explanation, and full placeholder-form body. Mobile renders pending approvals in full, resolved approvals as expandable summary rows, and collapses consecutive stream-wake noise in linked chats. Unit, type, lint, OS e2e, and mobile approval e2e checks pass.
+Complete. New approvals carry their exact script source, matched-policy explanation, and full placeholder-form body. Mobile renders pending approvals in full and resolved approvals as expandable summary rows. Both mobile and OS collapse consecutive stream-wake noise in agent chats. Unit, type, lint, OS e2e, and mobile approval e2e checks pass.
 
 ## Outcome
 
@@ -26,6 +26,7 @@ Every new egress approval explains the exact request, the policy that caught it,
 - [x] Preserve provenance actions after a decision. *Recent Approved/Rejected entries render as full read-only approval cards with expandable script/body details and Show thread links.*
 - [x] Collapse handled approvals by default. *Resolved cards start as a method/host summary with an Approved/Rejected badge; tapping reveals all provenance and request details.*
 - [x] Collapse consecutive stream wakes in chat. *Each adjacent run renders only its final wake marker with the run length, while wakes separated by real feed items stay separate.*
+- [x] Apply stream-wake compaction to the OS feed. *The browser-feed projection replaces an adjacent pretty wake row with the final event and accumulated count, keeping virtual row counts coherent.*
 - [x] Run focused tests, typechecks, formatting, and the production-shaped approval e2e. *223 OS unit files, 12 mobile unit files, both e2e approval suites, root typecheck/lint/format all pass.*
 
 ## Decisions
