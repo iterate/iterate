@@ -816,7 +816,7 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("starts every isolated OS sub-lane in parallel", () => {
+  test("gates high-fanout OS Vitest on the production-shaped rollout smoke", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
@@ -836,19 +836,24 @@ describe("preview test commands", () => {
     expect(script).toContain("SMOKE_PID");
     expect(script).toContain("TUI_PID");
     expect(script).toContain("E2E_PID");
+    expect(script).toContain("SPEC_PID");
     expect(script).toContain('wait "$SMOKE_PID"');
     expect(script).toContain('wait "$TUI_PID"');
     expect(script).toContain('wait "$E2E_PID"');
     expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
-    // Each background lane starts before any join. Playwright starts as soon
-    // as Chromium is ready while those remote lanes are still running.
-    for (const lane of [smokeLane, tuiLane, e2eLane]) {
+    // Independent setup starts immediately. Playwright begins as soon as
+    // Chromium is ready, while the production-shaped smoke becomes the only
+    // rollout gate in front of high-fanout Vitest.
+    for (const lane of [smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
     expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
+    expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$SMOKE_PID"'));
+    expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$E2E_PID"'));
+    expect(script).not.toContain("sleep ");
   });
 
   test("guards the parallel OS preview lane with target budgets", () => {

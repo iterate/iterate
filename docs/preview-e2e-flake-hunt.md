@@ -67,6 +67,7 @@ Round-9 run ledger:
 | ------------------ | ------------------------------------------ | ------------: | ------: | --------------------------------------- |
 | Round-9 marathon 1 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       4 | Functional pass; rejected at 363s       |
 | Round-9 marathon 2 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       0 | Clean functional pass; rejected at 350s |
+| Round-9 marathon 3 | `64bc519b4d68d3d8fad6c4337d0ad8a137aa2332` |          0/25 |       9 | Failed OS Vitest during rollout at 270s |
 
 The first attempt was [Depot run
 `nfwh10j558`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=v96gml6mn4).
@@ -112,6 +113,26 @@ dwell. Product operations remain responsible for explicit Durable Object
 lifecycle outcomes, as the existing performance contract requires. This change
 resets the accepted streak to 0/25; only a canonical Depot run on its new
 immutable head can restart it.
+
+The first canonical run after removing the probes, [Depot run
+`69ccf2rkj7`](https://depot.dev/orgs/0p91s0lz49/workflows/jj6p9xkh2z?job=tqpx1h1kwr&attempt=5cj8k7kk2d),
+made the remaining boundary precise. All five deploys passed and every non-OS
+suite passed. OS Playwright passed 63/63 and the onboarding smoke completed on
+its first attempt in 26 seconds, but nine OS Vitest cases entered retry; eight
+recovered and the preview-smoke case failed both attempts. Every affected test
+was scheduled within the first second of Vitest. The errors were rollout-wide
+(`Durable Object reset because its code was updated`, failed WebSocket
+connections, and internal references), while files scheduled later had no
+retry. This is a fresh-deployment fan-out race, not nine independent test
+defects.
+
+The minimal boundary is now the existing production-shaped onboarding smoke,
+not a synthetic fleet sampler. Chromium installation, the smoke, and TUI start
+immediately; Playwright starts as soon as Chromium is ready; high-fanout Vitest
+starts only after the smoke has successfully created a real project and served
+its project/agent/stream flow. The 26-second propagation window remains hidden
+under the 139-second Playwright critical path, adds no arbitrary sleep or retry,
+and fails fast if the real canary cannot complete.
 
 ## Round 8 (2026-07-22, post-#2251)
 
