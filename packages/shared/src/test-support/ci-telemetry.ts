@@ -137,6 +137,31 @@ const TestTelemetryLane = z.object({
   collectionErrors: z.array(z.string()),
 });
 
+const DeploymentTelemetryLane = z.object({
+  app: z.string().min(1),
+  previewSlot: z.string().optional(),
+  status: z.enum(["passed", "failed"]),
+  durationMs: z.number().nonnegative(),
+  finishedAt: Timestamp.optional(),
+  configDurationMs: z.number().nonnegative().nullable().optional(),
+  commandDurationMs: z.number().nonnegative().nullable().optional(),
+  readinessDurationMs: z.number().nonnegative().nullable().optional(),
+  reuseProofDurationMs: z.number().nonnegative().nullable().optional(),
+  workerName: z.string().nullable().optional(),
+  workerVersion: z.string().nullable().optional(),
+});
+
+const DeploymentTelemetry = z.object({
+  deploymentKind: z.string().min(1),
+  status: z.enum(["passed", "failed", "skipped"]),
+  startedAt: Timestamp,
+  finishedAt: Timestamp,
+  durationMs: z.number().nonnegative(),
+  previewSlot: z.string().optional(),
+  error: TestTelemetryError.optional(),
+  lanes: z.array(DeploymentTelemetryLane),
+});
+
 /**
  * Durable, runner-independent input to the CI telemetry finalizer. Reporters
  * only write this artifact; they never know about PostHog or network delivery.
@@ -175,6 +200,8 @@ export const TestTelemetryArtifact = z.object({
     durationMs: z.number().nonnegative(),
     error: TestTelemetryError.optional(),
   }),
+  /** Optional deployment evidence recorded by an orchestration artifact. */
+  deployment: DeploymentTelemetry.optional(),
   lanes: z.array(TestTelemetryLane),
   tests: z.array(TestTelemetryRecord),
   modules: z.array(ModuleTelemetryRecord),
@@ -189,6 +216,8 @@ export type TestTelemetryAttempt = z.infer<typeof TestTelemetryAttempt>;
 export type TestTelemetryRecord = z.infer<typeof TestTelemetryRecord>;
 export type ModuleTelemetryRecord = z.infer<typeof ModuleTelemetryRecord>;
 export type TestTelemetryLane = z.infer<typeof TestTelemetryLane>;
+export type DeploymentTelemetry = z.infer<typeof DeploymentTelemetry>;
+export type DeploymentTelemetryLane = z.infer<typeof DeploymentTelemetryLane>;
 
 /** Convert an arbitrary runner/orchestrator failure into the shared JSON-safe shape. */
 export function normalizeTestTelemetryError(

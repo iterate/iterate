@@ -47,6 +47,7 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
       { status: "running" },
       artifact.run.startedAt,
     ),
+    ...deploymentTelemetryEvents(artifact),
   ];
   for (const [laneIndex, lane] of artifact.lanes.entries()) {
     events.push(
@@ -276,6 +277,103 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
         error_message: artifact.run.error?.message.slice(0, 2_000),
       },
       artifact.run.finishedAt,
+    ),
+  );
+  return events;
+}
+
+function deploymentTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEvent[] {
+  const deployment = artifact.deployment;
+  if (!deployment) return [];
+
+  const distinctId = `ci-deploy:${artifact.ci.workflowRunId}:${artifact.ci.workflowRunAttempt}:${artifact.artifactId}`;
+  const common = {
+    artifact_schema_version: artifact.artifactSchemaVersion,
+    artifact_id: artifact.artifactId,
+    artifact_producer: artifact.producer,
+    deployment_kind: deployment.deploymentKind,
+    ...ciProperties(artifact),
+  };
+  const event = (
+    name: string,
+    identity: string,
+    properties: Record<string, unknown>,
+    timestamp: string,
+  ) =>
+    systemEvent(
+      name,
+      `${distinctId}:${identity}`,
+      distinctId,
+      { ...common, ...properties },
+      timestamp,
+    );
+
+  const events: PostHogEvent[] = [
+    event(
+      "ci deploy run started",
+      "run-started",
+      {
+        lane: "preview",
+        preview_slot: deployment.previewSlot,
+        status: "running",
+      },
+      deployment.startedAt,
+    ),
+  ];
+  for (const [laneIndex, lane] of deployment.lanes.entries()) {
+    const laneCommon = {
+      scope: "app",
+      app: lane.app,
+      preview_slot: lane.previewSlot ?? deployment.previewSlot,
+      status: lane.status,
+      worker_name: lane.workerName,
+      worker_version: lane.workerVersion,
+    };
+    events.push(
+      event(
+        "ci deploy lane finished",
+        `lane:${laneIndex}`,
+        {
+          ...laneCommon,
+          duration_ms: lane.durationMs,
+          config_duration_ms: lane.configDurationMs,
+          command_duration_ms: lane.commandDurationMs,
+          readiness_duration_ms: lane.readinessDurationMs,
+          reuse_proof_duration_ms: lane.reuseProofDurationMs,
+        },
+        lane.finishedAt ?? deployment.finishedAt,
+      ),
+    );
+    for (const [phaseName, durationMs] of [
+      ["config", lane.configDurationMs],
+      ["command", lane.commandDurationMs],
+      ["readiness", lane.readinessDurationMs],
+      ["reuse proof", lane.reuseProofDurationMs],
+    ] as const) {
+      if (durationMs == null) continue;
+      events.push(
+        event(
+          "ci deploy phase finished",
+          `lane:${laneIndex}:phase:${phaseName}`,
+          { ...laneCommon, phase_name: phaseName, duration_ms: durationMs },
+          lane.finishedAt ?? deployment.finishedAt,
+        ),
+      );
+    }
+  }
+  events.push(
+    event(
+      "ci deploy run finished",
+      "run-finished",
+      {
+        lane: "preview",
+        preview_slot: deployment.previewSlot,
+        status: deployment.status,
+        duration_ms: deployment.durationMs,
+        error_name: deployment.error?.name,
+        error_message: deployment.error?.message.slice(0, 2_000),
+      },
+      deployment.finishedAt,
     ),
   );
   return events;
