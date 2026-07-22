@@ -4,7 +4,7 @@ import type { WorkerBuildRequest } from "./worker-build-capability.ts";
 export type WorkerBuildCoordinatorEvent = {
   buildKey: string;
   durationMs?: number;
-  kind: "coalesced" | "settled" | "started";
+  kind: "coalesced" | "reused" | "settled" | "started";
   outcome?: "built" | "infrastructure-failed" | "source-failed";
   waiters: number;
 };
@@ -50,6 +50,11 @@ export class WorkerBuildCoordinator {
     const settled = this.#settled;
     if (settled !== undefined) {
       this.#assertBuildKey(settled.buildKey, request.buildKey);
+      this.#observe({
+        buildKey: request.buildKey,
+        kind: "reused",
+        waiters: 0,
+      });
       return settled.artifact;
     }
 

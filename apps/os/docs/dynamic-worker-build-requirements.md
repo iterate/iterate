@@ -95,12 +95,24 @@ has no atomic lease primitive. After the caller's fast KV read misses, every
 request for the same key reaches the globally named coordinator object. Its
 leader rechecks KV, reads the repo snapshot, calls the bundler, and writes the
 artifact once; concurrent followers receive the same plain-data result through
-promises owned by their own RPC invocations. Different build keys address
+promises owned by their own RPC invocations. After success, the coordinator
+retains the immutable artifact for the rest of that object
+incarnation. That in-memory tier bridges KV's distributed negative-cache window:
+later callers whose local KV read still sees the old miss receive the retained
+plain data without starting another flight, including callers with a zero build
+budget. Retention never extends the object lifetime and failures are never
+retained. Different build keys address
 different objects and therefore build in parallel, following Cloudflare's
 [one coordination atom per Durable
 Object](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/#model-your-durable-objects-around-your-atom-of-coordination)
 guidance. A coordinator reset may retry the idempotent build, but normal
 cross-isolate concurrency cannot create a stampede.
+
+Coordinator telemetry reflects these tiers: `worker-build.settled` is normally
+about once per key per object incarnation, `worker-build.reused` records later
+incarnation-local hits. The retained value is content-addressed immutable build
+output, not a last-good or stale artifact; an object reset simply drops it and
+resumes through the durable KV cache.
 
 Browser fetches may stop waiting at a small budget while the coordinator's
 elected operation continues under `waitUntil`; callers see the self-refreshing
