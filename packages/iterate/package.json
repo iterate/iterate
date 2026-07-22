@@ -28,6 +28,8 @@
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
     "./node": "./src/node.ts",
+    "./github-ai-linter": "./src/github-ai-linter/index.ts",
+    "./github-ai-linter/worker": "./src/github-ai-linter/worker.ts",
     "./processors": "./src/processors/index.ts",
     "./processors/cloudflare": "./src/processors/cloudflare.ts",
     "./processors/testing": "./src/processors/testing.ts",
@@ -54,6 +56,16 @@
         "types": "./dist/node.d.ts",
         "import": "./dist/node.mjs",
         "default": "./dist/node.mjs"
+      },
+      "./github-ai-linter": {
+        "types": "./dist/github-ai-linter/index.d.ts",
+        "import": "./dist/github-ai-linter/index.mjs",
+        "default": "./dist/github-ai-linter/index.mjs"
+      },
+      "./github-ai-linter/worker": {
+        "types": "./dist/github-ai-linter/worker.d.ts",
+        "import": "./dist/github-ai-linter/worker.mjs",
+        "default": "./dist/github-ai-linter/worker.mjs"
       },
       "./processors": {
         "types": "./dist/processors/index.d.ts",
@@ -118,6 +130,7 @@
     "react": "^19.2.7",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
+    "yaml": "^2.8.3",
     "zod": "4.3.6"
   },
   "optionalDependencies": {

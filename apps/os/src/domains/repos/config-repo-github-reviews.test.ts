@@ -6,11 +6,45 @@ import {
   type HarnessSubstrate,
 } from "iterate/processors/testing";
 import {
-  handleGithubPullRequestWebhook,
+  handleGithubPullRequestWebhook as handleGithubPullRequestWebhookWithPolicy,
   ReviewBotProcessor,
   ReviewBotProcessorContract,
   reviewBotFreshnessHorizonMs,
-} from "../../../config-repo-template/apps/review-bot/src/review-bot.ts";
+} from "iterate/github-ai-linter/worker";
+
+const testAndSpecFileGlobs = [
+  "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
+  "!**/{__tests__,test,tests,spec,specs}/**",
+];
+const policy = {
+  policyVersion: "2",
+  rules: {
+    "structure/no-small-single-use-helper": {
+      files: ["**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+      invariant:
+        "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.",
+    },
+    "typescript/no-inferable-type-annotation": {
+      files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+      invariant: "Do not declare a type annotation that TypeScript can infer from the value.",
+    },
+    "typescript/explain-type-cast": {
+      files: ["**/*.{ts,tsx,mts,cts}", ...testAndSpecFileGlobs],
+      invariant:
+        "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.",
+    },
+  },
+};
+const ruleFiles = Object.fromEntries(
+  Object.entries(policy.rules).map(([id, rule]) => [
+    `rules/${id}.md`,
+    ["---", `id: ${id}`, `files: ${JSON.stringify(rule.files)}`, "---", rule.invariant].join("\n"),
+  ]),
+);
+
+function handleGithubPullRequestWebhook(itx: Project, event: StreamEvent) {
+  return handleGithubPullRequestWebhookWithPolicy(itx, event, policy);
+}
 
 const route = {
   connection: "install-789",
@@ -144,6 +178,11 @@ function harness(input?: {
   };
   const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
   const repoGet = vi.fn((path: string) => ({
+    glob: async () => ({ commitOid: "rules-abc", paths: Object.keys(ruleFiles) }),
+    readFile: async ({ path: filePath }: { path: string }) => {
+      const content = ruleFiles[filePath];
+      return content === undefined ? null : { commitOid: "rules-abc", content, path: filePath };
+    },
     processor: {
       snapshot: async () => ({ offset: 1, state: { github: routes[path] ?? null } }),
     },
@@ -515,7 +554,7 @@ describe("userspace GitHub pull-request routing", () => {
   });
 });
 
-// The processor half (config-repo-template/apps/review-bot — review-bot.ts)
+// The processor half (`iterate/github-ai-linter/worker`)
 // driven by the REAL runner over an in-memory journal via the shared
 // `iterate/processors/testing` harness. The router itself is covered above;
 // these prove the delivery skin around it: which events reach it at all, and
@@ -533,6 +572,10 @@ describe("userspace review-bot stream processor", () => {
           path,
           projectId,
           now,
+          config: {
+            policyVersion: policy.policyVersion,
+            rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+          },
           // The DO host passes `() => env.ITX.get()`; the fake adds the
           // disposal the handler's `using` expects. Structural cast as in
           // harness().

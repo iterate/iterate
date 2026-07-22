@@ -1,9 +1,9 @@
-status: in-progress
+status: needs-preview
 size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: The implementation and config migration are ported onto current `main`. Re-verification, package publication, and a preview exercise remain.
+Status: The implementation and config migration are ported onto current `main`. All local checks pass; package publication and a preview exercise remain.
 
 ## Plan
 
@@ -14,7 +14,7 @@ Status: The implementation and config migration are ported onto current `main`. 
 - [x] Export/build/type the package submodule and cover its public behavior with integration-style package tests. *Both public exports build and the focused package suite passes.*
 - [x] Update the seeded config template and generated seed to import/register the package app; keep unrelated app routing and schedules out of scope. *The real template and generated file now contain the declaration.*
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
-- [ ] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally.
+- [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests and the package build pass. Preview proof awaits both PRs.*
 
 ## Approved decisions
 
@@ -31,3 +31,4 @@ Status: The implementation and config migration are ported onto current `main`. 
 - 2026-07-22: Verified config against the local package source, then removed the temporary dependency install; no config lockfile was created.
 - 2026-07-22: The full OS typecheck passed after temporarily moving an unrelated ignored scratch script out of its include path; the script was restored unchanged.
 - 2026-07-22: Ported the implementation onto current `main`; the packaged worker now uses the SDK's newer shared `createProcessorHost` rather than duplicating its host lifecycle.
+- 2026-07-22: Full monorepo typecheck, lint, format check, and tests pass on the worktree branch; package build and focused GitHub/template tests also pass.

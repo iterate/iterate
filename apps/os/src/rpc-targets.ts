@@ -28,6 +28,7 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import { minimatch } from "minimatch";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -1118,6 +1119,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
         create:
           "Request the repo creation saga (optional payload = the repos/create-requested source: empty seed by default, or a GitHub import) and wait for its terminal repos/created certificate; returns this same repo handle, or throws the recorded repos/create-failed error.",
         edit: "Replace an exact string in one file and commit it; oldString must match once unless replaceAll is true.",
+        glob: "Committed file paths at HEAD matching a glob pattern.",
         kill: "Restart the repo's server-side object; the next request boots it fresh.",
         linkGithub:
           "Back this repo with a GitHub repository via a named GitHub connection ({ connection, owner, repo }); commits mirror out, fast-forward default-branch pushes import in, and webhooks cross-post in.",
@@ -1261,6 +1263,15 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     return this.#durableObjectStub.listFiles();
+  }
+
+  /** Committed file paths at HEAD matching a glob pattern. */
+  async glob(pattern: string): Promise<{ commitOid: string; paths: string[] }> {
+    const { commitOid, paths } = await this.#durableObjectStub.listFiles();
+    return {
+      commitOid,
+      paths: paths.filter((path) => minimatch(path, pattern, { dot: true })),
+    };
   }
 
   /**

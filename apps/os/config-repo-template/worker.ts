@@ -1,9 +1,6 @@
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { GithubAiLinter } from "iterate/github-ai-linter";
+import { IterateWorkerEntrypoint } from "iterate/sdk";
 import { guestbookAppRef } from "./apps/guestbook/ref.ts";
-import {
-  githubConnectionStreamPath,
-  reviewBotSubscriptionEvents,
-} from "./apps/review-bot/src/review-bot-ref.ts";
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
@@ -16,33 +13,15 @@ import {
 // { fetch, processEvent }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
-  // The base class delivers committed events on ANY stream here at least once and in
-  // per-stream order.
-  protected override async processEvent(event: StreamEvent): Promise<void> {
-    switch (event.type) {
-      case "events.iterate.com/repo/github-link-configured": {
-        // The pull-request review bot (apps/review-bot) is a stream processor
-        // on each GitHub connection's webhook stream. A repo link is the rare
-        // moment a connection starts mattering to this project, and its fact
-        // carries the connection slug — so this lane offers the bot's durable
-        // WAKE subscription once per (re-)link, not once per webhook. The
-        // append is idempotent, and a freshly configured wake subscription
-        // replays its stream from offset zero, so pull requests opened
-        // shortly before the link (within the bot's freshness horizon) still
-        // get reviewed. From then on the stream spine dials the app
-        // directly, without this worker in the loop.
-        const connection = event.payload?.connection;
-        if (typeof connection !== "string" || connection.length === 0) break;
-        using itx = await this.env.ITX.get();
-        await itx.streams
-          .get(githubConnectionStreamPath(connection))
-          .append(...reviewBotSubscriptionEvents(connection));
-        break;
-      }
-      default:
-        break;
-    }
-  }
+  protected override apps = [
+    GithubAiLinter.create({
+      policyVersion: "2",
+      rules: {
+        glob: "rules/**/*.md",
+        repoPath: "/repos/iterate",
+      },
+    }),
+  ];
 
   async fetch(req: Request): Promise<Response> {
     const app = req.headers.get("x-iterate-app");

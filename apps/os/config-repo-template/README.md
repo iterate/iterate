@@ -1,1 +1,3 @@
-iterate project config repo — worker.ts is the project worker ({ fetch, processEvent }); apps/ holds its apps. Real docs coming soon.
+iterate project config repo — `worker.ts` is the project worker. It handles
+HTTP and declares packaged apps such as `GithubAiLinter`; project-owned app
+source lives under `apps/`.
