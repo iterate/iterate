@@ -515,6 +515,67 @@ describe("resilience and reach (round 2)", () => {
   });
 });
 
+describe("install-time guards (round 4)", () => {
+  test("onApplied fires INSIDE the chain: a queued guarded sync sees the new floor and skips", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader, store } = subject(remote);
+    await syncTip(reader);
+
+    // A freshness read validated the OLD head and queues its sync while the
+    // commit holds the chain. The commit's onApplied moves the "floor"
+    // (here: a flag) atomically with the snapshot; the queued sync's guard
+    // re-checks inside the chain and must skip the stale install.
+    let floor = head;
+    const commit = reader.commitFiles(
+      {
+        author: AUTHOR,
+        changes: [{ content: "# floor moves\n", path: "tasks/one.md" }],
+        message: "with hook",
+      },
+      { onApplied: (applied) => (floor = applied.commitOid) },
+    );
+    const staleSync = reader.syncToHead(head, { stillWanted: () => floor === head });
+    const outcome = await commit;
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    expect(floor).toBe(outcome.commitOid);
+    await staleSync; // skipped — returns the current head untouched
+    expect(store.head("main")?.commitOid).toBe(outcome.commitOid);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# floor moves\n"]);
+  });
+
+  test("a guarded sync that skips with an empty store throws instead of serving nothing", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await expect(reader.syncToHead(head, { stillWanted: () => false })).rejects.toThrow(
+      /skipped by its guard/,
+    );
+  });
+
+  test("an UNADVERTISED commit is fetchable by exact oid — floor-directed sync under stale ls-refs", async () => {
+    const { remote } = await seededRemote();
+    const writer = subject(remote);
+    await syncTip(writer.reader);
+    const outcome = await writer.reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# floor target\n", path: "tasks/one.md" }],
+      message: "pushed but not yet advertised",
+    });
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+
+    // A second store syncs DIRECTLY to the pushed oid while ls-refs still
+    // advertises the parent (lagging replica) — the fetch wants the exact
+    // commit, which the server has regardless of its ref advertisement.
+    const readerB = subject(remote);
+    remote.faults.staleRefReads = 0; // ls-refs not even consulted
+    await expect(readerB.reader.syncToHead(outcome.commitOid)).resolves.toMatchObject({
+      commitOid: outcome.commitOid,
+    });
+    await expect(readerB.reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# floor target\n"]);
+  });
+});
+
 describe("lazy commits", () => {
   test("commit builds locally, pushes CAS, and reads back with zero fetches", async () => {
     const { remote } = await seededRemote();

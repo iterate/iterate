@@ -575,17 +575,33 @@ export class RepoDurableObject extends DurableObject<Env> {
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
     }
     const decision = decideHeadResolution(this.#branchAuthority(branch), candidate!);
+    let target = candidate!;
     if (!decision.cache) {
-      // The remote is still serving something the authority calls stale.
-      if (stored !== null) return stored; // our endorsed snapshot is not worse — serve once
-      // COLD store (first lazy use after clone-lane history): installing a
-      // pre-floor head would serve stale reads AFTER our own commit —
-      // a read-your-write violation. The clone lanes own this window.
-      throw new Error(
-        `remote head ${candidate} is not endorsed by the branch authority and no lazy snapshot exists — deferring to the clone lane`,
-      );
+      // The remote's ADVERTISEMENT is still serving something the authority
+      // calls stale. Our own pushed floor is a definitely-safe target: the
+      // push succeeded, so the commit is FETCHABLE by exact oid even while
+      // ls-refs lags (probed server behavior). This heals both the
+      // install-failed-commit window and the first lazy read after
+      // clone-lane history (cold store, floor set).
+      const floor = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+      if (floor !== undefined && floor !== stored?.commitOid) {
+        target = floor;
+      } else if (stored !== null) {
+        return stored; // our endorsed snapshot is not worse — serve once
+      } else {
+        throw new Error(
+          `remote head ${candidate} is not endorsed by the branch authority and no lazy snapshot exists — deferring to the clone lane`,
+        );
+      }
     }
-    const head = await reader.syncToHead(candidate!);
+    // The guard re-checks INSIDE the reader's chain: a commit that lands
+    // while this sync waits moves the floor, and a target the authority no
+    // longer endorses (and that is not the current floor) must not install.
+    const head = await reader.syncToHead(target, {
+      stillWanted: () =>
+        this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)) === target ||
+        decideHeadResolution(this.#branchAuthority(branch), target).cache,
+    });
     if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
       await this.#publishLazyHeadRecord(head.commitOid);
     }
@@ -765,16 +781,29 @@ export class RepoDurableObject extends DurableObject<Env> {
     // the clone lane ONLY through the reader's own classification: a thrown
     // error here means the push was never sent (freshness resolution, input
     // validation, pack building) — pre-push by construction.
+    // Authority bookkeeping runs INSIDE the reader's serialized commit, the
+    // moment the push classifies as applied: the pushed floor and the new
+    // snapshot become visible together, so no concurrent freshness read can
+    // observe the snapshot under the old floor and sync backwards.
+    const onApplied = (applied: { commitOid: string; parentCommitOid: string }) => {
+      this.#recordPushedHead({
+        branch,
+        commitOid: applied.commitOid,
+        parentCommitOid: applied.parentCommitOid,
+      });
+      this.#scheduleGithubMirrorPush(branch);
+      this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    };
     let outcome: Awaited<ReturnType<typeof reader.commitFiles>>;
     try {
       await this.#lazyFreshHead();
-      outcome = await reader.commitFiles(command);
+      outcome = await reader.commitFiles(command, { onApplied });
       if (outcome.kind === "rejected") {
         // The ref moved under us (out-of-band writer): one resync + retry —
         // the clone lane's visibility posture. A rejection is proof nothing
         // was pushed.
         await reader.syncToHead(await reader.resolveRemoteHead());
-        outcome = await reader.commitFiles(command);
+        outcome = await reader.commitFiles(command, { onApplied });
       }
     } catch (error) {
       return { detail: String(error), kind: "fallback-safe" };
@@ -794,16 +823,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       };
     }
 
-    // THE PUSH IS APPLIED. From here every failure is cache maintenance:
-    // degrade, log, and still return "completed" — never re-run the mutation.
+    // THE PUSH IS APPLIED (floor + mirror + record-drop already ran inside
+    // the commit via onApplied). From here every failure is cache
+    // maintenance: degrade, log, and still return "completed" — never
+    // re-run the mutation.
     try {
-      this.#recordPushedHead({
-        branch,
-        commitOid: outcome.commitOid,
-        parentCommitOid: outcome.parentCommitOid,
-      });
-      this.#scheduleGithubMirrorPush(branch);
-      this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
       if (outcome.localInstallError !== undefined) {
         // The remote HAS the commit but our snapshot could not install it;
         // the next read re-syncs from the remote.

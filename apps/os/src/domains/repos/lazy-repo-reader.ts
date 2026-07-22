@@ -138,7 +138,7 @@ export function createLazyRepoReader(input: {
     }
   };
 
-  const syncOnce = async (targetOid: string): Promise<StoredHead> => {
+  const syncOnce = async (targetOid: string, stillWanted?: () => boolean): Promise<StoredHead> => {
     const current = store.head(branch);
     if (current?.commitOid === targetOid) return current;
     const objects = await wire.fetchObjects({
@@ -166,6 +166,12 @@ export function createLazyRepoReader(input: {
     // into a changed directory from an unchanged one (rename/copy).
     store.putObjects(objects);
     await hydrate(upserts.filter((file) => file.mode !== GITLINK_MODE).map((file) => file.blobOid));
+    if (stillWanted !== undefined && !stillWanted()) {
+      // The caller's policy moved on during the fetch (a commit advanced the
+      // floor). The fetched objects are content-addressed and harmless;
+      // installing the now-stale snapshot is not.
+      return store.head(branch) ?? current ?? { commitOid: targetOid, rootTreeOid: "" };
+    }
     store.installSnapshot(branch, {
       commitOid: targetOid,
       dirs: next.dirs,
@@ -257,8 +263,23 @@ export function createLazyRepoReader(input: {
 
     resolveRemoteHead,
 
-    /** Install a validated target head. Serialized; a no-op when current. */
-    syncToHead: (targetOid: string): Promise<StoredHead> => serialized(() => syncOnce(targetOid)),
+    /**
+     * Install a validated target head. Serialized; a no-op when current.
+     * `stillWanted` re-checks the caller's policy INSIDE the chain (at entry
+     * and again after the network awaits, right before install): a target
+     * validated before queueing may be outdated by the time its turn comes —
+     * e.g. a commit that moved the pushed floor while this sync waited. A
+     * skipped sync returns the current head untouched.
+     */
+    syncToHead: (targetOid: string, opts?: { stillWanted?: () => boolean }): Promise<StoredHead> =>
+      serialized(async () => {
+        const current = store.head(branch);
+        if (opts?.stillWanted !== undefined && !opts.stillWanted()) {
+          if (current === null) throw new Error("sync skipped by its guard and no snapshot exists");
+          return current;
+        }
+        return syncOnce(targetOid, opts?.stillWanted);
+      }),
 
     /**
      * The synced head with every file path it holds — ONE consistent
@@ -326,22 +347,28 @@ export function createLazyRepoReader(input: {
      * paths' ancestor directories — and push it under a compare-and-swap.
      * Returns a typed outcome; see LazyCommitOutcome for the caller contract.
      */
-    commitFiles: (input: {
-      author: { date: Date; email: string; name: string };
-      changes: RepoFileChange[];
-      message: string;
-    }): Promise<LazyCommitOutcome> => serialized(() => commitFilesLocked(input)),
+    commitFiles: (
+      input: {
+        author: { date: Date; email: string; name: string };
+        changes: RepoFileChange[];
+        message: string;
+      },
+      opts?: { onApplied?: (applied: { commitOid: string; parentCommitOid: string }) => void },
+    ): Promise<LazyCommitOutcome> => serialized(() => commitFilesLocked(input, opts)),
   };
 
   /** The whole commit — snapshot capture, compile, push, local install —
    * runs as ONE chained operation: a sync arriving mid-commit queues behind
    * it, so a delta computed against head A can never install over a newer
    * head B that slipped in between. */
-  async function commitFilesLocked(input: {
-    author: { date: Date; email: string; name: string };
-    changes: RepoFileChange[];
-    message: string;
-  }): Promise<LazyCommitOutcome> {
+  async function commitFilesLocked(
+    input: {
+      author: { date: Date; email: string; name: string };
+      changes: RepoFileChange[];
+      message: string;
+    },
+    opts?: { onApplied?: (applied: { commitOid: string; parentCommitOid: string }) => void },
+  ): Promise<LazyCommitOutcome> {
     {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
@@ -511,8 +538,14 @@ export function createLazyRepoReader(input: {
         return { detail: report.detail, kind: "indeterminate", proposedCommitOid: commitOid };
       }
 
-      // THE PUSH IS APPLIED. Local install failures degrade the outcome, not
-      // the verdict — the caller must never re-run the mutation.
+      // THE PUSH IS APPLIED. The caller's hook runs HERE — synchronously,
+      // inside the chain, before any other queued operation can observe the
+      // store — so authority bookkeeping (the pushed floor) and the snapshot
+      // move together; a concurrent freshness read can never see the new
+      // snapshot under the old floor and "correct" it backwards.
+      opts?.onApplied?.({ commitOid, parentCommitOid: head.commitOid });
+      // Local install failures degrade the outcome, not the verdict — the
+      // caller must never re-run the mutation.
       const changedPaths = [...new Set([...upserts.keys(), ...removes])].sort();
       try {
         store.putObjects(packCandidates);
