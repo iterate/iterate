@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
+  approvalBodyHash,
   approvalBodyForDisplay,
   deriveOpenRequests,
   deriveRecentResolvedRequests,
@@ -149,6 +150,24 @@ test("the approval view labels a capped request body as truncated", () => {
   });
 });
 
+test("the approval view still reads pre-consolidation body fields", () => {
+  const payload = requested(10, "legacy").payload as RequestedPayload & {
+    bodyPreview?: string;
+    bodySha256?: string | null;
+  };
+  payload.body = undefined;
+  payload.bodyPreview = "legacy preview";
+  payload.bodySha256 = "legacy-sha256";
+
+  expect(approvalBodyForDisplay(payload)).toEqual({
+    language: "text",
+    originalByteLength: null,
+    text: "legacy preview",
+    truncated: true,
+  });
+  expect(approvalBodyHash(payload)).toBe("legacy-sha256");
+});
+
 function requested(
   offset: number,
   ruleKey: string,
@@ -163,9 +182,7 @@ function requested(
       method: "POST",
       url: "https://api.stripe.com/v1/transfers",
       headers: {},
-      bodySha256: null,
-      bodyPreview: null,
-      body: undefined,
+      body: null,
       secretPaths: [],
       ruleKey,
       ruleDescription: "",

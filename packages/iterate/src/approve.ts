@@ -24,6 +24,8 @@ import {
   type StoredApprovalKey,
 } from "./approval-keys.ts";
 import {
+  approvalBodyHash,
+  approvalBodyPreview,
   awaitSettlement,
   connectApproval,
   enrollKey,
@@ -330,15 +332,17 @@ function renderHeldRequest(offset: number, payload: RequestedPayload): void {
       : [
           `spends secret${payload.secretPaths.length > 1 ? "s" : ""}: ${payload.secretPaths.join(", ")}`,
         ];
+  const bodyPreview = approvalBodyPreview(payload);
   const preview =
-    payload.bodyPreview !== null && payload.bodyPreview.length > 200
-      ? `${payload.bodyPreview.slice(0, 200)}…`
-      : payload.bodyPreview;
+    bodyPreview !== null && bodyPreview.length > 200
+      ? `${bodyPreview.slice(0, 200)}…`
+      : bodyPreview;
+  const bodyHash = approvalBodyHash(payload);
   const bodyLines =
     preview === null
-      ? payload.bodySha256 === null
+      ? bodyHash === null
         ? []
-        : [`body: sha256 ${payload.bodySha256.slice(0, 16)}…`]
+        : [`body: sha256 ${bodyHash.slice(0, 16)}…`]
       : [`body: ${preview}`];
   prompts.note(
     [

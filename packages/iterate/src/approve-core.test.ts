@@ -114,7 +114,7 @@ describe("reconcileBacklog — the door's first resolution is authoritative", ()
         secretPaths: [],
         ruleKey: "r",
         expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
-        bodyPreview: null,
+        body: null,
       },
       createdAt: "2026-01-01T00:00:00.000Z",
     }) as unknown as StreamEvent;

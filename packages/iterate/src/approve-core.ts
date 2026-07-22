@@ -11,6 +11,7 @@
 import type { RpcStub } from "@iterate-com/capnweb";
 
 import {
+  approvalBodySha256,
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,
 } from "../../../apps/os/src/domains/projects/egress-approvals.ts";
@@ -42,6 +43,22 @@ export function safeHost(url: string): string {
   } catch {
     return url;
   }
+}
+
+/** Readable body text for approval front-ends, including pre-consolidation events. */
+export function approvalBodyPreview(payload: RequestedPayload): string | null {
+  if (payload.body !== undefined && payload.body !== null) {
+    return payload.body.encoding === "base64"
+      ? `[base64] ${payload.body.content}`
+      : payload.body.content;
+  }
+  const legacyPreview = (payload as RequestedPayload & { bodyPreview?: unknown }).bodyPreview;
+  return typeof legacyPreview === "string" ? legacyPreview : null;
+}
+
+/** Complete-body hash for approval front-ends, including pre-consolidation events. */
+export function approvalBodyHash(payload: RequestedPayload): string | null {
+  return approvalBodySha256(payload as RequestedPayload & { bodySha256?: string | null });
 }
 
 /** The canonical bytes a grant for this request signs over. */

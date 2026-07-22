@@ -134,8 +134,11 @@ export function buildApprovalMessage(input: {
   approvalRequestEventOffset: number;
   requested: Pick<
     HumanApprovalRequestedPayload,
-    "method" | "url" | "headers" | "bodySha256" | "secretPaths"
-  >;
+    "method" | "url" | "headers" | "body" | "secretPaths"
+  > & {
+    /** Compatibility with approval events written before body metadata was consolidated. */
+    bodySha256?: string | null;
+  };
   decision: "granted" | "rejected";
 }): Uint8Array {
   return new TextEncoder().encode(
@@ -146,7 +149,7 @@ export function buildApprovalMessage(input: {
       method: input.requested.method,
       url: input.requested.url,
       headers: input.requested.headers,
-      bodySha256: input.requested.bodySha256,
+      bodySha256: approvalBodySha256(input.requested),
       secretPaths: input.requested.secretPaths,
       decision: input.decision,
     }),
@@ -156,15 +159,19 @@ export function buildApprovalMessage(input: {
 export const APPROVAL_BODY_INSPECTION_LIMIT_BYTES = 64 * 1024;
 
 /** Keep a bounded body prefix for human inspection; UTF-8 stays readable and other bytes are base64. */
-export function approvalRequestBody(bytes: Uint8Array): {
+export function approvalRequestBody(
+  bytes: Uint8Array,
+  sha256: string,
+): {
   encoding: "utf8" | "base64";
   content: string;
   originalByteLength: number;
+  sha256: string;
   truncated: boolean;
 } {
   const truncated = bytes.byteLength > APPROVAL_BODY_INSPECTION_LIMIT_BYTES;
   const inspectionBytes = bytes.slice(0, APPROVAL_BODY_INSPECTION_LIMIT_BYTES);
-  const metadata = { originalByteLength: bytes.byteLength, truncated };
+  const metadata = { originalByteLength: bytes.byteLength, sha256, truncated };
   try {
     return {
       encoding: "utf8",
@@ -174,6 +181,15 @@ export function approvalRequestBody(bytes: Uint8Array): {
   } catch {
     return { encoding: "base64", content: bytesToBase64(inspectionBytes), ...metadata };
   }
+}
+
+/** Complete-body hash used by approval.v1; accepts the pre-consolidation event shape. */
+export function approvalBodySha256(
+  requested: Pick<HumanApprovalRequestedPayload, "body"> & { bodySha256?: string | null },
+): string | null {
+  const nestedHash = requested.body?.sha256;
+  if (nestedHash !== undefined) return nestedHash;
+  return requested.bodySha256 === undefined ? null : requested.bodySha256;
 }
 
 function decodeUtf8InspectionBytes(bytes: Uint8Array, truncated: boolean): string {

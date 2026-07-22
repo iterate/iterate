@@ -37,6 +37,7 @@ import type { RpcStub } from "@iterate-com/capnweb";
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
 import { loadApprovalKey } from "./approval-keys.ts";
 import {
+  approvalBodyPreview,
   awaitSettlement,
   connectApproval,
   EVENT,
@@ -304,7 +305,7 @@ function emitRequested(offset: number, payload: RequestedPayload, submitted: boo
     secretPaths: payload.secretPaths,
     ruleKey: payload.ruleKey,
     expiresAt: payload.expiresAt,
-    bodyPreview: payload.bodyPreview,
+    bodyPreview: approvalBodyPreview(payload),
     submitted, // a grant already exists — awaiting the door, not fresh
   });
 }

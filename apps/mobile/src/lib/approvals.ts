@@ -13,6 +13,7 @@
 import type { RpcStub } from "capnweb";
 import type { Stream, StreamEvent } from "iterate/sdk/itx/react";
 import {
+  approvalBodySha256,
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,
 } from "../../../os/src/domains/projects/egress-approvals.ts";
@@ -45,12 +46,13 @@ export function approvalBodyForDisplay(payload: RequestedPayload): {
 } | null {
   if (payload.body === null) return null;
   if (payload.body === undefined) {
-    return payload.bodyPreview === null
+    const legacyPreview = (payload as RequestedPayload & { bodyPreview?: unknown }).bodyPreview;
+    return typeof legacyPreview !== "string"
       ? null
       : {
           language: "text",
           originalByteLength: null,
-          text: payload.bodyPreview,
+          text: legacyPreview,
           truncated: true,
         };
   }
@@ -80,6 +82,11 @@ export function approvalBodyForDisplay(payload: RequestedPayload): {
       truncated: payload.body.truncated,
     };
   }
+}
+
+/** Complete-body hash for display, including pre-consolidation approval events. */
+export function approvalBodyHash(payload: RequestedPayload): string | null {
+  return approvalBodySha256(payload as RequestedPayload & { bodySha256?: string | null });
 }
 
 export function scriptCodeForApproval(

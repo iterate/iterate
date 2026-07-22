@@ -17,17 +17,19 @@ import {
 
 test("approvalRequestBody preserves readable requests within the inspection limit", () => {
   const text = JSON.stringify({ orderId: 1234, reason: "duplicate" });
-  expect(approvalRequestBody(new TextEncoder().encode(text))).toEqual({
+  expect(approvalRequestBody(new TextEncoder().encode(text), "text-sha256")).toEqual({
     encoding: "utf8",
     content: text,
     originalByteLength: text.length,
+    sha256: "text-sha256",
     truncated: false,
   });
 
-  expect(approvalRequestBody(Uint8Array.from([0, 255, 17, 128]))).toEqual({
+  expect(approvalRequestBody(Uint8Array.from([0, 255, 17, 128]), "binary-sha256")).toEqual({
     encoding: "base64",
     content: "AP8RgA==",
     originalByteLength: 4,
+    sha256: "binary-sha256",
     truncated: false,
   });
 });
@@ -35,18 +37,20 @@ test("approvalRequestBody preserves readable requests within the inspection limi
 test("approvalRequestBody caps the durable inspection payload at 64 KiB", () => {
   const bytes = new TextEncoder().encode("a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000));
 
-  expect(approvalRequestBody(bytes)).toEqual({
+  expect(approvalRequestBody(bytes, "text-sha256")).toEqual({
     encoding: "utf8",
     content: "a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
     originalByteLength: bytes.byteLength,
+    sha256: "text-sha256",
     truncated: true,
   });
 
   const binary = new Uint8Array(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000).fill(0xff);
-  const binaryBody = approvalRequestBody(binary);
+  const binaryBody = approvalRequestBody(binary, "binary-sha256");
   expect(binaryBody).toMatchObject({
     encoding: "base64",
     originalByteLength: binary.byteLength,
+    sha256: "binary-sha256",
     truncated: true,
   });
   expect(binaryBody.content).toBe(
@@ -58,11 +62,61 @@ test("approvalRequestBody keeps UTF-8 readable when the byte cap splits a code p
   const completePrefix = "a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES - 1);
   const bytes = new TextEncoder().encode(`${completePrefix}€ after the cap`);
 
-  expect(approvalRequestBody(bytes)).toEqual({
+  expect(approvalRequestBody(bytes, "text-sha256")).toEqual({
     encoding: "utf8",
     content: completePrefix,
     originalByteLength: bytes.byteLength,
+    sha256: "text-sha256",
     truncated: true,
+  });
+});
+
+test("the approval request contract exposes one nullish body object", () => {
+  const schema =
+    ProjectProcessorContract.events["events.iterate.com/project/human-approval-requested"]
+      .payloadSchema;
+  const base = {
+    method: "POST",
+    url: "https://api.stripe.com/v1/transfers",
+    headers: {},
+    secretPaths: [],
+    ruleKey: "stripe",
+    expiresAt: "2026-07-22T15:00:00.000Z",
+  };
+
+  expect(schema.parse({ ...base, body: null })).toEqual({
+    ...base,
+    body: null,
+    ruleDescription: "",
+  });
+  expect(
+    schema.parse({
+      ...base,
+      body: {
+        encoding: "utf8",
+        content: '{"orderId":1234}',
+        originalByteLength: 16,
+        sha256: "body-sha256",
+      },
+    }),
+  ).toMatchObject({
+    body: {
+      encoding: "utf8",
+      content: '{"orderId":1234}',
+      originalByteLength: 16,
+      sha256: "body-sha256",
+      truncated: false,
+    },
+  });
+  expect(
+    schema.parse({
+      ...base,
+      body: { encoding: "utf8", content: "legacy #2231 body" },
+    }).body,
+  ).toEqual({
+    encoding: "utf8",
+    content: "legacy #2231 body",
+    truncated: false,
   });
 });
 
@@ -195,7 +249,12 @@ describe("canonical approval message", () => {
     method: "POST",
     url: "https://api.stripe.com/v1/transfers",
     headers: { authorization: 'Bearer getSecret("/secrets/stripe/prod")' },
-    bodySha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
+    body: {
+      encoding: "utf8" as const,
+      content: '{"amount":100}',
+      sha256: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430ba0aa",
+      truncated: false,
+    },
     secretPaths: ["/secrets/stripe/prod"],
   };
 
@@ -217,6 +276,34 @@ describe("canonical approval message", () => {
     expect(message({ requested: { ...requested, url: "https://evil.example" } })).not.toBe(
       message(),
     );
+  });
+
+  test("keeps approval.v1 signatures stable for pre-consolidation events", () => {
+    const legacy = buildApprovalMessage({
+      projectId: "prj_1",
+      approvalRequestEventOffset: 42,
+      requested: {
+        method: requested.method,
+        url: requested.url,
+        headers: requested.headers,
+        body: {
+          encoding: requested.body.encoding,
+          content: requested.body.content,
+          truncated: requested.body.truncated,
+        },
+        bodySha256: requested.body.sha256,
+        secretPaths: requested.secretPaths,
+      },
+      decision: "granted",
+    });
+    const consolidated = buildApprovalMessage({
+      projectId: "prj_1",
+      approvalRequestEventOffset: 42,
+      requested,
+      decision: "granted",
+    });
+
+    expect(legacy).toEqual(consolidated);
   });
 });
 
@@ -249,7 +336,7 @@ describe("verifyApprovalSignature", () => {
       method: "DELETE",
       url: "https://api.example.com/prod-db",
       headers: {},
-      bodySha256: null,
+      body: null,
       secretPaths: [],
     },
     decision: "granted",
@@ -271,7 +358,7 @@ describe("verifyApprovalSignature", () => {
         method: "DELETE",
         url: "https://api.example.com/prod-db",
         headers: {},
-        bodySha256: null,
+        body: null,
         secretPaths: [],
       },
       decision: "granted",
