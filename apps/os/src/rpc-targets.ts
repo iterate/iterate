@@ -262,6 +262,7 @@ import {
   type CapabilityHostCreateInput,
 } from "./domains/capability-host/capability-host-defaults.ts";
 import { DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS } from "./domains/capability-host/capability-host-processor-contract.ts";
+import { runCapabilityHostScript } from "./domains/capability-host/capability-host-script-run.ts";
 import {
   settleByDeadline,
   type DeadlineOutcome,
@@ -4804,8 +4805,14 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
         path: this.#props.path,
         projectId: this.#props.projectId,
       },
-      message: "script run rejoining after Durable Object reset",
-      operation: async () => await this.#durableObject.runScript(command),
+      message: "script run rejoining after stream Durable Object reset",
+      operation: async () =>
+        await runCapabilityHostScript({
+          command,
+          path: this.#props.path,
+          projectId: this.#props.projectId,
+          stream: this.#stream,
+        }),
     });
   }
 
