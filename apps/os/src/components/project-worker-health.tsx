@@ -171,7 +171,7 @@ function StrugglingSubscriptionsSheet({
                     </span>
                   </div>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                    <dt>{parked ? "Parked at" : "Stuck at"}</dt>
+                    <dt>{parked ? "Parked after" : "Stuck after"}</dt>
                     <dd className="tabular-nums">
                       offset {parked ? subscription.parkedAtOffset : subscription.ackedOffset}
                     </dd>
@@ -179,16 +179,21 @@ function StrugglingSubscriptionsSheet({
                     <dd className="tabular-nums">
                       {subscription.lag} event{subscription.lag === 1 ? "" : "s"}
                     </dd>
-                    <dt>Attempts</dt>
-                    <dd className="tabular-nums">{subscription.attempt}</dd>
+                    {/* attempt/lastError are cleared once parked — only real for backoff. */}
+                    {parked ? null : (
+                      <>
+                        <dt>Attempts</dt>
+                        <dd className="tabular-nums">{subscription.attempt}</dd>
+                      </>
+                    )}
                   </dl>
-                  {subscription.lastError ? (
-                    <div
-                      className={cn(
-                        "text-xs break-words whitespace-pre-wrap",
-                        parked ? "text-destructive" : "text-amber-600 dark:text-amber-500",
-                      )}
-                    >
+                  {parked ? (
+                    <div className="text-xs text-muted-foreground">
+                      Delivery gave up here; the failure reason is recorded on the stream's parked
+                      event.
+                    </div>
+                  ) : subscription.lastError ? (
+                    <div className="text-xs break-words whitespace-pre-wrap text-amber-600 dark:text-amber-500">
                       {subscription.lastError}
                     </div>
                   ) : null}

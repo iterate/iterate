@@ -89,11 +89,13 @@ describe("buildRedriveEvents", () => {
     ]);
   });
 
-  it("skip seeks past the stuck offset (exclusive) before resuming", () => {
+  it("skip seeks to ackedOffset + 1 — past the stuck event, not a no-op resume", () => {
+    // ackedOffset is the last DELIVERED offset; the stuck event is the next one.
+    // Seeking to ackedOffset would be a no-op (delivery already reads past it).
     expect(buildRedriveEvents("skip", parked)).toEqual([
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
-        payload: { subscriptionKey: "root#project", afterOffset: 300 },
+        payload: { subscriptionKey: "root#project", afterOffset: 301 },
       },
       {
         type: "events.iterate.com/stream/subscription-resumed",
@@ -102,7 +104,7 @@ describe("buildRedriveEvents", () => {
     ]);
   });
 
-  it("skip on a backoff subscription seeks past its acked cursor", () => {
+  it("skip on a backoff subscription seeks past its stuck event too", () => {
     expect(
       buildRedriveEvents("skip", {
         subscriptionKey: "root#project",
@@ -116,7 +118,7 @@ describe("buildRedriveEvents", () => {
     ).toEqual([
       {
         type: "events.iterate.com/stream/subscription-cursor-set",
-        payload: { subscriptionKey: "root#project", afterOffset: 118 },
+        payload: { subscriptionKey: "root#project", afterOffset: 119 },
       },
       {
         type: "events.iterate.com/stream/subscription-resumed",

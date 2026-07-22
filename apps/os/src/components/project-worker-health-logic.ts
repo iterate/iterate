@@ -3,14 +3,19 @@ import type { StreamEventInput } from "../itx-api.generated.ts";
 /**
  * An unhealthy subscription the sidebar warning surfaces, read from the root
  * stream's own runtime state. `parked` = delivery gave up and stopped;
- * `backoff` = delivery is failing and retrying (not stopped yet). Only the
- * fields the UI shows — the full row lives in the stream's `runtimeState()`.
+ * `backoff` = delivery is failing and retrying (not stopped yet).
+ *
+ * `attempt` / `lastError` are only meaningful for `backoff`: parking `ack`s the
+ * spine row, which zeroes `attempt` and clears `last_error` (the count and
+ * reason survive only in the `subscription-parked` fact, not in runtime state),
+ * so the UI must not show them for a parked row.
  */
 export type SubscriptionHealth = {
   subscriptionKey: string;
   status: "parked" | "backoff";
-  /** Exclusive cursor: the offset delivery is stuck on (equals `parkedAtOffset`
-   * once parked). The skip verb seeks past this. */
+  /** Exclusive delivery cursor: the last offset delivered. The next (stuck)
+   * event is `ackedOffset + 1`; the skip verb seeks past it. Equals
+   * `parkedAtOffset` once parked. */
   ackedOffset: number;
   parkedAtOffset: number | null;
   lag: number;
@@ -63,8 +68,13 @@ export function selectStrugglingSubscriptions(
 /**
  * The events to append to unstick a subscription. `resume` un-parks and kicks
  * delivery (retry from the stopped cursor). `skip` first moves the cursor past
- * the offset it choked on (exclusive `afterOffset`) so it does not just fail on
- * the same poison again, then resumes.
+ * the stuck event so it does not just fail on the same one again, then resumes.
+ *
+ * Delivery reads events STRICTLY after the cursor, so `ackedOffset` is the last
+ * delivered offset and the stuck event is `ackedOffset + 1`. Setting the cursor
+ * to `ackedOffset + 1` (`subscription-cursor-set` is exclusive too) is what
+ * actually skips it — setting it to `ackedOffset` would be a no-op and behave
+ * like a plain resume.
  */
 export function buildRedriveEvents(
   action: "resume" | "skip",
@@ -80,7 +90,7 @@ export function buildRedriveEvents(
         type: "events.iterate.com/stream/subscription-cursor-set",
         payload: {
           subscriptionKey: subscription.subscriptionKey,
-          afterOffset: subscription.ackedOffset,
+          afterOffset: subscription.ackedOffset + 1,
         },
       },
       resumed,
