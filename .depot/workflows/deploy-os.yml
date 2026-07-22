@@ -96,7 +96,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           APP_SLUG: os
           DEPLOY_LOG_FILE: /tmp/deploy-os.log
         run: |-
