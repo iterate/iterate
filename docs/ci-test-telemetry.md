@@ -532,6 +532,25 @@ navigation/readiness, 5.0 seconds of catalogue execution, and no cleanup time.
 Future recurrences will therefore distinguish project bootstrap, page
 readiness, the example operation, and cleanup instead of leaving an opaque gap.
 
+The completed `4556d58` artifact then made the new longest Playwright result
+unambiguous: `feed resumes after page freeze + socket death` took 63.4 seconds,
+including two sequential, named `Wait for timeout` phases of 25.0 seconds each.
+The first was an arbitrary frozen-page hold even though the test explicitly
+kills the socket; the second slept for a guessed probe window before beginning
+the actual delivery assertion. The test now keeps a one-second freeze as the
+failure stimulus, appends its durable marker immediately after thaw, and polls
+marker delivery for the existing bounded 90-second recovery window. A healthy
+run can finish as soon as recovery is observed, while the historical permanent
+wedge still exhausts the same ceiling and fails with its runtime evidence.
+
+The longest Vitest result in that artifact was the concurrency proof at 60.7
+seconds. Its phases account for the time: 11.9 seconds creating the project,
+48.8 seconds executing the scripts, and an intentional 30-second remote hold
+inside that execution phase. The remaining 18.8 seconds is actual orchestration
+and completion overhead. This is why named phases matter: the dashboard can
+separate a test's contractual wait from runner contention and product latency
+without inferring a cause from one aggregate duration.
+
 ## Adding Or Changing A Reporter
 
 1. Extend the canonical Zod schema only with runner-neutral fields; missing

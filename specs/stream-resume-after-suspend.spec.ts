@@ -20,12 +20,11 @@ import { test } from "./test-support/test.ts";
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
-
-// Two liveness-probe intervals (LIVENESS_PROBE_INTERVAL_MS = 10s): a clean
-// socket close is invisible to the runtime (the view's factory never wires
-// onConnectionStatusChange), so only the probe notices the dead session —
-// a rejection reconnects on the first probe, timeouts need two strikes.
-const PROBE_NOTICE_MS = 25_000;
+// This is the failure stimulus, not a recovery budget: keeping the page
+// frozen briefly proves that its timers stop while avoiding the old arbitrary
+// 25s hold. Socket death is modeled explicitly below, so it does not depend on
+// the browser or OS reaping a connection during this window.
+const SUSPEND_STIMULUS_MS = 1_000;
 
 // Fresh streams' first post-subscribe delivery can stall and needs the ~10s
 // probe self-heal (see reactivity.spec.ts's DELIVERY_WAIT rationale), so the
@@ -102,17 +101,15 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
 
-  // Give the liveness probe two intervals to notice and enter its reconnect loop.
-  await page.waitForTimeout(PROBE_NOTICE_MS);
-  console.log("--- after probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
+  // Append immediately: delivery is the recovery invariant, so polling it
+  // covers however many liveness-probe intervals the runtime actually needs
+  // without paying a guessed probe delay before starting the real assertion.
   const [marker] = await agent.stream.append({
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-socket-death" },
   });
   const { delivered, snapshot } =
-    await test.step("half-open: redial and deliver a new stream event", () =>
+    await test.step("clean close: redial and deliver a new stream event", () =>
       pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
   dumpEvidence("after socket death", snapshot, consoleLines);
   // The historical wedge: runtimes stuck in connectionStatus "reconnecting"
@@ -156,27 +153,25 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   );
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
-  await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
-  await page.context().setOffline(true);
-  await page.waitForTimeout(25_000);
-  await page.context().setOffline(false);
-  await cdp.send("Page.setWebLifecycleState", { state: "active" });
+  await test.step("freeze page, drop network, and thaw", async () => {
+    await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
+    await page.context().setOffline(true);
+    await page.waitForTimeout(SUSPEND_STIMULUS_MS);
+    await page.context().setOffline(false);
+    await cdp.send("Page.setWebLifecycleState", { state: "active" });
+  });
 
-  // Timers were suspended while frozen: the probe strikes only start now.
-  await page.waitForTimeout(PROBE_NOTICE_MS);
-  console.log("--- after thaw + probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
+  // Timers were suspended while frozen and the probe strikes only start after
+  // thaw. Append immediately and wait on the durable delivery invariant; a
+  // permanently wedged runtime still consumes the full bounded recovery
+  // window, while a healthy runtime finishes as soon as it has really healed.
   const [marker] = await agent.stream.append({
     type: MARKER_EVENT_TYPE,
     payload: { marker: "after-freeze" },
   });
-  const { delivered, snapshot } = await pollDelivered(
-    page,
-    keys,
-    marker!.offset,
-    RECOVERY_DELIVERY_MS,
-  );
+  const { delivered, snapshot } =
+    await test.step("thaw: redial and deliver a new stream event", () =>
+      pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
   dumpEvidence("after freeze", snapshot, consoleLines);
   // Historically the same wedge as the clean-close test — the frozen window
   // only delayed when the liveness probe noticed.
