@@ -593,3 +593,7 @@ the recorded projection.
   repository-owned `workerName` was dropped when Doppler contributed readiness
   secrets, so OS and Streams failed config validation before deploy. A red/green
   regression now requires deployment identity to survive config composition.
+- 2026-07-22: Review found that bounded `CloudflareApiError` messages could hide
+  later binding-owner names from targeted Durable Object handover. The error now
+  retains its full structured details for recovery logic while keeping the
+  displayed message bounded; a regression puts the owner beyond that boundary.

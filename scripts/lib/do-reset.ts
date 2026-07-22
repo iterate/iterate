@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DeployableEnv, EnvContext } from "./env-context.ts";
+import { CloudflareApiError, type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext the reset needs: the account-scoped CF API fetch. */
 type CfContext = Pick<EnvContext<DeployableEnv>, "cf">;
@@ -235,7 +235,10 @@ function namedExternalBindingWorkers(input: {
   workerNames: readonly string[];
   alreadyDetached: ReadonlySet<string>;
 }) {
-  const message = String(input.failure);
+  const message =
+    input.failure instanceof CloudflareApiError
+      ? String(JSON.stringify(input.failure.details))
+      : String(input.failure);
   if (!/bind/i.test(message) || !/(referenc|depend|namespace|delete-class)/i.test(message)) {
     return [];
   }
