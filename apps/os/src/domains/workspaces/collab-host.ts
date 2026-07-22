@@ -200,21 +200,33 @@ export class CollabHost {
     // (the session wasn't durable yet) — re-read now that it is, and fold any
     // divergence in as an external splice. Writes from here on route through
     // the live gateway, so one read closes the window; version 0 guards the
-    // splice against a gateway write that beat the re-read.
-    const settled = await this.#fs.readFile(path);
-    // The re-read awaited too: a destruction in ITS window must also unwind
-    // (same rule as the seed), never hand back a session that already ended.
-    if ((this.#destroyed.get(path) ?? 0) !== destroyedBefore || !this.isLive(path)) {
+    // splice against a gateway write that beat the re-read. ANY failure in
+    // this tail unwinds the birth — a session that survived its open's error
+    // would serve the seed forever, hiding settled truth.
+    try {
+      const settled = await this.#fs.readFile(path);
+      // The re-read awaited too: a destruction in ITS window must also unwind
+      // (same rule as the seed), never hand back a session that already ended.
+      if ((this.#destroyed.get(path) ?? 0) !== destroyedBefore || !this.isLive(path)) {
+        this.#engine.discard(path);
+        this.#store.endSession(path);
+        throw new Error(`${path} was deleted while the session was opening — retry to reopen`);
+      }
+      if (
+        settled !== null &&
+        settled !== opened.content &&
+        this.#engine.head(path)?.version === 0
+      ) {
+        await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, settled));
+      }
+      // Return the LIVE head — a gateway write may have advanced the session
+      // past the birth snapshot while this open was in flight.
+      return this.#engine.head(path) ?? opened;
+    } catch (error) {
       this.#engine.discard(path);
       this.#store.endSession(path);
-      throw new Error(`${path} was deleted while the session was opening — retry to reopen`);
+      throw error;
     }
-    if (settled !== null && settled !== opened.content && this.#engine.head(path)?.version === 0) {
-      await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, settled));
-    }
-    // Return the LIVE head — a gateway write may have advanced the session
-    // past the birth snapshot while this open was in flight.
-    return this.#engine.head(path) ?? opened;
   }
 
   async push(raw: CollabPush): Promise<CollabPushResult> {
