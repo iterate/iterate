@@ -91,7 +91,7 @@ while [ "$run" -le "$RUNS" ]; do
 
   echo "run $run/$RUNS: deploying the full fleet (attempt $attempt)"
   run_with_watchdog "$RUN_TIMEOUT_SECS" "$deploy_log" \
-    doppler run --project _shared --config prd -- pnpm preview deploy --all-apps --allow-draft \
+    doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --all-apps --allow-draft \
     --pull-request-number "$PR_NUMBER"
   deploy_exit=$?
 
@@ -116,7 +116,7 @@ while [ "$run" -le "$RUNS" ]; do
 
   echo "run $run/$RUNS: running every e2e lane in parallel (${remaining}s watchdog remaining)"
   run_with_watchdog "$remaining" "$test_log" \
-    doppler run --project _shared --config prd -- pnpm preview test \
+    doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test \
     --pull-request-number "$PR_NUMBER"
   test_exit=$?
 

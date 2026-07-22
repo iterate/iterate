@@ -10,7 +10,7 @@
  * Env: APP_SLUG, DEPLOY_LOG_FILE, DEPLOY_SHA (the checked-out sha that was
  * actually deployed — NOT the workflow trigger's GITHUB_SHA, which diverges
  * on a workflow_dispatch with a custom ref), GITHUB_REPOSITORY, and
- * GITHUB_TOKEN / ITERATE_BOT_GITHUB_TOKEN.
+ * GITHUB_TOKEN.
  */
 import { readFileSync } from "node:fs";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";

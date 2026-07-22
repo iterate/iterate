@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 import { openRepoTreeFile } from "./test-support/repo-tree.ts";
@@ -38,8 +39,14 @@ test("toggle an svg file between Code and its sandboxed Preview", async ({
   // Preview renders the svg in the sandboxed iframe (same srcdoc lane as html).
   await page.getByRole("tab", { name: "Preview" }).click({ timeout: 10_000 });
   const preview = page.locator('iframe[title="HTML preview"]');
-  await preview.waitFor();
-  await preview.and(page.locator('[srcdoc*="<circle"]')).waitFor();
+  // The tab changes URL-owned view state through a React transition while the
+  // usable Code pane remains on screen. There is intentionally no loading
+  // spinner, so assert the bounded eventual render rather than treating the
+  // transition as a missing product loading state.
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- React retains the usable Code pane during this search-state transition, so there is intentionally no spinner for locator.waitFor to follow.
+  await expect(preview).toBeVisible();
+  // oxlint-disable-next-line iterate/spec-restricted-syntax -- same bounded search-state transition; this assertion also proves the rendered iframe contains the SVG source.
+  await expect(preview).toHaveAttribute("srcdoc", /<circle/);
 });
 
 test("preview a staged snapshot from the readonly Index view", async ({
