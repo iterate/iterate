@@ -119,6 +119,14 @@ non-obvious case: its Depot organization token lives in `_shared/preview`, but
 the collector sends under `_shared/prd` so it reaches the canonical PostHog
 project. See [CI and test telemetry](ci-test-telemetry.md) for the exact setup.
 
+The daily PR dashboard also avoids a hidden token exception: it finds today's
+message and detail reply through Slack history instead of persisting their
+timestamps in a GitHub Actions repository variable. GitHub's variable API
+requires the separate
+[repository `Variables` permission](https://docs.github.com/en/rest/actions/variables#get-a-repository-variable),
+which workflow `GITHUB_TOKEN` permissions cannot request. Do not reintroduce
+`SLACK_PR_DASHBOARD_STATE` or a personal/bot token for that state.
+
 ## Wait For CI
 
 Depot CLI does not currently have a blocking `wait` subcommand. The monitoring

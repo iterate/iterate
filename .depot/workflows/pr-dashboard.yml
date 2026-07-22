@@ -1,6 +1,5 @@
 name: Daily PR dashboard
 permissions:
-  actions: write
   contents: read
   issues: read
   pull-requests: read

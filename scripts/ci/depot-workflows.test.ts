@@ -185,7 +185,6 @@ describe("Depot credential boundaries", () => {
     {
       file: ".depot/workflows/pr-dashboard.yml",
       permissions: {
-        actions: "write",
         contents: "read",
         issues: "read",
         "pull-requests": "read",
