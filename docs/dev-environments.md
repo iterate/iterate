@@ -424,6 +424,10 @@ e2e as one step, sharing one resolved PR head so a push cannot race into a
 gap between them. The PR body's managed "Environment Config Lease" section
 records the slot, per-app URLs and statuses; the workflow logs narrate every
 decision (which apps were selected and why, lease transitions, slot waits).
+Diff selection may reuse an unchanged app's exact recorded Worker deployment,
+but never its test result: every triggered PR head reruns every recorded app's
+e2e suite, and a run with no runnable deployment fails instead of reporting a
+green `deploy + e2e` check.
 Closing or merging the PR runs `pnpm preview cleanup`, which destroys the
 PR's apps (for os that means erasing the slot's data — auth D1 and
 project-directory KV) and releases the slot — after verifying the PR still

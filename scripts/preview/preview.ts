@@ -87,13 +87,10 @@ function decideDraftPreviewPolicy(input: {
 type DeployCommandOptions = PullRequestCommandOptions & {
   /**
    * Deploy every preview app regardless of the diff. Diff selection only
-   * redeploys apps affected since their LAST DEPLOYED head, so unaffected
-   * apps keep an older recorded head and the test lane leaves them out of
-   * its testable set (stale — deploy has not run for the current head). A
-   * caller that needs the whole fleet testable at the current head — the
-   * flake-hunt marathon preflight — uses this to reunify the fleet
-   * explicitly instead of relying on the commit happening to touch a
-   * fleet-shared path.
+   * redeploys apps affected since their LAST DEPLOYED head. A caller that
+   * needs a fresh deployment of the whole fleet — the flake-hunt marathon
+   * preflight — uses this explicitly instead of relying on the commit
+   * happening to touch a fleet-shared path.
    */
   allApps?: boolean;
   /**
@@ -197,7 +194,7 @@ export async function testTarget(options: TestTargetOptions) {
   const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
     app,
     apps: recorded.apps,
-    headSha: context.pullRequestHeadSha,
+    requiredDeploymentHeadSha: context.pullRequestHeadSha,
   });
   // Match the full preview lane: RPC-only dependencies such as auth need an
   // exact version pin even though they do not contribute a public base URL.
@@ -206,7 +203,7 @@ export async function testTarget(options: TestTargetOptions) {
     apps: recorded.apps,
     appSlugs: versionedAppSlugs,
     dopplerConfig: environmentConfigLease.dopplerConfig,
-    headSha: context.pullRequestHeadSha,
+    requiredDeploymentHeadSha: context.pullRequestHeadSha,
   });
   const plan = resolvePreviewTestTargetPlan({
     ...selection,
@@ -305,8 +302,9 @@ export async function run(options: DeployCommandOptions = {}) {
       return deployResult;
     }
 
-    // A "nothing to deploy" skip still tests: the recorded deployments ARE the
-    // current head's code, and their green must be earned, not assumed.
+    // A "nothing to deploy" skip still tests. Unchanged apps may reuse their
+    // exact recorded Worker versions, but every PR head earns its own e2e
+    // result; a previous head's green is never promoted to this check.
     return await testPreviewApps({ context, runtime, state: deployResult.state, telemetry });
   });
 }
@@ -707,13 +705,14 @@ async function deployPreviewApps({
 function resolvePreviewTestBaseUrlEnvironment({
   app,
   apps,
-  headSha,
+  requiredDeploymentHeadSha,
 }: {
   app: CloudflarePreviewApp;
   apps: Partial<
     Record<CloudflarePreviewAppSlug, { headSha?: string | null; publicUrl?: string | null }>
   >;
-  headSha: string;
+  /** Targeted runs can require a fresh current-head deployment; full CI may reuse proven unchanged versions. */
+  requiredDeploymentHeadSha?: string;
 }): string[] {
   const requiredUrls = new Map<CloudflarePreviewAppSlug, string>();
   requiredUrls.set(app.slug, app.previewTestBaseUrlEnvVar);
@@ -727,9 +726,14 @@ function resolvePreviewTestBaseUrlEnvironment({
 
   const environment = [...requiredUrls].map(([appSlug, environmentVariable]) => {
     const entry = apps[appSlug];
-    if (!entry?.publicUrl || entry.headSha !== headSha) {
+    if (
+      !entry?.publicUrl ||
+      (requiredDeploymentHeadSha != null && entry.headSha !== requiredDeploymentHeadSha)
+    ) {
       throw new Error(
-        `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${headSha.slice(0, 7)}. Re-run preview deploy.`,
+        requiredDeploymentHeadSha == null
+          ? `Cannot test ${app.slug}: ${environmentVariable} requires a recorded ${appSlug} deployment. Re-run preview deploy.`
+          : `Cannot test ${app.slug}: ${environmentVariable} requires ${appSlug} deployed at head ${requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`,
       );
     }
     return `${environmentVariable}=${entry.publicUrl}`;
@@ -790,7 +794,8 @@ function resolvePreviewTestWorkerVersionOverrides(input: {
   apps: Partial<Record<CloudflarePreviewAppSlug, CloudflarePreviewAppEntry>>;
   appSlugs: readonly CloudflarePreviewAppSlugType[];
   dopplerConfig: string;
-  headSha: string;
+  /** Targeted runs can require a fresh current-head deployment; full CI pins the recorded unchanged version. */
+  requiredDeploymentHeadSha?: string;
 }): string {
   return renderCloudflareWorkerVersionOverrides(
     input.appSlugs.map((appSlug) => {
@@ -799,12 +804,16 @@ function resolvePreviewTestWorkerVersionOverrides(input: {
         input.dopplerConfig,
       ).workerName;
       if (
-        entry?.headSha !== input.headSha ||
+        entry == null ||
+        (input.requiredDeploymentHeadSha != null &&
+          entry.headSha !== input.requiredDeploymentHeadSha) ||
         entry.deployedWorkerName !== expectedWorkerName ||
         !entry.deployedWorkerVersion
       ) {
         throw new Error(
-          `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.headSha.slice(0, 7)}. Re-run preview deploy.`,
+          input.requiredDeploymentHeadSha == null
+            ? `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing. Re-run preview deploy.`
+            : `Cannot test ${appSlug}: its exact ${expectedWorkerName} deployment identity is missing or stale for head ${input.requiredDeploymentHeadSha.slice(0, 7)}. Re-run preview deploy.`,
         );
       }
       return {
@@ -864,14 +873,10 @@ async function testPreviewApps({
       canRunPreviewTests(entry),
     );
     if (!displaySlot && !hasTestableRecordedApps) {
-      logPreview(
-        `the semaphore leases no slot to ${holder} and nothing is deployed — skipping tests`,
-      );
-      return {
-        ok: true,
-        skipped: true,
-        state: recorded,
-      };
+      const message = `Refusing to report preview e2e success: the semaphore leases no slot to ${holder} and no runnable deployment is recorded. E2e was NOT run. Run preview deploy first.`;
+      logPreview(message);
+      await updatePreviewState(context, (state) => ({ ...state, notice: message }));
+      throw new Error(message);
     }
 
     // This PR has deployments on record but no slot: the slot was stolen (or
@@ -924,42 +929,29 @@ async function testPreviewApps({
     }));
   }
 
-  const testableApps = Object.values(recorded.apps)
-    .filter((entry) => canRunPreviewTests(entry) && entry.headSha === context.pullRequestHeadSha)
-    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
-    .filter((app): app is PreviewAppRuntime => app != null);
+  const testableApps = selectPreviewAppsForTesting(recorded.apps);
 
   if (testableApps.length === 0) {
-    // Deploy leaves nothing recorded at this head only when nothing
-    // app-affecting changed since the last fully tested deploy: its retry
-    // selection redeploys every non-green recorded app at the current head
-    // regardless of which head produced it (see
-    // selectPreviewAppsNeedingRetry), so any app still at an older head is a
-    // green whose results stand. `preview run` shares one resolved head
-    // between the deploy and test phases, so the old two-step hazard — a
-    // push racing into the gap and a green check describing a commit that
-    // never ran — cannot reach this branch there. A standalone `test` just
-    // reports the skip; the flake-hunt loop already treats any skip as "not
-    // a green run".
-    const notice = `Preview e2e skipped for head ${context.pullRequestHeadSha.slice(0, 7)}: no app is recorded at this head — nothing app-affecting changed since the last fully tested deploy, so the recorded results below still stand. If this PR has never deployed for this head, run preview deploy first.`;
+    const notice = `Refusing to report preview e2e success for head ${context.pullRequestHeadSha.slice(0, 7)}: no runnable app deployment is recorded. E2e was NOT run. Run preview deploy first.`;
     logPreview(notice);
     await updatePreviewState(context, (state) => ({
       ...state,
       notice,
     }));
-    return {
-      ok: true,
-      skipped: true,
-      skippedReason: "no-apps-at-current-head",
-      state: recorded,
-    };
+    throw new Error(notice);
   }
-  logPreview(`testable apps: ${testableApps.map((app) => app.slug).join(", ")}`);
+  logPreview(
+    `testable apps for head ${context.pullRequestHeadSha.slice(0, 7)}: ${testableApps
+      .map((app) => {
+        const deployedHead = recorded.apps[app.slug]?.headSha;
+        return `${app.slug}@${deployedHead?.slice(0, 7) ?? "unknown"}`;
+      })
+      .join(", ")}`,
+  );
   const workerVersionOverrides = resolvePreviewTestWorkerVersionOverrides({
     apps: recorded.apps,
     appSlugs: testableApps.map((app) => app.slug),
     dopplerConfig: environmentConfigLease.dopplerConfig,
-    headSha: context.pullRequestHeadSha,
   });
 
   // Preview e2e commands are full app-level suites. They run concurrently:
@@ -974,7 +966,6 @@ async function testPreviewApps({
     const baseUrlEnvironment = resolvePreviewTestBaseUrlEnvironment({
       app,
       apps: recorded.apps,
-      headSha: context.pullRequestHeadSha,
     });
 
     const startedAt = Date.now();
@@ -5659,18 +5650,52 @@ function selectPreviewAppsNeedingRetry(params: { previousState: CloudflarePrevie
   // deploy", the test lane then skipped its stale recorded apps and the
   // whole check went GREEN on a slot with three deploy-failed apps). For
   // awaiting-tests: at any head it means a deploy landed and its e2e never
-  // ran (a cancelled run), so redeploying it at the current head — idempotent
-  // and cheap — is what makes the test lane's "no app recorded at this head"
-  // an honest green skip (observed 2026-07-10: run 7 deployed then got
-  // cancelled by run 8's push; run 8's one-line non-app diff then skipped
-  // green while every app sat at awaiting-tests).
+  // ran (a cancelled run), so redeploying it at the current head is the only
+  // valid route back to a tested state. A recorded green that lacks its exact
+  // immutable Worker identity is also untestable: select it once so legacy or
+  // stale PR-body state self-heals instead of failing every future run.
+  const recordedSlot = params.previousState.environmentConfigLease;
   const retrySlugs = Object.values(params.previousState.apps)
-    .filter((entry) =>
-      ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status),
-    )
+    .filter((entry) => {
+      if (
+        ["awaiting-tests", "claim-failed", "deploy-failed", "tests-failed"].includes(entry.status)
+      ) {
+        return true;
+      }
+      if (entry.status !== "deployed") return false;
+
+      const app = cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType];
+      const expectedWorkerName = recordedSlot
+        ? app?.resolvePreviewAppConfig(recordedSlot.dopplerConfig).workerName
+        : null;
+      return (
+        !entry.publicUrl ||
+        !entry.deployedWorkerVersion ||
+        !expectedWorkerName ||
+        entry.deployedWorkerName !== expectedWorkerName
+      );
+    })
     .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
 
   return expandPreviewDependencies(retrySlugs).map((slug) => cloudflarePreviewApps[slug]);
+}
+
+/**
+ * Every runnable deployment participates in every PR-head e2e check. The
+ * deployment may come from an older head when the deploy selector proved that
+ * none of that app's inputs changed; its immutable Worker version is pinned by
+ * {@link resolvePreviewTestWorkerVersionOverrides}. Only deployment work is
+ * reusable — test results never are.
+ */
+function selectPreviewAppsForTesting(
+  apps: Partial<Record<string, CloudflarePreviewAppEntry>>,
+): PreviewAppRuntime[] {
+  return Object.values(apps)
+    .filter(
+      (entry): entry is CloudflarePreviewAppEntry => entry != null && canRunPreviewTests(entry),
+    )
+    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
+    .filter((app): app is PreviewAppRuntime => app != null);
 }
 
 function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugType[]) {
@@ -6082,6 +6107,7 @@ export const previewInternals = {
   resolvePreviewTestWorkerVersionOverrides,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
+  selectPreviewAppsForTesting,
   selectPreviewSlotDataOwners,
   splitRepositoryFullName,
   syncPreviewInventory,
