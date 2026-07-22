@@ -832,6 +832,24 @@ export function isVirtualDirectoryPath(
   });
 }
 
+/** Paths whose OWNING mount changed between two mount tables (longest-prefix
+ * ownership): removed, re-pointed, or stolen by a newly added nested mount.
+ * The mount-transition session sweep ends exactly these. */
+export function reRoutedPaths(
+  before: Record<string, WorkspaceMount>,
+  after: Record<string, WorkspaceMount>,
+  paths: string[],
+): string[] {
+  return paths.filter((path) => {
+    const ownerBefore = routeMount(before, path);
+    const ownerAfter = routeMount(after, path);
+    return (
+      ownerBefore?.mountPath !== ownerAfter?.mountPath ||
+      ownerBefore?.mount.repoPath !== ownerAfter?.mount.repoPath
+    );
+  });
+}
+
 export function routeMount(
   mounts: Record<string, WorkspaceMount>,
   path: string,

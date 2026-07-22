@@ -337,13 +337,21 @@ export class CollabHost {
   }
 
   async #settleAll(): Promise<SettledFile[]> {
-    // DIRTY sessions only: an unedited session's head equals its seed, and
-    // writing that over a mount HEAD that moved since the seed would pin
-    // outdated text into the overlay (and a commit could revert upstream).
+    // WRITE only dirty sessions (flushing a clean one would pin its seed
+    // over a mount HEAD that moved since), but REPORT every live session:
+    // a commit that follows contains work the debounce already settled, and
+    // its baseline must advance too or changes() keeps showing committed
+    // text and the uncommitted-ops quota never resets.
     const settled: SettledFile[] = [];
-    for (const path of this.#store.dirtySessions()) {
-      const file = await this.#flush(path);
-      if (file !== null) settled.push(file);
+    const dirty = new Set(this.#store.dirtySessions());
+    for (const path of this.#store.livePaths()) {
+      if (dirty.has(path)) {
+        const file = await this.#flush(path);
+        if (file !== null) settled.push(file);
+        continue;
+      }
+      const head = await this.#opened(path);
+      settled.push({ content: head.content, epoch: head.epoch, path, version: head.version });
     }
     return settled;
   }

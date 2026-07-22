@@ -492,3 +492,22 @@ describe("flush dirtiness", () => {
     expect(files.get(PATH)).toBe(`hi ${SEED}`);
   });
 });
+
+describe("commit stamping after prior settles", () => {
+  test("commitBarrier stamps sessions the debounce already flushed", async () => {
+    const { store } = fakeSessionStore();
+    const { fs } = fakeFs({ [PATH]: SEED });
+    const host = new CollabHost({ fs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "hi ", SEED.length);
+    await host.reconcile(); // an earlier barrier settles it — session is clean now
+    await host.commitBarrier(
+      async () => ({ mount: "/" }),
+      () => true,
+    );
+    // The commit contained the flushed text, so the redline must reset.
+    const changes = await host.changes(PATH);
+    expect(changes.inserted).toEqual([]);
+    expect(changes.deleted).toEqual([]);
+  });
+});

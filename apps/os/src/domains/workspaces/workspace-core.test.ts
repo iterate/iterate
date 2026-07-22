@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@cloudflare/shell";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
-import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
+import { reRoutedPaths, WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
 
 /** The slice of `@cloudflare/shell`'s Workspace the core touches, in memory. */
 function fakeLocalLayer() {
@@ -739,5 +739,42 @@ describe("delete whiteout surface", () => {
     expect(core.isMaskedFromMount("config/worker.ts")).toBe(true); // canonicalized
     await core.writeFile("/config/worker.ts", "fresh");
     expect(core.isMaskedFromMount("/config/worker.ts")).toBe(false);
+  });
+});
+
+describe("reRoutedPaths", () => {
+  const root: Record<string, WorkspaceMount> = {
+    "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+  };
+  test("adding a nested mount re-routes exactly the stolen paths", () => {
+    const after = {
+      ...root,
+      "/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
+    };
+    expect(reRoutedPaths(root, after, ["/sub/tasks/a.md", "/tasks/b.md"])).toEqual([
+      "/sub/tasks/a.md",
+    ]);
+  });
+  test("re-pointing a mount re-routes its paths; removal re-routes to the parent", () => {
+    const after: Record<string, WorkspaceMount> = {
+      "/": { policy: "commit-to-main", repoPath: "/repos/swapped" },
+    };
+    expect(reRoutedPaths(root, after, ["/tasks/b.md"])).toEqual(["/tasks/b.md"]);
+    const nested = {
+      ...root,
+      "/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
+    };
+    expect(reRoutedPaths(nested, root, ["/sub/tasks/a.md"])).toEqual(["/sub/tasks/a.md"]);
+  });
+  test("an unchanged nested mount survives sibling changes", () => {
+    const before = {
+      ...root,
+      "/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
+    };
+    const after = {
+      "/": { policy: "commit-to-main" as const, repoPath: "/repos/swapped" },
+      "/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
+    };
+    expect(reRoutedPaths(before, after, ["/keep/x.md", "/y.md"])).toEqual(["/y.md"]);
   });
 });

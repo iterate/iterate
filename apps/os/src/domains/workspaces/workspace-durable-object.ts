@@ -32,6 +32,7 @@ import {
 } from "./workspace-processor-implementation.ts";
 import {
   isVirtualDirectoryPath,
+  reRoutedPaths,
   routeMount,
   WorkspaceCore,
   type MountRepoAccess,
@@ -264,23 +265,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
           return config;
         }),
       );
-      // A session bound to a removed or re-pointed mount would keep serving
-      // the OLD repo's text as the live truth for the path. The barrier just
-      // settled everything, so ending them here loses nothing committed.
-      // Ownership is routeMount's longest-prefix rule — hand-rolled prefix
-      // string checks get the root mount ("//") and nested mounts wrong.
-      const changedMounts = new Set(
-        Object.entries(before)
-          .filter(([key, mount]) => applied.mounts[key]?.repoPath !== mount.repoPath)
-          .map(([key]) => key),
-      );
-      if (changedMounts.size > 0) {
-        const doomed = this.#collab.livePaths().filter((path) => {
-          const owner = routeMount(before, path);
-          return owner !== null && changedMounts.has(owner.mountPath);
-        });
-        if (doomed.length > 0) this.#collab.endSessions(doomed);
-      }
+      // A session whose OWNING mount changed — removed, re-pointed, or the
+      // path stolen by a newly added nested mount — would keep serving the
+      // old repo's text as the live truth (and flush it into the NEW mount's
+      // repo). Ownership is routeMount's longest-prefix rule, diffed across
+      // the transition; the barrier settled dirty work, so nothing is lost.
+      const doomed = reRoutedPaths(before, applied.mounts, this.#collab.livePaths());
+      if (doomed.length > 0) this.#collab.endSessions(doomed);
       return applied;
     });
   }
