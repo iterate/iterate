@@ -1,4 +1,9 @@
-import { writeFileSync } from "node:fs";
+import {
+  ciTelemetrySourceFromEnvironment,
+  testTelemetryArtifactId,
+  testTelemetryContextFromEnvironment,
+  writeTestTelemetryArtifact,
+} from "@iterate-com/shared/test-support/ci-telemetry";
 
 // The TUI e2e lane is deliberately SKIPPED.
 //
@@ -17,9 +22,32 @@ console.info(
   "[tui-test] SKIPPED: quarantined by tasks/quarantined-tui-e2e.md — the terminal UI has known bugs and tui-test 0.0.4 is not concurrency-safe.",
 );
 
-// The preview lane reads a retry-telemetry file from every sub-lane; an empty
-// ledger keeps that contract without a warning about a missing file.
-const telemetryFile = process.env.E2E_RETRY_TELEMETRY_FILE;
-if (telemetryFile != null && telemetryFile !== "") {
-  writeFileSync(telemetryFile, `${JSON.stringify({ retried: [] }, null, 2)}\n`);
-}
+const now = new Date().toISOString();
+const context = testTelemetryContextFromEnvironment("script", {
+  testKind: "e2e",
+  lane: "tui",
+  workspace: process.env.npm_package_name ?? "@iterate-com/os",
+  app: "os",
+});
+writeTestTelemetryArtifact({
+  artifactSchemaVersion: 1,
+  artifactId: testTelemetryArtifactId("tui-quarantine", process.pid, Date.now()),
+  producer: "tui-quarantine",
+  createdAt: now,
+  ci: ciTelemetrySourceFromEnvironment(process.env),
+  context,
+  run: { status: "skipped", startedAt: now, finishedAt: now, durationMs: 0 },
+  lanes: [
+    {
+      context,
+      status: "skipped",
+      durationMs: 0,
+      exitCode: 0,
+      testCount: 0,
+      retryCount: 0,
+      collectionErrors: [],
+    },
+  ],
+  tests: [],
+  modules: [],
+});

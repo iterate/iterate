@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -10,13 +10,15 @@ type WorkflowJob = {
     image?: string;
     size?: string;
   };
+  "timeout-minutes"?: number;
   steps?: Array<{
+    env?: Record<string, string>;
     name?: string;
+    if?: string;
     run?: string;
     uses?: string;
     with?: Record<string, unknown>;
   }>;
-  "timeout-minutes"?: number;
 };
 
 type Workflow = {
@@ -171,6 +173,44 @@ describe("Depot validation capacity", () => {
     expect(workflow).toContain("run: doppler run -- pnpm test");
   });
 
+  it("every unit-test workspace writes the canonical telemetry artifact", () => {
+    const packageFiles = [
+      ...["apps", "packages"].flatMap((directory) =>
+        readdirSync(resolve(repoRoot, directory), { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => `${directory}/${entry.name}/package.json`),
+      ),
+      "lint/package.json",
+      "scripts/package.json",
+    ].filter((file) => {
+      if (!existsSync(resolve(repoRoot, file))) return false;
+      const packageJson = JSON.parse(readFileSync(resolve(repoRoot, file), "utf8")) as {
+        scripts?: Record<string, string>;
+      };
+      return packageJson.scripts?.test !== undefined;
+    });
+    const expectedWorkspaces = packageFiles.map((file) => {
+      const packageJson = JSON.parse(readFileSync(resolve(repoRoot, file), "utf8")) as {
+        name: string;
+        scripts: Record<string, string>;
+      };
+      const testCommand = [packageJson.scripts.test, packageJson.scripts["test:unit"]]
+        .filter(Boolean)
+        .join(" ");
+      expect(testCommand, `${file} must install one canonical test telemetry reporter`).toMatch(
+        /(?:retry-telemetry-reporter|node-test-telemetry-reporter)\.ts/,
+      );
+      return packageJson.name;
+    });
+
+    const finalizer = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find((step) =>
+      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+    );
+    expect(finalizer?.env?.TEST_TELEMETRY_EXPECTED_WORKSPACES?.split(",").sort()).toEqual(
+      expectedWorkspaces.sort(),
+    );
+  });
+
   it.each([
     {
       file: ".depot/workflows/test.yml",
@@ -200,5 +240,56 @@ describe("Depot validation capacity", () => {
     expect(workflow.concurrency).toEqual({ group, "cancel-in-progress": true });
     expect(job["runs-on"].size).toBe(size);
     expect(job["timeout-minutes"]).toBe(timeoutMinutes);
+  });
+
+  it.each([
+    { file: ".depot/workflows/test.yml", jobId: "test" },
+    { file: ".depot/workflows/cloudflare-previews.yml", jobId: "preview" },
+    { file: ".depot/workflows/preview-e2e-marathon.yml", jobId: "marathon" },
+  ])("$file always finalizes and retains test telemetry", ({ file, jobId }) => {
+    const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
+    const finalizer = steps.find((step) =>
+      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+    );
+    const upload = steps.find((step) => step.uses === "actions/upload-artifact@v4");
+
+    expect(finalizer, `${file} must normalize and send telemetry`).toMatchObject({
+      if: "always()",
+    });
+    expect(finalizer?.run, `${file} must not send cancelled runs as test failures`).toContain(
+      "cancelled() && '--cancelled'",
+    );
+    expect(upload, `${file} must retain raw and normalized telemetry`).toMatchObject({
+      if: "always()",
+      with: expect.objectContaining({
+        path: expect.stringContaining("test-results"),
+        "if-no-files-found": "error",
+      }),
+    });
+    expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
+  });
+
+  it("labels unit artifacts with the exact checked-out pull-request head", () => {
+    const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test.steps?.find(
+      (step) => step.name === "Run Tests",
+    );
+
+    expect(runTests?.env).toMatchObject({
+      TEST_TELEMETRY_BRANCH: "${{ github.head_ref || github.ref_name }}",
+      TEST_TELEMETRY_HEAD_SHA: "${{ github.event.pull_request.head.sha || github.sha }}",
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: "${{ github.event.pull_request.number }}",
+    });
+  });
+
+  it.each([
+    { file: ".depot/workflows/test.yml", jobId: "test" },
+    { file: ".depot/workflows/cloudflare-previews.yml", jobId: "preview" },
+    { file: ".depot/workflows/preview-e2e-marathon.yml", jobId: "marathon" },
+  ])("$file sends finalized test telemetry to the canonical PostHog project", ({ file, jobId }) => {
+    const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
+      step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
+    );
+
+    expect(finalizer?.run).toContain("doppler run --project _shared --config prd --");
   });
 });

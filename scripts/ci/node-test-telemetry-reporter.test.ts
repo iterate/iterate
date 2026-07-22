@@ -1,24 +1,24 @@
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { TestEvent } from "node:test/reporters";
+import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { afterEach, expect, it, vi } from "vitest";
 import nodeTestTelemetryReporter from "./node-test-telemetry-reporter.ts";
 
-const originalEnabled = process.env.TEST_TELEMETRY_ENABLED;
-const originalPostHog = process.env.APP_CONFIG_POSTHOG;
+const originalArtifactDirectory = process.env.TEST_TELEMETRY_ARTIFACT_DIR;
 const originalGithubRunId = process.env.GITHUB_RUN_ID;
 
 afterEach(() => {
-  restoreEnv("TEST_TELEMETRY_ENABLED", originalEnabled);
-  restoreEnv("APP_CONFIG_POSTHOG", originalPostHog);
+  restoreEnv("TEST_TELEMETRY_ARTIFACT_DIR", originalArtifactDirectory);
   restoreEnv("GITHUB_RUN_ID", originalGithubRunId);
   vi.restoreAllMocks();
 });
 
 it("keeps duplicate Node leaf identities distinct instead of inventing retries", async () => {
-  process.env.TEST_TELEMETRY_ENABLED = "1";
-  process.env.APP_CONFIG_POSTHOG = JSON.stringify({ apiKey: "phc_test" });
+  const directory = mkdtempSync(join(tmpdir(), "node-test-telemetry-artifacts-"));
+  process.env.TEST_TELEMETRY_ARTIFACT_DIR = directory;
   delete process.env.GITHUB_RUN_ID;
-  const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
-  vi.stubGlobal("fetch", fetchMock);
 
   const duplicateResult = (): TestEvent =>
     ({
@@ -60,13 +60,22 @@ it("keeps duplicate Node leaf identities distinct instead of inventing retries",
     // Consume the async reporter so delivery completes.
   }
 
-  const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
-    batch: Array<{ event: string; properties: Record<string, unknown> }>;
-  };
-  const tests = body.batch.filter(({ event }) => event === "ci test finished");
-  expect(tests).toHaveLength(2);
-  expect(tests.map(({ properties }) => properties.retry_count)).toEqual([0, 0]);
-  expect(tests.every(({ properties }) => properties.execution_context === "local")).toBe(true);
+  const files = readdirSync(directory);
+  expect(files).toHaveLength(1);
+  const artifact = JSON.parse(
+    readFileSync(join(directory, files[0]!), "utf8"),
+  ) as TestTelemetryArtifact;
+  expect(artifact.tests).toHaveLength(2);
+  expect(artifact.tests.map(({ retryCount }) => retryCount)).toEqual([0, 0]);
+  expect(artifact.tests[0]?.attempts[0]).toEqual(
+    expect.objectContaining({
+      durationMs: 5,
+      scheduleDelayMs: expect.any(Number),
+      startedAt: expect.any(String),
+    }),
+  );
+  expect(artifact.ci.executionContext).toBe("local");
+  rmSync(directory, { recursive: true });
 });
 
 function restoreEnv(name: string, value: string | undefined) {

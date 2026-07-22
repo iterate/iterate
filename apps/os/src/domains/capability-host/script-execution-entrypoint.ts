@@ -4,15 +4,13 @@ import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts
 import { normalizePath } from "../durable-object-names.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
+import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
+
+export { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
 
 const DEADLINE_EXCEEDED_ERROR =
   "Script execution exceeded its absolute deadline after it started. Its worker execution context ended, but arbitrary external work cannot be proven terminated. It may have partially executed; it was NOT re-run.";
-
-// Sessionless sandbox exec uses up to six seconds after its timeout to TERM,
-// KILL, and verify the Linux process group. Keep a larger margin for Workers
-// RPC propagation and the durable completion append.
-export const SCRIPT_EXTERNAL_CLEANUP_GRACE_MS = 15_000;
 
 /**
  * Compute the timeout forwarded to one sandbox command inside a script. This

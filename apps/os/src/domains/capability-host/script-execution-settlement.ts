@@ -3,18 +3,15 @@ import {
   type ScriptExecutionSettlement as ScriptExecutionSettlementValue,
 } from "@iterate-com/shared/script-execution";
 import type { DeadlineOutcome } from "./execution-deadline.ts";
+import { SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS } from "./script-execution-budgets.ts";
+
+export {
+  SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
+  SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
+} from "./script-execution-budgets.ts";
 
 export const ScriptExecutionSettlement = ScriptExecutionSettlementSchema;
 export type ScriptExecutionSettlement = ScriptExecutionSettlementValue;
-
-// The worker must return before the obligation deadline so the host still has
-// time to journal its one durable settlement. Every individual journal append
-// attempt is bounded by the same interval; a timeout rejects the tracked
-// attempt and the keepalive/reconciler retries the idempotent completion.
-export const SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS = 15_000;
-/** Time for an already-committed completion to traverse the processor before
- * the public RPC gives up. This never extends the execution deadline. */
-export const SCRIPT_COMPLETION_OBSERVATION_GRACE_MS = 15_000;
 
 const WORKER_EXECUTION_DEADLINE_ERROR =
   "Script execution exceeded its absolute deadline after it started. The host stopped waiting for the worker RPC, but arbitrary external work cannot be proven terminated. It may have partially executed; it was NOT re-run.";

@@ -133,6 +133,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
         run: |-
           set -euo pipefail
           # A manual dispatch is an explicit ask for a fresh preview, so it
@@ -142,15 +143,19 @@ jobs:
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
             ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}
+      - name: Normalize and send preview test telemetry
+        if: always()
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project _shared --config prd -- pnpm tsx scripts/ci/upload-test-telemetry.ts ${{ cancelled() && '--cancelled' || '' }}
       - name: Collect OS preview test artifacts
         if: always()
         run: scripts/preview/collect-test-artifacts.sh test-results
       - name: Upload OS preview test artifacts
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: preview-os-test-artifacts
           path: test-results
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: error

@@ -1,16 +1,43 @@
 import { relative } from "node:path";
 import type { TestEvent } from "node:test/reporters";
-import { readPostHogConfig, sendPostHogEvents, systemEvent } from "./posthog-events.ts";
+import {
+  ciTelemetrySourceFromEnvironment,
+  testTelemetryArtifactId,
+  testTelemetryContextFromEnvironment,
+  writeTestTelemetryArtifact,
+  writeTestTelemetryFailureSentinel,
+  type TestTelemetryRecord,
+} from "@iterate-com/shared/test-support/ci-telemetry";
 
 type ResultEvent = Extract<TestEvent, { type: "test:pass" | "test:fail" }>;
 
 /**
  * Silent secondary reporter for Node's native test runner. The normal `spec`
- * reporter still owns console output; this reporter only emits the same CI
- * test events used by Vitest and Playwright.
+ * reporter still owns console output; this reporter only writes the same
+ * artifact contract used by Vitest and Playwright.
  */
 export default async function* nodeTestTelemetryReporter(source: AsyncIterable<TestEvent>) {
-  const attempts = new Map<string, ResultEvent[][]>();
+  const runStartedAtMs = Date.now();
+  const workspace =
+    process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? process.cwd();
+  const context = testTelemetryContextFromEnvironment("node-test", {
+    testKind: "unit",
+    lane: "unit",
+    workspace,
+  });
+  const artifactId = testTelemetryArtifactId("node-test", workspace, process.pid, runStartedAtMs);
+  const ci = ciTelemetrySourceFromEnvironment(
+    process.env,
+    `local-node-test-${process.pid}-${runStartedAtMs}`,
+  );
+  writeTestTelemetryFailureSentinel({
+    artifactId,
+    producer: "node-test-telemetry-reporter",
+    startedAt: new Date(runStartedAtMs).toISOString(),
+    ci,
+    context,
+  });
+  const attempts = new Map<string, Array<Array<{ event: ResultEvent; observedAtMs: number }>>>();
   let summary: Extract<TestEvent, { type: "test:summary" }> | undefined;
 
   for await (const event of source) {
@@ -20,21 +47,22 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
         // helper, and testNumber is only ordinal within the parent. Preserve
         // every first attempt as a distinct observation. Only Node's explicit
         // rerun attempt number is allowed to join two result events.
+        const observed = { event, observedAtMs: Date.now() };
         const key = testIdentityCandidate(event);
         const observations = attempts.get(key) ?? [];
         const attempt = event.data.details.attempt;
         if (attempt === undefined || attempt === 0) {
-          observations.push([event]);
+          observations.push([observed]);
         } else {
           const observation = observations.find(
-            (candidate) => (candidate.at(-1)?.data.details.attempt ?? 0) === attempt - 1,
+            (candidate) => (candidate.at(-1)?.event.data.details.attempt ?? 0) === attempt - 1,
           );
           if (!observation) {
             throw new Error(
               `Node test telemetry received rerun attempt ${attempt} without its prior attempt: ${key}`,
             );
           }
-          observation.push(event);
+          observation.push(observed);
         }
         attempts.set(key, observations);
       }
@@ -43,7 +71,7 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
     }
   }
 
-  if (process.env.TEST_TELEMETRY_ENABLED !== "1") return;
+  if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR && !process.env.TEST_TELEMETRY_ARTIFACT_FILE) return;
   if (!summary) throw new Error("Node test telemetry did not receive a run summary");
   const observedTestCount = [...attempts.values()].reduce(
     (count, observations) => count + observations.length,
@@ -55,91 +83,110 @@ export default async function* nodeTestTelemetryReporter(source: AsyncIterable<T
     );
   }
 
-  const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
-  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
-  const workspace =
-    process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? process.cwd();
-  const distinctId = `ci-test:${runId}:${runAttempt}:${workspace}:node-test`;
   const repositoryRoot = process.env.GITHUB_WORKSPACE;
-  const common = {
-    repository: process.env.GITHUB_REPOSITORY ?? "iterate/iterate",
-    framework: "node-test",
-    test_kind: process.env.TEST_TELEMETRY_KIND ?? "unit",
-    lane: process.env.TEST_TELEMETRY_LANE ?? "unit",
-    workspace,
-    head_sha: process.env.GITHUB_SHA,
-    branch: process.env.GITHUB_HEAD_REF || process.env.GITHUB_REF_NAME,
-    workflow_name: process.env.GITHUB_WORKFLOW,
-    workflow_run_id: runId,
-    workflow_run_attempt: runAttempt,
-    pull_request_number: pullRequestNumber(process.env.GITHUB_REF),
-    runner_provider: process.env.DEPOT_JOB_URL ? "depot" : "github-actions",
-    execution_context: process.env.GITHUB_RUN_ID ? "ci" : "local",
-    depot_job_url: process.env.DEPOT_JOB_URL,
-  };
-  const events = [];
-  for (const [key, observations] of attempts) {
-    for (const [observationIndex, testAttempts] of observations.entries()) {
-      const final = testAttempts.at(-1)!;
+  const tests: TestTelemetryRecord[] = [];
+  for (const observations of attempts.values()) {
+    for (const testAttempts of observations) {
+      const final = testAttempts.at(-1)!.event;
       const moduleId = normalizeModuleId(final.data.file, repositoryRoot);
       const finalState = testState(final);
-      const shared = {
-        ...common,
-        test_name: final.data.name,
-        test_module: moduleId,
-        test_number: final.data.testNumber,
-        test_line: final.data.line,
-      };
-      events.push(
-        systemEvent(
-          "ci test finished",
-          `${distinctId}:test:${key}:${observationIndex}`,
-          distinctId,
-          {
-            ...shared,
-            test_state: finalState,
-            duration_ms: final.data.details.duration_ms,
-            retry_count: Math.max(0, testAttempts.length - 1),
-            passed_after_retry: finalState === "passed" && testAttempts.length > 1,
-            error_count: final.type === "test:fail" ? 1 : 0,
-            error_name: final.type === "test:fail" ? final.data.details.error.name : undefined,
-            error_message:
-              final.type === "test:fail"
-                ? String(final.data.details.error.message).slice(0, 2_000)
-                : undefined,
-          },
-        ),
+      const errors = testAttempts.flatMap(({ event }) =>
+        event.type === "test:fail"
+          ? [
+              {
+                name: event.data.details.error.name,
+                message: String(event.data.details.error.message),
+                ...(event.data.details.error.stack
+                  ? { stack: String(event.data.details.error.stack) }
+                  : {}),
+              },
+            ]
+          : [],
       );
-      for (const [index, attempt] of testAttempts.entries()) {
-        events.push(
-          systemEvent(
-            "ci test attempt finished",
-            `${distinctId}:attempt:${key}:${observationIndex}:${index}`,
-            distinctId,
-            {
-              ...shared,
-              attempt_index: index,
-              is_retry: index > 0,
-              test_state: testState(attempt),
-              duration_ms: attempt.data.details.duration_ms,
-            },
-          ),
-        );
-      }
+      tests.push({
+        fullName: final.data.name,
+        moduleId,
+        tags: [],
+        annotations: [],
+        retryCount: Math.max(0, testAttempts.length - 1),
+        passedAfterRetry: finalState === "passed" && testAttempts.length > 1,
+        state: finalState,
+        durationMs: testAttempts.reduce(
+          (total, { event }) => total + event.data.details.duration_ms,
+          0,
+        ),
+        attemptDetail: "complete",
+        startedAt: new Date(
+          testAttempts[0]!.observedAtMs - testAttempts[0]!.event.data.details.duration_ms,
+        ).toISOString(),
+        startedAtSource: "inferred",
+        scheduleDelayMs: Math.max(
+          0,
+          testAttempts[0]!.observedAtMs -
+            testAttempts[0]!.event.data.details.duration_ms -
+            runStartedAtMs,
+        ),
+        attempts: testAttempts.map(({ event, observedAtMs }, index) => {
+          const durationMs = event.data.details.duration_ms;
+          const previousFinishedAtMs = testAttempts[index - 1]?.observedAtMs ?? runStartedAtMs;
+          const startedAtMs = observedAtMs - durationMs;
+          return {
+            attemptIndex: index,
+            state: testState(event),
+            durationMs,
+            startedAt: new Date(startedAtMs).toISOString(),
+            startedAtSource: "inferred",
+            scheduleDelayMs: Math.max(0, startedAtMs - previousFinishedAtMs),
+            ...(event.type === "test:fail"
+              ? {
+                  error: {
+                    name: event.data.details.error.name,
+                    message: String(event.data.details.error.message),
+                    ...(event.data.details.error.stack
+                      ? { stack: String(event.data.details.error.stack) }
+                      : {}),
+                  },
+                }
+              : {}),
+            phases: [],
+          };
+        }),
+        phases: [],
+        errors,
+        ...(errors[0] ? { firstFailure: errors[0].message.slice(0, 300) } : {}),
+        ...(final.data.testNumber === undefined ? {} : { testNumber: final.data.testNumber }),
+        ...(final.data.line === undefined ? {} : { testLine: final.data.line }),
+        ...(final.data.column === undefined ? {} : { testColumn: final.data.column }),
+      });
     }
   }
-  events.push(
-    systemEvent("ci test run finished", `${distinctId}:run`, distinctId, {
-      ...common,
+  const finishedAtMs = Date.now();
+  writeTestTelemetryArtifact({
+    artifactSchemaVersion: 1,
+    artifactId,
+    producer: "node-test-telemetry-reporter",
+    createdAt: new Date(finishedAtMs).toISOString(),
+    ci,
+    context,
+    run: {
       status: summary.data.success ? "passed" : "failed",
-      duration_ms: summary.data.duration_ms,
-      test_count: summary.data.counts.tests,
-      failed_test_count:
-        summary.data.counts.tests - summary.data.counts.passed - summary.data.counts.skipped,
-      skipped_test_count: summary.data.counts.skipped,
-    }),
-  );
-  await sendPostHogEvents(events, readPostHogConfig());
+      startedAt: new Date(runStartedAtMs).toISOString(),
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      durationMs: summary.data.duration_ms,
+    },
+    lanes: [
+      {
+        context,
+        status: summary.data.success ? "passed" : "failed",
+        durationMs: summary.data.duration_ms,
+        testCount: tests.length,
+        retryCount: tests.reduce((total, test) => total + test.retryCount, 0),
+        collectionErrors: [],
+      },
+    ],
+    tests,
+    modules: [],
+  });
   // Node's reporter contract requires an async iterator. Human output comes
   // from the parallel `spec` reporter, so this destination stays silent.
   yield "";
@@ -167,9 +214,4 @@ function normalizeModuleId(moduleId: string | undefined, repositoryRoot: string 
   return repositoryRoot && moduleId.startsWith(repositoryRoot)
     ? relative(repositoryRoot, moduleId)
     : moduleId;
-}
-
-function pullRequestNumber(githubRef: string | undefined): number | undefined {
-  const match = githubRef?.match(/^refs\/pull\/(\d+)\/(?:merge|head)$/u);
-  return match ? Number(match[1]) : undefined;
 }
