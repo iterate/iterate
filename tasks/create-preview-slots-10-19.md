@@ -10,15 +10,12 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 
 ## Status
 
-Slots 10–19 are provisioned, deployed, and published in Semaphore's nineteen-
-slot production pool. Google has both callback types for every slot; GitHub App
-identity/webhooks and every Slack manifest URL are verified. Draft PR #2182
-requested preview-14, passed all five deploy/e2e lanes at head `4d8693cd2`, and
-proved real Google, GitHub, and Slack connections through OS. Normal cleanup
-erased the canary in 18 seconds, released preview-14, and reconciliation is
-clean. Remaining work is the separately approved shared-session-root migration
-and classification/fix of Cloudflare runtime anomalies observed around the
-preview run.
+Slots 10–19 are provisioned, integrated, deployed, and published in Semaphore's
+nineteen-slot pool. Preview-14 proved the full deploy/e2e lifecycle plus real
+Google, GitHub, and Slack connections through OS. All preview Auth/OS stacks now
+inherit one project-app session secret from `_shared/preview`; their deployed
+bindings were updated without replacing code owned by other PRs. The remaining
+work is final PR CI/review and merge verification.
 
 ## Goal
 
@@ -133,8 +130,12 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _All fifty deployments passed. Fresh-host 522s recovered within bounded
   smoke checks. GitHub identity/webhook checks and all ten Slack full-manifest
   URL verifications passed._
-- [ ] Migrate the project-app session secret to matching Auth/OS preview roots,
-  remove child overrides, and redeploy Auth/OS together after explicit approval.
+- [x] Migrate the project-app session secret to one inherited preview root,
+  remove child overrides, and update Auth/OS together after explicit approval.
+  _All 19 Auth/OS children inherit the matching dev value from
+  `_shared/preview`; paired Worker secret-version updates passed, and all five
+  leased stacks passed Auth/OS health probes. Preview-14's real project-member
+  sign-in canary then passed in 25 seconds._
 - [x] Add the two Google OAuth redirect URIs for every new slot.
   _The shared non-production `dev` client now persists both Auth and OS
   callbacks for previews 1–19, with no missing or duplicate preview URI._
@@ -597,3 +598,13 @@ the recorded projection.
   later binding-owner names from targeted Durable Object handover. The error now
   retains its full structured details for recovery logic while keeping the
   displayed message bounded; a regression puts the owner beyond that boundary.
+- 2026-07-22: Migrated the project-app session secret after explicit approval.
+  Preflight proved matching Auth/OS dev values and matching per-slot legacy
+  pairs. A preview-2 tracer exposed that app children inherit
+  `_shared/preview`, not their app-level preview roots; Doppler also rejects an
+  inheritable config that itself inherits another config. The common dev value
+  therefore lives once in `_shared/preview`. Removed all 38 child overrides and
+  updated every deployed Auth/OS secret binding as a pair; in-place Wrangler
+  updates preserved code owned by leased PRs. All updates passed first try and
+  the five leased stacks passed both health probes. A red/green provisioner
+  regression and the runbook now encode the proven topology.

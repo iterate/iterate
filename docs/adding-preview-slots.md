@@ -267,17 +267,31 @@ Streams must have `AUTH_FORGE_PRIVATE_JWK`. OS must also have
 `APP_CONFIG_INTEGRATIONS__PETSHOP`; an OS deploy cannot infer the Dummy Petshop
 client.
 
-`APP_CONFIG_PROJECT_APP_SESSION_SECRET` is one non-production value, shared by
-Auth and OS and inherited from each project's `dev` and `preview` roots. A
-`preview_N` child must not override it. The projects cannot inherit from one
-another, so their two roots contain the same value. The provisioner verifies
-that the Auth and OS roots agree and fails if a child shadows the root.
+`APP_CONFIG_PROJECT_APP_SESSION_SECRET` is one non-production value. Auth and
+OS `dev` must contain the same value; `_shared/preview` contains that value once
+for every preview child to inherit. Do not copy it into `auth/preview`,
+`os/preview`, or a `preview_N` child. Doppler does not allow an inheritable
+config to inherit another config, so an app-level preview root cannot sit
+between `_shared/preview` and the children without breaking the existing shared
+secret chain. The provisioner verifies the dev pair and shared preview value,
+then fails if a child does not resolve the common value.
 
 If an older fleet has per-slot overrides, migrate it as a separately approved
-operation: set the matching Auth/OS roots first, remove only the named child
-overrides, verify effective values without printing them, then redeploy Auth
-and OS together. This invalidates existing preview sessions. Never delete the
-child overrides before both roots are present and equal.
+operation:
+
+1. Verify `auth/dev` and `os/dev` match without printing either value.
+2. Set that value on `_shared/preview` and verify every Auth/OS child inherits
+   `_shared.preview` in its config metadata.
+3. Remove only the named child overrides, one slot at a time, and verify both
+   effective values still match `_shared/preview` before touching Workers.
+4. Update the deployed Auth and OS secret bindings together. For a leased slot,
+   use `wrangler secret put` against the existing Workers so another PR's code
+   is not replaced; require both health probes afterward. An unleased OS Worker
+   is deliberately parked at HTTP 503, so verify the paired secret uploads and
+   leave that modeled state intact.
+
+This invalidates existing preview project-app sessions. Never remove a child
+override before `_shared/preview` is present and inherited by that child.
 
 Do not run `pnpm auth:sync-clients`. That older command can point every target
 at the Auth config wrapping the command; it is not the isolated preview-stack
@@ -607,8 +621,9 @@ explicitly approved.
   ad-hoc smoke sent `Bearer undefined` and misclassified Slack's `invalid_auth`
   response as a stale preview token.
 - Slots 10–19 initially had matching Auth/OS session secrets per slot, but the
-  values differed across slots and shadowed empty preview roots. Root
-  inheritance is the required shape for later slots.
+  values differed across slots and shadowed `_shared/preview`. The app-level
+  preview roots cannot own this value because Doppler forbids an inheritable
+  config from also inheriting the existing shared preview config.
 - New OS configs lacked `APP_CONFIG_INTEGRATIONS__PETSHOP`; provisioning now
   writes the fixed Dummy Petshop client before deployment.
 - Slack bootstrap manifests preserve OAuth callbacks and scopes but omit Event

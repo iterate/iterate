@@ -147,24 +147,22 @@ test("Auth preview provisioning can target only an approved slot range", () => {
   ).toThrow(/unknown preview slot 4/);
 });
 
-test("Preview provisioning inherits the shared dev project-app session secret", () => {
+test("Preview provisioning seeds the shared preview project-app session secret from dev", () => {
   expect(
     resolveSharedPreviewRootSecret({
       authDevSecret: "shared-non-production-secret",
-      authPreviewSecret: null,
       osDevSecret: "shared-non-production-secret",
-      osPreviewSecret: null,
+      sharedPreviewSecret: null,
     }),
   ).toBe("shared-non-production-secret");
 });
 
-test("Preview provisioning preserves a matching preview-root session secret", () => {
+test("Preview provisioning preserves a matching shared preview session secret", () => {
   expect(
     resolveSharedPreviewRootSecret({
       authDevSecret: "shared-non-production-secret",
-      authPreviewSecret: "shared-non-production-secret",
       osDevSecret: "shared-non-production-secret",
-      osPreviewSecret: "shared-non-production-secret",
+      sharedPreviewSecret: "shared-non-production-secret",
     }),
   ).toBe("shared-non-production-secret");
 });
@@ -173,29 +171,18 @@ test("Preview provisioning refuses divergent project-app session roots", () => {
   expect(() =>
     resolveSharedPreviewRootSecret({
       authDevSecret: "auth-secret",
-      authPreviewSecret: null,
       osDevSecret: "os-secret",
-      osPreviewSecret: null,
+      sharedPreviewSecret: null,
     }),
   ).toThrow(/dev project-app session secrets differ/);
 
   expect(() =>
     resolveSharedPreviewRootSecret({
       authDevSecret: "shared-non-production-secret",
-      authPreviewSecret: "auth-preview-secret",
       osDevSecret: "shared-non-production-secret",
-      osPreviewSecret: "os-preview-secret",
+      sharedPreviewSecret: "stale-preview-secret",
     }),
-  ).toThrow(/preview project-app session secrets differ/);
-
-  expect(() =>
-    resolveSharedPreviewRootSecret({
-      authDevSecret: "shared-non-production-secret",
-      authPreviewSecret: "stale-preview-secret",
-      osDevSecret: "shared-non-production-secret",
-      osPreviewSecret: null,
-    }),
-  ).toThrow(/preview project-app session secret differs from dev/);
+  ).toThrow(/shared preview project-app session secret differs from dev/);
 });
 
 test("Preview provisioning includes the Dummy Petshop client OS deploys require", () => {

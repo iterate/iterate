@@ -3556,9 +3556,8 @@ function resolveAuthPreviewRootSecret(input: {
 
 function resolveSharedPreviewRootSecret(input: {
   authDevSecret: string | null;
-  authPreviewSecret: string | null;
   osDevSecret: string | null;
-  osPreviewSecret: string | null;
+  sharedPreviewSecret: string | null;
 }) {
   if (!input.authDevSecret || !input.osDevSecret) {
     throw new Error("auth/dev and os/dev must both define the project-app session secret");
@@ -3566,16 +3565,8 @@ function resolveSharedPreviewRootSecret(input: {
   if (input.authDevSecret !== input.osDevSecret) {
     throw new Error("Auth and OS dev project-app session secrets differ");
   }
-  if (
-    input.authPreviewSecret &&
-    input.osPreviewSecret &&
-    input.authPreviewSecret !== input.osPreviewSecret
-  ) {
-    throw new Error("Auth and OS preview project-app session secrets differ");
-  }
-  const previewSecret = input.authPreviewSecret || input.osPreviewSecret;
-  if (previewSecret && previewSecret !== input.authDevSecret) {
-    throw new Error("The preview project-app session secret differs from dev");
+  if (input.sharedPreviewSecret && input.sharedPreviewSecret !== input.authDevSecret) {
+    throw new Error("The shared preview project-app session secret differs from dev");
   }
   return input.authDevSecret;
 }
@@ -3620,16 +3611,18 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
   }
   const projectAppSessionSecret = resolveSharedPreviewRootSecret({
     authDevSecret: getDopplerSecret("auth", "dev", "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
-    authPreviewSecret: getDopplerSecret("auth", "preview", "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
     osDevSecret: getDopplerSecret("os", "dev", "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
-    osPreviewSecret: getDopplerSecret("os", "preview", "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
+    sharedPreviewSecret: getDopplerSecret(
+      "_shared",
+      "preview",
+      "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
+    ),
   });
-  rootValues.APP_CONFIG_PROJECT_APP_SESSION_SECRET = projectAppSessionSecret;
   setDopplerSecrets("auth", "preview", rootValues);
-  setDopplerSecrets("os", "preview", {
+  setDopplerSecrets("_shared", "preview", {
     APP_CONFIG_PROJECT_APP_SESSION_SECRET: projectAppSessionSecret,
   });
-  console.log("auth/preview root config ensured");
+  console.log("auth/preview and _shared/preview root configs ensured");
 
   for (const slot of input.slots) {
     const config = `preview_${slot}`;
@@ -3653,7 +3646,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
         projectAppSessionSecret
       ) {
         throw new Error(
-          `${project}/${config} must inherit APP_CONFIG_PROJECT_APP_SESSION_SECRET from its preview root; remove the child override`,
+          `${project}/${config} must inherit APP_CONFIG_PROJECT_APP_SESSION_SECRET from _shared/preview; remove the child override`,
         );
       }
     }
