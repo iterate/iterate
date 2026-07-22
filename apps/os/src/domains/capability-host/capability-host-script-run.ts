@@ -18,7 +18,7 @@ export type RunScriptCommand = {
   expiresAt: number;
 };
 
-export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
+type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
 
 /** The small stream surface needed by the public script-run protocol. */
 export type CapabilityHostScriptStream = {
