@@ -43,6 +43,9 @@ import {
   walkCheckoutPaths,
 } from "./checkout-files.ts";
 import { diffFileMaps } from "./line-diff.ts";
+import { createGitWireTransport, type GitWireTransport } from "./git-wire.ts";
+import { createLazyRepoReader, LazyRepoConflict, type LazyChange } from "./lazy-repo-reader.ts";
+import { sqliteGitObjectStore } from "./repo-object-store.ts";
 import {
   RepoArtifactNameCodec,
   RepoNotSeededError,
@@ -89,6 +92,10 @@ const GITHUB_LINK_KV_KEY = "github-link:v1";
 // compares it against the durable head cursor and re-materializes only when
 // main actually moved.
 const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
+// Blobs in the lazy object store are redundant once the head tree holds their
+// bytes — they exist to make hydration and commit building cheap. Bounded so
+// a big repo's history of reads cannot grow storage without limit.
+const LAZY_BLOB_CACHE_BUDGET_BYTES = 64 * 1024 * 1024;
 
 type RepoHead = {
   branch: string;
@@ -275,10 +282,30 @@ export class RepoDurableObject extends DurableObject<Env> {
       input.exclude === undefined &&
       input.include === undefined;
     if (cacheable) {
-      // A `paths` selection rides (and primes) the whole-head cache: the pick
-      // below keeps the RETURN small — the RPC cap binds the serialized
-      // value, not this object's memory — while repeat readers share one
-      // clone instead of re-cloning per scoped call.
+      if (input.paths !== undefined) {
+        // Scoped head reads serve straight off the durable byte tree — per-path
+        // SQLite lookups, no clone, no whole-snapshot materialization in
+        // memory. This is the workspace mount-read lane: a big repo's board
+        // seed must cost its 75 files, not the 43MB tree.
+        try {
+          const paths = input.paths;
+          return await this.#withHeadTree(async (commitOid) => {
+            const files: Record<string, string> = {};
+            for (const path of paths) {
+              const bytes = await this.#readHeadTreeBytesVerified(path);
+              if (bytes !== null) files[path] = new TextDecoder().decode(bytes);
+            }
+            return { commitOid, files };
+          });
+        } catch (error) {
+          this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+          console.warn(
+            `scoped head snapshot via the byte tree failed; falling back to the whole-head cache: ${String(error)}`,
+          );
+        }
+      }
+      // The whole-head cache: worker builds want the full masked tree, and the
+      // scoped lane above falls back here when the byte tree is corrupt.
       const snapshot = await this.#headFilesSnapshot.get(
         () => this.#loadFilesSnapshot({ branch }),
         (snapshot) => {
@@ -477,11 +504,18 @@ export class RepoDurableObject extends DurableObject<Env> {
   #withHeadTree<T>(read: (commitOid: string) => Promise<T>): Promise<T> {
     const run = async () => {
       // The durable cursor is consulted directly — when it and the tree agree
-      // there is NO clone anywhere on this path. When either is missing or
-      // stale, ONE materialization (one checkout) refreshes both.
+      // there is NO clone or fetch anywhere on this path. When either is
+      // missing or stale, ONE materialization refreshes both. The tree is
+      // also fresh when it names the last commit THIS object pushed: the lazy
+      // commit lane patches the tree and moves the pushed floor without
+      // recomputing the head record's whole-snapshot contentHash.
       const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(REPO_DEFAULT_BRANCH));
       const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
       if (isRepoHeadRecord(record) && cached === record.commitOid) return read(cached);
+      const pushedFloor = this.ctx.storage.kv.get<string>(
+        repoPushedHeadStorageKey(REPO_DEFAULT_BRANCH),
+      );
+      if (cached !== undefined && cached === pushedFloor) return read(cached);
       return read(await this.#materializeHeadTree());
     };
     const result = this.#headTreeChain.then(run, run);
@@ -489,13 +523,111 @@ export class RepoDurableObject extends DurableObject<Env> {
     return result;
   }
 
+  // -- the lazy repo lane -------------------------------------------------------
+  // Reads and commits without cloning: a durable git object store (SQLite)
+  // synced by delta fetches against the Artifacts remote, hydrating blobs by
+  // exact oid. See lazy-repo-reader.ts for the wire contract. Every caller
+  // wraps this lane in try/catch and falls back to the clone lane loudly —
+  // the clone path remains the authority of last resort.
+  readonly #gitObjectStore = sqliteGitObjectStore(this.ctx.storage);
+  #lazyReaderInstance: ReturnType<typeof createLazyRepoReader> | null = null;
+
+  #lazyReader(): ReturnType<typeof createLazyRepoReader> {
+    if (this.#lazyReaderInstance === null) {
+      // Tokens are minted per gitAccess() call, so the transport dials fresh
+      // credentials per operation instead of pinning one at construction.
+      const dial = async (): Promise<GitWireTransport> => {
+        const repo = await this.gitAccess();
+        return createGitWireTransport({ remote: repo.remote, token: repo.token });
+      };
+      this.#lazyReaderInstance = createLazyRepoReader({
+        branch: REPO_DEFAULT_BRANCH,
+        store: this.#gitObjectStore,
+        wire: {
+          fetchObjects: async (request) => (await dial()).fetchObjects(request),
+          lsRefs: async (prefixes) => (await dial()).lsRefs(prefixes),
+          push: async (request) => (await dial()).push(request),
+        },
+      });
+    }
+    return this.#lazyReaderInstance;
+  }
+
   /**
-   * ONE checkout fills everything: the byte tree, and — when the durable head
-   * record is absent — the head record itself (text snapshot + contentHash),
-   * with the same raced-authority and behind-push guards `getHead` applies.
-   * An external push therefore costs one clone, not getHead's plus this one.
+   * Materialize the head tree WITHOUT a clone: sync the object store to the
+   * remote head (delta-sized after the first ever sync) and patch only the
+   * byte tree's changed paths. Blobs are dropped from the object store after
+   * landing in the tree — the tree (with its R2 spill) is the byte authority;
+   * the store keeps commits, trees, and the manifest, which is what makes the
+   * NEXT sync cheap.
+   */
+  async #materializeHeadTreeLazy(): Promise<string> {
+    const reader = this.#lazyReader();
+    const before = new Map(
+      this.#gitObjectStore.manifest(REPO_DEFAULT_BRANCH).map((file) => [file.path, file.blobOid]),
+    );
+    const treeAt = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
+    const treeMatchesBefore =
+      treeAt !== undefined && treeAt === this.#gitObjectStore.head(REPO_DEFAULT_BRANCH)?.commitOid;
+    const synced = await reader.syncToHead();
+    const after = this.#gitObjectStore.manifest(REPO_DEFAULT_BRANCH);
+    if (treeAt !== synced.commitOid) {
+      // The key comes off BEFORE any tree write: a crash mid-patch must leave
+      // "no cache", never a mixed tree labeled as a head (same rule as the
+      // clone lane). The patch below is idempotent, so the retry converges.
+      this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
+      const patchOnly = treeMatchesBefore;
+      if (!patchOnly) await wipeWorkspace(this.#headTreeCache);
+      const changed = after.filter((file) => !patchOnly || before.get(file.path) !== file.blobOid);
+      const changedBytes = await reader.readPathBytes(changed.map((file) => file.path));
+      for (let index = 0; index < changed.length; index++) {
+        const bytes = changedBytes[index];
+        if (bytes === null || bytes === undefined) continue; // gitlinks have no bytes
+        await this.#headTreeCache.writeFileBytes(`/${changed[index]!.path}`, bytes);
+      }
+      if (patchOnly) {
+        const afterPaths = new Set(after.map((file) => file.path));
+        for (const path of before.keys()) {
+          if (!afterPaths.has(path)) await this.#headTreeCache.rm(`/${path}`);
+        }
+      }
+    }
+
+    // Mirror the clone lane's publication rules: never record what the
+    // branch authority calls stale, and never clobber a record a racing
+    // write landed. The contentHash is only computed when the record is
+    // absent — a full tree read, paid at most once per external head move.
+    const branch = REPO_DEFAULT_BRANCH;
+    const decision = decideHeadResolution(this.#branchAuthority(branch), synced.commitOid);
+    const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
+    if (decision.cache && !isRepoHeadRecord(raced)) {
+      const files: Record<string, string> = {};
+      for (const file of after) {
+        const bytes = await this.#readHeadTreeBytesVerified(file.path);
+        if (bytes !== null) files[file.path] = new TextDecoder().decode(bytes);
+      }
+      this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+        commitOid: synced.commitOid,
+        contentHash: await repoContentHash(files),
+      });
+    }
+    if (decision.cache) this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, synced.commitOid);
+    this.#gitObjectStore.evictBlobs(LAZY_BLOB_CACHE_BUDGET_BYTES);
+    return synced.commitOid;
+  }
+
+  /**
+   * Refresh the byte tree and — when the durable head record is absent — the
+   * head record itself, with the same raced-authority and behind-push guards
+   * `getHead` applies. The lazy lane transfers only the delta since the last
+   * sync; the clone lane below remains the authority of last resort.
    */
   async #materializeHeadTree(): Promise<string> {
+    try {
+      return await this.#materializeHeadTreeLazy();
+    } catch (error) {
+      console.warn(`lazy head-tree sync failed; falling back to the clone lane: ${String(error)}`);
+    }
     // The key comes off BEFORE the wipe: if the write below dies, reads must
     // find "no cache" and re-materialize — never an empty tree labeled main.
     this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
@@ -563,6 +695,17 @@ export class RepoDurableObject extends DurableObject<Env> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
+    if (branch === REPO_DEFAULT_BRANCH) {
+      // The lazy lane builds the commit from the synced manifest and pushes a
+      // pack of just the new objects — no clone, transfer proportional to the
+      // change. Any failure falls back to the clone lane below, which retries
+      // with its own visibility machinery.
+      try {
+        return await this.#commitFilesLazy(parsed);
+      } catch (error) {
+        console.warn(`lazy commit failed; falling back to the clone lane: ${String(error)}`);
+      }
+    }
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
       branch,
@@ -591,6 +734,103 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid: result.commitOid,
       noChanges: result.noChanges,
     };
+  }
+
+  /**
+   * The clone-free commit: sync (a no-op when the store already names the
+   * last pushed head — our own writes prime it), build blobs + rebuilt trees
+   * + commit locally, push them as one small pack with a compare-and-swap on
+   * the old head, then patch the byte tree and the durable cursors so
+   * read-your-write costs nothing. One re-sync retry absorbs a ref moved by
+   * an out-of-band writer; other failures fall back to the clone lane.
+   */
+  async #commitFilesLazy(parsed: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+    const branch = REPO_DEFAULT_BRANCH;
+    const reader = this.#lazyReader();
+    await reader.syncToHead(this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch)));
+    const before = new Map(
+      this.#gitObjectStore.manifest(branch).map((file) => [file.path, file.blobOid]),
+    );
+    const author = {
+      date: new Date(),
+      email: parsed.author?.email ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.email,
+      name: parsed.author?.name ?? ITERATE_GITHUB_BOT_COMMIT_AUTHOR.name,
+    };
+    const changes: LazyChange[] = parsed.changes.map((change) => {
+      const path = normalizeRepoFilePath(change.path);
+      if ("delete" in change && change.delete) return { delete: true, path };
+      if ("contentBase64" in change) return { contentBase64: change.contentBase64, path };
+      return { content: (change as { content: string }).content, path };
+    });
+    const parentCommitOid = reader.head()?.commitOid;
+    let result: { commitOid: string; noChanges: boolean };
+    try {
+      result = await reader.commitFiles({ author, changes, message: parsed.message });
+    } catch (error) {
+      if (!(error instanceof LazyRepoConflict)) throw error;
+      // The ref moved under us (out-of-band writer): resync once and retry —
+      // the same posture as the clone lane's visibility retries.
+      await reader.syncToHead();
+      result = await reader.commitFiles({ author, changes, message: parsed.message });
+    }
+    if (result.noChanges) {
+      return { branch, changedPaths: [], commitOid: result.commitOid, noChanges: true };
+    }
+
+    const after = this.#gitObjectStore.manifest(branch);
+    const afterByPath = new Map(after.map((file) => [file.path, file.blobOid]));
+    const changedPaths = [
+      ...after.filter((file) => before.get(file.path) !== file.blobOid).map((file) => file.path),
+      ...[...before.keys()].filter((path) => !afterByPath.has(path)),
+    ].sort();
+
+    // Same bookkeeping as the clone lane: floor + frontier first (this also
+    // drops the tree sentinel and the in-memory snapshot cache)…
+    const treeAtBeforePush = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
+    this.#recordPushedHead({ branch, commitOid: result.commitOid, parentCommitOid });
+
+    // …then patch the byte tree in the readers' serialized chain. Patching is
+    // only sound when the tree held this commit's parent; any other
+    // generation re-materializes on the next read instead.
+    const treeWasAtParent = treeAtBeforePush !== undefined && treeAtBeforePush === parentCommitOid;
+    const patch = async () => {
+      if (!treeWasAtParent) return;
+      const bytesByPath = new Map<string, Uint8Array | null>();
+      const contentPaths = changedPaths.filter((path) => afterByPath.has(path));
+      const bytes = await reader.readPathBytes(contentPaths);
+      contentPaths.forEach((path, index) => bytesByPath.set(path, bytes[index] ?? null));
+      for (const path of changedPaths) {
+        const content = bytesByPath.get(path);
+        if (afterByPath.has(path)) {
+          if (content != null) await this.#headTreeCache.writeFileBytes(`/${path}`, content);
+        } else {
+          await this.#headTreeCache.rm(`/${path}`);
+        }
+      }
+      this.ctx.storage.kv.put(REPO_HEAD_TREE_KEY, result.commitOid);
+    };
+    const chained = this.#headTreeChain.then(patch, patch);
+    this.#headTreeChain = chained.catch(() => {});
+    await chained;
+
+    // The head record's contentHash spans the whole snapshot. Recompute it
+    // inline for small repos (worker builds read it right after config-repo
+    // commits); big repos rely on the pushed-floor freshness gate instead,
+    // and getHead recomputes on demand if a build ever asks.
+    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+    if (after.length <= 4000 && this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY) !== undefined) {
+      const files: Record<string, string> = {};
+      for (const file of after) {
+        const content = await this.#readHeadTreeBytesVerified(file.path);
+        if (content !== null) files[file.path] = new TextDecoder().decode(content);
+      }
+      this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+        commitOid: result.commitOid,
+        contentHash: await repoContentHash(files),
+      });
+    }
+    this.#scheduleGithubMirrorPush(branch);
+    return { branch, changedPaths, commitOid: result.commitOid, noChanges: false };
   }
 
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult> {
