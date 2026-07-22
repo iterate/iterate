@@ -27,6 +27,7 @@ type Workflow = {
     "cancel-in-progress": boolean;
   };
   jobs: Record<string, WorkflowJob>;
+  permissions?: Record<string, string>;
   on?: {
     push?: {
       branches?: string[];
@@ -38,6 +39,10 @@ type Workflow = {
 function loadWorkflow(file: string): Workflow {
   return parseYaml(readFileSync(resolve(repoRoot, file), "utf8")) as Workflow;
 }
+
+const depotWorkflowFiles = readdirSync(resolve(repoRoot, ".depot/workflows"))
+  .filter((file) => file.endsWith(".yml"))
+  .map((file) => `.depot/workflows/${file}`);
 
 const deploymentWorkflows = [
   {
@@ -125,6 +130,90 @@ describe("Depot deployment safety", () => {
     expect(workflow.on?.push?.paths).toEqual(
       expect.arrayContaining(["apps/auth/**", "apps/auth-contract/**"]),
     );
+  });
+});
+
+describe("Depot credential boundaries", () => {
+  it("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
+    const secretReferences = depotWorkflowFiles.flatMap((file) => {
+      const contents = readFileSync(resolve(repoRoot, file), "utf8");
+      return [...contents.matchAll(/secrets\.([A-Z0-9_]+)/g)].map((match) => match[1]);
+    });
+
+    expect([...new Set(secretReferences)]).toEqual(["DOPPLER_TOKEN"]);
+  });
+
+  it("uses only GitHub's job-scoped token for GitHub API calls", () => {
+    const tokenAssignments = depotWorkflowFiles.flatMap((file) => {
+      const contents = readFileSync(resolve(repoRoot, file), "utf8");
+      return [...contents.matchAll(/^\s+GITHUB_TOKEN:\s*(.+)$/gm)].map((match) => match[1]);
+    });
+
+    expect(tokenAssignments.length).toBeGreaterThan(0);
+    expect([...new Set(tokenAssignments)]).toEqual(["${{ github.token }}"]);
+  });
+
+  it.each([
+    {
+      file: ".depot/workflows/ci-telemetry.yml",
+      permissions: {
+        actions: "read",
+        checks: "read",
+        contents: "read",
+        "pull-requests": "read",
+      },
+    },
+    {
+      file: ".depot/workflows/cloudflare-preview-cleanup.yml",
+      permissions: { contents: "read", "pull-requests": "write" },
+    },
+    {
+      file: ".depot/workflows/cloudflare-previews.yml",
+      permissions: { contents: "read", "pull-requests": "write", statuses: "read" },
+    },
+    {
+      file: ".depot/workflows/deploy-os.yml",
+      permissions: { contents: "read", deployments: "write", statuses: "write" },
+    },
+    {
+      file: ".depot/workflows/loc-report.yml",
+      permissions: { contents: "read", "pull-requests": "write" },
+    },
+    {
+      file: ".depot/workflows/nag.yml",
+      permissions: { contents: "read", issues: "write", "pull-requests": "write" },
+    },
+    {
+      file: ".depot/workflows/pr-dashboard.yml",
+      permissions: {
+        contents: "read",
+        issues: "read",
+        "pull-requests": "read",
+      },
+    },
+    {
+      file: ".depot/workflows/preview-e2e-marathon.yml",
+      permissions: { contents: "read", "pull-requests": "write", statuses: "read" },
+    },
+    {
+      file: ".depot/workflows/release.yml",
+      permissions: { contents: "write" },
+    },
+  ])("$file grants only its required GitHub permissions", ({ file, permissions }) => {
+    expect(loadWorkflow(file).permissions).toEqual(permissions);
+  });
+
+  it("loads the Depot telemetry token from preview without changing the PostHog config", () => {
+    const workflow = loadWorkflow(".depot/workflows/ci-telemetry.yml");
+    const collector = workflow.jobs.sync.steps?.find((step) =>
+      step.run?.includes("scripts/ci/sync-ci-telemetry.ts"),
+    );
+
+    expect(collector?.run).toContain(
+      "doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview",
+    );
+    expect(collector?.run).toContain("doppler run --project _shared --config prd");
+    expect(collector?.run).toContain("--preserve-env=DEPOT_CI_TELEMETRY_TOKEN,GITHUB_TOKEN");
   });
 });
 

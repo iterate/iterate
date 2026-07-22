@@ -21,14 +21,19 @@
 #     --workflow cloudflare-previews.yml --ref <branch> \
 #     --input pull-request-number=<pr>
 #
-# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
-# ITERATE_BOT_GITHUB_TOKEN.
+# The only Depot secret is DOPPLER_TOKEN. GitHub supplies the job-scoped token;
+# Doppler supplies every other credential.
 #
 # Keep the `paths` list below in sync with `cloudflarePreviewSharedPaths` +
 # `cloudflarePreviewAdditionalTriggerPaths` + each app's `paths` in
 # scripts/preview/preview.ts (asserted in scripts/preview/preview.test.ts).
 
 name: Cloudflare Previews (Depot CI)
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: read
 
 # Draft PRs don't claim a preview slot unless they ask — the `preview` label,
 # marking ready for review, or a manual dispatch (dispatch passes
@@ -132,14 +137,14 @@ jobs:
       - name: Preview / deploy + e2e
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
         run: |-
           set -euo pipefail
           # A manual dispatch is an explicit ask for a fresh preview, so it
           # overrides the draft policy and redeploys even when this exact head
           # was previously cleaned up and recorded as released.
-          doppler run --project _shared --config prd -- pnpm preview run \
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview run \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number || inputs.pull-request-number }}" \
             ${{ github.event_name == 'workflow_dispatch' && '--allow-draft --all-apps' || '' }}

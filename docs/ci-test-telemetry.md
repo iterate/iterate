@@ -272,25 +272,37 @@ CI needs a dedicated [Depot organization API token](https://depot.dev/docs/cli/a
 `DEPOT_CI_TELEMETRY_TOKEN`. Depot does not currently expose a read-only token
 limited to CI metrics, so this credential has broad organization API scope.
 Never reuse a developer's personal Depot login token. Create a dedicated token
-named `CI telemetry` in Depot Organization Settings, then store it as a secret
-variant restricted to this repository and workflow. The scheduled job
-intentionally fails if it is missing:
+named `CI telemetry` in Depot Organization Settings, then store it as a masked
+secret in the inheritable Doppler `_shared/preview` base config. Enter the
+value interactively so it does not land in shell history:
 
 ```bash
-read -rs DEPOT_TELEMETRY_VALUE
-printf '%s' "$DEPOT_TELEMETRY_VALUE" | \
-  depot ci secrets set DEPOT_CI_TELEMETRY_TOKEN ci-telemetry \
-    --from-stdin \
-    --org 0p91s0lz49 \
-    --repo iterate/iterate \
-    --workflow ci-telemetry.yml \
-    --description "Dedicated Depot organization API token for historical CI telemetry"
-unset DEPOT_TELEMETRY_VALUE
+doppler --silent secrets set DEPOT_CI_TELEMETRY_TOKEN \
+  --project _shared \
+  --config preview \
+  --visibility masked
 ```
 
-Confirm the variant scope with `depot ci secrets list --org 0p91s0lz49`.
+The scheduled collector reads only that credential from `_shared/preview`,
+then runs the uploader under `_shared/prd`. This split is deliberate:
+`_shared/preview` and `_shared/prd` belong to different PostHog projects, and
+running the whole collector under preview would silently send CI history away
+from the canonical dashboards. The job fails if the Depot credential is
+missing.
+
+`DOPPLER_TOKEN` is the only long-lived secret stored in Depot CI. GitHub API
+calls use the workflow's short-lived `${{ github.token }}` with explicit
+least-privilege permissions; every other credential comes from Doppler. Check
+the invariant without displaying any values:
+
+```bash
+depot ci secrets list --org 0p91s0lz49
+doppler secrets --project _shared --config preview --only-names \
+  | rg DEPOT_CI_TELEMETRY_TOKEN
+```
+
 Rotate or revoke the organization token immediately if it is ever exposed;
-deleting the secret alone does not revoke the token at Depot.
+deleting the Doppler secret alone does not revoke the token at Depot.
 
 Local collection uses `gh` auth and the developer's Depot CLI login:
 

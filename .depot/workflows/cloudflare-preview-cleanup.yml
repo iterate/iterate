@@ -15,8 +15,8 @@
 # Depot registers automatic triggers when this file is on the default branch —
 # branch-only changes to the `on:` block do not take effect until merged.
 #
-# Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN,
-# ITERATE_BOT_GITHUB_TOKEN.
+# The only Depot secret is DOPPLER_TOKEN. GitHub supplies the job-scoped token;
+# Doppler supplies every other credential.
 #
 # Deliberately NO `paths` filter: a closed PR that once held a slot must always
 # attempt cleanup, even when the final PR diff is empty (full revert) or no
@@ -26,6 +26,10 @@
 # never released preview-1).
 
 name: Cloudflare Preview Cleanup (Depot CI)
+
+permissions:
+  contents: read
+  pull-requests: write
 
 on:
   pull_request:
@@ -69,9 +73,9 @@ jobs:
       - name: Preview / cleanup
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |-
           set -euo pipefail
-          doppler run --project _shared --config prd -- pnpm preview cleanup \
+          doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number }}"

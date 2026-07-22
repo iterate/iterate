@@ -322,9 +322,9 @@ async function depotEvents(): Promise<PostHogEvent[]> {
       "DEPOT_CI_TELEMETRY_TOKEN is required for Depot timing and utilization telemetry",
     );
   }
-  // Developer runs may use the Depot CLI's local login. CI uses a dedicated
-  // organization API token scoped to this repository and workflow as a Depot
-  // CI secret; Depot does not currently offer a read-only metrics token.
+  // Developer runs may use the Depot CLI's local login. CI loads a dedicated
+  // organization API token from Doppler _shared/preview; Depot does not
+  // currently offer a read-only metrics token.
   const environment = token ? { ...process.env, DEPOT_TOKEN: token } : process.env;
   const list = await depotJson<Array<{ workflow_id: string; status: string; created_at: string }>>(
     [

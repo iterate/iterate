@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 
+export * as configRepo from "./reset-config-repo.ts";
 export * as dev from "./dev.ts";
 export * as itx from "./itx.ts";
 export * as session from "./session.ts";
