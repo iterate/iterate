@@ -267,9 +267,10 @@ The practical split is therefore:
 - PostHog for curated product analytics, browser identity, organization/project
   Group Analytics in the browser, and project Group Analytics for durable
   stream activity.
-- Grouped `append:<type>` events while their product value justifies the full
+- Grouped `stream:append` events while their product value justifies the full
   base, identified-event, and Group Analytics cost. Use the native project
-  group for project slicing; type and path are promoted event properties.
+  group for project slicing; type and path are promoted event properties
+  (`stream_event_type`, `stream_path`) rather than encoded into the event name.
 - R2/Iceberg as the better future home if exact long-retention raw history is
   required independently of PostHog.
 
@@ -340,7 +341,8 @@ The enabled staging-only PostHog `Drop Events` transformation is:
 
 - ID: `019f741a-2dd8-0000-61e9-73abda6505fe`
 - Name: `Emergency: drop preview stream events`
-- Filter: `event = 'stream:append' OR event LIKE 'append:%'`
+- Filter: `event = 'stream:append' OR event LIKE 'append:%'` (legacy dual
+  match; production capture is now only `stream:append`)
 - Execution order: `0`
 - Function: `return null`
 
@@ -362,7 +364,7 @@ never modified.
    and traces, not paid organization analytics. Ordinary browser analytics can
    remain separated in the existing development/staging projects.
 3. **Create daily event-volume alerts per PostHog project.** Alert on both total
-   events and `append:%`, with breakdowns by native project group slug,
+   events and `stream:append`, with breakdowns by native project group slug,
    `stream_path`, and `stream_event_type`. A production warning at 50,000/day
    and intervention at 60,000/day leaves headroom below $20/day at the highest
    first-paid combined marginal rates. Non-production stream volume should be
