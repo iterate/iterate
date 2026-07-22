@@ -1,3 +1,4 @@
+import { minimatch } from "minimatch";
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@cloudflare/shell";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
@@ -152,10 +153,11 @@ describe("mount-routed reads", () => {
       "/iterate/tasks/two.md",
       "/scratch/notes.txt",
     ]);
-    await expect(core.glob("**/tasks/**/*.md")).resolves.toEqual([
-      "/config/tasks/one.md",
-      "/iterate/tasks/two.md",
-    ]);
+    expect(
+      (await core.listAllFiles()).filter((path) =>
+        minimatch(path, "**/tasks/**/*.md", { dot: true }),
+      ),
+    ).toEqual(["/config/tasks/one.md", "/iterate/tasks/two.md"]);
   });
 
   test("readFileBytes decodes the mount's base64 lane", async () => {
@@ -711,7 +713,9 @@ describe("virtual directory coherence", () => {
   test("listing masks the outer file at a virtual ancestor", async () => {
     const { core } = nestedCollisionCore();
     expect(await core.listAllFiles()).toEqual(["/a/b/note.md", "/worker.ts"]);
-    expect(await core.glob("/**")).toEqual(["/a/b/note.md", "/worker.ts"]);
+    expect(
+      (await core.listAllFiles()).filter((path) => minimatch(path, "/**", { dot: true })),
+    ).toEqual(["/a/b/note.md", "/worker.ts"]);
   });
 
   test("deleteFile() refuses virtual ancestors and installs no whiteout", async () => {

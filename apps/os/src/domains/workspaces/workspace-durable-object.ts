@@ -347,12 +347,8 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       { entries: { path: string; repoRelativePath: string }[]; repoPath: string }
     >();
     for (const path of leftover) {
-      if (this.#core.isMaskedFromMount(path) || isVirtualDirectoryPath(mounts, path)) {
-        result[path] = null;
-        continue;
-      }
-      const resolved = routeMount(mounts, path);
-      if (resolved === null || resolved.repoRelativePath === "") {
+      const resolved = this.#core.resolveMountFallThrough(mounts, path);
+      if (resolved === null) {
         result[path] = null;
         continue;
       }
@@ -423,7 +419,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   }
 
   async glob(pattern: string): Promise<string[]> {
-    await this.#assertCreated();
+    // listAllFiles runs the birth assertion (same error, no duplicate round).
     const all = await this.listAllFiles();
     return all.filter((path) => minimatch(path, pattern, { dot: true }));
   }

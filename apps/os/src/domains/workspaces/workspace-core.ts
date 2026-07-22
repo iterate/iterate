@@ -1,4 +1,3 @@
-import { minimatch } from "minimatch";
 import { Workspace } from "@cloudflare/shell";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import type { RepoFileChange } from "../repos/types.ts";
@@ -205,13 +204,29 @@ export class WorkspaceCore {
   async readFile(path: string): Promise<string | null> {
     const local = await this.#workspace.readFile(path);
     if (local !== null) return local;
+    const resolved = this.resolveMountFallThrough(await this.#mounts(), path);
+    if (resolved === null) return null;
+    const file = await this.#repo(resolved.mount.repoPath).readFile({
+      path: resolved.repoRelativePath,
+    });
+    return file === null ? null : file.content;
+  }
+
+  /**
+   * THE mount fall-through predicate — whiteout mask, virtual-directory mask
+   * (a mount point or an ancestor of one is a DIRECTORY in the merged view),
+   * then longest-prefix routing. Every reader that falls through a missing
+   * local copy (readFile, readFileBytes, batched readFiles) consults THIS,
+   * so single-file and batched semantics agree structurally.
+   */
+  resolveMountFallThrough(
+    mounts: Record<string, WorkspaceMount>,
+    path: string,
+  ): ResolvedMount | null {
     if (this.isMaskedFromMount(path)) return null;
-    const mounts = await this.#mounts();
-    // A virtual directory (a mount point or an ancestor of one) is a
-    // DIRECTORY in the merged view: an outer repo's file at the same path is
-    // masked, exactly as files under a deeper mount point are shadowed.
     if (isVirtualDirectoryPath(mounts, path)) return null;
-    return this.#mountRead(mounts, path);
+    const resolved = routeMount(mounts, path);
+    return resolved === null || resolved.repoRelativePath === "" ? null : resolved;
   }
 
   /** The OVERLAY copy only — no mount fall-through (bulk readers group the
@@ -229,7 +244,7 @@ export class WorkspaceCore {
     return this.#mountRead(mounts, path);
   }
 
-  /** The mount fall-through arm shared by readFile and readBase. */
+  /** The mount read arm for readBase (baselines ignore whiteouts by design). */
   async #mountRead(mounts: Record<string, WorkspaceMount>, path: string): Promise<string | null> {
     const resolved = routeMount(mounts, path);
     if (resolved === null || resolved.repoRelativePath === "") return null;
@@ -242,11 +257,8 @@ export class WorkspaceCore {
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     const local = await this.#workspace.readFileBytes(path);
     if (local !== null) return local;
-    if (this.isMaskedFromMount(path)) return null;
-    const mounts = await this.#mounts();
-    if (isVirtualDirectoryPath(mounts, path)) return null;
-    const resolved = routeMount(mounts, path);
-    if (resolved === null || resolved.repoRelativePath === "") return null;
+    const resolved = this.resolveMountFallThrough(await this.#mounts(), path);
+    if (resolved === null) return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       encoding: "base64",
       path: resolved.repoRelativePath,
@@ -396,12 +408,6 @@ export class WorkspaceCore {
     return [...merged].sort();
   }
 
-  /** Files in the merged view matching a glob pattern (paths only). */
-  async glob(pattern: string): Promise<string[]> {
-    const all = await this.listAllFiles();
-    return all.filter((path) => minimatch(path, pattern, { dot: true }));
-  }
-
   /** All file paths of the local layer (absolute, no directories), fully paged. */
   #localFilePaths(): Promise<string[]> {
     return walkWorkspaceFiles(this.#workspace);
@@ -465,13 +471,7 @@ export class WorkspaceCore {
   ): Promise<void> {
     const localFiles = await this.#localFilePaths();
     const dirty = [...localFiles, ...Object.keys(this.#whiteouts())];
-    const moved = dirty.filter((path) => {
-      const before = routeMount(current, path);
-      const after = routeMount(next, path);
-      return (
-        before?.mountPath !== after?.mountPath || before?.mount.repoPath !== after?.mount.repoPath
-      );
-    });
+    const moved = reRoutedPaths(current, next, dirty);
     if (moved.length > 0) {
       throw new Error(
         `mount change would silently move uncommitted work to a different repo (or orphan it): ` +
