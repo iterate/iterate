@@ -52,7 +52,11 @@ export function createLazyRepoReader(input: {
   wire: GitWireTransport;
 }) {
   const { branch, store, wire } = input;
-  let syncing: Promise<StoredHead> | null = null;
+  // Syncs SERIALIZE: two concurrent calls with different targets must not
+  // share one result (a caller could get a head label for content another
+  // sync wrote). Each queued run re-reads the store, so an already-satisfied
+  // target short-circuits without touching the wire.
+  let syncChain: Promise<unknown> = Promise.resolve();
 
   const resolveTree = (oid: string, fromPack: Map<string, RawGitObject>): TreeEntry[] => {
     const packed = fromPack.get(oid);
@@ -137,13 +141,14 @@ export function createLazyRepoReader(input: {
 
     /**
      * Bring the store to the remote head (or to `targetOid` when the caller
-     * already knows it, saving the ls-refs round trip). Single-flight.
+     * already knows it, saving the ls-refs round trip). Serialized: every
+     * call runs its OWN sync against fresh store state, in arrival order.
      */
     syncToHead: (targetOid?: string): Promise<StoredHead> => {
-      syncing ??= syncOnce(targetOid).finally(() => {
-        syncing = null;
-      });
-      return syncing;
+      const run = () => syncOnce(targetOid);
+      const result = syncChain.then(run, run);
+      syncChain = result.catch(() => {});
+      return result;
     },
 
     /** Read blob bytes at the synced head; null for absent paths and gitlinks. */
@@ -182,7 +187,7 @@ export function createLazyRepoReader(input: {
       author: { date: Date; email: string; name: string };
       changes: LazyChange[];
       message: string;
-    }): Promise<{ commitOid: string; noChanges: boolean }> => {
+    }): Promise<{ commitOid: string; noChanges: boolean; parentCommitOid: string }> => {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
@@ -252,7 +257,9 @@ export function createLazyRepoReader(input: {
       };
       const newRootOid = await buildDir("");
       if (newRootOid === null) throw new Error("a commit cannot empty the whole repository");
-      if (newRootOid === head.rootTreeOid) return { commitOid: head.commitOid, noChanges: true };
+      if (newRootOid === head.rootTreeOid) {
+        return { commitOid: head.commitOid, noChanges: true, parentCommitOid: head.commitOid };
+      }
 
       const commitPayload = encodeCommit({
         author: input.author,
@@ -294,7 +301,7 @@ export function createLazyRepoReader(input: {
       ]);
       const manifestNow = walkManifest(newRootOid, new Map());
       store.replaceManifest(branch, { commitOid, rootTreeOid: newRootOid, ...manifestNow });
-      return { commitOid, noChanges: false };
+      return { commitOid, noChanges: false, parentCommitOid: head.commitOid };
     },
   };
 }

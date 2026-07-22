@@ -327,13 +327,63 @@ describe("lazy commits", () => {
         message: "b loses",
       }),
     ).rejects.toThrow(LazyRepoConflict);
-    // After re-syncing, the loser can commit on the new head.
+    // After re-syncing, the loser can commit on the new head — and the
+    // result's parent is the WINNER's commit, not the stale pre-conflict head
+    // (the caller's push metadata and tree-patch preconditions hang off it).
     await second.reader.syncToHead();
+    const winnerHead = remote.refs.get("refs/heads/main")!;
     const retried = await second.reader.commitFiles({
       author: { date: new Date(1767323045000), email: "b@iterate.com", name: "b" },
       changes: [{ content: "# b\n", path: "tasks/one.md" }],
       message: "b retries",
     });
     expect(remote.refs.get("refs/heads/main")).toBe(retried.commitOid);
+    expect(retried.parentCommitOid).toBe(winnerHead);
+  });
+
+  test("commit results carry the parent they were built on", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await reader.syncToHead();
+    const committed = await reader.commitFiles({
+      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
+      changes: [{ content: "# parent check\n", path: "tasks/one.md" }],
+      message: "parent check",
+    });
+    expect(committed.parentCommitOid).toBe(head);
+  });
+});
+
+describe("sync serialization", () => {
+  test("concurrent syncs with different targets both apply, in order", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader, store } = subject(remote);
+
+    // Prepare the v2 commit up front so both syncs can start back-to-back in
+    // the same tick — a REAL race on the single-flight machinery.
+    const v2Blob = await remote.putBlob("# racing v2\n");
+    const oldRoot = parseCommit(remote.objects.get(head)!.payload).tree;
+    const rootEntries = parseTree(remote.objects.get(oldRoot)!.payload);
+    const tasksOid = rootEntries.find((entry) => entry.name === "tasks")!.oid;
+    const tasksEntries = parseTree(remote.objects.get(tasksOid)!.payload).map((entry) =>
+      entry.name === "one.md" ? { ...entry, oid: v2Blob } : entry,
+    );
+    const newTasks = await remote.putTree(tasksEntries);
+    const newRoot = await remote.putTree(
+      rootEntries.map((entry) => (entry.name === "tasks" ? { ...entry, oid: newTasks } : entry)),
+    );
+    const v2Head = await remote.putCommit(newRoot, [head], "v2\n");
+
+    const first = reader.syncToHead(); // ls-refs: still the seeded head
+    const second = reader.syncToHead(v2Head); // explicit later target
+
+    const [a, b] = await Promise.all([first, second]);
+    remote.refs.set("refs/heads/main", v2Head);
+    // Each caller got the head IT asked for; the store finished at the later
+    // target — never a label from one sync over content from another.
+    expect(a.commitOid).toBe(head);
+    expect(b.commitOid).toBe(v2Head);
+    expect(store.head("main")?.commitOid).toBe(v2Head);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# racing v2\n"]);
   });
 });
