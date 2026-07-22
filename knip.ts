@@ -26,8 +26,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "scripts/cli.ts",
       "scripts/dev.ts",
       "scripts/itx.ts",
-      // Operational smoke for the create-project -> onboarding-greeting path.
+      // Operational preview scripts invoked by the orchestration shell.
       "e2e/vitest/onboarding-smoke.ts",
+      "e2e/vitest/preview-project-prewarm.ts",
       // Seeded as a standalone worker entry outside apps/os/src. Tests import
       // parts of it, but the deployed config-repo worker uses the whole file.
       "config-repo-template/worker.ts",
