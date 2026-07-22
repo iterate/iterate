@@ -127,7 +127,7 @@ export function StreamViewHeader({
                 <button
                   key={entry.subscriptionKey}
                   type="button"
-                  title={`${presenceLabel(entry)} — open processor`}
+                  aria-label={`${presenceLabel(entry)} — open processor`}
                   onClick={() => focusProcessor(entry.subscriptionKey)}
                   className={cn("-ml-1.5 rounded-full", selected && "relative z-10")}
                 >
@@ -151,28 +151,7 @@ export function StreamViewHeader({
             ) : null}
           </div>
         )}
-        {isMobile ? null : (
-          <Button
-            variant="ghost"
-            size="sm"
-            title="Stream state"
-            onClick={openProcessorsOverview}
-            className="font-mono text-xs font-normal text-muted-foreground"
-          >
-            {metrics.spark.length === 0 ? null : (
-              <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
-                <polyline
-                  points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
-                  fill="none"
-                  className="stroke-emerald-600"
-                  strokeWidth="1.4"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-            {latencyLabel}
-          </Button>
-        )}
+        {isMobile ? null : <StreamStateButton metrics={metrics} />}
         {eventsToggle != null ? (
           <Button
             variant="outline"
@@ -230,6 +209,37 @@ export function StreamViewHeader({
         ) : null}
       </div>
     </header>
+  );
+}
+
+/**
+ * Latency sparkline that opens the processors/stream-state sheet. Shared by
+ * the page header and the full-panel Events sheet.
+ */
+export function StreamStateButton({ metrics }: { metrics: BrowserStreamMetricsView }) {
+  const { openProcessorsOverview } = useStreamViewPanels();
+  const latencyLabel = metrics.transportRttMs === null ? "—" : `${metrics.transportRttMs.last}ms`;
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      title="Stream state"
+      onClick={openProcessorsOverview}
+      className="font-mono text-xs font-normal text-muted-foreground"
+    >
+      {metrics.spark.length === 0 ? null : (
+        <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
+          <polyline
+            points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
+            fill="none"
+            className="stroke-emerald-600"
+            strokeWidth="1.4"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+      {latencyLabel}
+    </Button>
   );
 }
 

@@ -38,7 +38,7 @@ const projects = await itx.projects.list();
 // Open one. The result is an itx scoped to that project — the same shape a
 // project REPL's \`itx\` has (streams, repo, workers, runScript, ...).
 const pid = vars.projectId ?? projects[0]?.id;
-if (!pid) throw new Error("Create a project first: await itx.projects.create({ slug: 'demo' })");
+if (!pid) throw new Error("Create a project first: await itx.projects.get('demo').create({})");
 
 // describe() reports the project and its capability table. Method-returned
 // surfaces pipeline, so the get() needs no intermediate await.
@@ -130,14 +130,14 @@ return { appended, count: events.length };
 const devices = await itx.devices.list();
 const deviceId = vars.deviceId || devices[0]?.deviceId;
 if (!deviceId) {
-  throw new Error("Open this project in the Iterate development build to enroll a phone.");
+  throw new Error("Open this project in the iterate development build to enroll a phone.");
 }
 const operationId = vars.operationId || crypto.randomUUID();
 const [requested] = await itx.devices.get(deviceId).append({
   type: "events.iterate.com/device/notification-requested",
   idempotencyKey: \`device-notification-requested:\${operationId}\`,
   payload: {
-    title: vars.title || "Reminder from Iterate",
+    title: vars.title || "Reminder from iterate",
     body: vars.body || "This notification was sent by an itx script.",
     destination: { kind: "project" },
     expiresAt: Date.now() + 5 * 60_000,
@@ -150,7 +150,7 @@ return { deviceId, requestOffset: requested.offset };
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; Iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -393,20 +393,18 @@ return { current: await counter.current() }; // 2, and it persists under the key
     id: "sandbox-exec",
     title: "Create a sandbox and run shell commands in it",
     description:
-      "A sandbox is a real Linux container, kept like a project pet: it exists only after itx.sandboxes.create({ name, instanceType? }) (names are one path segment — the path is /sandboxes/<name>; instance types are Cloudflare's — lite, basic (default), standard-1..4 — fixed for life), and itx.sandboxes.get(path) then returns the bare Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, … — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). The first command boots the container (can take a minute cold); after idle it is snapshotted and shut down — files under /workspace come back on the next start, everything else resets. The image is the stock Cloudflare one (Ubuntu, Node, Bun, git): install what you need, and clone repos with gitCheckout (GH_TOKEN is planted automatically when the project has a GitHub connection). Prefer reusing an existing sandbox (itx.sandboxes.list()) over creating more.",
+      "A sandbox is a real Linux container, kept like a project pet: address it with itx.sandboxes.get('/sandboxes/<name>'), then explicitly birth it with handle.create({ instanceType? }). Instance types are Cloudflare's — lite, basic (default), standard-1..4 — and fixed for life. The handle exposes the Cloudflare Sandbox SDK surface (exec, readFile/writeFile, startProcess, gitCheckout, tunnels, … — https://developers.cloudflare.com/sandbox/api/) plus start()/sleep()/destroy(). The first command boots the container (can take a minute cold); after idle it is snapshotted and shut down — files under /workspace come back on the next start, everything else resets. The image is the stock Cloudflare one (Ubuntu, Node, Bun, git): install what you need, and clone repos with gitCheckout (GH_TOKEN is planted automatically when the project has a GitHub connection). Prefer reusing an existing sandbox (itx.sandboxes.list()) over creating more.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
-// Reuse the sandbox if it exists, create it otherwise. The name IS the
-// identity, verbatim — no normalization anywhere: same name, same sandbox
-// (and its /workspace) until destroy(). create is strict, so a concurrent
-// creator can win the race — swallow the create error and let the second
-// get() be the arbiter.
+// The path IS the identity, verbatim: same path, same sandbox (and its
+// /workspace) until destroy(). Addressing is pure; create appends the
+// complete birth batch and returns this same handle.
 const name = vars.sandboxName ?? "example";
 const path = "/sandboxes/" + name;
-const sandbox = await itx.sandboxes.get(path).catch(async () => {
-  await itx.sandboxes.create({ name, instanceType: vars.instanceType }).catch(() => {});
-  return itx.sandboxes.get(path);
+const sandbox = itx.sandboxes.get(path);
+await sandbox.create({
+  ...(vars.instanceType === undefined ? {} : { instanceType: vars.instanceType }),
 });
 
 // exec runs a shell command; the first one boots the container.
@@ -427,13 +425,14 @@ return {
     id: "workspace-edit-and-push",
     title: "Edit files in a workspace, then commit them to main",
     description:
-      'A workspace is a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. By default the config repo is mounted at "/", so reads see its latest main until a local write shadows a path. In an agent scope `itx.workspace` is YOUR workspace; itx.workspaces.get("/workspaces/<name>") addresses any other (first touch births it with the default mount table, so no create step is needed). Changes stay private until git.commit({ message }) — which commits ONE mount\'s changes straight to that repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and clears just that subtree. More repos mount into the tree via configure({ config: { mounts } }); commits never span mounts (pass { scope } when several are dirty).',
+      'A workspace is a mount-routed, copy-on-write filesystem in a Durable Object (no container, no clone, always warm) — the fastest place for multi-step file reading and editing. Address it with itx.workspaces.get("/workspaces/<name>"), then call handle.create({ mounts? }) explicitly; addressing alone never births it. By default the config repo is mounted at "/", so reads see its latest main until a local write shadows a path. Changes stay private until git.commit({ message }) — which commits ONE mount\'s changes straight to that repo\'s MAIN branch (the project worker/website redeploys automatically; no branches, no push step) and clears just that subtree. More repos mount into the tree via configure({ config: { mounts } }); commits never span mounts (pass { scope } when several are dirty).',
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 // The path IS the identity: same path, same filesystem. An agent's own
 // workspace is itx.workspace — for the example we address one by path.
 const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+await workspace.create({});
 
 // Reads fall through to the repo's latest main until shadowed by a write.
 // Paths are absolute; "/" is the repo root.
@@ -473,6 +472,7 @@ return {
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 const workspace = itx.workspaces.get(vars.workspacePath ?? "/workspaces/example");
+await workspace.create({});
 
 // files -> workspace: pull a stored file into the checkout. put() string data
 // must be base64, so encode plain text as bytes instead.
@@ -1128,7 +1128,7 @@ return {
     e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. get() selects the first connected installation; pass a slug only when a specific installation matters. Do not use repo.data.permissions to decide whether an installation is read-only: that user-style field can contain all false even when installation writes work. Attempt the requested operation and use GitHub\'s real error if denied. Needs a connected GitHub installation — interactive-only.',
+      'itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. get() selects the first connected installation; pass a slug only when a specific installation matters. Do not use repo.data.permissions to decide whether an installation is read-only: that user-style field can contain all false even when installation writes work. Attempt the requested operation and use GitHub\'s real error if denied. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `

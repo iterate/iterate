@@ -165,8 +165,10 @@ The resource-free maps and consumers derive from `envs.ts`:
 - Auth audiences and per-slot OAuth client targets;
 - mobile server presets.
 
-Streams must keep `previewDependencies: ["auth"]`: its deploy fetches Auth's
-JWKS. Do not add another numeric slot list or an exact-range test.
+Streams keeps `previewDependencies: ["auth"]` so the orchestrator selects and
+tests one coherent Auth + relying-party revision. This is selection, not deploy
+ordering: both derive the same signing key from Doppler and deploy concurrently.
+Do not add another numeric slot list or an exact-range test.
 
 Search for operational prose and hidden ranges before moving on:
 
@@ -295,8 +297,11 @@ done
 ```
 
 Streams has no `ensure-resources`; its deploy creates its DNS record. OS also
-installs R2 lifecycle rules, creates its Queue and event subscription, enables
-inbound Email Routing, and installs the zone catch-all.
+installs R2 lifecycle rules, creates its Queue and exact-repo event
+subscriptions, and enables inbound Email Routing. On a brand-new slot the
+Email Routing catch-all is explicitly deferred because Cloudflare rejects a
+Worker action until that script exists; the first OS deploy installs and
+verifies the catch-all after uploading the Worker.
 
 Outbound Email Service onboarding remains a Cloudflare dashboard step. Within
 the approved batch, an agent may drive it using the dedicated browser profile,
@@ -310,8 +315,10 @@ Paste these IDs into the branch:
 - Semaphore `resourcesDbId`.
 
 Run every `ensure-resources` command again. The second pass must match the
-recorded IDs and create nothing. A collision, warning, different ID, or new
-object on the second pass is a failed checkpoint.
+recorded IDs and create nothing. Before the first OS deploy, its one expected
+deferred result is `Email Routing catch-all ... deferred until worker ...
+deploys`; any collision, warning, different ID, or other new object is a failed
+checkpoint.
 
 ## 6. Test and merge the repository change
 
@@ -350,10 +357,11 @@ for n in $(seq 10 19); do
 done
 ```
 
-Auth must precede Streams, which fetches Auth's JWKS. Dummy Petshop must
-precede OS e2e. Do not replace a failed deploy with a curl-only health check;
-the deploy command validates secrets, resources, migrations, routes, and smoke
-probes.
+Auth, OS, Semaphore, and Streams may deploy concurrently; they derive the same
+public signing key from Doppler and do not fetch one another's JWKS. Dummy
+Petshop must precede OS e2e. Do not replace a failed deploy with a curl-only
+health check; the deploy command validates secrets, resources, migrations,
+routes, and smoke probes.
 
 Now update Slack from bootstrap to full manifests, complete Slack installation
 through OS, and verify each GitHub App's `/app` identity and webhook URL.

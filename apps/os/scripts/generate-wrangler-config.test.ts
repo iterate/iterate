@@ -2,6 +2,10 @@ import { expect, it } from "vitest";
 
 import { envs } from "../../../envs.ts";
 import {
+  deploymentReadinessNamedProbes,
+  deploymentReadinessProjectProbes,
+} from "../src/deployment-readiness.ts";
+import {
   config,
   localDevAuthJwks,
   localAuthServiceBinding,
@@ -17,6 +21,7 @@ it("does not emit the local forge JWKS into deployed builds", () => {
     kty: "OKP",
     kid: "test-forge",
     crv: "Ed25519",
+    alg: "EdDSA",
     x: "public-key",
     d: "private-key",
   });
@@ -24,7 +29,7 @@ it("does not emit the local forge JWKS into deployed builds", () => {
   expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: "prd" })).toBeUndefined();
   expect(localDevAuthJwks({ forgePrivateJwk, deployedEnv: undefined })).toBe(
     JSON.stringify({
-      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", x: "public-key" }],
+      keys: [{ kty: "OKP", kid: "test-forge", crv: "Ed25519", alg: "EdDSA", x: "public-key" }],
     }),
   );
 });
@@ -55,6 +60,18 @@ it("gives every deployed env its own worker name derived from the service name",
     expect(envBlock.name, envName).toMatch(/^os-/);
     expect(envBlock.name, envName).not.toBe(config.name);
   }
+});
+
+it("probes every configured Durable Object namespace before preview tests", () => {
+  const configuredBindings = config.durable_objects.bindings.map(({ name }) => name).toSorted();
+  const probedBindings = [
+    "CAPABILITY_HOST",
+    "STREAM",
+    ...deploymentReadinessNamedProbes.map(([binding]) => binding),
+    ...deploymentReadinessProjectProbes.map(([binding]) => binding),
+  ].toSorted();
+
+  expect(probedBindings).toEqual(configuredBindings);
 });
 
 it("binds the os worker to its own env's typechecker sidecar", () => {
@@ -152,6 +169,15 @@ it("requires the first-party PostHog project token in every deployed environment
   expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_POSTHOG");
 });
 
+it("requires the Cloudflare API token and marks only deployed environments", () => {
+  expect(REQUIRED_SECRETS).toContain("APP_CONFIG_CLOUDFLARE__API_TOKEN");
+  expect(OPTIONAL_SECRETS).not.toContain("APP_CONFIG_CLOUDFLARE__API_TOKEN");
+  expect(config.vars).not.toHaveProperty("DEPLOYMENT_ENV");
+  for (const [envName, envBlock] of Object.entries(config.env)) {
+    expect(envBlock.vars).toMatchObject({ DEPLOYMENT_ENV: envName });
+  }
+});
+
 it("emits the AI response-cache key for every deployment while keeping production disabled", () => {
   expect(envShapedVars(envs.prd)).toMatchObject({
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: "",
@@ -159,6 +185,12 @@ it("emits the AI response-cache key for every deployment while keeping productio
   expect(envShapedVars(envs.preview_6)).toMatchObject({
     APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
   });
+});
+
+it("exposes the selected environment name to browser-facing config", () => {
+  expect(config.vars.APP_CONFIG_ENVIRONMENT_NAME).toBe(process.env.DOPPLER_CONFIG?.trim() || "dev");
+  expect(envShapedVars(envs.prd).APP_CONFIG_ENVIRONMENT_NAME).toBe("prd");
+  expect(envShapedVars(envs.preview_6).APP_CONFIG_ENVIRONMENT_NAME).toBe("preview_6");
 });
 
 it("does not retain a reconciled Durable Object tombstone", () => {
@@ -178,6 +210,18 @@ it("routes Cloudflare for SaaS custom hostnames through the project provider zon
   expect(config.env.prd.routes ?? []).toContainEqual({
     pattern: "*/*",
     zone_name: "iterate.app",
+  });
+});
+
+it("routes the owned iterate.com apex and single-label apps to the production os worker", () => {
+  const productionRoutes = config.env.prd.routes ?? [];
+  expect(productionRoutes).toContainEqual({
+    pattern: "iterate.com/*",
+    zone_name: "iterate.com",
+  });
+  expect(productionRoutes).toContainEqual({
+    pattern: "*.iterate.com/*",
+    zone_name: "iterate.com",
   });
 });
 

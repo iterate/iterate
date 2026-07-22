@@ -1,5 +1,9 @@
 import { test as base, type Page, type TestInfo } from "@playwright/test";
 import {
+  CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER,
+  cloudflareWorkerVersionOverrideHeaders,
+} from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import {
   addPlugins,
   hydrationWaiter,
   spinnerWaiter,
@@ -8,8 +12,6 @@ import {
 } from "middlewright";
 import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
-
-type ForgedProjectFixture = Awaited<ReturnType<typeof createForgedProjectFixture>>;
 
 const addPagePlugins = (page: Page, testInfo: TestInfo) =>
   addPlugins({
@@ -33,14 +35,49 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
 
 export const test = base.extend<{
   helpers: {
-    createFixture: (slugPrefix: string) => Promise<ForgedProjectFixture>;
+    createFixture: (
+      slugPrefix: string,
+      options?: { projectCount?: number },
+    ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({
+  context: async ({ context }, use) => {
+    if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0) {
+      await context.route("**/*", async (route) => {
+        const request = route.request();
+
+        // Playwright's context-wide headers also reach cross-origin fetches,
+        // where this non-safelisted header forces a CORS preflight. Preserve
+        // it for navigations, same-origin HTTP, and (outside HTTP routing) the
+        // OS WebSocket handshake; remove it from cross-origin subresources.
+        if (request.isNavigationRequest()) {
+          await route.continue();
+          return;
+        }
+
+        const frame = request.serviceWorker() === null ? request.frame() : null;
+        const sameOrigin =
+          frame !== null && new URL(request.url()).origin === new URL(frame.url()).origin;
+        if (sameOrigin) {
+          await route.continue();
+          return;
+        }
+
+        const headers = request.headers();
+        delete headers[CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER.toLowerCase()];
+        await route.continue({ headers });
+      });
+    }
+    await use(context);
+  },
   helpers: async ({ baseURL, page }, use) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
     await use({
-      createFixture: (slugPrefix) => createForgedProjectFixture(slugPrefix, { baseURL, page }),
+      createFixture: (slugPrefix, options) =>
+        base.step("create project fixture", () =>
+          createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
+        ),
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {

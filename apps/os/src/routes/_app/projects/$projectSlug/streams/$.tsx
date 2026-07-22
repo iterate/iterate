@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useItx } from "iterate/react";
+import { connectItx } from "iterate/sdk/itx/react";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   breadcrumbLoaderData,
@@ -32,9 +32,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
 function ProjectStreamDetailContent() {
   const { project } = Route.useLoaderData();
   const { _splat: streamPath } = Route.useParams();
-  const itx = useItx();
 
   async function submitMessage(message: string) {
+    const itx = await connectItx(project.id);
     const [event] = await itx.streams.get(streamPath).append({
       type: "events.iterate.com/agents/context-added",
       payload: {

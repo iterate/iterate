@@ -51,6 +51,7 @@ import {
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
+import { createCloudflareWorkerVersionOverrideFetch } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 
 function requireAuthBaseUrl(): string {
   const value = process.env.AUTH_BASE_URL?.trim();
@@ -129,10 +130,15 @@ function postJson(cookie: string | null, body: unknown): RequestInit {
   };
 }
 
+const authFetch = createCloudflareWorkerVersionOverrideFetch(
+  globalThis.fetch.bind(globalThis),
+  process.env,
+);
+
 /** Session-authenticated dynamic registration → confidential client (secret + PKCE). */
 async function registerClient(cookie: string, label: string): Promise<OAuthClient> {
   const redirectUri = `http://127.0.0.1:8123/oauth/callback/${label}-${runId}`;
-  const response = await fetch(
+  const response = await authFetch(
     `${issuer}/oauth2/register`,
     postJson(cookie, {
       client_name: `auth e2e ${label} ${runId}`,
@@ -182,7 +188,7 @@ async function authorizeJson(
   url: URL,
   cookie: string,
 ): Promise<{ redirect: boolean; url: string }> {
-  const response = await fetch(url, {
+  const response = await authFetch(url, {
     headers: { cookie, accept: "application/json" },
     redirect: "manual",
   });
@@ -202,7 +208,7 @@ async function acceptConsent(consentPageUrl: string, cookie: string): Promise<UR
     signedParams.append(key, value);
     if (key === "sig") break;
   }
-  const response = await fetch(
+  const response = await authFetch(
     `${issuer}/oauth2/consent`,
     postJson(cookie, { accept: true, oauth_query: signedParams.toString() }),
   );
@@ -227,7 +233,7 @@ async function mintAuthorizationCode(client: OAuthClient, cookie: string): Promi
 }
 
 async function exchangeToken(body: Record<string, string>): Promise<Response> {
-  return fetch(`${issuer}/oauth2/token`, {
+  return authFetch(`${issuer}/oauth2/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(body),
@@ -251,7 +257,11 @@ beforeAll(async () => {
   // Seed a user with one organization through the service-token lane. Without
   // an organization the authorize flow parks on /project-access onboarding
   // (auth-plugins.ts postLogin.shouldRedirect) instead of issuing a code.
-  const serviceClient = createAuthContractClient({ baseUrl, serviceToken: requireServiceToken() });
+  const serviceClient = createAuthContractClient({
+    baseUrl,
+    fetch: authFetch,
+    serviceToken: requireServiceToken(),
+  });
   const user = await serviceClient.internal.user.upsertVerifiedEmail({
     email,
     name: "OAuth exchange e2e",
@@ -262,12 +272,12 @@ beforeAll(async () => {
   });
 
   // Sign the seeded user in over plain HTTP via the fixed test OTP.
-  const sendOtp = await fetch(
+  const sendOtp = await authFetch(
     `${issuer}/email-otp/send-verification-otp`,
     postJson(null, { email, type: "sign-in" }),
   );
   expect(sendOtp.status).toBe(200);
-  const signIn = await fetch(
+  const signIn = await authFetch(
     `${issuer}/sign-in/email-otp`,
     postJson(null, { email, otp: "424242" }),
   );
@@ -292,7 +302,7 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     // The incident class: after a domain move, a deployment whose advertised
     // issuer/endpoints stop matching its public origin strands every relying
     // party. Exact equality against AUTH_BASE_URL is the point.
-    const response = await fetch(`${baseUrl}/api/auth/.well-known/openid-configuration`);
+    const response = await authFetch(`${baseUrl}/api/auth/.well-known/openid-configuration`);
     expect(response.status).toBe(200);
     const discovery = (await response.json()) as Record<string, unknown>;
     expect(discovery).toMatchObject({
@@ -355,7 +365,7 @@ describe("deployed auth OAuth2/OIDC provider", () => {
 
     // 4. the access token verifies against this deployment's own JWKS and
     //    carries the resource audience plus Iterate's claims.
-    const jwksResponse = await fetch(`${issuer}/jwks`);
+    const jwksResponse = await authFetch(`${issuer}/jwks`);
     expect(jwksResponse.status).toBe(200);
     const jwks = createLocalJWKSet(await jwksResponse.json());
     const { payload } = await jwtVerify(tokens.access_token, jwks, {
@@ -381,7 +391,7 @@ describe("deployed auth OAuth2/OIDC provider", () => {
     expect(idClaims.email).toBe(email);
 
     // 6. the bearer works at userinfo (the second audience minted above).
-    const userinfo = await fetch(`${issuer}/oauth2/userinfo`, {
+    const userinfo = await authFetch(`${issuer}/oauth2/userinfo`, {
       headers: { authorization: `Bearer ${tokens.access_token}` },
     });
     expect(userinfo.status).toBe(200);

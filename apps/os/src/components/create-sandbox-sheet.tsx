@@ -32,7 +32,7 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Switch } from "@iterate-com/ui/components/switch";
-import { useItx } from "iterate/react";
+import { useItx } from "iterate/sdk/itx/react";
 import {
   DEFAULT_SANDBOX_INSTANCE_TYPE,
   SANDBOX_INSTANCE_TYPES,
@@ -73,13 +73,16 @@ export function CreateSandboxSheet({
 }) {
   const itx = useItx();
   const createSandbox = useMutation({
-    mutationFn: async (values: SandboxCreateFormValues) =>
-      itx.sandboxes.create(parseSandboxCreateForm(values)),
-    onSuccess: (sandbox) => {
+    mutationFn: async (values: SandboxCreateFormValues) => {
+      const parsed = parseSandboxCreateForm(values);
+      await itx.sandboxes.get(parsed.path).create(parsed.input);
+      return parsed.path;
+    },
+    onSuccess: (path) => {
       form.reset();
       onOpenChange(false);
-      toast.success(`Created ${sandbox.path}`);
-      onCreated(sandbox.path);
+      toast.success(`Created ${path}`);
+      onCreated(path);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });

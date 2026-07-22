@@ -1,60 +1,73 @@
-import { DurableObject } from "cloudflare:workers";
+import {
+  LiveStateRpcTarget,
+  RpcTarget,
+  newWorkersWebSocketRpcResponse,
+  type LiveStateRpc,
+} from "iterate/sdk/capnweb";
+import type { StreamProcessorRegistry } from "iterate/processors/cloudflare";
+import { IterateDurableObject, createProcessorHost } from "iterate/sdk";
+import { guestbookCreationEvents, guestbookStreamPath } from "./ref.ts";
+import { GuestbookProcessor, type GuestbookState } from "./processor.ts";
 
-export class GuestbookApp extends DurableObject {
-  constructor(ctx: DurableObjectState, env: unknown) {
-    super(ctx, env);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS entries (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        message TEXT NOT NULL,
-        signed_at TEXT NOT NULL
-      )
-    `);
+/** One createApp Durable Object owns the page, API, processor, and live value. */
+export class GuestbookApp extends IterateDurableObject {
+  #host = createProcessorHost<GuestbookState>({
+    ctx: this.ctx,
+    env: this.env,
+    path: guestbookStreamPath,
+    createProcessor: (deps) => new GuestbookProcessor(deps),
+  });
+
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#host.handleAlarm(alarmInfo);
+  }
+
+  /** The wake door the stream spine dials — the subscription's persisted
+   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */
+  get processor() {
+    return this.#host.wakeSubscriber;
+  }
+
+  /** Lazily initialize the stream: an empty fold means nobody has offered the
+   * birth certificate + wake subscription yet. Called from the two paths that
+   * actually consume the fold — the `/api` socket and `sign()` — never from a
+   * bare GET, which only serves the static shell (whose client then opens
+   * `/api`). The batch is idempotency-keyed, so every caller may offer it. */
+  async #ensureInitialized(): Promise<StreamProcessorRegistry<GuestbookState>> {
+    const registry = await this.#host.registry();
+    await registry.catchUp("guestbook");
+    if ((await this.#host.snapshot()).state.birthCertificate === null) {
+      using project = await this.env.ITX.get();
+      await project.streams.get(guestbookStreamPath).append(...guestbookCreationEvents());
+      await registry.catchUp("guestbook");
+    }
+    return registry;
+  }
+
+  async sign(name: string, message: string): Promise<void> {
+    const trimmedName = name.trim().slice(0, 80);
+    const trimmedMessage = message.trim().slice(0, 500);
+    if (trimmedName.length === 0 || trimmedMessage.length === 0) {
+      throw new TypeError("Name and message are required");
+    }
+    const registry = await this.#ensureInitialized();
+    using project = await this.env.ITX.get();
+    await project.streams.get(guestbookStreamPath).append({
+      type: "events.iterate.com/guestbook/entry-signed",
+      payload: { message: trimmedMessage, name: trimmedName },
+      idempotencyKey: `guestbook/entry:${crypto.randomUUID()}`,
+    });
+    await registry.catchUp("guestbook");
+    registry.refreshLive();
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/api/entries") {
-      if (request.method === "GET") {
-        const entries = this.ctx.storage.sql
-          .exec<{ id: string; message: string; name: string; signed_at: string }>(
-            "SELECT id, name, message, signed_at FROM entries ORDER BY signed_at DESC, id DESC LIMIT 100",
-          )
-          .toArray()
-          .map((entry) => ({
-            id: entry.id,
-            message: entry.message,
-            name: entry.name,
-            signedAt: entry.signed_at,
-          }));
-        return Response.json(entries);
-      }
-      if (request.method === "POST") {
-        const body = await request.json<{ message?: unknown; name?: unknown }>();
-        const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
-        const message = typeof body.message === "string" ? body.message.trim().slice(0, 500) : "";
-        if (name.length === 0 || message.length === 0) {
-          return new Response("name and message are required", { status: 400 });
-        }
-        const entry = {
-          id: crypto.randomUUID(),
-          message,
-          name,
-          signedAt: new Date().toISOString(),
-        };
-        this.ctx.storage.sql.exec(
-          "INSERT INTO entries (id, name, message, signed_at) VALUES (?, ?, ?, ?)",
-          entry.id,
-          entry.name,
-          entry.message,
-          entry.signedAt,
-        );
-        return Response.json(entry, { status: 201 });
-      }
-      return new Response("method not allowed", { status: 405 });
+    if (url.pathname === "/api") {
+      const registry = await this.#ensureInitialized();
+      await registry.loadAndRefreshLive();
+      return newWorkersWebSocketRpcResponse(request, new GuestbookApi(this, registry));
     }
-
     if (request.method !== "GET" || url.pathname !== "/") {
       return new Response("not found", { status: 404 });
     }
@@ -88,5 +101,25 @@ export class GuestbookApp extends DurableObject {
         },
       },
     );
+  }
+}
+
+export class GuestbookApi extends RpcTarget {
+  readonly #liveState: LiveStateRpcTarget<GuestbookState>;
+
+  constructor(
+    private readonly app: GuestbookApp,
+    registry: StreamProcessorRegistry<GuestbookState>,
+  ) {
+    super();
+    this.#liveState = new LiveStateRpcTarget(registry);
+  }
+
+  get liveState(): LiveStateRpc<GuestbookState> {
+    return this.#liveState;
+  }
+
+  async sign(name: string, message: string): Promise<void> {
+    await this.app.sign(name, message);
   }
 }

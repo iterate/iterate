@@ -52,6 +52,30 @@ export function isWebSocketUpgradeRequest(request: Request): boolean {
   return request.headers.get("upgrade")?.toLowerCase() === "websocket";
 }
 
+const DOCUMENT_COLD_BUILD_BUDGET_MS = 1_500;
+
+/**
+ * The cold-build budget a fetch-lane hop should race before answering with
+ * the building page.
+ *
+ * A person navigating (`sec-fetch-dest: document` — browsers set it, nothing
+ * can spoof it from a page) is watching a blank tab for exactly as long as
+ * this race runs, so it stays short: a fast warm load still serves directly,
+ * and a real cold build swaps the blank tab for the branded building page,
+ * which polls and reloads into the app by itself. Every other client — API
+ * calls, the building page's own polls, WebSocket dials, curl — keeps the
+ * caller's budget: an HTML stand-in does nothing for them, and waiting
+ * through the race means the first response after a build lands is the real
+ * one.
+ */
+export function buildBudgetForRequest(
+  request: Request,
+  callerBudgetMs?: number,
+): number | undefined {
+  if (request.headers.get("sec-fetch-dest") !== "document") return callerBudgetMs;
+  return Math.min(callerBudgetMs ?? DOCUMENT_COLD_BUILD_BUDGET_MS, DOCUMENT_COLD_BUILD_BUDGET_MS);
+}
+
 /**
  * Marks a 503 as "the worker is cold-building" on the fetch lane, where a
  * named error cannot cross the hop the way it does over RPC. Routers that
@@ -64,8 +88,8 @@ export const WORKER_BUILDING_HEADER = "x-iterate-worker-building";
 /** The one cold-build response every fetch-lane hop answers with: a polling
  * page for browsers (meta refresh for no-JS clients), retry-after + the
  * marker header for programmatic clients. */
-export function workerBuildingResponse(): Response {
-  return new Response(workerBuildingPageHtml(WORKER_BUILDING_HEADER), {
+export function workerBuildingResponse(urlPrefix = ""): Response {
+  return new Response(workerBuildingPageHtml(WORKER_BUILDING_HEADER, urlPrefix), {
     headers: {
       "content-type": "text/html; charset=utf-8",
       "retry-after": "2",
@@ -87,6 +111,7 @@ export function workerBuildingResponse(): Response {
  */
 export function workerBuildStatus(
   error: unknown,
+  urlPrefix = "",
 ): { outcome: "worker_build_failed" | "worker_building"; response: Response } | null {
   // RepoNotSeededError: a browser can reach a project host inside the
   // project's BIRTH window — the config repo's stream exists before its seed
@@ -96,10 +121,13 @@ export function workerBuildStatus(
   // Cloudflare 1101 on a fresh project's first app request (observed live on
   // preview e2e, 2026-07-17).
   if (isRepoNotSeededError(error) || isWorkerBuildInProgressError(error)) {
-    return { outcome: "worker_building", response: workerBuildingResponse() };
+    return { outcome: "worker_building", response: workerBuildingResponse(urlPrefix) };
   }
   if (isWorkerBuildFailedError(error)) {
-    return { outcome: "worker_build_failed", response: workerBuildFailedResponse(error) };
+    return {
+      outcome: "worker_build_failed",
+      response: workerBuildFailedResponse(error, urlPrefix),
+    };
   }
   return null;
 }

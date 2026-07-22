@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
+import type { StreamEvent } from "iterate/sdk/itx/react";
 import { reduceFeed, summarizeActivity, type AgentUiActivity } from "./feed.ts";
 
 const PATH = "/agents/mobile/test";

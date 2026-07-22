@@ -20,19 +20,23 @@ import { test } from "./test-support/test.ts";
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
+// This is the failure stimulus, not a recovery budget. The test arms an
+// in-page timer immediately before CDP suspends script execution and verifies
+// its gap after resume. Socket death is modeled explicitly, so the stimulus
+// need not wait for the OS to reap a connection during a guessed long window.
+const SUSPEND_STIMULUS_MS = 2_000;
+const SUSPEND_EVIDENCE_MIN_GAP_MS = 1_500;
 
-// Two liveness-probe intervals (LIVENESS_PROBE_INTERVAL_MS = 10s): a clean
-// socket close is invisible to the runtime (the view's factory never wires
-// onConnectionStatusChange), so only the probe notices the dead session —
-// a rejection reconnects on the first probe, timeouts need two strikes.
-const PROBE_NOTICE_MS = 25_000;
+type SuspendTimerEvidence = {
+  maxTimerGapMs: number;
+};
 
 // Fresh streams' first post-subscribe delivery can stall and needs the ~10s
 // probe self-heal (see reactivity.spec.ts's DELIVERY_WAIT rationale), so the
 // healthy-path window is 30s, not the theoretical "instant".
 const HEALTHY_DELIVERY_MS = 30_000;
 // Post-death recovery window. Worst case is the half-open lane: up to two
-// probe intervals + two 5s probe timeouts to declare the transport suspect,
+// probe intervals + two 10s probe timeouts to declare the transport suspect,
 // then resetTransport + a fresh dial + election + subscribe — measured ~40-56s
 // locally, so 90s leaves headroom for slower preview CI boxes without hiding
 // a real wedge (the wedge is permanent; any finite window catches it).
@@ -102,21 +106,17 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
 
-  // Give the liveness probe two intervals to notice and enter its reconnect loop.
-  await page.waitForTimeout(PROBE_NOTICE_MS);
-  console.log("--- after probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-socket-death" },
-  });
-  const { delivered, snapshot } = await pollDelivered(
-    page,
-    keys,
-    marker!.offset,
-    RECOVERY_DELIVERY_MS,
-  );
+  // Append immediately: delivery is the recovery invariant, so polling it
+  // covers however many liveness-probe intervals the runtime actually needs
+  // without paying a guessed probe delay before starting the real assertion.
+  const [marker] = await test.step("clean close: append recovery marker", () =>
+    agent.stream.append({
+      type: MARKER_EVENT_TYPE,
+      payload: { marker: "after-socket-death" },
+    }));
+  const { delivered, snapshot } =
+    await test.step("clean close: redial and deliver a new stream event", () =>
+      pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
   dumpEvidence("after socket death", snapshot, consoleLines);
   // The historical wedge: runtimes stuck in connectionStatus "reconnecting"
   // with connectionError "connect failed: Peer closed WebSocket: 1005"
@@ -137,6 +137,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   await using fixture = await helpers.createFixture("suspend-freeze");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
+  await installSuspendTimerProbe(page);
   const consoleLines = captureStreamConsole(page);
 
   using admin = await connectAdminItx(baseURL);
@@ -147,39 +148,63 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
-  // Mobile suspend ≈ frozen page + the OS reaping the TCP connection. Script
-  // execution is suspended while frozen, so the socket close must happen
-  // BEFORE Page.setWebLifecycleState (page.evaluate would hang otherwise);
-  // setOffline while frozen additionally models the radio dropping, though
-  // CDP's emulateNetworkConditions does not reliably kill established
-  // WebSockets on its own — the explicit close is the guaranteed death.
+  // Mobile suspend ≈ suspended page script + the OS reaping the TCP
+  // connection. This lane covers the close-event-delivered shape; the dedicated
+  // half-open test below covers a death with no close frame and pays the real
+  // two-strike liveness windows. Wait for the ORIGINAL socket's close event
+  // before freezing so this case does not accidentally duplicate that slower
+  // half-open lane merely because CDP disabled script before the event arrived.
   const cdp = await page.context().newCDPSession(page);
-  const closed = await page.evaluate(() =>
-    (window as unknown as { __closeAllApiSockets: () => string[] }).__closeAllApiSockets(),
-  );
+  const closed = await test.step("observe socket death before suspending page script", () =>
+    page.evaluate(() =>
+      (
+        window as unknown as { __closeAllApiSocketsAndWait: () => Promise<string[]> }
+      ).__closeAllApiSocketsAndWait(),
+    ));
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
-  await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
-  await page.context().setOffline(true);
-  await page.waitForTimeout(25_000);
-  await page.context().setOffline(false);
-  await cdp.send("Page.setWebLifecycleState", { state: "active" });
-
-  // Timers were suspended while frozen: the probe strikes only start now.
-  await page.waitForTimeout(PROBE_NOTICE_MS);
-  console.log("--- after thaw + probe window ---");
-  console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
-
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-freeze" },
+  await test.step("suspend page script, drop network, and resume", async () => {
+    await page.context().setOffline(true);
+    await page.evaluate(() =>
+      (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
+    );
+    await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
+    await page.waitForTimeout(SUSPEND_STIMULUS_MS);
+    await page.context().setOffline(false);
+    await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
+    await expect
+      .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
+        message: "the armed page timer should remain suspended for the stimulus window",
+        timeout: 5_000,
+      })
+      .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
+    const retiredTransitionDials = await page.evaluate(() => {
+      const closed = (
+        window as unknown as { __closeAllApiSockets: () => string[] }
+      ).__closeAllApiSockets();
+      // Chromium does not reliably revive a WebSocket whose constructor ran
+      // while offline. Retire every transition dial after connectivity is
+      // restored, then give the runtime the real returning-browser signal so
+      // its next constructor starts online.
+      window.dispatchEvent(new Event("online"));
+      return closed;
+    });
+    console.log(`retired transition sockets: ${JSON.stringify(retiredTransitionDials)}`);
   });
-  const { delivered, snapshot } = await pollDelivered(
-    page,
-    keys,
-    marker!.offset,
-    RECOVERY_DELIVERY_MS,
-  );
+
+  // Going back online lets the runtime's resume check fire; its periodic probe
+  // remains the fallback.
+  // Append immediately and wait on durable delivery so
+  // a healthy runtime finishes when it heals, while the historical permanent
+  // wedge still consumes the full bounded recovery window and fails.
+  const [marker] = await test.step("thaw: append recovery marker", () =>
+    agent.stream.append({
+      type: MARKER_EVENT_TYPE,
+      payload: { marker: "after-freeze" },
+    }));
+  const { delivered, snapshot } =
+    await test.step("thaw: redial and deliver a new stream event", () =>
+      pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
   dumpEvidence("after freeze", snapshot, consoleLines);
   // Historically the same wedge as the clean-close test — the frozen window
   // only delayed when the liveness probe noticed.
@@ -216,16 +241,26 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // therefore race with the greeting and watch it turn into Stop generation
   // while the test fills its draft. First require the greeting's durable
   // response event and its painted row; only then is Send a settled control.
-  await agent.stream.waitForEvent({
-    afterOffset: 0,
-    eventTypes: [WEB_MESSAGE_SENT],
-    timeoutMs: 120_000,
+  await test.step("half-open: wait for onboarding greeting", async () => {
+    await agent.stream.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [WEB_MESSAGE_SENT],
+      timeoutMs: 120_000,
+    });
   });
-  await page
-    .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
-    .first()
-    .waitFor({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+  // The durable greeting already exists; these waits only let its live browser
+  // mirror paint and settle the composer. There is intentionally no spinner in
+  // that push-only gap, so Middlewright's 1ms no-progress clamp must not replace
+  // the explicit bounded waits.
+  await test.step("half-open: paint greeting and settle composer", async () => {
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await page
+        .locator('[data-testid="agent-feed-message"][data-kind="assistant"]')
+        .first()
+        .waitFor({ timeout: 30_000 });
+      await page.getByRole("button", { name: "Send message" }).waitFor({ timeout: 120_000 });
+    });
+  });
 
   // Blackhole the transport WITHOUT a close event — what a suspend-killed TCP
   // connection looks like when the OS never surfaces the death. Every capnweb
@@ -255,8 +290,24 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
     await page.getByRole("button", { name: "Send message" }).click();
   });
 
-  // Two probe intervals + two probe timeouts before the transport is evicted.
-  await page.waitForTimeout(PROBE_NOTICE_MS + 10_000);
+  // A returning tab emits visibilitychange, which asks the socket owner to
+  // verify NOW. Wait on the actual eviction invariant instead of sleeping a
+  // guessed 35s (the old fixed wait was ~15s longer than the two 10s probe
+  // windows it was trying to cover, and still supplied no evidence).
+  await test.step("half-open: evict the muted transport after two probe strikes", async () => {
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            (
+              window as unknown as { __mutedApiSocketsStillOpen: () => number }
+            ).__mutedApiSocketsStillOpen(),
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(0);
+  });
   console.log("--- after half-open probe window ---");
   console.log(JSON.stringify(await readDebugSnapshot(page), null, 2));
 
@@ -285,45 +336,39 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // a resend on the recovered transport lands. Never a forever-spinner. The
   // feed's live "Thinking…" state renders two spinner-matching elements, so
   // spinner-waiter sits this out (same per-call override as agent-chat.spec.ts).
-  await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    const sendButton = page.getByRole("button", { name: "Send message" });
-    const sentRow = page
-      .locator('[data-testid="agent-feed-message"][data-kind="user"]')
-      .getByText(sentDuringOutage);
-    // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate half-open-repro probe: toPass() polls a compound settled-condition (row painted OR composer re-enabled) that no single locator can express.
-    await expect(async () => {
-      // Settled = the message painted (it landed) OR the button re-enabled
-      // (it rejected and the draft is back). A still-spinning composer with
-      // no row is the stranded-on-a-ghost-session wedge.
-      const landed = await sentRow.isVisible();
-      const enabled = await sendButton.isEnabled();
-      // oxlint-disable-next-line iterate/spec-restricted-syntax -- the retry trigger inside the toPass loop above; the compound boolean is the settled-condition and the message names the wedge.
-      expect(
-        landed || enabled,
-        "the mid-outage send never settled — stranded on a ghost session",
-      ).toBe(true);
-    }).toPass({ timeout: 60_000, intervals: [1_000] });
-    if (!(await sentRow.isVisible())) {
-      // The stranded call rejected; the composer kept the draft — resend on
-      // the recovered transport.
-      await sendButton.click();
-    }
-    await sentRow.waitFor({ timeout: 30_000 });
+  await test.step("half-open: settle or resend the message started during outage", async () => {
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      const sendButton = page.getByRole("button", { name: "Send message" });
+      const sentRow = page
+        .locator('[data-testid="agent-feed-message"][data-kind="user"]')
+        .getByText(sentDuringOutage);
+      // oxlint-disable-next-line iterate/spec-restricted-syntax -- deliberate half-open-repro probe: toPass() polls a compound settled-condition (row painted OR composer re-enabled) that no single locator can express.
+      await expect(async () => {
+        // Settled = the message painted (it landed) OR the button re-enabled
+        // (it rejected and the draft is back). A still-spinning composer with
+        // no row is the stranded-on-a-ghost-session wedge.
+        const landed = await sentRow.isVisible();
+        const enabled = await sendButton.isEnabled();
+        // oxlint-disable-next-line iterate/spec-restricted-syntax -- the retry trigger inside the toPass loop above; the compound boolean is the settled-condition and the message names the wedge.
+        expect(
+          landed || enabled,
+          "the mid-outage send never settled — stranded on a ghost session",
+        ).toBe(true);
+      }).toPass({ timeout: 60_000, intervals: [1_000] });
+      if (!(await sentRow.isVisible())) {
+        // The stranded call rejected; the composer kept the draft — resend on
+        // the recovered transport.
+        await sendButton.click();
+      }
+      await sentRow.waitFor({ timeout: 30_000 });
+    });
   });
-
-  // The real scenario delivers a visibilitychange when the user returns to
-  // the tab; the mute harness kills the network without one, so fire it —
-  // that's what triggers itx-react's resume sweep for sockets no consumer
-  // probes (the GLOBAL context's socket here: the stream runtimes recover
-  // their own project-context socket, but nothing else on this page would
-  // ever find the global corpse).
-  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
 
   // Leak census, two invariants: (1) every muted corpse was CLOSED — a
   // recovery that dials fresh but strands the corpse (the #1894 signature)
   // fails here even when the total count happens to look small; (2) the live
   // census returned to its pre-mute baseline — no accumulation per cycle.
-  // Window: the resume sweep needs two 5s ping strikes before it evicts.
+  // Window: the resume sweep needs two 10s ping strikes before it evicts.
   await expect
     .poll(
       () =>
@@ -397,6 +442,33 @@ async function pollDelivered(page: Page, keys: string[], offset: number, timeout
   }
 }
 
+function installSuspendTimerProbe(page: Page) {
+  return page.addInitScript(() => {
+    const timerEvidence: SuspendTimerEvidence = { maxTimerGapMs: 0 };
+    let previousTimerTick = performance.now();
+    let armed = false;
+    setInterval(() => {
+      const timerTick = performance.now();
+      if (armed)
+        timerEvidence.maxTimerGapMs = Math.max(
+          timerEvidence.maxTimerGapMs,
+          timerTick - previousTimerTick,
+        );
+      previousTimerTick = timerTick;
+    }, 50);
+    const testWindow = window as unknown as {
+      __suspendTimerEvidence: SuspendTimerEvidence;
+      __armSuspendTimerProbe: () => void;
+    };
+    testWindow.__suspendTimerEvidence = timerEvidence;
+    testWindow.__armSuspendTimerProbe = () => {
+      timerEvidence.maxTimerGapMs = 0;
+      previousTimerTick = performance.now();
+      armed = true;
+    };
+  });
+}
+
 /**
  * Registry of live main-thread WebSockets + two failure switches for the /api
  * ones (the itx capnweb transport — the stream runtimes ride it too). Must be
@@ -405,6 +477,8 @@ async function pollDelivered(page: Page, keys: string[], offset: number, timeout
  * exactly the recovery the bug report says users are forced into.
  *
  *   __closeAllApiSockets — clean close, the "close event delivered" lane.
+ *   __closeAllApiSocketsAndWait — clean close, resolving only after every
+ *     original socket emitted close; a replacement socket does not hold it up.
  *   __muteAllApiSockets  — half-open simulation: sends are swallowed and
  *     message events suppressed, but no close ever fires. This is what a
  *     mobile-suspend-killed TCP connection looks like to the page when the OS
@@ -467,6 +541,38 @@ function installSocketKillSwitch(page: Page) {
       }
       return closed;
     };
+    (
+      window as {
+        __closeAllApiSocketsAndWait?: () => Promise<string[]>;
+      }
+    ).__closeAllApiSocketsAndWait = async () => {
+      const sockets = apiSockets();
+      const closed = sockets.map((ws) => ws.url);
+      if (sockets.length === 0) return closed;
+      await new Promise<void>((resolve, reject) => {
+        let remaining = sockets.length;
+        const timeout = setTimeout(
+          () =>
+            reject(new Error(`${remaining}/${sockets.length} original /api sockets did not close`)),
+          5_000,
+        );
+        for (const ws of sockets) {
+          ws.addEventListener(
+            "close",
+            () => {
+              remaining -= 1;
+              if (remaining === 0) {
+                clearTimeout(timeout);
+                resolve();
+              }
+            },
+            { once: true },
+          );
+          ws.close();
+        }
+      });
+      return closed;
+    };
     const mutedList: WebSocket[] = [];
     (window as { __muteAllApiSockets?: () => string[] }).__muteAllApiSockets = () => {
       const mutedUrls: string[] = [];
@@ -488,6 +594,18 @@ function installSocketKillSwitch(page: Page) {
     // the corpse passes a bare census of "small number" — this doesn't.
     (window as { __mutedApiSocketsStillOpen?: () => number }).__mutedApiSocketsStillOpen = () =>
       mutedList.filter((ws) => ws.readyState < WebSocket.CLOSING).length;
+  });
+}
+
+function readSuspendTimerEvidence(page: Page) {
+  return page.evaluate(() => {
+    const evidence = (
+      window as unknown as {
+        __suspendTimerEvidence?: SuspendTimerEvidence;
+      }
+    ).__suspendTimerEvidence;
+    if (!evidence) throw new Error("suspend timer evidence was not installed before navigation");
+    return evidence;
   });
 }
 

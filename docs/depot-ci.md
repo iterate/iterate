@@ -9,6 +9,12 @@ The old TypeScript workflow generator is gone. Edit the YAML directly, and put
 runtime logic in normal scripts under `scripts/ci` instead of embedding large
 `actions/github-script` blocks.
 
+Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
+failure-rate analysis lives in PostHog; see
+[CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
+scheduled backfill, Doppler-managed Depot organization token and its scope
+caveat, and CLI/MCP queries.
+
 ## Quick Links
 
 - [Depot CI dashboard](https://depot.dev/orgs/0p91s0lz49/workflows)
@@ -27,8 +33,9 @@ runtime logic in normal scripts under `scripts/ci` instead of embedding large
 - CI scripts: `scripts/ci/*.ts`
 - Custom image:
   `0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree`
-- Secrets and variables are managed with `depot ci secrets` and `depot ci vars`,
-  not GitHub Actions secrets.
+- `DOPPLER_TOKEN` is the only Depot CI secret. Application and service
+  credentials live in Doppler; GitHub supplies a short-lived job token.
+- Non-secret variables are managed with `depot ci vars`.
 
 The only GitHub Actions workflow left is `.github/workflows/claude-assistant.yml`.
 It is not CI; it exists because Depot CI does not support issue/comment events
@@ -73,6 +80,22 @@ depot ci diagnose <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
 
+List and download retained artifacts:
+
+```bash
+depot_run_id="<run-id>"
+depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json
+artifact_id="<artifact-id>"
+depot ci artifacts download "$artifact_id" \
+  --org 0p91s0lz49 \
+  --output-file /tmp/unit-test-telemetry.zip
+```
+
+For a Depot-hosted workflow, use `depot ci artifacts` as the source of truth.
+The `actions/upload-artifact` log may print a GitHub-looking actions URL, but
+Depot owns the run and artifact; `gh run download` and the GitHub Actions
+artifact API can return 404 for that URL.
+
 Control runs:
 
 ```bash
@@ -85,9 +108,24 @@ Manage secrets:
 
 ```bash
 depot ci secrets list --org 0p91s0lz49
-printf '%s' "$VALUE" | depot ci secrets add NAME --org 0p91s0lz49
-depot ci secrets remove NAME --org 0p91s0lz49
 ```
+
+The list must contain only `DOPPLER_TOKEN`. Do not copy GitHub, Depot API,
+Cloudflare, Slack, PostHog, or other service credentials into Depot. Put them
+in the appropriate Doppler config; CI reaches them through the bootstrap
+token. GitHub operations use `${{ github.token }}` and workflow-level
+`permissions` instead of a stored bot token. The CI telemetry collector is the
+non-obvious case: its Depot organization token lives in `_shared/preview`, but
+the collector sends under `_shared/prd` so it reaches the canonical PostHog
+project. See [CI and test telemetry](ci-test-telemetry.md) for the exact setup.
+
+The daily PR dashboard also avoids a hidden token exception: it finds today's
+message and detail reply through Slack history instead of persisting their
+timestamps in a GitHub Actions repository variable. GitHub's variable API
+requires the separate
+[repository `Variables` permission](https://docs.github.com/en/rest/actions/variables#get-a-repository-variable),
+which workflow `GITHUB_TOKEN` permissions cannot request. Do not reintroduce
+`SLACK_PR_DASHBOARD_STATE` or a personal/bot token for that state.
 
 ## Wait For CI
 
@@ -244,7 +282,7 @@ freshness:
 - Every mainline job has `timeout-minutes`. This is a watchdog, not a retry:
   jobs fail at the outer edge and an operator decides whether a rerun is safe.
   Auth + OS gets 45 minutes because its bounded worst case includes both
-  deployments, JWKS propagation, and four sequential smoke probes.
+  deployments and four sequential smoke probes.
 - Runner size follows observed peak CPU and memory, with headroom. Lint stays
   on `8x32` (parallel oxlint/typecheck/knip). Unit tests use `4x16` — measured
   peaks on `8x32` were ~3 cores / ~2.5GB, and a second large sandbox next to

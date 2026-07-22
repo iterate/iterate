@@ -4,6 +4,7 @@ import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
@@ -26,7 +27,7 @@ const OsPlaywrightAuthEnv = z.object({
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID: z.string().min(1),
   /** Auth issuer used for both forged access and id tokens. */
   APP_CONFIG_ITERATE_AUTH__ISSUER: z.url(),
-  /** Private half of the forge key baked into dev/preview OS JWKS. */
+  /** Private half of the Auth signing key whose public half OS trusts. */
   AUTH_FORGE_PRIVATE_JWK: z
     .string()
     .min(1)
@@ -50,12 +51,20 @@ let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
 
 export async function createProjectFixture(
   slugPrefix: string,
-  input: { baseURL: string | undefined; page: Page },
+  input: { baseURL: string | undefined; page: Page; projectCount?: number },
 ) {
-  if (!input.baseURL) throw new Error("Playwright baseURL fixture is required.");
+  const baseUrl = input.baseURL;
+  if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
 
   const projectSlug = uniqueFixtureSlug(slugPrefix);
-  const projectFixture = await createAdminProject({ baseUrl: input.baseURL, slug: projectSlug });
+  const projectFixtures = await Promise.all(
+    Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
+      createAdminProject({
+        baseUrl,
+        slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
+      }),
+    ),
+  );
   try {
     const organization = {
       id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
@@ -64,16 +73,13 @@ export async function createProjectFixture(
       slug: uniqueFixtureSlug(`${slugPrefix}-org`),
     };
     const session = await mintIterateSession({
-      baseUrl: input.baseURL,
+      baseUrl,
       email: `forged-${projectSlug}+test@nustom.com`,
       organizations: [organization],
-      projects: [
-        {
-          id: projectFixture.project.id,
-          organizationId: organization.id,
-          slug: projectFixture.project.slug,
-        },
-      ],
+      projects: projectFixtures.map(({ project }) => ({
+        ...project,
+        organizationId: organization.id,
+      })),
     });
 
     await input.page.context().addCookies([
@@ -82,8 +88,8 @@ export async function createProjectFixture(
         httpOnly: true,
         name: "iterate_session",
         sameSite: "Lax",
-        secure: new URL(input.baseURL).protocol === "https:",
-        url: input.baseURL,
+        secure: new URL(baseUrl).protocol === "https:",
+        url: baseUrl,
         value: encodeURIComponent(
           JSON.stringify({
             accessToken: session.accessToken,
@@ -97,14 +103,15 @@ export async function createProjectFixture(
 
     return {
       organization,
-      project: projectFixture.project,
+      project: projectFixtures[0]!.project,
+      projects: projectFixtures.map(({ project }) => project),
       session,
       async [Symbol.asyncDispose]() {
-        await projectFixture[Symbol.asyncDispose]();
+        await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
       },
     };
   } catch (error) {
-    await projectFixture[Symbol.asyncDispose]();
+    await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
     throw error;
   }
 }
@@ -119,6 +126,7 @@ export async function connectAdminItx(baseUrl: string) {
   return connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
 }
 
@@ -133,8 +141,9 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
   using session = connectItx({
     auth: { type: "admin-secret", secret: config.adminApiSecret },
     baseUrl: input.baseUrl,
+    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });
-  using created = session.projects.create({ slug: input.slug });
+  using created = await session.projects.get(input.slug).create({});
   const description = await created.__describe();
   const project = { id: description.projectId, slug: input.slug };
 

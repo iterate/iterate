@@ -1,64 +1,100 @@
 // Contract for the "slack-agent" processor that runs on one routed Slack
-// agent stream (`/agents/slack/<channel>/ts-<threadTs>`).
-//
-// Rewritten new-style for itx from the pre-migration (git history)
-// reference. The processor owns no event types of its own: Slack presentation
-// is a pure paint of the agent's canonical summary and exact runtime counts.
+// agent stream (`/agents/slack/{connection}/{channel}/ts-{threadTs}`). The
+// processor owns NO event types of its own: even its birth certificate
+// (`slack-agent/created`) belongs to the upstream slack router's contract —
+// the router is what appends it, inside the creation batch it sends to a
+// fresh thread stream — and this contract reaches through
+// `SlackProcessorContract.events[...]` for the schema. Everything else it
+// consumes or emits resolves through `processorDeps`.
 
 import { z } from "zod";
-import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
-import { defineProcessorContract, STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import { defineProcessorContract } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { AgentSummary } from "../agents/agent-presence.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
-import { SlackAgentBirthCertificate, SlackProcessorContract } from "./slack-processor-contract.ts";
+import { SlackProcessorContract } from "./slack-processor-contract.ts";
 
-/**
- * Processor for one Slack-backed agent stream.
- *
- * The upstream `slack` processor has already routed raw Slack webhooks to this
- * stream. This processor owns the Slack-specific in-thread behavior: recording
- * route context, transcribing Slack messages into agent context, generating
- * bang-command codemode scripts, and painting active runtime onto Slack's
- * transient assistant status through host-provided dependencies.
- *
- * LLM turns are mention-gated: a human must @mention the bot (or Slack must
- * deliver `app_mention`) before the agent is woken. After
- * that activation, later messages in the same thread also queue turns so
- * multi-turn conversation does not require re-mentioning on every reply.
- * Unmentioned traffic before activation is still transcribed as
- * `dont-trigger-request` history so a later mention has thread context — it
- * never spends model tokens by itself.
- */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",
-  version: "0.10.0",
-  description: "Handles Slack-specific behavior for one routed Slack agent stream.",
+  // 0.11.0: dropped the never-read `streamPath` state field — a version bump
+  // refolds persisted reduction checkpoints, which is safe here by design
+  // (every vendor lane is idempotency-keyed, freshness-gated, or
+  // latest-fact-wins; see the refold tests).
+  version: "0.11.0",
+  description:
+    "Handles Slack-specific behavior for one routed Slack agent stream: transcribes " +
+    "forwarded webhooks into agent context (mention-gated LLM wake), compiles !bang " +
+    "commands into script runs, and paints the agent's summary/runtime onto Slack's " +
+    "assistant thread UI.",
   stateSchema: z.object({
-    birthCertificate: SlackAgentBirthCertificate.nullable().default(null),
-    summary: AgentSummary.prefault({}),
-    botBotId: z.string().optional(),
-    botUserId: z.string().optional(),
-    channel: z.string().optional(),
-    /** Slack's conversation type from the routed message webhook. Assistant
-     * thread UI methods are valid for app DMs (`im`), not channel mentions. */
-    channelType: z.string().optional(),
-    /**
-     * True after this thread has seen an @mention / app_mention of our bot.
-     * Unlocks follow-up turns without re-mentioning.
-     */
-    conversationActive: z.boolean().default(false),
-    /** Message that actually received this bot's transient eyes reaction.
-     * Ambient follow-ups must not replace it: settlement removes the reaction
-     * from the message we acknowledged, not merely the newest message seen. */
-    eyesReactionMessageTs: z.string().optional(),
-    streamPath: z.string().optional(),
-    threadTs: z.string().optional(),
+    birthCertificate: SlackProcessorContract.events[
+      "events.iterate.com/slack-agent/created"
+    ].payloadSchema
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Existence marker: null until slack-agent/created reduces. Carries the named " +
+          "connection every Slack call posts through, plus the bound channel/thread.",
+      }),
+    summary: AgentSummary.prefault({}).meta({
+      description:
+        "The agent's canonical summary (title, activity, waitingFor), reduced from " +
+        "agent/summary-updated patches. Slack presentation is a pure paint of this record: " +
+        "the title goes to assistant.threads.setTitle, the activity text rides the " +
+        "transient thread status.",
+    }),
+    botBotId: z
+      .string()
+      .optional()
+      .meta({
+        description:
+          "Our Slack app's bot_id, learned from webhook authorizations; identifies our own " +
+          "bot-authored messages so the agent never wakes itself.",
+      }),
+    botUserId: z
+      .string()
+      .optional()
+      .meta({
+        description:
+          "Our Slack app's bot user id (the <@U…> mention target), learned from webhook " +
+          "authorizations; drives the mention gate and self-action filtering.",
+      }),
+    channel: z.string().optional().meta({
+      description: "Slack channel id of the bound thread, from the route/webhook facts.",
+    }),
+    channelType: z
+      .string()
+      .optional()
+      .meta({
+        description:
+          "Slack's conversation type from the routed message webhook. Assistant thread UI " +
+          "methods (setStatus/setTitle) are valid for app DMs (`im`), not channel mentions.",
+      }),
+    conversationActive: z
+      .boolean()
+      .default(false)
+      .meta({
+        description:
+          "True after this thread has seen an @mention / app_mention of our bot. Unlocks " +
+          "follow-up turns without re-mentioning; pre-activation traffic is transcribed as " +
+          "non-triggering history.",
+      }),
+    eyesReactionMessageTs: z
+      .string()
+      .optional()
+      .meta({
+        description:
+          "Message that actually received this bot's transient 👀 reaction. Ambient " +
+          "follow-ups must not replace it: settlement removes the reaction from the message " +
+          "we acknowledged, not merely the newest message seen.",
+      }),
+    threadTs: z.string().optional().meta({
+      description: "Slack thread timestamp of the bound thread, from the route/webhook facts.",
+    }),
   }),
   events: {},
-  // CoreProcessorContract brings the platform revival fact into scope (see
-  // `consumes`).
   processorDeps: [
     AgentProcessorContract,
     CapabilityHostProcessorContract,
@@ -69,16 +105,15 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/slack-agent/created",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
-    AGENT_SUMMARY_UPDATED_EVENT_TYPE,
+    "events.iterate.com/agent/summary-updated",
     // The platform revival fact (core-owned, ONE type for every recovery-wired
-    // processor; the payload's processorSlug names which). MUST be consumed
-    // (the runner throws at construction otherwise): appended when an
-    // incarnation died owing in-flight work — a frame's blocking Slack
-    // paints/acks lost to a simultaneous Agent+Stream DO death — its delivery
-    // guarantees a caught-up pass whose at-head repaint re-derives the
-    // assistant status from the folded status record. Never emitted by the
-    // processor: the recovery adapter appends it raw, as the runtime speaking.
-    STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
+    // processor; the payload's processorSlug names which). Consumption is
+    // optional in general, but intentional here: processEvent reacts to this
+    // fact by clearing or restoring presentation left by the dead incarnation,
+    // then its at-head repaint re-derives assistant status from the reduced
+    // summary. Never emitted by the processor: the recovery adapter appends it
+    // raw, as the runtime speaking.
+    "events.iterate.com/stream/processor-revived",
   ],
   emits: [
     "events.iterate.com/agents/context-added",

@@ -1,10 +1,15 @@
 import { defineConfig } from "vitest/config";
-import { E2E_CI_RETRIES, E2E_TEST_TIMEOUT_MS } from "@iterate-com/shared/test-support/e2e-policy";
+import {
+  E2E_CI_RETRIES,
+  E2E_TEST_TIMEOUT_MS,
+  RetryTelemetryReporter,
+} from "@iterate-com/shared/test-support/e2e-policy";
 
 export default defineConfig({
   test: {
     environment: "node",
-    fileParallelism: false,
+    // Both files generate unique resource types and clean up their own rows.
+    fileParallelism: process.env.CI === "true",
     hookTimeout: E2E_TEST_TIMEOUT_MS,
     include: ["./e2e/vitest/**/*.test.ts"],
     testTimeout: E2E_TEST_TIMEOUT_MS,
@@ -16,5 +21,6 @@ export default defineConfig({
     // for the deploy-adjacent websocket lanes (os, streams-example-app);
     // semaphore's e2e is a plain HTTP contract check.
     retry: process.env.CI ? E2E_CI_RETRIES : 0,
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
   },
 });

@@ -1,6 +1,12 @@
 // Contract for the "telegram" webhook-router processor mounted on each
 // per-project `/integrations/telegram/{connection}` stream — the Telegram
-// sibling of SlackProcessorContract.
+// sibling of SlackProcessorContract. Self-contained: the state schema and the
+// event vocabulary are spelled inline; the ONE schema the contract uses twice
+// (the router's birth certificate) is a hoisted function below the contract,
+// so the contract still opens the file. This contract also OWNS the
+// `telegram-agent/created` payload (the facet birth certificate the router
+// emits onto agent streams) — the telegram-agent contract reaches through
+// `TelegramProcessorContract.events[...]` for it instead of a second export.
 
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
@@ -8,182 +14,180 @@ import { AgentProcessorContract } from "../agents/agent-processor-contract.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
-const TelegramBirthCertificate = z.object({
-  config: z.object({ connection: z.string() }),
-});
-
-export const TelegramAllowedUserIds = z
-  .array(z.string().trim().regex(/^\d+$/, "Telegram user IDs contain digits only"))
-  .transform((ids) => [...new Set(ids)]);
-
-export const TelegramAgentBirthCertificate = z.object({
-  config: z.object({
-    connection: z.string(),
-    chatId: z.string(),
-    messageThreadId: z.string().optional(),
-  }),
-});
-export type TelegramAgentBirthCertificate = z.output<typeof TelegramAgentBirthCertificate>;
-
-/** One `/new` session start, ordered by `(date, messageId)`: `date` is unix
- * seconds so same-second ties are possible; `message_id` is strictly
- * increasing per chat and breaks them. `sessionPath` is the routed stream. */
-const SessionStart = z.object({
-  date: z.number(),
-  messageId: z.number(),
-  senderId: z.string(),
-  sessionPath: z.string(),
-});
-
-/**
- * Processor mounted on `/integrations/telegram/{connection}`, armed at connect
- * time by connectTelegram's `recordConnection` processorSubscription.
- *
- * This processor is only a Telegram webhook router. Its folded state is the
- * thread model (the Slack router's `routes` table, reshaped for Telegram's
- * primitives):
- *
- * - `sessionsByChat`: per-chat `/new` session starts, folded straight from the
- *   webhook events on this stream. Every update routes to the LATEST session
- *   (ordered by `(date, message_id)`); a chat with no `/new` yet routes to the
- *   bare chat path — session zero, the v1 shape.
- * - `sentMessages`: `chatId:messageId → sessionPath` provenance for bot-sent
- *   messages, folded from the `message-sent` claims the telegram-agent
- *   processor cross-posts here after each journaled send. Replies to bot
- *   messages get EXACT thread hints from this map; replies to user messages
- *   fall back to "latest session started at or before the replied-to date".
- *
- * reply_to does NOT route (a reply-to-quote and a reply-to-continue are the
- * same gesture — a routing rule cannot disambiguate them); it becomes a HINT
- * on the forwarded payload (`replyHint`) that the agent transcription renders.
- *
- * The intended flow is:
- *
- * 1. The webhook door appends the raw Telegram Update to
- *    `/integrations/telegram/{connection}` as
- *    `events.iterate.com/telegram/webhook-received`.
- * 2. This processor forwards the event (plus `replyHint`, when the update is
- *    a reply) to the latest session's agent stream. It explicitly creates the
- *    Agent, CapabilityHost, and Telegram facet and installs all three
- *    subscriptions before forwarding; the `telegram-agent` processor does
- *    the transcription.
- */
 export const TelegramProcessorContract = defineProcessorContract({
   slug: "telegram",
   version: "0.4.0",
   description: "Routes raw Telegram webhook updates into Telegram-backed agent streams.",
   stateSchema: z.object({
-    birthCertificate: TelegramBirthCertificate.nullable().default(null),
-    /** False only while replaying a legacy journal that predates access
-     * policy events. The first policy filters that reconstructed session
-     * history to newly authorized senders; subsequent policy edits do not
-     * erase sessions created while those senders were authorized. */
-    accessPolicyConfigured: z.boolean().default(false),
-    /** Immutable Telegram user ids authorized to reach project agents through
-     * this bot connection. Empty is deliberately deny-all. */
-    allowedUserIds: z.array(z.string()).default([]),
-    /**
-     * Per-chat `/new` session starts, oldest first, keyed by the chat's path
-     * suffix (`chat-{chatId}` or `chat-{chatId}/topic-{threadId}`). The last
-     * entry is the live session; the history serves reply-date fallback
-     * resolution ("latest session started at or before the replied-to date").
-     */
-    sessionsByChat: z.record(z.string(), z.array(SessionStart)).default({}),
-    /**
-     * Bot-message provenance: `{chatId}:{messageId}` → the session stream the
-     * send-requested lived on. Folded from this stream's `message-sent`
-     * claims.
-     */
-    sentMessages: z.record(z.string(), z.object({ sessionPath: z.string() })).default({}),
+    birthCertificate: telegramRouterBirthCertificateSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "Existence marker: null until telegram/created reduces. Names the bot connection " +
+          "this router serves; the router forwards nothing before it.",
+      }),
+    accessPolicyConfigured: z
+      .boolean()
+      .default(false)
+      .meta({
+        description:
+          "False only while replaying a legacy stream that predates access-policy events. The " +
+          "FIRST access-configured event filters the reconstructed session history to newly " +
+          "authorized senders; subsequent policy edits do not erase sessions created while " +
+          "those senders were authorized.",
+      }),
+    allowedUserIds: z
+      .array(z.string())
+      .default([])
+      .meta({
+        description:
+          "Telegram user ids authorized to reach project agents through this bot connection. " +
+          "Empty is deliberately deny-all.",
+      }),
+    sessionsByChat: z
+      .record(
+        z.string().meta({
+          description:
+            "The chat-scoped path suffix: `chat-{chatId}` or `chat-{chatId}/topic-{threadId}`.",
+        }),
+        z.array(
+          z.object({
+            date: z.number().meta({
+              description:
+                "The /new message's `date` (unix seconds) — the session's name and its primary " +
+                "ordering key. Same-second ties are broken by messageId.",
+            }),
+            messageId: z.number().meta({
+              description:
+                "The /new message's message_id — strictly increasing per chat, the tie-break " +
+                "for same-second /new pairs.",
+            }),
+            senderId: z.string().meta({
+              description:
+                "The Telegram user id that sent the /new — the authorization principal the " +
+                "first access policy filters legacy history by.",
+            }),
+            sessionPath: z.string().meta({
+              description: "The routed session stream this /new started.",
+            }),
+          }),
+        ),
+      )
+      .default({})
+      .meta({
+        description:
+          "Per-chat /new session starts, oldest first, reduced straight off the webhook events " +
+          "on this stream (the webhook IS the session-start fact — replay rebuilds the exact " +
+          "same thread model with no extra event type). The last entry is the live session " +
+          "every update routes to; the history serves reply-date fallback resolution ('latest " +
+          "session started at or before the replied-to date'). A chat with no /new yet routes " +
+          "to the bare chat path — session zero, the v1 shape.",
+      }),
+    sentMessages: z
+      .record(
+        z.string().meta({ description: "`{chatId}:{messageId}` of one bot-sent message." }),
+        z.object({
+          sessionPath: z.string().meta({
+            description: "The session stream the message's send-requested lived on.",
+          }),
+        }),
+      )
+      .default({})
+      .meta({
+        description:
+          "Bot-message provenance, reduced from the message-sent claims the telegram-agent " +
+          "processor cross-posts here after each journaled send. Replies to bot messages get " +
+          "EXACT thread hints from this map; replies to user messages fall back to the " +
+          "sessionsByChat date ordering.",
+      }),
   }),
   events: {
     "events.iterate.com/telegram/created": {
       description: "Birth certificate for this Telegram webhook router.",
-      payloadSchema: TelegramBirthCertificate,
-      examples: [
-        {
-          description: "A Telegram connection router is born for one bot connection.",
-          payload: { config: { connection: "support-bot" } },
-        },
-      ],
+      payloadSchema: telegramRouterBirthCertificateSchema(),
     },
     "events.iterate.com/telegram/access-configured": {
       description:
         "Replaces the Telegram user-id allowlist for this bot connection. Empty denies every inbound user.",
       payloadSchema: z.object({
-        allowedUserIds: TelegramAllowedUserIds,
+        allowedUserIds: z
+          .array(z.string().trim().regex(/^\d+$/, "Telegram user IDs contain digits only"))
+          .transform((ids) => [...new Set(ids)])
+          .meta({
+            description:
+              "The complete replacement allowlist: Telegram user ids (digits only), " +
+              "deduplicated on parse. The sender's identity — not the chat — is the " +
+              "authorization principal.",
+          }),
       }),
-      examples: [
-        {
-          description: "Two Telegram users may talk to this project bot.",
-          payload: { allowedUserIds: ["555123", "777456"] },
-        },
-      ],
     },
     "events.iterate.com/telegram-agent/created": {
       description: "Birth certificate for the Telegram facet on an agent stream.",
-      payloadSchema: TelegramAgentBirthCertificate,
-      examples: [
-        {
-          description: "A Telegram facet binds an agent stream to one chat topic.",
-          payload: {
-            config: { connection: "support-bot", chatId: "555123", messageThreadId: "42" },
-          },
-        },
-      ],
+      payloadSchema: z.object({
+        config: z
+          .object({
+            connection: z.string().meta({
+              description: "The named bot connection the session's messages ride.",
+            }),
+            chatId: z.string().meta({
+              description:
+                "The Telegram chat this agent stream is bound to (negative for groups/channels).",
+            }),
+            messageThreadId: z.string().optional().meta({
+              description: "The forum-topic thread id, for supergroup topic sessions only.",
+            }),
+          })
+          .meta({
+            description: "The immutable chat coordinates every journaled send is forced to.",
+          }),
+      }),
     },
     "events.iterate.com/telegram/webhook-received": {
       description:
         "Raw Telegram Update, appended by the webhook door to `/integrations/telegram/{connection}` and forwarded (plus `replyHint` when the update replies to an earlier message) to routed chat/session streams. `botId` is the receiving bot's numeric id (the webhook path segment).",
       payloadSchema: z
-        .object({ body: z.record(z.string(), z.unknown()), botId: z.string() })
+        .object({
+          body: z
+            .record(z.string(), z.unknown())
+            .meta({ description: "The Telegram Update object, verbatim." }),
+          botId: z.string().meta({
+            description: "The receiving bot's numeric id (the webhook path segment).",
+          }),
+        })
         .loose(),
-      examples: [
-        {
-          description: "A private-chat text message, as Telegram's Bot API delivers it.",
-          payload: {
-            botId: "7000001",
-            body: {
-              update_id: 100001,
-              message: {
-                message_id: 42,
-                from: { id: 555123, is_bot: false, first_name: "Misha", username: "misha" },
-                chat: { id: 555123, type: "private" },
-                date: 1_751_980_451,
-                text: "Hey, can you check the deploy status?",
-              },
-            },
-          },
-        },
-      ],
     },
     "events.iterate.com/telegram/message-sent": {
       description:
-        "One journaled send delivered to Telegram. On the session stream it is the effect marker satisfying the send-requested at `requestOffset`; on the connection stream it is the provenance claim (`messageId`, `chatId`, `sessionPath`, `request`) the router folds so replies to bot messages resolve to their exact thread.",
+        "One journaled send delivered to Telegram. On the session stream it is the effect marker satisfying the send-requested at `requestOffset`; on the connection stream it is the provenance claim (`messageId`, `chatId`, `sessionPath`, `request`) the router reduces so replies to bot messages resolve to their exact thread.",
       payloadSchema: z
         .object({
-          messageId: z.number(),
-          chatId: z.string().optional(),
-          requestOffset: z.number().optional(),
-          request: z.object({ offset: z.number(), stream: z.string() }).optional(),
-          sessionPath: z.string().optional(),
+          messageId: z
+            .number()
+            .meta({ description: "Telegram's message_id for the sent message." }),
+          chatId: z.string().optional().meta({
+            description: "The chat the message went to (present on connection-stream claims).",
+          }),
+          requestOffset: z.number().optional().meta({
+            description:
+              "On session-stream markers: the offset of the send-requested this send satisfies.",
+          }),
+          request: z
+            .object({
+              offset: z.number().meta({ description: "The send-requested event's offset." }),
+              stream: z.string().meta({ description: "The session stream it lives on." }),
+            })
+            .optional()
+            .meta({
+              description:
+                "On connection-stream claims: the coordinates of the satisfied send-requested.",
+            }),
+          sessionPath: z.string().optional().meta({
+            description:
+              "On connection-stream claims: the session stream — what reply hints resolve to.",
+          }),
         })
         .loose(),
-      examples: [
-        {
-          description:
-            "The connection-stream provenance claim: bot message_id → the session stream its send-requested lived on.",
-          payload: {
-            messageId: 9001,
-            chatId: "555123",
-            sessionPath: "/agents/telegram/mishas-helper-bot/chat-555123/session-1751980500",
-            request: {
-              offset: 7,
-              stream: "/agents/telegram/mishas-helper-bot/chat-555123/session-1751980500",
-            },
-          },
-        },
-      ],
     },
   },
   consumes: [
@@ -213,4 +217,21 @@ export const TelegramProcessorContract = defineProcessorContract({
  */
 export type TelegramProcessorContract = typeof TelegramProcessorContract;
 
-export type TelegramProcessorState = z.infer<typeof TelegramProcessorContract.stateSchema>;
+export type TelegramProcessorState = z.output<typeof TelegramProcessorContract.stateSchema>;
+
+/** The router's birth certificate — the ONE schema this contract uses twice
+ * (the state's existence marker and the telegram/created payload), hoisted as
+ * a function so the contract can still open the file. */
+function telegramRouterBirthCertificateSchema() {
+  return z.object({
+    config: z
+      .object({
+        connection: z.string().meta({
+          description:
+            "The named bot connection this router serves — the {connection} segment of its " +
+            "own /integrations/telegram/{connection} stream path.",
+        }),
+      })
+      .meta({ description: "Immutable connection coordinates." }),
+  });
+}

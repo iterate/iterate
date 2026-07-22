@@ -20,7 +20,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
   const outputPath = `/worker-forwarding-output-${marker}`;
   const triggerPath = `/worker-forwarding-trigger-${marker}`;
 
-  using project = itx.projects.create({ slug: `worker-forwarding-${marker}` });
+  using project = await itx.projects.get(`worker-forwarding-${marker}`).create({});
 
   await project.repo.commitFiles({
     changes: [
@@ -48,7 +48,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
                 if (event.type !== "events.iterate.com/stream/child-stream-created") return;
                 if (event.payload.childPath !== TRIGGER_PATH) return;
 
-                const project = await this.env.ITX.get();
+                using project = await this.env.ITX.get();
                 await project.streams.get(OUTPUT_PATH).append({
                   type: FORWARDED_EVENT_TYPE,
                   payload: {
@@ -149,7 +149,7 @@ test("Cap'n Web stream subscribe callback survives the stateless Worker proxy", 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `capnweb-subscribe-callback-${marker}` });
+  using project = await itx.projects.get(`capnweb-subscribe-callback-${marker}`).create({});
   using stream = project.streams.get(streamPath);
   const delivered: number[] = [];
 
@@ -220,7 +220,7 @@ test("Cap'n Web stream subscribe with the same key replaces the old callback", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `capnweb-subscribe-replaced-${marker}` });
+  using project = await itx.projects.get(`capnweb-subscribe-replaced-${marker}`).create({});
   using stream = project.streams.get(streamPath);
   const first: number[] = [];
   const second: number[] = [];
@@ -275,7 +275,7 @@ test("Cap'n Web subscriber runtime-state callbacks survive the stateless Worker 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `capnweb-subscribe-nested-${marker}` });
+  using project = await itx.projects.get(`capnweb-subscribe-nested-${marker}`).create({});
   using stream = project.streams.get(streamPath);
   using subscription = await stream.subscribe({
     processEventBatch: () => {},

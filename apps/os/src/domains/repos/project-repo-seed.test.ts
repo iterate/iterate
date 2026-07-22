@@ -6,12 +6,19 @@ test("no override seeds the template verbatim", () => {
   expect(projectRepoSeedFiles(undefined)).toBe(PROJECT_REPO_INITIAL_FILES);
 });
 
+test("the seed keeps the root worker and tasks app proxy", () => {
+  const worker = projectRepoSeedFiles(undefined).find((file) => file.path === "worker.ts");
+  expect(worker?.content).toContain('if (app === "tasks")');
+  expect(worker?.content).toContain('itx.kv.get("tasks-app-origin")');
+  expect(worker?.content).toContain('"tasks.iterate.workers.dev"');
+});
+
 test("an override re-points the iterate dependency in every manifest that carries it", () => {
   const spec = "https://pkg.pr.new/iterate/iterate/iterate@1758";
   const files = projectRepoSeedFiles(spec);
 
   const packageJson = JSON.parse(files.find((file) => file.path === "package.json")!.content);
-  expect(packageJson).toMatchObject({ devDependencies: { iterate: spec } });
+  expect(packageJson).toMatchObject({ dependencies: { iterate: spec } });
 
   // Every non-manifest file is untouched, and nothing still carries @main.
   const others = files.filter((file) => !file.path.endsWith("package.json"));
@@ -28,6 +35,6 @@ test("the template's own spec matches what the substitution looks for", () => {
     PROJECT_REPO_INITIAL_FILES.find((file) => file.path === "package.json")!.content,
   );
   expect(packageJson).toMatchObject({
-    devDependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
+    dependencies: { iterate: TEMPLATE_ITERATE_PACKAGE_SPEC },
   });
 });

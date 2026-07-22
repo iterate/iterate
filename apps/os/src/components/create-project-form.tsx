@@ -21,7 +21,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { connectIterateSession, reconnectIterateSession } from "iterate/react";
+import { connectIterateSession, reconnectIterateSession } from "iterate/sdk/itx/react";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -57,11 +57,12 @@ export function CreateProjectForm({
       // primed, birth events appended — `waitUntilReady: false`); the
       // bootstrap saga runs behind the handle, driven by create's own
       // server-side nudge, and the project home plays it from live pushes.
-      const project = session.projects.create({
-        slug: input.slug,
-        waitUntilReady: false,
-        ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
-      });
+      const project = session.projects.get(input.slug).create(
+        {
+          ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
+        },
+        { waitUntilReady: false },
+      );
       // Navigate to the server's canonical slug, not the form's: auth may
       // normalize it (reserved names, all-numeric).
       const identity = await project.identity();
@@ -69,12 +70,8 @@ export function CreateProjectForm({
     },
     onSuccess: ({ slug }) => {
       setNavigatingAway(true);
-      // Onto the project home immediately with `welcome` so the creation
-      // checklist paints while the bootstrap saga runs. The project route
-      // resolves without the refreshed session: create primes the
-      // server-side project directory, which is the auth fallback for exactly
-      // this claims-lag window. Once `state.ready` flips, the home page
-      // hands off to the onboarding agent.
+      // The project home plays bootstrap progress from live state, then
+      // `welcome` hands the new owner into onboarding once ready.
       void router.navigate({
         to: "/projects/$projectSlug",
         params: { projectSlug: slug },

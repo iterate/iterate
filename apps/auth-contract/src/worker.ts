@@ -49,6 +49,12 @@ export type OAuthAccessTokenIntrospectionResult =
 
 export type MintProjectAppSessionInput = {
   audience: string;
+  /** Display identity baked into the claims for the app behind the proxy
+   * (presence, authorship). Carries no authority — userId is the principal. */
+  email?: string;
+  /** Avatar URL, same display-only status as email/name. */
+  image?: string;
+  name?: string;
   projectId: string;
   userId: string;
 };

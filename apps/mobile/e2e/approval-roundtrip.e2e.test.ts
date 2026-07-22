@@ -2,7 +2,7 @@
 // approver code, from Node — mirrors
 // apps/os/e2e/vitest/egress-approvals.e2e.test.ts's "enrolled key" lane but
 // signs with approver-core.ts (the exact @noble/curves code the phone runs;
-// no Expo imports, same Node-testable split as itx-core.ts) instead of raw
+// no Expo imports) instead of raw
 // crypto.subtle. Proves the mobile software-key approver is byte-for-byte
 // compatible with the platform's real verifier, end to end: a real held
 // fetch, a real Face-ID-shaped signature (minus the Face ID — that's
@@ -11,10 +11,9 @@
 //   doppler run --config dev -- pnpm --dir apps/mobile test:e2e   # local dev (pnpm dev must be running)
 
 import { expect, test } from "vitest";
-import { newWebSocketRpcSession } from "capnweb";
+import { connectItx } from "iterate/node";
 import { waitForCondition } from "../../os/e2e/test-support/wait-for-condition.ts";
 import { withTunnel } from "../../os/e2e/test-support/tunnel.ts";
-import type { UnauthenticatedOs } from "../../os/src/itx-api.generated.ts";
 import { generateApproverKey, signApprovalMessage } from "../src/lib/approver-core.ts";
 import {
   deriveOpenRequests,
@@ -23,7 +22,7 @@ import {
   reject,
   type RequestedPayload,
 } from "../src/lib/approvals.ts";
-import { requireEnv, resolveBaseUrl, wsUrl } from "./e2e-helpers.ts";
+import { requireEnv, resolveBaseUrl } from "./e2e-helpers.ts";
 
 const RULES_CONFIGURED = "events.iterate.com/project/egress-rules-configured";
 
@@ -49,23 +48,25 @@ function startEgressEcho() {
 
 test("phone approver: enrolled key signs a real held request and the door releases it", async () => {
   const baseUrl = resolveBaseUrl();
-  const admin = newWebSocketRpcSession<UnauthenticatedOs>(wsUrl(baseUrl));
-  const adminSession = await admin.authenticate({
-    type: "admin-secret",
-    secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+  using adminSession = connectItx({
+    baseUrl,
+    auth: {
+      type: "admin-secret",
+      secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+    },
   });
 
   const echo = await startEgressEcho();
   try {
     const slug = `mobile-approver-e2e-${Date.now().toString(36)}`;
-    const project = await adminSession.projects.create({ slug });
+    const project = await adminSession.projects.get(slug).create({});
     const projectId = (await project.__describe()).projectId;
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 
     // Enroll — the exact key material approver.ts would generate and
     // persist behind Face ID (approver.ts itself needs expo-secure-store,
-    // so this drives approver-core.ts directly, same split as itx-core.ts).
+    // so this drives approver-core.ts directly).
     const key = generateApproverKey();
     await stream.append(
       {
@@ -143,16 +144,18 @@ test("phone approver: enrolled key signs a real held request and the door releas
 
 test("phone approver: a rejection refuses the held request without signing anything", async () => {
   const baseUrl = resolveBaseUrl();
-  const admin = newWebSocketRpcSession<UnauthenticatedOs>(wsUrl(baseUrl));
-  const adminSession = await admin.authenticate({
-    type: "admin-secret",
-    secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+  using adminSession = connectItx({
+    baseUrl,
+    auth: {
+      type: "admin-secret",
+      secret: requireEnv("APP_CONFIG_ADMIN_API_SECRET"),
+    },
   });
 
   const echo = await startEgressEcho();
   try {
     const slug = `mobile-approver-reject-e2e-${Date.now().toString(36)}`;
-    const project = await adminSession.projects.create({ slug });
+    const project = await adminSession.projects.get(slug).create({});
     const stream = project.streams.get("/");
     const echoHost = new URL(echo.url).hostname;
 

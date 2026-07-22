@@ -54,11 +54,9 @@ export default async function deploy(
     resources: (env) => env.resources,
     requiredSecrets: REQUIRED_SECRETS,
     prepare: async (ctx, secretValues, credentials) => {
-      // Semaphore verifies iterate sessions and bearer tokens against a
-      // static JWKS baked at deploy time (issuer keys + forge public key) —
-      // the same relying-party model as apps/os.
-      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
-        authBaseUrl: ctx.env.authBaseUrl,
+      // Derive Auth's public key locally from the shared Doppler private key;
+      // the private half never ships to Semaphore and Auth need not be live.
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = bakeStaticAuthJwks({
         envName: ctx.name,
         dopplerConfig: ctx.env.dopplerConfig,
         secrets: ctx.secrets,

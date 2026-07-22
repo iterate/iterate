@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
-import { Link, useMatches, useMatchRoute, useSearch } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -12,7 +13,6 @@ import {
   ExternalLink,
   GitBranch,
   KeyRound,
-  ListTodo,
   LogOut,
   Plug,
   Plus,
@@ -64,7 +64,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { useIterateSessionQuery, useLiveState } from "iterate/react";
+import { useIterateSessionQuery, useLiveState } from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../project-deployment-status.ts";
 import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
 import { SidebarAgents } from "./agents/sidebar-agents.tsx";
@@ -73,6 +73,7 @@ import { DeferredSurface } from "~/components/deferred-surface.tsx";
 import type { AppConfig } from "~/config.ts";
 import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
+import { getProjectCustomHostnames } from "~/lib/project-custom-hostnames.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { StreamPath, type StreamPath as StreamPathType } from "~/lib/stream-links.ts";
@@ -138,7 +139,7 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
               >
                 <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
-                  <IterateLogo className="size-6 rounded-sm" />
+                  <IterateLogo className="size-6" />
                 </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>
@@ -167,8 +168,9 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
                     className="gap-2 p-2"
                     render={
                       <Link
-                        to="/projects/$projectSlug/agents/new"
+                        to="/projects/$projectSlug"
                         params={{ projectSlug: project.slug }}
+                        search={{}}
                       />
                     }
                   >
@@ -514,7 +516,6 @@ function ProjectSidebarGroup({
 }) {
   const matchRoute = useMatchRoute();
   const { isMobile, openMobile, state: sidebarState } = useSidebar();
-  const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
@@ -525,25 +526,22 @@ function ProjectSidebarGroup({
   const agentAttentionCount = Object.values(agents).filter(
     (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
   ).length;
-  const isNewAgentActive = Boolean(
-    matchRoute({
-      to: "/projects/$projectSlug/agents/new",
-      params: { projectSlug },
-      fuzzy: false,
-    }),
-  );
-  const isConfigTasksActive = Boolean(
-    matchRoute({
-      to: "/projects/$projectSlug/repos/$",
-      params: { projectSlug, _splat: "config" },
-      fuzzy: false,
-    }) && routeSearch.tasks === true,
-  );
-  const projectWorkerUrl = buildProjectWorkerUrl({
-    projectSlug,
-    projectHostnameBases,
-    appBaseUrl,
+  // A registered custom domain (garple.com) is the project's real address —
+  // the Homepage link prefers it over the platform host (<slug>.<base>).
+  const customHostnames = useQuery({
+    enabled: projectId !== null,
+    queryKey: ["project-custom-hostnames", projectId],
+    queryFn: () => getProjectCustomHostnames({ data: { projectId: projectId ?? "" } }),
+    staleTime: 5 * 60_000,
   });
+  // A malformed directory entry must not cost the link entirely: take the
+  // first registered hostname that passes validation, then the platform host.
+  const projectWorkerUrl = [...(customHostnames.data ?? []), null].reduce<string | null>(
+    (url, customHostname) =>
+      url ??
+      buildProjectWorkerUrl({ projectSlug, customHostname, projectHostnameBases, appBaseUrl }),
+    null,
+  );
   const showAgentRows = sidebarAgentRowsVisible({
     isMobile,
     openMobile,
@@ -558,14 +556,6 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={SquarePen}
               label="New agent"
-              render={
-                <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
-              }
-              isActive={isNewAgentActive}
-            />
-            <ProjectSidebarMenuItem
-              icon={Settings2}
-              label="Settings"
               render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
               isActive={Boolean(
                 matchRoute({
@@ -576,16 +566,18 @@ function ProjectSidebarGroup({
               )}
             />
             <ProjectSidebarMenuItem
-              icon={ListTodo}
-              label="Tasks"
+              icon={Settings2}
+              label="Settings"
               render={
-                <Link
-                  to="/projects/$projectSlug/repos/$"
-                  params={{ projectSlug, _splat: "config" }}
-                  search={{ tasks: true }}
-                />
+                <Link to="/projects/$projectSlug/settings" params={{ projectSlug }} search={{}} />
               }
-              isActive={isConfigTasksActive}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/settings",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }),
+              )}
             />
             <ProjectSidebarMenuItem
               icon={SquareTerminal}
@@ -638,11 +630,7 @@ function ProjectSidebarGroup({
                 <ProjectStreamNavItem
                   key={item.label}
                   icon={item.icon}
-                  isActive={
-                    item.to === "/projects/$projectSlug/agents" && isNewAgentActive
-                      ? false
-                      : itemActive
-                  }
+                  isActive={itemActive}
                   label={item.label}
                   badge={item.to === "/projects/$projectSlug/agents" ? agentAttentionCount : 0}
                   projectSlug={projectSlug}

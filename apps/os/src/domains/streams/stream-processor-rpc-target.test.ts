@@ -463,6 +463,27 @@ describe("StreamProcessorRpcTarget", () => {
     await target.snapshot();
     expect(catchUpBeforeSnapshot).toHaveBeenCalledOnce();
   });
+
+  it("tags a processor lifecycle reset before RPC strips its retryable flag", async () => {
+    const lifecycleReset = Object.assign(
+      new Error(
+        "Internal error while starting up Durable Object storage caused object to be reset",
+      ),
+      { retryable: true },
+    );
+    const reads: ProcessorReads<{ seen: number }> = {
+      getRuntimeState: async () => ({ snapshot: { offset: 0, state: { seen: 0 } } }),
+      snapshot: async () => ({ offset: 0, state: { seen: 0 } }),
+      waitUntilEvent: async () => {
+        throw lifecycleReset;
+      },
+    };
+    const target = new StreamProcessorRpcTarget(reads);
+
+    await expect(target.waitUntilProcessed({ offset: 8, timeoutMs: 75_000 })).rejects.toThrow(
+      "stream-unavailable: Internal error while starting up Durable Object storage caused object to be reset",
+    );
+  });
 });
 
 describe("ProcessorRelayRpcTarget", () => {
@@ -654,12 +675,11 @@ describe("ProcessorRelayRpcTarget", () => {
     expect(acquisitions).toBe(1);
   });
 
-  it("shares one waitUntilProcessed timeout across a lifecycle retry", async () => {
+  it("shares one waitUntilProcessed timeout across a serialized availability retry", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const lifecycleReset = Object.assign(
-      new Error("Durable Object reset because its code was updated."),
-      { durableObjectReset: true },
+    const lifecycleReset = new Error(
+      "stream-unavailable: Durable Object reset because its code was updated.",
     );
     const waits: { offset: number; timeoutMs?: number }[] = [];
     const processor = {

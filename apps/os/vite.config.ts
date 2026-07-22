@@ -10,6 +10,12 @@ import captunVite from "captun/vite";
 import { defineConfig, type Plugin } from "vite";
 import { canonicalizeOutputWranglerConfig } from "./scripts/canonicalize-output-wrangler-config.ts";
 import { writeWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+import { serveDevSdkTarball } from "./scripts/lib/dev-sdk-tarball.ts";
+
+// Local dev pins dynamic worker builds to THIS worktree's iterate sdk (the
+// tarball dev.ts packed) — must happen before the wrangler config below bakes
+// APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC. No-op without the dev.ts env.
+await serveDevSdkTarball();
 
 // wrangler.jsonc is generated (gitignored) — refresh it from envs.ts before
 // the cloudflare plugin reads it, so dev and build can never see stale config.
@@ -17,6 +23,8 @@ writeWranglerConfig();
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
+const deployedEnvironment = process.env.CLOUDFLARE_ENV?.trim();
+const uploadPostHogSourceMaps = deployedEnvironment === "prd";
 
 // Container-backed Durable Objects (the sandbox class) pair every container
 // with a `proxy-everything` egress sidecar. Upstream defaults to linux/amd64;
@@ -66,7 +74,10 @@ export default defineConfig({
         chunkFileNames: safeRollupChunkFileName,
       },
     },
-    sourcemap: true,
+    // Preview versions are ephemeral and retain full Cloudflare traces/logs;
+    // generating and uploading hundreds of PostHog maps used to dominate the
+    // preview build. Production keeps the existing symbolication contract.
+    sourcemap: deployedEnvironment ? uploadPostHogSourceMaps : true,
   },
   resolve: {
     tsconfigPaths: true,
@@ -123,9 +134,9 @@ export default defineConfig({
   ],
 });
 
-/** Upload both browser and Worker maps only during a real deploy build. */
+/** Upload both browser and Worker maps only for the production deploy build. */
 function posthogSourceMaps(): Plugin[] {
-  if (!process.env.CLOUDFLARE_ENV) return [];
+  if (!uploadPostHogSourceMaps) return [];
 
   return [
     // This is the official Rollup/Vite plugin. Its runtime hooks are compatible;

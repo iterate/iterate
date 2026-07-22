@@ -60,7 +60,7 @@ throwaway project first; full walkthrough in
 
 ```bash
 doppler run --project os --config prd -- pnpm cli itx run \
-  --eval 'return await itx.projects.create({ slug: `agent-smoke-${Date.now()}` }).__describe()'
+  --eval 'const slug = `agent-smoke-${Date.now()}`; const project = await itx.projects.get(slug).create({}); return await project.__describe()'
 
 doppler run --project os --config prd -- pnpm cli itx agent-smoke \
   --project <prj_id> --agent-path /agents/smoke --message "PING"
@@ -80,10 +80,10 @@ doppler run --project os --config preview_3 -- pnpm auth:mint \
   --email agent+test@nustom.com --browser-url        # repo root
 ```
 
-Works for dev and previews out of the box. Production minting is gated: the
-deploy only bakes the forge key into a prod-serving JWKS when
-`AUTH_FORGE_ALLOW_PRODUCTION=true` is set in `os/prd`
-(`scripts/lib/bake-auth-jwks.ts`) — handle prod sessions with care.
+Works for dev and previews out of the box. Production signing and minting are
+gated: Auth and relying-party deploys require
+`AUTH_FORGE_ALLOW_PRODUCTION=true` alongside the key in their prd Doppler
+configs (`scripts/lib/bake-auth-jwks.ts`) — handle prod sessions with care.
 
 ## What the deleted runtime-smoke used to cover
 

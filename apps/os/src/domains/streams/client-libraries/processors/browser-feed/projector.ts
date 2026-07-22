@@ -1,7 +1,7 @@
 // Pure projection logic for the "browser-feed" processor: ONE feed item
 // abstraction for everything the stream feed renders.
 //
-// Every event is folded through two lenses in a fixed order, drawing list
+// Every event is reduced through two lenses in a fixed order, drawing list
 // positions from a single monotonic counter, so `feed_items.local_index` is
 // the total feed order — pretty chat rows and raw debug rows interleave in
 // one list, and the React view renders `ORDER BY local_index` instead of
@@ -13,15 +13,15 @@
 //      in reduced state (the live tail renders straight from it).
 //   2. The RAW lens groups the event into `raw.*` rows: types with a specific
 //      renderer become their own `raw.<component>` singleton row; everything
-//      else folds into the current open `raw.group` row while the type
+//      else joins the current open `raw.group` row while the type
 //      matches. Group rows update IN PLACE — later same-type events extend
 //      `last_offset`/`event_count`/`data` but the row keeps its original
 //      `local_index`, so a pretty row emitted mid-run does not split the
 //      group. Interleaving is at feed-item granularity, not per event.
 //
-// This is deliberately a pure function of (state, events): the reducer uses
-// it to advance state, and processEventBatch re-folds it over the same batch
-// to derive the exact SQLite ops. Same input => same ops => idempotent replay.
+// This is deliberately a pure function of (state, events): `reduce` uses it
+// to advance state, and `processEvent` re-runs it over the same event to
+// derive the exact SQLite ops. Same input => same ops => idempotent replay.
 
 import {
   initialAgentUiState,
@@ -62,7 +62,7 @@ function rawSingletonKind(type: string): string | null {
 }
 
 /**
- * Upper bound on events folded into a single raw group row. When an open
+ * Upper bound on events grouped into a single raw group row. When an open
  * group reaches this many events, the next same-type event starts a fresh
  * group instead of extending it — bounding both the `feed_items.data` blob
  * size and the per-batch serialization work for streams dominated by one
@@ -145,10 +145,10 @@ export type FeedOp =
     };
 
 /**
- * Fold a batch of events into feed ops + the resulting state, starting from
- * `start`. The reducer calls this one event at a time (and uses only
- * `endState`); processEventBatch calls it with the whole delivered batch to
- * produce one transaction.
+ * Reduce a batch of events into feed ops + the resulting state, starting from
+ * `start`. The processor's hooks call this one event at a time — `reduce`
+ * keeps only `endState`, `processEvent` keeps only `ops` — but the function
+ * accepts a whole batch and stays correct for multi-event calls.
  *
  * Raw group ops are coalesced per `local_index`: a run of same-type events
  * that all land in the same group row emits ONE op carrying that row's final
@@ -248,7 +248,7 @@ export function planBrowserFeedOps(
         };
         ops.push(openOp);
       } else {
-        // A row inserted/updated earlier in this batch: fold the new event into
+        // A row inserted/updated earlier in this batch: merge the new event into
         // its existing op so the row still produces exactly one statement.
         openOp.lastOffset = open.lastOffset;
         openOp.eventCount = open.eventCount;

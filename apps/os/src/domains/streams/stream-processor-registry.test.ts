@@ -250,6 +250,34 @@ describe("register", () => {
   });
 });
 
+describe("catchUp", () => {
+  it("propagates a lifecycle reset unretried — the calling door owns the one replay", async () => {
+    const h = makeHarness();
+    const reset = Object.assign(new Error("injected deploy reset"), { durableObjectReset: true });
+    let calls = 0;
+    h.stream.getEvents = async () => {
+      calls += 1;
+      throw reset;
+    };
+
+    await expect(h.registry.catchUp("alpha-proc")).rejects.toBe(reset);
+    expect(calls).toBe(1);
+  });
+
+  it("does not replay or swallow application failures", async () => {
+    const h = makeHarness();
+    const failure = new Error("invalid processor input");
+    let calls = 0;
+    h.stream.getEvents = async () => {
+      calls += 1;
+      throw failure;
+    };
+
+    await expect(h.registry.catchUp("alpha-proc")).rejects.toBe(failure);
+    expect(calls).toBe(1);
+  });
+});
+
 // =============================================================================
 // The single-DO-alarm multiplex
 // =============================================================================

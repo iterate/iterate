@@ -9,6 +9,11 @@ import { test } from "./test-support/test.ts";
 // (tasks/stream-subscriber-deliveries-stall-mid-turn.md). Killed runs
 // 4dzf4jv6x1/nvbmgzlspl/91qtw6zt01 on 2026-07-10, one spec each time.
 const DELIVERY_WAIT = { timeout: 30_000 };
+// Route loading and the stream's WebSocket subscription settle independently;
+// the status visibly says "connecting" during the latter. Keep ordinary UI
+// actions on the intentionally tight global timeout while this real progress
+// state owns its liveness bound.
+const STREAM_READY_WAIT = { timeout: 30_000 };
 
 test("reactivity page repaints from a stream subscription after a page action", async ({
   helpers,
@@ -17,7 +22,7 @@ test("reactivity page repaints from a stream subscription after a page action", 
   await using projectFixture = await helpers.createFixture("reactivity");
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
-  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
   await page.getByTestId("reactivity-project-id").getByText(projectFixture.project.id).waitFor();
 
   const initialEventCount = await metricNumber(page, "reactivity-stream-event-count");
@@ -41,7 +46,7 @@ test("reactivity page appends a batch and renders every delivered marker", async
   await using projectFixture = await helpers.createFixture("reactivity-batch");
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
-  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
 
   const initialEventCount = await metricNumber(page, "reactivity-stream-event-count");
 
@@ -69,7 +74,7 @@ test("reactivity page replays already appended events after reload", async ({ he
   await using projectFixture = await helpers.createFixture("reactivity-replay");
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
-  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
   await page.getByRole("button", { name: "Append stream event" }).click();
   await page
     .getByTestId("reactivity-event-list")
@@ -78,7 +83,7 @@ test("reactivity page replays already appended events after reload", async ({ he
 
   await page.reload();
 
-  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+  await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
   await page
     .getByTestId("reactivity-event-list")
     .getByText("reactivity-event-1")
@@ -96,8 +101,11 @@ test("reactivity page delivers an appended event to another open tab", async ({
   try {
     await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
     await otherPage.goto(`/projects/${projectFixture.project.slug}/reactivity`);
-    await page.getByTestId("reactivity-stream-status").getByText("live").waitFor();
-    await otherPage.getByTestId("reactivity-stream-status").getByText("live").waitFor();
+    await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
+    await otherPage
+      .getByTestId("reactivity-stream-status")
+      .getByText("live")
+      .waitFor(STREAM_READY_WAIT);
 
     await page.getByRole("button", { name: "Append stream event" }).click();
 
@@ -124,7 +132,7 @@ test("reactivity page processor panel goes live and repaints from a server push"
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
   // The processor panel must actually be LIVE (a live-state push
   // subscription), not silently erroring behind a loader fallback.
-  await page.getByTestId("reactivity-status").getByText("live").waitFor();
+  await page.getByTestId("reactivity-status").getByText("live").waitFor(STREAM_READY_WAIT);
   await page.getByTestId("reactivity-phase").getByText("ready").waitFor();
 
   // #1810 removed the processor-offset metric; "State updates" is its

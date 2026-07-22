@@ -11,6 +11,8 @@
 // Exits 0 on PASS, 1 on timeout/failure.
 
 import process from "node:process";
+import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import NodeWebSocket from "ws";
 import {
   configureIterateSession,
   connectItx,
@@ -26,6 +28,20 @@ import { waitForCondition } from "../test-support/wait-for-condition.ts";
 const AGENT_PATH = "/agents/onboarding";
 const REPLY_TIMEOUT_MS = 120_000;
 const startedAt = Date.now();
+
+const workerVersionHeaders = cloudflareWorkerVersionOverrideHeaders(process.env);
+if (Object.keys(workerVersionHeaders).length > 0) {
+  // Node's browser-compatible global WebSocket cannot attach handshake
+  // headers. Preview CI swaps in the repo's existing Node transport so this
+  // keeper socket proves the same immutable Worker versions as every other
+  // HTTP and WebSocket entrypoint. Local runs keep the TUI's native transport.
+  class PreviewWebSocket extends NodeWebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols, { headers: workerVersionHeaders });
+    }
+  }
+  globalThis.WebSocket = PreviewWebSocket as unknown as typeof globalThis.WebSocket;
+}
 
 const project = await createTestProject({ slugPrefix: "tui-smoke" });
 log(`created project ${project.project.id} at ${project.baseUrl}`);

@@ -5,7 +5,7 @@
 // stateless one (`itx.liveDemo.ticker`, driven by a timer in the request
 // isolate with no DO).
 import { expect, test } from "vitest";
-import { applyPatch, type LiveUpdate } from "iterate/live-state";
+import { applyPatch, type LiveUpdate } from "iterate/sdk/capnweb";
 import type { ProjectLiveState } from "../../src/domains/projects/project-live-state.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -16,7 +16,7 @@ test("itx.liveState pushes a snapshot then a minimal diff; the DO-backed counter
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `live-state-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`live-state-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();
@@ -60,7 +60,7 @@ test("itx.liveDemo.ticker (stateless, no Durable Object) advances over time", as
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `live-ticker-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`live-ticker-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const track = trackLiveState<{ tick: number; startedAt: number }>();
@@ -78,7 +78,7 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `live-index-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`live-index-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
   const track = trackLiveState<ProjectLiveState>();

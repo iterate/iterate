@@ -459,9 +459,27 @@ describe("legacy login (email + password, no refresh grant)", () => {
 describe("token endpoint outage (backdoor-scheduled)", () => {
   test("fails the next N token calls, then recovers", async () => {
     const shop = makeShop();
-    expect((await shop("/__backdoor/fail-token-endpoint", postJson({ times: 2 }))).status).toBe(
-      200,
-    );
+    const otherClient = await (
+      await shop("/__backdoor/clients", postJson({}))
+    ).json<{ clientId: string; clientSecret: string }>();
+    expect(
+      (
+        await shop(
+          "/__backdoor/fail-token-endpoint",
+          postJson({ clientId: DEFAULT_CLIENT_ID, times: 2 }),
+        )
+      ).status,
+    ).toBe(200);
+    // A concurrent client's call reaches the real endpoint and cannot consume
+    // the default client's scheduled failures.
+    expect(
+      (
+        await exchange(shop, {
+          ...otherClient,
+          body: { grant_type: "refresh_token", refresh_token: "irrelevant" },
+        })
+      ).status,
+    ).toBe(400);
     const attempt = () =>
       exchange(shop, {
         clientId: DEFAULT_CLIENT_ID,
@@ -472,13 +490,23 @@ describe("token endpoint outage (backdoor-scheduled)", () => {
     expect((await attempt()).status).toBe(500);
     // Third call reaches the real endpoint (and fails normally on the junk token).
     expect((await attempt()).status).toBe(400);
-    expect((await backdoorState(shop)).tokenEndpointFailuresRemaining).toBe(0);
+    expect(
+      (await backdoorState(shop)).tokenEndpointFailuresRemainingByClient[DEFAULT_CLIENT_ID],
+    ).toBeUndefined();
   });
 
-  test("rejects a non-integer times", async () => {
+  test("requires a client and rejects a non-integer times", async () => {
     const shop = makeShop();
+    expect((await shop("/__backdoor/fail-token-endpoint", postJson({ times: 1 }))).status).toBe(
+      400,
+    );
     expect(
-      (await shop("/__backdoor/fail-token-endpoint", postJson({ times: "many" }))).status,
+      (
+        await shop(
+          "/__backdoor/fail-token-endpoint",
+          postJson({ clientId: DEFAULT_CLIENT_ID, times: "many" }),
+        )
+      ).status,
     ).toBe(400);
   });
 });

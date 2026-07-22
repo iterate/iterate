@@ -20,7 +20,7 @@ import {
  * Three consumers:
  * - `substitutePlatformApiKeyReferences` — the project egress door substitutes
  *   `getSecret({ platform: "<configPath>" })` header references for
- *   Iterate-owned API keys, each pinned to its provider origins.
+ *   iterate-owned API keys, each pinned to its provider origins.
  * - `resolvePlatformClientCreds` — the Secret DO's `oauth-refresh-token`
  *   strategy resolves a built-in integration's OAuth client credential.
  * - `resolvePlatformGithubAppKey` — the Secret DO's `github-app-installation`
@@ -31,7 +31,7 @@ import {
  * project material and there is no lane that reveals them to a caller.
  */
 
-/** Iterate-owned API keys substitutable into project egress. Adding one is
+/** iterate-owned API keys substitutable into project egress. Adding one is
  * adding a config key + a row here. The `origins` pin is enforced against the
  * request's terminal destination no matter who composed the request. */
 const PLATFORM_API_KEYS: Record<

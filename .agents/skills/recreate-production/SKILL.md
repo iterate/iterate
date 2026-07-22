@@ -111,6 +111,23 @@ the complete [GitHub production smoke](../../../docs/github-smoke-testing.md),
 and project-worker boot. Add PR-specific checks for whatever
 changed. Do not trigger externally visible provider actions without approval.
 
+### Production website (`iterate.com`)
+
+The company website is the `iterate` project worker, reached on the owned apex
+via Worker routes `iterate.com/*` and `*.iterate.com/*` → `os-prd` (see
+`ownedProjectCustomApexes` in root `envs.ts`). Those routes alone are not
+enough: ingress still needs the project-directory KV registration
+
+```text
+hostname:iterate.com → { id, slug, organizationId, name } of project "iterate"
+```
+
+Re-prime that key after every production erase (same shape as `slug:iterate`).
+Do **not** register `hostname:www.iterate.com` — the custom-domain parent
+fallback would treat `www` as an app slug and the seed homepage would emit
+`tasks.www.iterate.com` links. Do not add a www↔apex redirect unless a human
+explicitly asks for one.
+
 For Slack, run
 [`scripts/verify-slack-connection.itx.js`](scripts/verify-slack-connection.itx.js)
 without a project context immediately after OAuth. It requires a successful

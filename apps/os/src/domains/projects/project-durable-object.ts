@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/live-state";
+import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
@@ -43,8 +43,6 @@ import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.
 import {
   buildApprovalMessage,
   evaluateGrant,
-  HumanApprovalGrantedPayload,
-  HumanApprovalRejectedPayload,
   matchEgressRule,
   sha256Hex,
   type EgressRule,
@@ -64,6 +62,11 @@ import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
 
 export class ProjectDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   #egressInterceptor?: ReturnType<typeof deepRetainRpcStubs<ProjectEgressInterceptor>>;
   // Last time #egressRules paid a catch-up — bounds rules staleness to ~5s.
@@ -296,7 +299,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /** Demo mutation: bump the shared counter and push it to every `itx.liveState` watcher. */
-  incrementLiveDemo(): void {
+  async incrementLiveDemo(): Promise<void> {
+    // External live-state inputs cannot use the synchronous refresh door on a
+    // cold incarnation: it deliberately refuses to assemble from a runner's
+    // schema default. Load every peer before mutating so this update is
+    // published immediately and a load failure rejects the caller.
+    await this.#registry.loadAndRefreshLive();
     this.#liveDemo = { count: this.#liveDemo.count + 1 };
     this.#registry.refreshLive();
   }
@@ -307,7 +315,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * are harmless; a storage/RPC failure rejects the batch instead of silently
    * leaving live state stale.
    */
-  indexCommittedBatchFacts(input: { stream: TouchInput }): void {
+  async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
+    // See incrementLiveDemo: once this resolves every peer slice is real, so
+    // the synchronous refresh below cannot drop this external index update.
+    await this.#registry.loadAndRefreshLive();
     const streamsBefore = this.#streamDatabase.all();
     this.#streamDatabase.touch(input.stream);
     if (streamsBefore !== this.#streamDatabase.all()) {
@@ -555,14 +566,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     },
   ): Promise<"granted" | "rejected" | null> {
     if (event.type === "events.iterate.com/project/human-approval-rejected") {
-      const rejection = HumanApprovalRejectedPayload.safeParse(event.payload);
+      const rejection = ProjectProcessorContract.events[
+        "events.iterate.com/project/human-approval-rejected"
+      ].payloadSchema.safeParse(event.payload);
       return rejection.success &&
         rejection.data.approvalRequestEventOffset === input.approvalRequestEventOffset
         ? "rejected"
         : null;
     }
 
-    const grant = HumanApprovalGrantedPayload.safeParse(event.payload);
+    const grant = ProjectProcessorContract.events[
+      "events.iterate.com/project/human-approval-granted"
+    ].payloadSchema.safeParse(event.payload);
     if (
       !grant.success ||
       grant.data.approvalRequestEventOffset !== input.approvalRequestEventOffset

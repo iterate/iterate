@@ -21,10 +21,7 @@ import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.t
 import { getConnectionStatus } from "../integrations/connect-flows.ts";
 import { connectionOctokit, normalizeGithubError } from "../integrations/github-api.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
-import {
-  GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
-  integrationConnectionStreamPath,
-} from "../integrations/utils.ts";
+import { integrationConnectionStreamPath } from "../integrations/utils.ts";
 import type { GithubRepoLink, LinkGithubResult } from "./types.ts";
 
 /** Whether a failed repo-create was GitHub's 422 "name already exists" — the
@@ -64,7 +61,7 @@ function githubCrossPostSubscriptionEvent(input: {
       subscriptionKey: input.subscriptionKey,
       description: `Copies GitHub webhooks for ${input.owner}/${input.repo} onto this repo's stream so default-branch pushes can be imported.`,
       selector: {
-        eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
+        eventTypes: ["events.iterate.com/github/webhook-received"],
         condition: `payload.delivery.name = "push" and payload.body.repository.id = ${input.repositoryId}`,
       },
       delivery: {

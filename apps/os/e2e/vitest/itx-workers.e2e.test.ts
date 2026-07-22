@@ -1,10 +1,10 @@
 import { expect, test } from "vitest";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { DynamicWorkerRef } from "../../src/domains/workers/schemas.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
 import { inlineJsSource } from "./itx-test-support.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
-// These are hand written tests - they MUST pass
 test("Project repos, workers, runScript, and dynamic worker refs compose", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
@@ -12,24 +12,29 @@ test("Project repos, workers, runScript, and dynamic worker refs compose", async
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "dynamic-worker-project" });
+  using project = await itx.projects
+    .get(`dynamic-worker-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   const description = await project.__describe();
 
-  // The seeded root worker now routes via x-iterate-app (static homepage
-  // otherwise); the hello app keeps the path-echo this assertion relies on.
+  // The seeded root worker routes via x-iterate-app (static homepage
+  // otherwise); an unknown selection echoes back in the 404 body, giving the
+  // script a request-specific probe through the fetch lane with no app cold
+  // build.
   const scriptResult = await itxScript(project.capabilityHost).execute(async (itx) => {
     const response = await itx.worker.fetch(
-      new Request("https://example.com/script", { headers: { "x-iterate-app": "hello" } }),
+      new Request("https://example.com/script", { headers: { "x-iterate-app": "script-probe" } }),
     );
-    const body = (await response.json()) as { app: string; path: string };
     return {
       repo: await itx.repo.whoami(),
-      worker: `${body.app} fetched ${body.path}`,
+      sandboxCreate: typeof itx.sandboxes.get("/sandboxes/surface-probe").create,
+      worker: `${response.status} ${await response.text()}`,
     };
   });
   expect(scriptResult.success()).toEqual({
     repo: `repo ${description.projectId}:/repos/config`,
-    worker: "hello fetched /script",
+    sandboxCreate: "function",
+    worker: "404 unknown app: script-probe",
   });
 
   const commit = await project.repo.commitFiles({
@@ -249,11 +254,13 @@ test("deleting the main worker file makes the next project worker build fail", a
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "deleted-worker-source" });
+  using project = await itx.projects
+    .get(`deleted-worker-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
   // The seeded root worker serves a static homepage; this warm-up only needs
   // proof the seeded worker.ts is live before we delete it.
   const warmResponse = await project.worker.fetch(new Request("https://example.com/warm"));
-  expect(await warmResponse.text()).toContain("Hello from your Iterate project worker");
+  expect(await warmResponse.text()).toContain("Hello from your iterate project worker");
 
   await project.repo.commitFiles({
     changes: [{ delete: true, path: "worker.ts" }],
@@ -272,7 +279,7 @@ test("Worker expression capabilities dispatch nested RpcTarget paths", async () 
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `worker-flatten-${marker}` });
+  using project = await itx.projects.get(`worker-flatten-${marker}`).create({});
 
   const source = {
     createWorker: {
@@ -389,7 +396,7 @@ test("Dynamic workers can return RpcTarget capabilities that keep chaining", asy
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `returned-rpc-target-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`returned-rpc-target-${crypto.randomUUID()}`).create({});
 
   type ReturnedTool = {
     child: { value(): Promise<{ label: string; via: string }> };
@@ -526,7 +533,7 @@ test("Worker capabilities cover project/agent, stateful/stateless, repo/inline r
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "worker-capability-matrix" });
+  using project = await itx.projects.get(uniqueFixtureSlug("worker-capability-matrix")).create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/worker-capability-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);

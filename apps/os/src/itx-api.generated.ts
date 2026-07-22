@@ -81,19 +81,37 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
+   * Register (for a prospective slug) and append the complete root birth
+   * batch. By default this resolves once the bootstrap saga has committed
+   * `project/ready` — the right shape for scripts that use the project
+   * immediately. `waitUntilReady: false` resolves as soon as the project
+   * EXISTS (identity registered, directory primed, birth events appended):
+   * the caller renders bootstrap progress itself, so nobody is left waiting.
+   * The durable-delivery subscriptions committed in the birth batch are what
+   * guarantee the saga runs; create also nudges both root processors AFTER
+   * this response, and a failed nudge is telemetry, not a create failure —
+   * the checklist's stall detector covers the rest. Either lane returns this
+   * same handle, and addressing an unknown slug is side-effect free.
+   */
+  create(
+    args: { organizationSlug?: string; projectId?: string },
+    options?: { waitUntilReady?: boolean },
+  ): Promise<Project>;
+  /**
    * Canonical identity from the project directory: id, slug (the auth
    * worker's normalized form — what URLs and ingress hostnames use),
    * organization, and display name. A directory read only — no project DO
    * dial — so it is safe pre-birth and cheap to pipeline through
-   * `projects.create()`.
+   * `projects.get(slug).create()`.
    */
   identity(): Promise<ProjectIdentity>;
   /**
    * Resolve once the bootstrap saga has committed `project/ready`. Replays
    * stream history first, so an already-ready project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
-   * observing. The composable partner of
-   * `projects.create({ waitUntilReady: false })`.
+   * observing. `create()` waits here by default; this remains useful after a
+   * non-blocking create or when a caller receives an existing handle while a
+   * bootstrap is in flight.
    */
   waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
   /**
@@ -164,14 +182,14 @@ export interface Project {
   mcp: McpClientCollection;
   /** Ad-hoc OpenAPI clients: connect(spec). */
   openapi: OpenApiCollection;
-  /** Parallel API, preconfigured with Iterate's platform API key. */
+  /** Parallel API, preconfigured with iterate's platform API key. */
   parallel: OpenApiRpc;
   /** Repo catalog by path. */
   repos: ProjectRepoCollection;
   /** Enrolled phone installations and their durable notification journals. */
   devices: DeviceCollection;
   /** The project's sandboxes — explicitly created, sized Linux containers
-   * (`itx.sandboxes.create` / `get` / `list`) — see {@link SandboxCollection}. */
+   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */
   sandboxes: SandboxCollection;
   /** The default project Scheduler — shorthand for `schedulers.get("/scheduler/primary")`. */
   scheduler: Scheduler;
@@ -228,27 +246,6 @@ export interface ProjectCollection {
    */
   get(idOrSlug: string): Promise<Project>;
   /**
-   * Register and bootstrap a project. By default this resolves once the
-   * bootstrap saga has committed `project/ready` — the right shape for
-   * scripts and pipelined chains that use the project immediately.
-   *
-   * `waitUntilReady: false` resolves as soon as the project EXISTS: identity
-   * registered, directory primed, birth events appended. The saga keeps
-   * running behind the returned handle — create still drives processor birth
-   * via a post-response nudge, so no caller has to. Progress is ordinary
-   * live state (`state.reduced.ready` flips when bootstrap lands), and
-   * `waitUntilReady()` on the handle is the composable wait. Pipeline
-   * `identity()` through the create call to learn the canonical slug (auth
-   * may normalize it) in the same round trip — the dashboard does exactly
-   * that, then plays the checklist from live pushes.
-   */
-  create(args: {
-    organizationSlug?: string;
-    projectId?: string;
-    slug: string;
-    waitUntilReady?: boolean;
-  }): Promise<Project>;
-  /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
    * engine probe (`state.ready` on each project's processor snapshot). A
@@ -261,20 +258,7 @@ export interface ProjectCollection {
   list(input?: { scope?: "mine" | "deployment" }): Promise<ProjectListEntry[]>;
 }
 
-/**
- * A node's live state — a source-agnostic reactive value. `get()` reads it once;
- * `subscribe()` opens a channel that pushes a full snapshot then minimal diffs
- * (see `lib/live-state`), which the React `useLiveState` hook reassembles so
- * components pick only the slice they render. ANY RpcTarget can expose one: a
- * Durable Object over its folded state, or a stateless worker over state it
- * computes or fetches.
- *
- * Deliberately READ-ONLY over the wire: the server DERIVES this state (a DO
- * reassembles it from its fold), so writes go through the node's own verbs —
- * events appended, mutations called — never a generic `set`. A wire-level
- * `set`/`assign` would let any principal that can reach the node broadcast
- * fabricated state to every subscriber.
- */
+/** Read-only live value exposed across a Cap'n Web capability boundary. */
 export interface LiveStateRpc<State = unknown> {
   get(): Promise<State>;
   subscribe(onUpdate: (update: LiveUpdate<State>) => unknown): Promise<LiveStateSubscriptionHandle>;
@@ -426,12 +410,17 @@ export interface Agent {
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
-   * agent, capability-host, and singleton collection processors have reduced
-   * the birth. Configuration, context, and tasks are separate events: append
-   * processor-consumed events through `agent.append()` or use a typed helper
-   * such as `message()` after creation.
+   * agent, capability-host, singleton collection, and explicitly-created
+   * workspace processors have reduced their births. The optional payload is
+   * the `agent/created` birth certificate
+   * (arbitrary birth facts; defaults to `{}`). Configuration, context, and
+   * tasks remain separate events: append processor-consumed events through
+   * `agent.append()` or use a typed helper such as `message()` after creation.
+   * Resolves with this same agent handle, so create chains.
+   * Identical-payload retries dedupe on the birth idempotency keys; a create
+   * over an existing agent with a different payload fails loudly.
    */
-  create(): Promise<void>;
+  create(payload?: AgentCreateInput): Promise<Agent>;
   /**
    * Send a message to this agent — THE inbound door for every caller. The
    * context item's actor derives from the calling scope: inside an agent script
@@ -531,8 +520,16 @@ export interface CapabilityHost {
   /** This scope's capability-host stream processor (snapshot/state). A real
    * member, so it also claims the name: mounts cannot shadow `processor`. */
   processor: WakeableStreamProcessorRpc;
-  /** Create this capability host and return only after it has processed its birth batch. */
-  create(): Promise<void>;
+  /**
+   * Create this capability host: append the atomic birth batch (created +
+   * processor subscription; the payload defaults to `{}` config with the
+   * standard one-hop fallback to the project root host — the path is
+   * normalized in the constructor), wait until the processor has consumed it,
+   * and return this same host handle, so create chains. Identical-payload
+   * retries dedupe on the birth idempotency keys; a create over an existing
+   * host with a different payload fails loudly.
+   */
+  create(payload?: CapabilityHostCreateInput): Promise<CapabilityHost>;
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
@@ -782,7 +779,7 @@ export interface ProjectIntegrations {
   telegram: IntegrationFamily<TelegramConnection>;
   /** Waitrose account connections. */
   waitrose: IntegrationFamily<WaitroseConnection>;
-  /** Parallel API, preconfigured with Iterate's platform API key. Not a connection. */
+  /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   parallel: OpenApiRpc;
   /** Cloudflare first-party platform bindings: AI, Browser Run, Images, Media
    * Transformations. Like `parallel`, these ride the deployment's own
@@ -926,51 +923,10 @@ export interface DeviceCollection {
   list(): Promise<DeviceDescription[]>;
 }
 
-/**
- * The `itx.sandboxes` built-in. Sandboxes are PETS:
- * `create({ name, instanceType })` is the only way one comes to exist
- * (nothing mints a sandbox implicitly — `get` refuses paths that were never
- * created), names are one path segment (`/sandboxes/<name>` — no intermediate
- * folders in the stream tree), and the sandbox itself carries the imperative
- * lifecycle (`start`/`sleep`/`destroy`).
- *
- * `get(path)` returns the sandbox Durable Object's own RPC stub —
- * deliberately NO RpcTarget wrapper, so the caller sees exactly what the
- * `@cloudflare/sandbox` SDK exposes and new SDK methods need no forwarding
- * code here. Confinement is by name: the stub is minted from this project's
- * id plus the validated path, after the same project-access assert every
- * collection performs.
- *
- * The instance type is CONFIGURATION, not identity — but Cloudflare fixes
- * instance type per container class (instance-types.ts), so each type is its
- * own Durable Object namespace and routing needs the type. The `/sandboxes`
- * catalogue stream is the directory: `create` journals `create-requested`
- * there (idempotency-keyed by path, so the stream's native dedup makes the
- * FIRST claim on a name authoritative — races settle atomically in one
- * append) BEFORE touching any container namespace, and `get` routes by the
- * claim's instance type. The catalogue and not the sandbox's own stream
- * because reads materialize streams (any wake appends `created`/`woken`):
- * routing a `get` through the sandbox's own stream would mint a junk stream
- * for every typo'd path, and addressing must never create.
- */
+/** Path-addressed sandbox catalogue. `get` is pure addressing; creation lives on the handle. */
 export interface SandboxCollection {
   __describe(): Promise<Description>;
-  /** The sandbox's hosted reducer. Kept on the collection as an isolate-side
-   * relay because `get(path)` deliberately returns the bare SDK stub, and a
-   * Workers RPC property read cannot itself be pipelined through. */
-  processor(path: string): WakeableStreamProcessorRpc<SandboxProcessorState>;
-  /** Push-driven reduced lifecycle state for one sandbox, including a
-   * destroyed sandbox whose command door is no longer usable. */
-  liveState(path: string): LiveStateRpc<SandboxProcessorState>;
-  /** Create a sandbox. Strict: an existing or destroyed path is an error.
-   * Returns the path to `get`. */
-  create(
-    input: SandboxCreateInput,
-  ): Promise<{ createdAt: string; instanceType: SandboxInstanceType; path: string }>;
-  /** The sandbox at a path. Throws unless the path was created (and not destroyed). */
-  get(path: string): Promise<CloudflareSandbox>;
-  /** Every sandbox stream path in the project (`/sandboxes/...`), including
-   * destroyed sandboxes' streams — the stream is the history. */
+  get(path: string): Sandbox;
   list(): Promise<StreamListItem[]>;
 }
 
@@ -991,7 +947,7 @@ export interface Scheduler {
   /** The scheduler stream processor (snapshot/state). */
   processor: WakeableStreamProcessorRpc<SchedulerProcessorState>;
   /** Create this Scheduler and return only after it has processed the complete birth batch. */
-  create(): Promise<void>;
+  create(_input: Record<string, never>): Promise<Scheduler>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
@@ -1036,23 +992,21 @@ export interface SecretCollection {
 /** Git-backed repo capability used by project workers and dynamic worker refs. */
 export interface Repo {
   __describe(): Promise<Description>;
-  /** Request creation and wait for the repo processor saga's terminal fact.
-   * The request chooses an empty seed, a private GitHub pull at depth one, or
-   * a public import performed by Cloudflare Artifacts outside the Worker
-   * isolate (full history unless `depth` is provided). Throws the saga's
-   * recorded error if creation fails. */
-  create(
-    input:
-      | { type: "empty" }
-      | { type: "github-private"; connection: string; owner: string; repo: string }
-      | {
-          type: "github-public";
-          connection: string;
-          depth?: number;
-          owner: string;
-          repo: string;
-        },
-  ): Promise<void>;
+  /**
+   * Request creation and wait for the repo creation saga's terminal fact.
+   * The request chooses an empty starter seed (the default), a private
+   * GitHub pull at depth one, or a public import performed by Cloudflare
+   * Artifacts outside the Worker isolate (full history unless `depth` is
+   * provided). Appends the atomic request batch (`repos/create-requested` +
+   * the repo processor subscription, plus the catalog cross-post rule that
+   * copies the terminal certificate onto `/`), then waits for
+   * `repos/created` and resolves with this same handle, so create chains —
+   * or throws the saga's recorded error when creation fails. An
+   * identical-payload retry dedupes on the request idempotency keys and
+   * resumes the same saga; a create over an existing repo with a different
+   * payload fails loudly.
+   */
+  create(payload?: RepoCreateInput): Promise<Repo>;
   /** Repo identity string (debug). */
   whoami(): Promise<string>;
   /** Restart the repo's server-side object; the next request boots it fresh. */
@@ -1066,13 +1020,6 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-  /**
-   * Every task markdown file's contents at HEAD, keyed by path, in a single
-   * clone — the task board's bulk load. Cheaper than `listFiles()` plus a
-   * `readFile()` per task: the task include mask is applied before contents
-   * are read, so cost scales with the number of tasks, not the repo size.
-   */
-  listTaskFiles(): Promise<{ commitOid: string; files: Record<string, string> }>;
   /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file
@@ -1124,7 +1071,7 @@ export interface Repo {
    *
    * The history transfers in-process. `depth` requests a bounded history
    * window, but fast-forward syncs always retain the previous Artifacts head
-   * as well so queue-derived task diffs can read both sides. GitHub retains
+   * as well so queue-derived commit diffs can read both sides. GitHub retains
    * the full history, and a later deeper sync can always widen the window.
    */
   syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult>;
@@ -1166,25 +1113,14 @@ export interface DynamicWorkerCollection {
  * (`/workspaces/agents/...`, exposed as `itx.workspace` in that agent's
  * scope), and standalone workspaces live under `/workspaces/<anything>`.
  *
- * A workspace's identity + configuration are stream facts: `create({ path,
- * mounts })` appends the `workspace/created` birth certificate to the
- * workspace's own stream; `workspace/configured` patches the mount table. A
- * workspace touched without an explicit create births itself with the default
- * table (the config repo mounted at "/", committable) — so `get(path)` is
- * always usable and behaves like the old single-parent overlay by default.
+ * A workspace's identity + configuration are stream facts. `get(path)` only
+ * addresses a handle; `get(path).create({ mounts? })` appends the atomic birth
+ * batch. Every birth-requiring method fails loudly until that explicit create.
  */
 export interface WorkspaceCollection {
   __describe(): Promise<Description>;
-  /** The workspace at a path (first touch births it with the default mount table). */
+  /** A workspace handle at a path. Addressing never creates it. */
   get(path: string): Workspace;
-  /**
-   * Create a workspace. Runs entirely inside the workspace Durable Object's
-   * serialized authority: birth is ensured (the certificate is ALWAYS the
-   * default table — identical body, so the idempotency key can never hit the
-   * stream's different-body rejection), then a custom `mounts` table
-   * converges via one validated `workspace/configured` patch. Idempotent.
-   */
-  create(input: { mounts?: Record<string, WorkspaceMount>; path: string }): Promise<Workspace>;
 }
 
 /**
@@ -1425,12 +1361,61 @@ export interface CloudflareIntegrations {
 /** One enrolled installation. Push credentials enter only through enroll(). */
 export interface Device {
   __describe(): Promise<Description & DeviceDescription>;
+  /**
+   * Enroll remains a named device-vocabulary door instead of generic create:
+   * it first routes the private Expo push token into the device's Secret,
+   * then appends the device certificate and processor subscription atomically
+   * after that Secret offset. Re-enrollment rotates the credential without
+   * rebirthing the Device.
+   */
   enroll(input: DeviceEnrollInput): Promise<DeviceDescription>;
   append(...events: DeviceAppendInput[]): Promise<StreamEvent[]>;
   revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent>;
   kill(): Promise<void>;
   processor: WakeableStreamProcessorRpc<DeviceDescription>;
   liveState: LiveStateRpc<DeviceDescription>;
+}
+
+/**
+ * One address-first sandbox handle. Addressing never creates or even chooses
+ * a container namespace. `create(input)` claims the path in the catalogue,
+ * lets the selected Durable Object append and reduce its own birth batch, and
+ * returns this handle. Every later SDK call resolves the durable claim and is
+ * receiver-preservingly replayed onto the real Cloudflare Sandbox stub.
+ */
+export interface Sandbox {
+  __describe(): Promise<Description>;
+  /** Claim, birth, and configure this sandbox; identical re-entry returns this handle. */
+  create(input: SandboxCreateInput): Promise<Sandbox>;
+  /** The sandbox's hosted lifecycle reducer. */
+  processor: WakeableStreamProcessorRpc<SandboxProcessorState>;
+  /** Push-driven reduced lifecycle state, including after permanent destroy. */
+  liveState: LiveStateRpc<SandboxProcessorState>;
+  start(): Promise<void>;
+  sleep(): Promise<void>;
+  restart(): Promise<void>;
+  destroy(): Promise<void>;
+  kill(): Promise<void>;
+  exec(
+    command: string,
+    options?: {
+      cwd?: string;
+      encoding?: string;
+      env?: Record<string, string | undefined>;
+      timeout?: number;
+    },
+  ): Promise<{
+    success: boolean;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    command: string;
+    duration: number;
+    timestamp: string;
+    sessionId?: string;
+  }>;
+  /** Replay any undeclared Cloudflare Sandbox SDK path onto the claimed stub. */
+  invokeCapability(call: { args: unknown[]; path: string[] }): Promise<unknown>;
 }
 
 /** Path-addressed secret capability. Secret material has no public read API:
@@ -1446,8 +1431,17 @@ export interface Secret {
   fetch(request: Request): Promise<Response>;
   /** Restart the secret's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** Create this secret and wait until its processor has folded the birth certificate. */
-  create(input: SecretCreateInput): Promise<StreamEvent>;
+  /**
+   * Create this secret and wait until its processor has reduced the birth
+   * certificate, then return this same secret handle, so create chains. The
+   * Secret Durable Object owns the birth semantics: it encrypts the material
+   * bound to the exact commit offset and appends `secret/created` plus the
+   * secret's processor subscription in one atomic batch. An identical-policy
+   * retry over an existing secret resolves fine (material is write-only and
+   * not comparable — it is kept, never replaced; rotate through `update()`);
+   * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.
+   */
+  create(input: SecretCreateInput): Promise<Secret>;
   /**
    * Read the material back — only for a secret born `readable: true` (an
    * immutable birth-certificate fact; every other secret stays write-only
@@ -1477,6 +1471,8 @@ export interface Secret {
  */
 export interface Workspace {
   __describe(): Promise<Description>;
+  /** Explicitly create this workspace and wait through its complete birth batch. */
+  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;
   whoami(): Promise<string>;
   /** Restart the workspace's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
@@ -1740,6 +1736,9 @@ export type ProjectProcessorState = {
   secrets: { createdAt: string; path: string }[];
   streams: { createdAt: string; path: string }[];
   customDomains: {
+    kind: "cloudflare" | "direct";
+    createdAt: string;
+    updatedAt: string;
     cloudflareHostnameId: string | null;
     error: string | null;
     hostname: string;
@@ -1749,8 +1748,6 @@ export type ProjectProcessorState = {
     status: "active" | "failed" | "pending_validation" | "provisioning" | "removing" | "requested";
     validationRecords: { name: string; status: string | null; value: string }[];
     wildcard: boolean;
-    createdAt: string;
-    updatedAt: string;
   }[];
   egressRules: {
     ruleKey: string;
@@ -1996,10 +1993,7 @@ export type LiveUpdate<State = unknown> =
   | { type: "snapshot"; revision: number; state: State }
   | { type: "patch"; from: number; to: number; patch: LiveStatePatch };
 
-/**
- * Live handle for one live-state subscription. `ping()` reports liveness (and
- * the call rejects when the hosting incarnation is gone); `unsubscribe()` closes it.
- */
+/** Owned handle for one live-state subscription. */
 export type LiveStateSubscriptionHandle = Disposable & {
   ping(): boolean | Promise<boolean>;
   unsubscribe(): void;
@@ -2394,10 +2388,6 @@ export type AgentEventInput =
             }
           | undefined;
       }
-    >
-  | TypedConsumedEventInput<
-      "events.iterate.com/stream/processor-revived",
-      { [x: string]: unknown; processorSlug: string; revivals: number; version: string }
     >;
 
 /** One committed event on a durable stream: type, JSON payload, offset,
@@ -2437,6 +2427,10 @@ export type StreamEvent = {
   path: string;
 };
 
+/** The `agent/created` payload — the agent's birth certificate (a loose
+ * object of caller-authored birth facts; `{}` is the norm). */
+export type AgentCreateInput = { [x: string]: unknown };
+
 /**
  * Bytes accepted by every file-writing surface. Strings are ALWAYS treated as
  * base64 (optionally a full `data:` URL) — that is what Workers AI image
@@ -2449,6 +2443,9 @@ export type FileData = string | ArrayBuffer | Uint8Array | Blob | ReadableStream
  * file-storage path, size, and the signed public URL minted at attach time
  * (stored, not re-minted — it expires with its signature). */
 export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>[number];
+
+/** The `capability-host/created` payload — the scope's birth certificate. */
+export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {
@@ -2560,7 +2557,7 @@ export type GmailConnection = {
   }>;
 };
 
-/** The normal all-in-one Octokit package with Iterate supplying GitHub App
+/** The normal all-in-one Octokit package with iterate supplying GitHub App
  * installation auth and transport. Both REST and GraphQL are available. */
 export type GithubConnection = { octokit: import("octokit").Octokit };
 
@@ -2577,7 +2574,7 @@ export type TelegramConnection = {
   sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;
 };
 
-/** Iterate's small, connection-scoped Waitrose client. */
+/** iterate's small, connection-scoped Waitrose client. */
 export type WaitroseConnection = {
   addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;
   removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;
@@ -2749,132 +2746,6 @@ export type DeviceDescription = {
   revokedAt: string | null;
 };
 
-/** The sandbox processor's reduced lifecycle projection. */
-export type SandboxProcessorState = {
-  birthCertificate: {
-    config: {
-      instanceType: "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
-    };
-  } | null;
-  status: "created" | "destroyed" | "running" | "stopped" | null;
-  running: boolean;
-  lastBackupId: string | null;
-  env: Record<string, string>;
-};
-
-/** What `itx.sandboxes.create` takes — Cloudflare's own vocabulary
- * (instance types, `SandboxOptions.sleepAfter`/`keepAlive`) plus a name. */
-export type SandboxCreateInput = {
-  /** The sandbox's name — a single path segment (no `/`); its path becomes
-   * `/sandboxes/<name>`. Names are unique per project (across instance
-   * types), and destroyed names are retired, not recycled — pick a new one. */
-  name: string;
-  /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
-  instanceType?: SandboxInstanceType;
-  /** Idle time before the container is snapshotted and torn down: a positive
-   * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,
-   * `"1h"` — no other units). Defaults to the SDK's 10 minutes. The workspace
-   * survives — see {@link CloudflareSandbox}. */
-  sleepAfter?: string | number;
-  /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
-   * `sleep()` or `destroy()` explicitly. */
-  keepAlive?: boolean;
-  /** Initial env-var map, merged as if by `setEnvVars` — values are
-   * `getSecret(path)` placeholders or non-secret literals, NEVER raw
-   * secret material. */
-  env?: Record<string, string>;
-};
-
-/** A sandbox's size tier ("lite" | "basic" | "standard-1"…"standard-4") —
- * Cloudflare container instance-type names, fixed at `create` and immutable
- * for the sandbox's lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the
- * vCPU/memory/disk table. */
-export type SandboxInstanceType =
-  | "basic"
-  | "lite"
-  | "standard-1"
-  | "standard-2"
-  | "standard-3"
-  | "standard-4";
-
-/**
- * One sandbox: the bare `@cloudflare/sandbox` Durable Object stub, nothing
- * wrapped on top. Whatever the installed SDK exposes is callable —
- * `exec(command)`, `readFile`/`writeFile`/`listFiles`, `startProcess`,
- * sessions, `gitCheckout`, the code interpreter, `tunnels`, … — and this
- * contract re-declares lifecycle controls and the everyday command door,
- * `exec` (the rest stays undeclared, same stance as `McpClientRpc`, so new SDK
- * methods need no forwarding code here); https://developers.cloudflare.com/sandbox/api/
- * is the authoritative reference. The image is the stock Cloudflare sandbox
- * image (Ubuntu 22.04, Node 20, Bun, git, curl, jq); install anything else
- * you need at runtime.
- *
- * Platform deltas over stock Cloudflare (everything else passes through):
- * - Sandboxes are created explicitly (`itx.sandboxes.create`), never minted
- *   by addressing.
- * - `/workspace` SURVIVES sleep: snapshotted to storage on `sleep()` or the
- *   idle timer, restored on the next start — where stock Cloudflare loses all
- *   state. Everything outside `/workspace` is ephemeral, and a crash loses
- *   anything since the last snapshot.
- * - `start()` boots the container now instead of lazily; `sleep()` snapshots
- *   and tears down now instead of waiting for `sleepAfter` (the SDK's
- *   `stop()` forwards to it); `kill()` aborts the Durable Object incarnation;
- *   `destroy()` is permanent — the name is retired.
- * - Top-level `exec()` is sessionless: every call gets a fresh shell, and a
- *   timeout terminates the complete Linux process group before resolving an
- *   exit-code-124 result. Use the SDK's explicit session APIs when commands
- *   intentionally need shared shell state.
- * - `__describe()` (the capability-tree convention) carries the durable
- *   record as structured extras ({ path, instanceType, createdAt, sleepAfter }).
- * - `setEnvVars(vars)` is DURABLE here (persisted, re-applied every start,
- *   journaled as a `configured` event); values are conventionally
- *   `getSecret(path)` placeholders substituted only at egress — real
- *   secret material never enters the container. All sandbox egress flows
- *   through project egress policy; there is no direct internet path.
- * - `mountBucket` and `exposePort` are unavailable (they throw): /workspace
- *   snapshots cover persistence, and `tunnels` covers public URLs.
- */
-export type CloudflareSandbox = object & {
-  /** Boot the container now. */
-  start(): Promise<void>;
-  /** Snapshot `/workspace` and tear the container down. */
-  sleep(): Promise<void>;
-  /** Snapshot, tear down, and boot a fresh container. */
-  restart(): Promise<void>;
-  /** Permanently destroy the sandbox and retire its name. */
-  destroy(): Promise<void>;
-  /** Run one shell command to completion and return its captured output —
-   * the SDK's `exec`, declared with the data fields that travel over every
-   * RPC lane (the SDK's streaming callbacks — `stream`, `onOutput`, … —
-   * exist at runtime but are transport-dependent, so they stay out of this
-   * contract). `env` values override the session's for this one command;
-   * `timeout` is milliseconds. */
-  exec(
-    command: string,
-    options?: {
-      cwd?: string;
-      encoding?: string;
-      env?: Record<string, string | undefined>;
-      timeout?: number;
-    },
-  ): Promise<{
-    /** Whether the command succeeded (`exitCode === 0`). */
-    success: boolean;
-    exitCode: number;
-    stdout: string;
-    stderr: string;
-    /** The command that was executed. */
-    command: string;
-    /** Execution duration in milliseconds. */
-    duration: number;
-    /** ISO timestamp of when the command started. */
-    timestamp: string;
-    sessionId?: string;
-  }>;
-  /** Abort the current sandbox Durable Object incarnation; the next request boots it again. */
-  kill(): Promise<void>;
-};
-
 /** The scheduler's reduced state: the one object the UI, alarm, and executor read. */
 export type SchedulerProcessorState = {
   birthCertificate: { config: Record<string, never> } | null;
@@ -2974,6 +2845,18 @@ export type CollectSecretLink = {
   url: string;
 };
 
+/** The `repos/create-requested` payload — the creation saga's durable intent. */
+export type RepoCreateInput =
+  | { type: "empty" }
+  | { type: "github-private"; connection: string; owner: string; repo: string }
+  | {
+      type: "github-public";
+      connection: string;
+      depth?: number | undefined;
+      owner: string;
+      repo: string;
+    };
+
 /** Command object for committing a batch of repo file mutations. */
 export type CommitRepoFilesInput = {
   author?: { email: string; name: string };
@@ -3058,24 +2941,6 @@ export type GithubResetResult = {
  * `stateSchema` — the one definition of the shape.
  */
 export type RepoProcessorState = {
-  birthCertificate:
-    | {
-        request:
-          | { type: "empty" }
-          | { type: "github-private"; connection: string; owner: string; repo: string }
-          | {
-              type: "github-public";
-              connection: string;
-              depth?: number | undefined;
-              owner: string;
-              repo: string;
-            };
-        artifactName: string;
-        defaultBranch: string;
-        remote: string;
-      }
-    | { config: unknown }
-    | null;
   createRequest:
     | { type: "empty" }
     | { type: "github-private"; connection: string; owner: string; repo: string }
@@ -3099,6 +2964,21 @@ export type RepoProcessorState = {
           owner: string;
           repo: string;
         };
+  } | null;
+  birthCertificate: {
+    request:
+      | { type: "empty" }
+      | { type: "github-private"; connection: string; owner: string; repo: string }
+      | {
+          type: "github-public";
+          connection: string;
+          depth?: number | undefined;
+          owner: string;
+          repo: string;
+        };
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
   } | null;
   artifactName: string | null;
   defaultBranch: string | null;
@@ -3147,9 +3027,6 @@ export type DynamicWorkerDispatchOptions = {
   buildBudgetMs?: number;
   flattenNestedPaths?: boolean;
 };
-
-/** One repo mount: the repo a workspace subtree reads from and its commit policy. */
-export type WorkspaceMount = { policy: "commit-to-main" | "read-only"; repoPath: string };
 
 /** Stable identity for one stream subscription connection. */
 export type SubscriptionKey = string;
@@ -3367,7 +3244,7 @@ export type DeviceEnrollInput = {
   platform: "ios" | "android";
 };
 
-/** Public journal vocabulary, mechanically retaining payloads from the processor contract. */
+/** Public stream vocabulary, mechanically retaining payloads from the processor contract. */
 export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-opened",
@@ -3385,6 +3262,38 @@ export type DeviceAppendInput =
         title: string;
       }
     >;
+
+/** What `itx.sandboxes.get(path).create` takes — Cloudflare's own vocabulary
+ * (instance types and `SandboxOptions.sleepAfter`/`keepAlive`). */
+export type SandboxCreateInput = {
+  /** Cloudflare instance type; defaults to `basic`. Cannot be changed later. */
+  instanceType?: SandboxInstanceType;
+  /** Idle time before the container is snapshotted and torn down: a positive
+   * number of SECONDS, or `"<n>s"`/`"<n>m"`/`"<n>h"` (e.g. `"30s"`, `"5m"`,
+   * `"1h"` — no other units). Defaults to the SDK's 10 minutes. The workspace
+   * survives across idle sleep. */
+  sleepAfter?: string | number;
+  /** Keep the container alive indefinitely (the SDK's `keepAlive`); you must
+   * `sleep()` or `destroy()` explicitly. */
+  keepAlive?: boolean;
+  /** Initial env-var map, merged as if by `setEnvVars` — values are
+   * `getSecret(path)` placeholders or non-secret literals, NEVER raw
+   * secret material. */
+  env?: Record<string, string>;
+};
+
+/** The sandbox processor's reduced lifecycle projection. */
+export type SandboxProcessorState = {
+  birthCertificate: {
+    config: {
+      instanceType: "basic" | "lite" | "standard-1" | "standard-2" | "standard-3" | "standard-4";
+    };
+  } | null;
+  status: "created" | "destroyed" | "running" | "stopped" | null;
+  running: boolean;
+  lastBackupId: string | null;
+  env: Record<string, string>;
+};
 
 /**
  * When a Schedule triggers. Exactly one canonical spelling per shape: a single
@@ -3424,7 +3333,7 @@ export type SecretDescription = {
     usedCount: number;
   };
   egress: { urls: string[] };
-  /** Whether the secret processor has folded its birth certificate. */
+  /** Whether the secret processor has reduced its birth certificate. */
   created: boolean;
   hasMaterial: boolean;
   /** How the material may leave (a birth-certificate fact): write-only secrets refuse reveal(). */
@@ -3570,7 +3479,10 @@ export type StatefulDynamicWorkerRef = DynamicWorkerRefBase & {
   durableWorkerKey: string;
 };
 
-/** The workspace processor's reduced state: birth certificate plus folded config. */
+/** One repo mount: the repo a workspace subtree reads from and its commit policy. */
+export type WorkspaceMount = WorkspaceConfig["mounts"][string];
+
+/** The workspace processor's reduced state: birth certificate plus the merged config. */
 export type WorkspaceProcessorState = {
   birthCertificate: {
     config: {
@@ -3581,11 +3493,12 @@ export type WorkspaceProcessorState = {
 };
 
 /** A workspace's complete configuration: the mount table, keyed by mount path. */
-export type WorkspaceConfig = {
-  mounts: Record<string, { policy: "commit-to-main" | "read-only"; repoPath: string }>;
-};
+export type WorkspaceConfig = WorkspaceProcessorState["config"];
 
-/** A configuration patch: deep-merged per mount point; null unmounts. */
+/** A configuration patch: deep-merged per mount point; null unmounts.
+ * (Spelled as one z.output<> reference — not an indexed access over it — so
+ * the itx-api generator expands it structurally instead of copying the
+ * expression verbatim into the generated public API.) */
 export type WorkspaceConfigPatch = {
   mounts?:
     | Record<
@@ -3747,6 +3660,18 @@ export type CfVideoTransformInput = {
   output: CfVideoOutputOptions;
 };
 
+/** A sandbox's size tier ("lite" | "basic" | "standard-1"…"standard-4") —
+ * Cloudflare container instance-type names, fixed at `create` and immutable
+ * for the sandbox's lifetime. See {@link SANDBOX_INSTANCE_TYPES} for the
+ * vCPU/memory/disk table. */
+export type SandboxInstanceType =
+  | "basic"
+  | "lite"
+  | "standard-1"
+  | "standard-2"
+  | "standard-3"
+  | "standard-4";
+
 /** How a secret's material may leave the secret system. Extendable — e.g. a
  * future "reveal-once". */
 export type SecretVisibility = "write-only" | "readable";
@@ -3873,6 +3798,14 @@ export type LatencyStats = {
 /** Serializable subscriber identity carried on presence facts and the runtime connection table. */
 export type StreamSubscriberDescriptor = {
   description?: string | undefined;
+  user?:
+    | {
+        id?: string | undefined;
+        email: string;
+        name?: string | undefined;
+        picture?: string | undefined;
+      }
+    | undefined;
   processor?:
     | {
         announcement: {
@@ -3940,8 +3873,8 @@ export type PlatformCredsRef = { platform: string };
 
 /**
  * One direct worker-bundler call. The wrapper names deliberately match the
- * upstream functions; OS only resolves the repo-aware `files` value, adds its
- * platform virtual modules to `createWorker`, and caches the returned build.
+ * upstream functions; OS resolves the repo-aware `files` value, applies the
+ * deployment-specific `iterate` package pin, and caches the returned build.
  */
 export type DynamicWorkerSource =
   | { createApp: WorkerBundlerCreateAppOptions }

@@ -19,6 +19,7 @@
  */
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { authEnvs, envs, PREVIEW_AND_DEV_ACCOUNT_ID, type DeployedEnv } from "../../../envs.ts";
+import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import {
   OBSERVABILITY,
   writeGeneratedWranglerConfig,
@@ -28,7 +29,6 @@ import {
   SANDBOX_INSTANCE_TYPES,
   type SandboxInstanceType,
 } from "../src/domains/sandboxes/instance-types.ts";
-import { workerEventsQueueName } from "../src/queue-names.ts";
 
 /**
  * Secrets every deployment MUST have (deploy.ts fails before uploading when
@@ -38,6 +38,7 @@ import { workerEventsQueueName } from "../src/queue-names.ts";
  */
 export const REQUIRED_SECRETS = [
   "APP_CONFIG_ADMIN_API_SECRET",
+  "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_ID",
   "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
   "APP_CONFIG_OPEN_AI_API_KEY",
@@ -53,7 +54,6 @@ export const REQUIRED_SECRETS = [
  * plugin loads whichever ones your Doppler config has.
  */
 export const OPTIONAL_SECRETS = [
-  "APP_CONFIG_CLOUDFLARE__API_TOKEN",
   // Shared with the auth app: local verification of project-app-session
   // tokens (the project-host gate + the /api credential lane). Optional —
   // absent, both fall back to the auth worker's validate RPC.
@@ -105,6 +105,7 @@ export const RETIRED_WORKER_SECRETS = [
 export function envShapedVars(env: DeployedEnv) {
   return {
     APP_CONFIG_BASE_URL: env.baseUrl,
+    APP_CONFIG_ENVIRONMENT_NAME: env.dopplerConfig,
     APP_CONFIG_MCP__BASE_URL: env.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify(env.projectHostnameBases),
     APP_CONFIG_ITERATE_AUTH__ISSUER: `${env.authBaseUrl}/api/auth`,
@@ -181,6 +182,7 @@ const DO_CLASSES = {
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",
+  WORKER_BUILD_COORDINATOR: "WorkerBuildCoordinatorDurableObject",
   WORKER: "StatefulWorkerDurableObject",
   // Deliberately NOT "WorkspaceDurableObject": declarative exports key
   // namespaces by class name, and the retired single-parent-overlay workspace
@@ -224,7 +226,6 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
-  WorkerBuilderDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**
@@ -335,17 +336,6 @@ function workerBindings(input: {
     version_metadata: { binding: "CF_VERSION_METADATA" },
     worker_loaders: [{ binding: "LOADER" }],
     artifacts: [{ binding: "ARTIFACTS", namespace: `${input.workerName}-repos` }],
-    queues: {
-      consumers: [
-        {
-          queue: workerEventsQueueName(input.workerName),
-          max_batch_size: 10,
-          max_batch_timeout: 5,
-          max_retries: 3,
-          retry_delay: 30,
-        },
-      ],
-    },
     // Sandbox workspace backups (ensure-resources.ts creates the bucket; the
     // sandbox DO snapshots /workspace here on idle and restores on start).
     // The binding MUST be named BACKUP_BUCKET — the Sandbox SDK reads it from
@@ -388,9 +378,10 @@ function workerBindings(input: {
 
 /**
  * Every hostname routed to the os worker: the app base URL, public event docs,
- * the MCP host, project-host patterns, and any SaaS-enabled provider-zone
- * catch-all routes. The zone is the hostname minus its first label for
- * app/MCP/event-docs hosts; project bases are themselves zones.
+ * the MCP host, project-host patterns, any SaaS-enabled provider-zone
+ * catch-all routes, and owned custom apexes (e.g. prod `iterate.com`). The
+ * zone is the hostname minus its first label for app/MCP/event-docs hosts;
+ * project bases and owned apexes are themselves zones.
  *
  * Project bases get three built-in project-host patterns: `base/*`,
  * `*.base/*`, and `*base/*`.
@@ -398,6 +389,10 @@ function workerBindings(input: {
  * only reliably invoked the worker for project hosts once all three existed
  * (observed 2026-06) — kept verbatim; collapse only with an edge experiment
  * proving it.
+ *
+ * Owned custom apexes get apex/* + *.apex/* only (not a SaaS catch-all).
+ * More-specific routes on that zone (os., auth., mcp., …) stay owned by
+ * other workers and win by specificity.
  */
 function routes(env: DeployedEnv) {
   const appHost = new URL(env.baseUrl).hostname;
@@ -419,10 +414,14 @@ function routes(env: DeployedEnv) {
         ? [{ pattern: "*/*", zone_name: base }, ...projectRoutes]
         : projectRoutes;
     }),
+    ...env.ownedProjectCustomApexes.flatMap((apex) => [
+      { pattern: `${apex}/*`, zone_name: apex },
+      { pattern: `*.${apex}/*`, zone_name: apex },
+    ]),
   ];
 }
 
-function envBlock(env: DeployedEnv) {
+function envBlock(envName: string, env: DeployedEnv) {
   const isProduction = env.osWorkerName === "os-prd";
   const bindings = workerBindings({
     workerName: env.osWorkerName,
@@ -437,7 +436,7 @@ function envBlock(env: DeployedEnv) {
     account_id: env.cloudflareAccountId,
     routes: routes(env),
     ...bindings,
-    vars: { ...bindings.vars, ...envShapedVars(env) },
+    vars: { ...bindings.vars, ...envShapedVars(env), DEPLOYMENT_ENV: envName },
   };
 }
 
@@ -503,6 +502,7 @@ function localDevBindings() {
     ...bindings,
     vars: {
       ...bindings.vars,
+      APP_CONFIG_ENVIRONMENT_NAME: process.env.DOPPLER_CONFIG?.trim() || "dev",
       // Local dev rides the BYOK lane with the response cache, same as the
       // preview slots: agent-loop iteration replays yesterday's answers for
       // free. In envShapedVars for deployed envs; spelled out here because
@@ -510,6 +510,12 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
+      ...(process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim()
+        ? {
+            APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC:
+              process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.trim(),
+          }
+        : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from
       // AUTH_FORGE_PRIVATE_JWK. Do not read APP_CONFIG_ITERATE_AUTH__JWKS from
       // Doppler here: stale snapshots caused login verification failures.
@@ -534,14 +540,11 @@ export function localDevAuthJwks(input: {
   const forgePrivateJwk = input.forgePrivateJwk?.trim();
   if (!forgePrivateJwk) return undefined;
 
-  const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
-    string,
-    unknown
-  > & { d?: string };
-  if (!publicJwk.kid || !publicJwk.kty) {
-    throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
-  }
-  return JSON.stringify({ keys: [publicJwk] });
+  return bakeStaticAuthJwks({
+    envName: "dev",
+    dopplerConfig: process.env.DOPPLER_CONFIG ?? "local dev",
+    secrets: { AUTH_FORGE_PRIVATE_JWK: forgePrivateJwk },
+  });
 }
 
 export const config = {
@@ -588,7 +591,7 @@ export const config = {
       ...ENV_SHAPED_KEYS.filter((key) => !(key in LOCAL_DEV_BINDINGS.vars)),
     ],
   },
-  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(env)])),
+  env: Object.fromEntries(Object.entries(envs).map(([name, env]) => [name, envBlock(name, env)])),
 };
 
 /**

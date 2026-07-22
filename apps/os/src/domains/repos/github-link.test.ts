@@ -1,6 +1,6 @@
 // Unit tests for linkRepoToGithub / unlinkRepoFromGithub — the itx-side flow
 // behind repo.linkGithub(). There is NO network: the connection stream, the
-// connection secret's fetch (which is how the wrapped Octokit reaches
+// project egress fetch (which is how the wrapped Octokit reaches
 // "GitHub"), and the Repo Durable Object are all in-memory fakes on the same
 // itxEnv seam the connect-flow tests use. The GitHub-touching push/sync
 // mechanics live on the Repo DO and are proven against real GitHub in
@@ -8,7 +8,6 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { GITHUB_CONNECTED_EVENT_TYPE } from "../integrations/utils.ts";
 import { linkRepoToGithub, unlinkRepoFromGithub } from "./github-link.ts";
 
 const network = await vi.hoisted(async () => {
@@ -54,11 +53,10 @@ const network = await vi.hoisted(async () => {
       state.subscriptionRemoveAppendShouldFail = false;
     },
     state,
-    // The connection secret's fetch IS the fake GitHub API: the wrapped
-    // Octokit dispatches every request through it. (The shared seam's SECRET
-    // is a store of update()d records; this suite needs the other half of
-    // the Secret DO — its egress fetch — so it stays bespoke.)
-    SECRET: {
+    // Project egress IS the fake GitHub API: wrapped Octokit dispatches every
+    // placeholder-bearing request through this outer policy boundary. The
+    // shared seam's SECRET remains the connection-record store.
+    PROJECT: {
       getByName(_name: string) {
         return {
           async fetch(request: Request) {
@@ -157,6 +155,7 @@ vi.mock("../integrations/telegram-api.ts", () => ({
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {
+    PROJECT: network.PROJECT,
     REPO: network.REPO,
     SECRET: network.SECRET,
     STREAM: network.STREAM,
@@ -172,7 +171,7 @@ const CONNECTION_STREAM = DurableObjectNameCodec.stringify({
 
 function seedConnectedFact() {
   network.seedStream(CONNECTION_STREAM, {
-    type: GITHUB_CONNECTED_EVENT_TYPE,
+    type: "events.iterate.com/github/connected",
     payload: {
       connection: CONNECTION,
       externalId: "789",
@@ -349,7 +348,7 @@ describe("linkRepoToGithub", () => {
       path: `/integrations/github/${otherConnection}`,
     });
     network.seedStream(otherConnectionStream, {
-      type: GITHUB_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/connected",
       payload: {
         connection: otherConnection,
         externalId: "456",
@@ -394,7 +393,7 @@ describe("linkRepoToGithub", () => {
       path: `/integrations/github/${otherConnection}`,
     });
     network.seedStream(otherConnectionStream, {
-      type: GITHUB_CONNECTED_EVENT_TYPE,
+      type: "events.iterate.com/github/connected",
       payload: {
         connection: otherConnection,
         externalId: "456",

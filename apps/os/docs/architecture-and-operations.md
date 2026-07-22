@@ -80,7 +80,7 @@ There are no organization routes; organization membership and selection live
 in the auth worker.
 
 The browser talks to itx over `/api`: one Cap'n Web WebSocket per
-context, managed by the `iterate` package's client (`iterate/react` —
+context, managed by the `iterate` package's client (`iterate/sdk/itx/react` —
 `useItx`/`useItxQuery`/`useItxSubscription`; see `docs/frontend-development.md`). `POST /api` serves one-shot HTTP batch sessions (used by
 the project-create server function and MCP `exec_typescript`).
 `/api/operator-sessions` mints short-lived, origin-bound grants for either one
@@ -181,15 +181,15 @@ Slack/Google integration config returns with the integrations domain
 
 OAuth clients in the Iterate Auth Worker and the matching Doppler values are
 managed by `scripts/sync-auth-clients.ts` (`pnpm auth:sync-clients`). For each
-target Doppler config (`dev_<name>`, `preview_1`–`preview_9`, `prd`) it
+target Doppler config (`dev_<name>`, `preview_<n>`, `prd`) it
 ensures two OAuth clients (web + MCP/CLI) via the auth contract's
 `internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
 `APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and
 `APP_CONFIG_ITERATE_AUTH__*` OAuth/client values back to Doppler. It does not
-write `APP_CONFIG_ITERATE_AUTH__JWKS`: OS deploys fetch the live auth JWKS
-directly, merge the forge public key, and fail closed if auth's JWKS endpoint
-remains unavailable after the deploy retry window. Local dev derives its forge
-JWKS binding from `AUTH_FORGE_PRIVATE_JWK` at generated-Wrangler-config time.
+write `APP_CONFIG_ITERATE_AUTH__JWKS`: generated local config and deployed OS
+derive the public JWKS directly from the environment's Doppler-owned
+`AUTH_FORGE_PRIVATE_JWK`. Auth signs with the private half; OS receives only
+the public half and never fetches Auth during deploy or verification.
 
 It requires `APP_CONFIG_SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 `AUTH_CLIENT_SYNC_TARGETS` filters targets;

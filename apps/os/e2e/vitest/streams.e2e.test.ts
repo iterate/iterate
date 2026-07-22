@@ -7,6 +7,7 @@
 // workerd-only stream regression tests stay out of this file.
 
 import { expect, test } from "vitest";
+import { isIdempotencyConflict } from "iterate/processors";
 import type { StreamEventBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -21,7 +22,7 @@ const EXPECTED_POSTHOG_SUBSCRIPTION = {
   idempotencyKey: "iterate-platform-posthog-subscription-v2",
   payload: {
     subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
-    description: "Iterate's first-party durable-event PostHog feed",
+    description: "iterate's first-party durable-event PostHog feed",
     delivery: {
       mode: "push",
       expression: ["integrations", "posthog", "processEventBatch"],
@@ -48,7 +49,7 @@ test("creates a project and uses project streams through v4 itx", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-smoke-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-stream-smoke-${RUN_SUFFIX}-${marker}`).create({});
   const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -106,7 +107,7 @@ test("project streams are born with the ordinary first-party PostHog subscriptio
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `posthog-birth-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`posthog-birth-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -133,7 +134,7 @@ test("project code cannot forge the PostHog receiver through an impersonated pri
 
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = itx.projects.create({ slug: `posthog-authority-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`posthog-authority-${RUN_SUFFIX}-${marker}`).create({});
   const projectId = (await project.__describe()).projectId;
 
   using impersonatedSession = withItxSession();
@@ -172,7 +173,7 @@ test("stream getEvents defaults to a bounded page and supports event type filter
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-get-events-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-stream-get-events-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
   const appendedEvents = await stream.append(
@@ -216,7 +217,7 @@ test("stream subscribe replays history, tails live appends, and unsubscribes", a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-subscribe-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-stream-subscribe-${RUN_SUFFIX}-${marker}`).create({});
   const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -273,7 +274,7 @@ test("state-only stream subscribe pushes initial state immediately, then state a
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-state-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-stream-state-${RUN_SUFFIX}-${marker}`).create({});
   const projectDescription = await project.__describe();
   using stream = project.streams.get(streamPath);
 
@@ -317,7 +318,7 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-ephemeral-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-stream-ephemeral-${RUN_SUFFIX}-${marker}`).create({});
   using stream = project.streams.get(streamPath);
 
   // A live watcher attached BEFORE the appends.
@@ -362,7 +363,7 @@ test("ephemeral events are raw-readable and delivered live, but never replayed t
       idempotencyKey: `chunk-${marker}`,
       payload: { marker, different: true },
     }),
-  ).rejects.toThrow(/idempotency key .* already names a different event/);
+  ).rejects.toSatisfy(isIdempotencyConflict);
 
   // Default reads skip it; includeEphemeral opts in.
   const readWindow = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
@@ -448,7 +449,7 @@ test("crossPostTo copies matching events with source provenance", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({ slug: `os-stream-cross-post-${RUN_SUFFIX}-${marker}` });
+  using project = await itx.projects.get(`os-stream-cross-post-${RUN_SUFFIX}-${marker}`).create({});
   const projectDescription = await project.__describe();
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
@@ -501,9 +502,9 @@ test("cross-post conditions gate cross-posting on event content", async () => {
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-cond-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = await itx.projects
+    .get(`os-stream-cross-post-cond-${RUN_SUFFIX}-${marker}`)
+    .create({});
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
@@ -546,9 +547,9 @@ test("cross-post subscriptions reject unparseable conditions before they commit"
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-bad-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = await itx.projects
+    .get(`os-stream-cross-post-bad-${RUN_SUFFIX}-${marker}`)
+    .create({});
   using source = project.streams.get(sourcePath);
 
   // crossPostTo is sugar over appending subscription-configured; an
@@ -575,9 +576,9 @@ test("cross-post chains accumulate provenance hops and removeCrossPost stops for
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-chain-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = await itx.projects
+    .get(`os-stream-cross-post-chain-${RUN_SUFFIX}-${marker}`)
+    .create({});
   using streamA = project.streams.get(pathA);
   using streamB = project.streams.get(pathB);
   using streamC = project.streams.get(pathC);
@@ -627,9 +628,9 @@ test("cross-posts do not recursively copy events that are already cross-posted",
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-loop-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = await itx.projects
+    .get(`os-stream-cross-post-loop-${RUN_SUFFIX}-${marker}`)
+    .create({});
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);
 
@@ -679,11 +680,9 @@ test("global cross-posts stay in the global namespace — a project stream is un
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    projectId,
-    slug: `os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`,
-    waitUntilReady: false,
-  });
+  using project = await itx.projects
+    .get(`os-stream-cross-post-global-${RUN_SUFFIX}-${marker}`)
+    .create({ projectId });
 
   // This test needs an existing project namespace, not a concurrently booting
   // project. Supplying the fixture id avoids the auth mint lane; awaiting the
@@ -739,9 +738,9 @@ test("crossPostTo transform reshapes the copied event and keeps the provenance c
     type: "admin-secret",
     secret: adminSecret(),
   });
-  using project = itx.projects.create({
-    slug: `os-stream-cross-post-xform-${RUN_SUFFIX}-${marker}`,
-  });
+  using project = await itx.projects
+    .get(`os-stream-cross-post-xform-${RUN_SUFFIX}-${marker}`)
+    .create({});
   const projectDescription = await project.__describe();
   using source = project.streams.get(sourcePath);
   using target = project.streams.get(targetPath);

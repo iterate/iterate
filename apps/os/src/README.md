@@ -196,17 +196,21 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 
 ## Project creation
 
-`session.projects.create({ slug })` registers the project with the auth worker
-(the project directory — OS has no database of its own), primes the KV cache,
-then appends the `project/created` birth certificate and explicit Project
-processor subscription onto the project's root stream. The Project processor
+`session.projects.get(slug)` returns a possibly nonexistent project handle
+without creating anything. `handle.create({ organizationSlug?, projectId? })`
+registers that slug with the auth worker (the project directory — OS has no
+database of its own), adopts the directory-issued project ID, primes the KV
+cache, then appends the Project and notification birth certificates plus both
+processor subscriptions onto the project's root stream in one atomic batch.
+It waits both processors through that batch and then waits for `project/ready`
+before returning the same handle. The Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at
-`apps/os/config-repo-template` (ONE TypeScript `worker.ts` — the router as
-its default export plus the example apps as named exports — and `package.json`
-— platform types come from its `iterate` devDependency's `iterate/sdk` export
-— `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`apps/os/config-repo-template` (thin TypeScript `worker.ts` router, modular
+apps under `apps/`, and `package.json` — platform types come from its
+`iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
+codegen keeps the seeded file map in
 `domains/repos/config-repo-template.generated.ts` in sync), builds and loads
 the seeded project worker through the worker build pipeline, and then emits
 `project/ready`. The onboarding agent is created separately and explicitly

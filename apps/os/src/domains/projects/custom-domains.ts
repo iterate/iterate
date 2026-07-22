@@ -102,7 +102,7 @@ export function normalizeProjectCustomDomain(input: {
     throw new Error("Enter a valid DNS hostname, such as garple.com.");
   }
   if (isReservedProjectHostname(hostname, input.projectHostnameBases)) {
-    throw new Error(`"${hostname}" is reserved for Iterate project hostnames.`);
+    throw new Error(`"${hostname}" is reserved for iterate project hostnames.`);
   }
   return hostname;
 }

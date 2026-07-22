@@ -257,6 +257,7 @@ export type AgentUiPresenceEntry = {
   direction: "inbound" | "outbound";
   connected: boolean;
   description?: string;
+  user?: { id?: string; email: string; name?: string; picture?: string };
   processor?: AgentUiProcessorAnnouncement;
 };
 
@@ -392,6 +393,14 @@ const AgentUiPresenceEntrySchema = z.strictObject({
   direction: z.enum(["inbound", "outbound"]),
   connected: z.boolean(),
   description: z.string().optional(),
+  user: z
+    .strictObject({
+      id: z.string().optional(),
+      email: z.string(),
+      name: z.string().optional(),
+      picture: z.string().optional(),
+    })
+    .optional(),
   processor: AgentUiProcessorAnnouncementSchema.optional(),
 }) satisfies z.ZodType<AgentUiPresenceEntry>;
 
@@ -868,6 +877,18 @@ function reduceAgentUiEvent(
       const direction = payload.direction === "inbound" ? "inbound" : "outbound";
       const subscriber = isRecord(payload.subscriber) ? payload.subscriber : undefined;
       const announcement = readProcessorAnnouncement(subscriber?.processor);
+      const subscriberUser = isRecord(subscriber?.user) ? subscriber.user : undefined;
+      const user =
+        typeof subscriberUser?.email === "string"
+          ? {
+              ...(typeof subscriberUser.id === "string" ? { id: subscriberUser.id } : {}),
+              email: subscriberUser.email,
+              ...(typeof subscriberUser.name === "string" ? { name: subscriberUser.name } : {}),
+              ...(typeof subscriberUser.picture === "string"
+                ? { picture: subscriberUser.picture }
+                : {}),
+            }
+          : undefined;
       const entry: AgentUiPresenceEntry = {
         subscriptionKey,
         direction,
@@ -875,6 +896,7 @@ function reduceAgentUiEvent(
         ...(typeof subscriber?.description === "string"
           ? { description: subscriber.description }
           : {}),
+        ...(user === undefined ? {} : { user }),
         ...(announcement == null ? {} : { processor: announcement }),
       };
       const existingIndex = state.presence.findIndex(
@@ -883,9 +905,7 @@ function reduceAgentUiEvent(
       const presence =
         existingIndex === -1
           ? [...state.presence, entry]
-          : state.presence.map((candidate, index) =>
-              index === existingIndex ? { ...candidate, ...entry } : candidate,
-            );
+          : state.presence.map((candidate, index) => (index === existingIndex ? entry : candidate));
       return { ...state, presence };
     }
 

@@ -8,9 +8,9 @@ import { adminSecret, withItxSession } from "./test-helpers.ts";
 test("itx.kv round-trips small values, lists by prefix, and is project-scoped", async () => {
   using session = withItxSession();
   using admin = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using project = admin.projects.create({ slug: `kv-${crypto.randomUUID().slice(0, 8)}` });
+  using project = await admin.projects.get(`kv-${crypto.randomUUID().slice(0, 8)}`).create({});
   await project.projectId;
-  using other = admin.projects.create({ slug: `kv-other-${crypto.randomUUID().slice(0, 8)}` });
+  using other = await admin.projects.get(`kv-other-${crypto.randomUUID().slice(0, 8)}`).create({});
 
   expect(await project.kv.get("tasks-app-origin")).toBeNull();
 

@@ -7,7 +7,6 @@ import {
   GitCommitVerticalIcon,
   GithubIcon,
   HistoryIcon,
-  ListTodoIcon,
   MinusIcon,
   PlusIcon,
   Undo2Icon,
@@ -20,7 +19,7 @@ import {
   ResizablePanelGroup,
 } from "@iterate-com/ui/components/resizable";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { useItx, useItxQuery } from "iterate/react";
+import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
 import { CommitDiffPane } from "./commit-diff-pane.tsx";
@@ -29,20 +28,9 @@ import { RepoEditorPane } from "./repo-editor-pane.tsx";
 import { discardRepoFile } from "./repo-file-discard.ts";
 import { RepoGithubPanel } from "./repo-github-panel.tsx";
 import { RepoFileTree, type RepoTreeActions } from "./repo-file-tree.tsx";
-import { RepoTasksView } from "./repo-tasks-view.tsx";
-import {
-  fallbackTaskCommitMessage,
-  listRepoTaskChanges,
-  prepareRepoTaskAssignment,
-  repoTaskAssignmentFileChanges,
-  repoTaskAssignmentHeadPaths,
-  type RepoTask,
-} from "./repo-tasks.ts";
 import {
   commitPlan,
   effectiveEntry,
-  fileChangeForEntry,
-  textContentForEntry,
   useWorkingTree,
   workingTreeStore,
   type FileEntry,
@@ -55,15 +43,7 @@ import {
  * slots per path, localStorage-backed per HEAD oid) committed through
  * `itx.repos.get(path).commitFiles` as a single batch.
  */
-export function RepoIde({
-  projectId,
-  projectSlug,
-  repoPath,
-}: {
-  projectId: string;
-  projectSlug: string;
-  repoPath: string;
-}) {
+export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: string }) {
   const itx = useItx();
   const queryClient = useQueryClient();
   const files = useItxQuery({
@@ -78,7 +58,6 @@ export function RepoIde({
     file: selectedPath,
     diff,
     preview,
-    tasks,
     scm,
     gh,
     stagedView,
@@ -240,188 +219,12 @@ export function RepoIde({
     },
   });
 
-  /** Tasks view: commit only task-path changes, leave unrelated working-tree edits. */
-  const commitTasks = useMutation({
-    mutationFn: async (message: string | undefined) => {
-      const previousTaskContents =
-        queryClient.getQueryData<Record<string, string>>([
-          "itx",
-          "repo-task-files",
-          projectId,
-          repoPath,
-          files.commitOid,
-        ]) ?? {};
-      // One snapshot drives the RPC payload, the generated message, and the
-      // post-commit cleanup, so all three describe the same change set. An
-      // empty message summarizes deterministically — no AI call sits between
-      // an autosave firing and the commit.
-      const listed = listRepoTaskChanges(
-        store.changes,
-        new Set([...headPaths, ...Object.keys(previousTaskContents)]),
-        previousTaskContents,
-      );
-      if (listed.length === 0) return null;
-      const typed = message?.trim() ?? "";
-
-      const result = await itx.repos.get(repoPath).commitFiles({
-        message: typed === "" ? fallbackTaskCommitMessage(listed) : typed,
-        changes: listed.map((change) => fileChangeForEntry(change.path, change.entry)),
-      });
-
-      // Seed the new HEAD's task + file-list caches before clearing overlays so
-      // brand-new tasks never vanish and non-task working edits migrate onto
-      // the post-commit store even if invalidateQueries is still stale.
-      const nextTaskContents = { ...previousTaskContents };
-      const nextPathSet = new Set(headPaths);
-      for (const { path, entry } of listed) {
-        if (entry.type === "delete") {
-          delete nextTaskContents[path];
-          nextPathSet.delete(path);
-          continue;
-        }
-        nextPathSet.add(path);
-        const content = textContentForEntry(entry);
-        if (content !== undefined) nextTaskContents[path] = content;
-      }
-      queryClient.setQueryData<Record<string, string>>(
-        ["itx", "repo-task-files", projectId, repoPath, result.commitOid],
-        nextTaskContents,
-      );
-      queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], {
-        commitOid: result.commitOid,
-        paths: [...nextPathSet].sort((left, right) => left.localeCompare(right)),
-      });
-
-      // Equality-guarded: a slot the user re-edited while the RPC was in
-      // flight no longer matches its committed entry and survives to migrate.
-      store.clearCommitted(new Map(listed.map((change) => [change.path, change.entry])));
-      await queryClient.invalidateQueries({
-        queryKey: ["itx", "repo-files", projectId, repoPath],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["itx", "repo-log", projectId, repoPath],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["itx", "repo-task-files", projectId, repoPath],
-      });
-      store.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
-      return result;
-    },
-    onSuccess: (result) => {
-      if (result === null) return;
-      toast.success(
-        result.noChanges
-          ? "No task changes to commit."
-          : `Committed ${result.changedPaths.length} task file(s) (${result.commitOid.slice(0, 7)}).`,
-      );
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Could not commit tasks.");
-    },
-  });
-  const assignTaskAgent = async (task: RepoTask, pendingRenameFromPath?: string) => {
-    const assignment = prepareRepoTaskAssignment(task, repoPath);
-    const renamedFromPath =
-      pendingRenameFromPath !== undefined && headPathSet.has(pendingRenameFromPath)
-        ? pendingRenameFromPath
-        : undefined;
-    const sourceStore = store;
-    // Same cache key the task board reads through (see `RepoTasksView`'s
-    // `listTaskFiles` query): keyed by HEAD commit oid, no path-list segment.
-    const previousTaskContents =
-      queryClient.getQueryData<Record<string, string>>([
-        "itx",
-        "repo-task-files",
-        projectId,
-        repoPath,
-        files.commitOid,
-      ]) ?? {};
-    let committed = false;
-    try {
-      const result = await itx.repos.get(repoPath).commitFiles({
-        message: `Assign task: ${task.title}`,
-        changes: repoTaskAssignmentFileChanges(task, assignment.content, renamedFromPath),
-      });
-      committed = true;
-
-      // Keep the durable assignment as the local overlay while HEAD refreshes.
-      // This is load-bearing for tasks created only in the working tree: if we
-      // clear first, the board drops the card before listFiles catches up.
-      sourceStore.setWorking(task.path, { type: "write", content: assignment.content });
-      sourceStore.setStaged(task.path, undefined);
-      await queryClient.invalidateQueries({
-        queryKey: ["itx", "repo-files", projectId, repoPath],
-      });
-      await queryClient.invalidateQueries({
-        queryKey: ["itx", "repo-log", projectId, repoPath],
-      });
-
-      const refreshedFiles = queryClient.getQueryData<{ commitOid: string; paths: string[] }>([
-        "itx",
-        "repo-files",
-        projectId,
-        repoPath,
-      ]);
-      // A successful commit is the authority even if the invalidated query
-      // briefly returns its previous cached HEAD. Project this known atomic
-      // mutation locally so we can migrate every unrelated working edit and
-      // start the agent without waiting for eventual cache convergence.
-      const nextFiles =
-        refreshedFiles?.commitOid === result.commitOid
-          ? refreshedFiles
-          : {
-              commitOid: result.commitOid,
-              paths: repoTaskAssignmentHeadPaths(headPaths, task, renamedFromPath),
-            };
-      if (refreshedFiles?.commitOid !== result.commitOid) {
-        queryClient.setQueryData(["itx", "repo-files", projectId, repoPath], nextFiles);
-      }
-      // The assignment commit changes one logical task (and may rename its
-      // file). Seed the new HEAD's task query before removing the overlay, so
-      // React never observes a gap and the sheet immediately sees both
-      // `agent` and `in-progress`. Keyed by the new commit oid to match the
-      // board's `listTaskFiles` query key exactly.
-      const nextTaskContents = { ...previousTaskContents, [task.path]: assignment.content };
-      if (renamedFromPath !== undefined) delete nextTaskContents[renamedFromPath];
-      queryClient.setQueryData<Record<string, string>>(
-        ["itx", "repo-task-files", projectId, repoPath, result.commitOid],
-        nextTaskContents,
-      );
-      if (renamedFromPath !== undefined) {
-        sourceStore.setWorking(renamedFromPath, undefined);
-        sourceStore.setStaged(renamedFromPath, undefined);
-      }
-      sourceStore.setWorking(task.path, undefined);
-      sourceStore.setStaged(task.path, undefined);
-      sourceStore.migrateTo(workingTreeStore({ projectId, repoPath, commitOid: result.commitOid }));
-
-      // The task commit intentionally happens before explicit birth, so the
-      // agent's first turn can always read the durable assignment.
-      const agent = itx.agents.get(assignment.agentPath);
-      const snapshot = await agent.processor.snapshot();
-      if (snapshot.state.birthCertificate === null) await agent.create();
-      await agent.message(assignment.instructions);
-      toast.success(`Assigned ${task.title} to ${assignment.agentPath}.`);
-      return assignment.agentPath;
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "Unknown error";
-      toast.error(
-        committed
-          ? `The assignment was committed, but the agent did not start: ${detail}`
-          : `Could not assign the task: ${detail}`,
-      );
-      // Once committed, the assignment is durable even if starting the agent
-      // failed. Surface its link immediately and prevent a second assignment.
-      return committed ? assignment.agentPath : undefined;
-    }
-  };
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row">
-      {/* vscode-style activity strip: Files / Tasks / Source control / History / GitHub. */}
+      {/* vscode-style activity strip: Files / Source control / History / GitHub. */}
       <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
         <Button
-          variant={tasks || scm || gh || history ? "ghost" : "secondary"}
+          variant={scm || gh || history ? "ghost" : "secondary"}
           size="icon"
           title="Files"
           aria-label="Files"
@@ -431,7 +234,6 @@ export function RepoIde({
           onClick={() =>
             patchSearch({
               scm: undefined,
-              tasks: undefined,
               gh: undefined,
               staged: undefined,
               history: undefined,
@@ -443,28 +245,6 @@ export function RepoIde({
           <FilesIcon className="size-4" />
         </Button>
         <Button
-          variant={tasks ? "secondary" : "ghost"}
-          size="icon"
-          title="Tasks"
-          aria-label="Tasks"
-          onClick={() =>
-            patchSearch({
-              tasks: true,
-              scm: undefined,
-              gh: undefined,
-              history: undefined,
-              commit: undefined,
-              file: undefined,
-              diff: undefined,
-              preview: undefined,
-              staged: undefined,
-            })
-          }
-          className="text-muted-foreground"
-        >
-          <ListTodoIcon className="size-4" />
-        </Button>
-        <Button
           variant={scm ? "secondary" : "ghost"}
           size="icon"
           title="Source control"
@@ -474,7 +254,6 @@ export function RepoIde({
           onClick={() =>
             patchSearch({
               scm: true,
-              tasks: undefined,
               gh: undefined,
               history: undefined,
               commit: undefined,
@@ -496,7 +275,6 @@ export function RepoIde({
           onClick={() =>
             patchSearch({
               history: true,
-              tasks: undefined,
               scm: undefined,
               gh: undefined,
               staged: undefined,
@@ -513,7 +291,6 @@ export function RepoIde({
           onClick={() =>
             patchSearch({
               gh: true,
-              tasks: undefined,
               scm: undefined,
               history: undefined,
               commit: undefined,
@@ -525,167 +302,138 @@ export function RepoIde({
         </Button>
       </div>
 
-      {tasks ? (
-        <Suspense
-          fallback={
-            <div
-              className="flex flex-1 items-center justify-center text-sm text-muted-foreground"
-              data-spinner="true"
+      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+        <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
+          {history ? (
+            <Suspense
+              fallback={
+                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                  Loading history…
+                </div>
+              }
             >
-              Loading tasks…
+              <CommitHistoryPanel
+                projectId={projectId}
+                repoPath={repoPath}
+                expandedOid={expandedCommitOid}
+                selectedPath={selectedPath}
+                onExpand={(oid) => patchSearch({ commit: oid })}
+                // selectFile clears diff/preview/staged too, so a lingering
+                // preview=true doesn't spuriously re-open Preview for the file
+                // you pick out of a commit (history/commit stay set — the
+                // commit diff keeps showing until you leave History).
+                onOpenFile={(path) => selectFile(path)}
+              />
+            </Suspense>
+          ) : gh ? (
+            // Own Suspense (like RepoEditorPane's): the panel's first
+            // connections read suspends, and without a local boundary that
+            // would bubble to the route's `<Suspense>` boundary and blank the whole IDE.
+            <Suspense
+              fallback={
+                <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
+                  Loading…
+                </div>
+              }
+            >
+              <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
+            </Suspense>
+          ) : scm ? (
+            <GitPanel
+              changes={changes}
+              headPathSet={headPathSet}
+              commitPending={commit.isPending}
+              onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
+              onStage={(path) => store.stage(path)}
+              onUnstage={(path) => store.unstage(path)}
+              onDiscard={discardPath}
+              onDiscardAll={() => store.discardAll()}
+              onOpen={(path, status) =>
+                patchSearch({
+                  file: path,
+                  diff: status === "modified" ? true : undefined,
+                  preview: undefined,
+                  staged: undefined,
+                })
+              }
+              onOpenStaged={(path) =>
+                patchSearch({ file: path, diff: undefined, preview: undefined, staged: true })
+              }
+            />
+          ) : (
+            <RepoFileTree
+              className="h-full"
+              headPaths={headPaths}
+              changes={changes}
+              selectedPath={selectedPath}
+              onSelect={selectFile}
+              actions={actions}
+            />
+          )}
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel className="flex min-w-0 flex-col">
+          {selectedPath === undefined ? (
+            <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+              Select a file to view or edit it.
             </div>
-          }
-        >
-          <RepoTasksView
-            projectId={projectId}
-            projectSlug={projectSlug}
-            repoPath={repoPath}
-            headCommitOid={files.commitOid}
-            headPaths={headPaths}
-            changes={changes}
-            selectedPath={selectedPath}
-            onPatchSearch={patchSearch}
-            onSetWorking={(path, entry) => store.setWorking(path, entry)}
-            onDelete={removePath}
-            onAssignAgent={assignTaskAgent}
-            commitPending={commitTasks.isPending}
-            onCommitTaskChanges={commitTasks.mutateAsync}
-          />
-        </Suspense>
-      ) : (
-        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-          <ResizablePanel defaultSize="20%" minSize="10rem" className="min-w-0">
-            {history ? (
-              <Suspense
-                fallback={
-                  <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
-                    Loading history…
-                  </div>
-                }
-              >
-                <CommitHistoryPanel
+          ) : (
+            <Suspense
+              fallback={
+                <div
+                  className="flex flex-1 items-center justify-center text-sm text-muted-foreground"
+                  data-spinner="true"
+                >
+                  Loading {selectedPath}…
+                </div>
+              }
+            >
+              {history && expandedCommitOid !== undefined ? (
+                <CommitDiffPane
+                  key={`${selectedPath}:${expandedCommitOid}`}
                   projectId={projectId}
                   repoPath={repoPath}
-                  expandedOid={expandedCommitOid}
-                  selectedPath={selectedPath}
-                  onExpand={(oid) => patchSearch({ commit: oid })}
-                  // selectFile clears diff/preview/staged too, so a lingering
-                  // preview=true doesn't spuriously re-open Preview for the file
-                  // you pick out of a commit (history/commit stay set — the
-                  // commit diff keeps showing until you leave History).
-                  onOpenFile={(path) => selectFile(path)}
+                  path={selectedPath}
+                  commitOid={expandedCommitOid}
                 />
-              </Suspense>
-            ) : gh ? (
-              // Own Suspense (like RepoEditorPane's): the panel's first
-              // connections read suspends, and without a local boundary that
-              // would bubble to the route's `<Suspense>` boundary and blank the whole IDE.
-              <Suspense
-                fallback={
-                  <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
-                    Loading…
-                  </div>
-                }
-              >
-                <RepoGithubPanel projectId={projectId} repoPath={repoPath} />
-              </Suspense>
-            ) : scm ? (
-              <GitPanel
-                changes={changes}
-                headPathSet={headPathSet}
-                commitPending={commit.isPending}
-                onCommit={(message, reset) => commit.mutate(message, { onSuccess: reset })}
-                onStage={(path) => store.stage(path)}
-                onUnstage={(path) => store.unstage(path)}
-                onDiscard={discardPath}
-                onDiscardAll={() => store.discardAll()}
-                onOpen={(path, status) =>
-                  patchSearch({
-                    file: path,
-                    diff: status === "modified" ? true : undefined,
-                    preview: undefined,
-                    staged: undefined,
-                  })
-                }
-                onOpenStaged={(path) =>
-                  patchSearch({ file: path, diff: undefined, preview: undefined, staged: true })
-                }
-              />
-            ) : (
-              <RepoFileTree
-                className="h-full"
-                headPaths={headPaths}
-                changes={changes}
-                selectedPath={selectedPath}
-                onSelect={selectFile}
-                actions={actions}
-              />
-            )}
-          </ResizablePanel>
-          <ResizableHandle />
-          <ResizablePanel className="flex min-w-0 flex-col">
-            {selectedPath === undefined ? (
-              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-                Select a file to view or edit it.
-              </div>
-            ) : (
-              <Suspense
-                fallback={
-                  <div
-                    className="flex flex-1 items-center justify-center text-sm text-muted-foreground"
-                    data-spinner="true"
-                  >
-                    Loading {selectedPath}…
-                  </div>
-                }
-              >
-                {history && expandedCommitOid !== undefined ? (
-                  <CommitDiffPane
-                    key={`${selectedPath}:${expandedCommitOid}`}
-                    projectId={projectId}
-                    repoPath={repoPath}
-                    path={selectedPath}
-                    commitOid={expandedCommitOid}
-                  />
-                ) : (
-                  <RepoEditorPane
-                    key={selectedPath}
-                    projectId={projectId}
-                    repoPath={repoPath}
-                    path={selectedPath}
-                    headCommitOid={files.commitOid}
-                    headHasPath={headPathSet.has(selectedPath)}
-                    change={changes.get(selectedPath)}
-                    diffOpen={diff}
-                    // Diff and preview are mutually exclusive views of the same
-                    // buffer — turning one on turns the other off.
-                    onToggleDiff={(open) =>
-                      patchSearch({ diff: open ? true : undefined, preview: undefined })
-                    }
-                    previewOpen={preview}
-                    onTogglePreview={(open) =>
-                      patchSearch({ preview: open ? true : undefined, diff: undefined })
-                    }
-                    onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
-                    onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
-                    onDiscardFile={() => discardPath(selectedPath)}
-                    onStageFile={() => store.stage(selectedPath)}
-                    onUnstageFile={() => {
-                      store.unstage(selectedPath);
-                      patchSearch({ staged: undefined });
-                    }}
-                    onOpenWorking={() =>
-                      patchSearch({ staged: undefined, diff: undefined, preview: undefined })
-                    }
-                    stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
-                    onRestore={() => dropChange(selectedPath)}
-                  />
-                )}
-              </Suspense>
-            )}
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      )}
+              ) : (
+                <RepoEditorPane
+                  key={selectedPath}
+                  projectId={projectId}
+                  repoPath={repoPath}
+                  path={selectedPath}
+                  headCommitOid={files.commitOid}
+                  headHasPath={headPathSet.has(selectedPath)}
+                  change={changes.get(selectedPath)}
+                  diffOpen={diff}
+                  // Diff and preview are mutually exclusive views of the same
+                  // buffer — turning one on turns the other off.
+                  onToggleDiff={(open) =>
+                    patchSearch({ diff: open ? true : undefined, preview: undefined })
+                  }
+                  previewOpen={preview}
+                  onTogglePreview={(open) =>
+                    patchSearch({ preview: open ? true : undefined, diff: undefined })
+                  }
+                  onSetWorking={(entry) => store.setWorking(selectedPath, entry)}
+                  onSetStaged={(entry) => store.setStaged(selectedPath, entry)}
+                  onDiscardFile={() => discardPath(selectedPath)}
+                  onStageFile={() => store.stage(selectedPath)}
+                  onUnstageFile={() => {
+                    store.unstage(selectedPath);
+                    patchSearch({ staged: undefined });
+                  }}
+                  onOpenWorking={() =>
+                    patchSearch({ staged: undefined, diff: undefined, preview: undefined })
+                  }
+                  stagedView={stagedView && changes.get(selectedPath)?.staged !== undefined}
+                  onRestore={() => dropChange(selectedPath)}
+                />
+              )}
+            </Suspense>
+          )}
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }
@@ -883,18 +631,17 @@ function GitPanel({
  * IDE view state, URL-owned like every stream view's: `file` is the open
  * path, `diff` whether the HEAD↔staged diff is showing, `preview` whether a
  * markdown/html file shows its rendered preview instead of the editor,
- * `tasks`/`scm`/`gh`/`history` which sidebar shows instead of the file tree
- * (task board / Source Control / GitHub / commit history), `commit` the expanded commit's oid
- * (which also pins the readonly commit diff the open file renders as). The
- * repo detail route validates these (RepoDetailSearch), so loose reads here
- * are safe.
+ * `scm`/`gh`/`history` which sidebar shows instead of the file tree
+ * (Source Control / GitHub / commit history), `commit` the expanded commit's
+ * oid (which also pins the readonly commit diff the open file renders as).
+ * The repo detail route validates these (RepoDetailSearch), so loose reads
+ * here are safe.
  */
 function useRepoIdeSearch() {
   const search = useSearch({ strict: false }) as {
     file?: string;
     diff?: boolean;
     preview?: boolean;
-    tasks?: boolean;
     scm?: boolean;
     gh?: boolean;
     staged?: boolean;
@@ -907,7 +654,6 @@ function useRepoIdeSearch() {
       file?: string | undefined;
       diff?: boolean | undefined;
       preview?: boolean | undefined;
-      tasks?: boolean | undefined;
       scm?: boolean | undefined;
       gh?: boolean | undefined;
       staged?: boolean | undefined;
@@ -928,7 +674,6 @@ function useRepoIdeSearch() {
     file: search.file,
     diff: search.diff === true,
     preview: search.preview === true,
-    tasks: search.tasks === true,
     scm: search.scm === true,
     gh: search.gh === true,
     stagedView: search.staged === true,

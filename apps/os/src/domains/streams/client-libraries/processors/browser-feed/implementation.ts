@@ -5,7 +5,7 @@ import {
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamProcessor } from "iterate/processors";
-import type { StreamEvent } from "iterate/processors";
+import type { ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import { ensureBrowserProcessorProgressSchema } from "../../browser/processor-state-storage.ts";
 import { BrowserProjectionWriteBuffer } from "../../browser/projection-write-buffer.ts";
@@ -27,7 +27,7 @@ export const BROWSER_FEED_TABLE = "feed_items";
 type VolatileAgentState = { state: AgentUiState; throughOffset: number };
 
 /**
- * Folds stream events into the single `feed_items` projection for the browser
+ * Reduces stream events into the single `feed_items` projection for the browser
  * feed UI. The projection logic lives in the pure `planBrowserFeedOps` helper,
  * run one event at a time by BOTH hooks — `reduce` keeps its `endState`,
  * `processEvent` keeps its `ops` — so state and projection stay in lockstep by
@@ -35,7 +35,7 @@ type VolatileAgentState = { state: AgentUiState; throughOffset: number };
  * browser progress store (processor-state-storage.ts) flushes them and the
  * two-cursor progress record in ONE SQLite transaction per delivered frame.
  *
- * The open raw-group row grows with every folded event; its per-event ops are
+ * The open raw-group row grows with every reduced event; its per-event ops are
  * COALESCED in the buffer to one upsert per commit carrying the row's final
  * data (matching the legacy batch override's one-statement-per-touched-row
  * serialization cost — without it a monotype catch-up would serialize the
@@ -61,7 +61,7 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
   /**
    * Build (without publishing) the transient agent-tail candidate for one
    * genuinely live frame. The durable runners still receive only durable
-   * events; this overlay folds the original event order so a chunk before a
+   * events; this overlay reduces in the original event order so a chunk before a
    * completion cannot be replayed after that completion. A frame with no
    * ephemeral event starts no overlay, while later durable frames continue an
    * already-live overlay until reconnect clears it.
@@ -106,16 +106,12 @@ export class BrowserFeedProcessor extends StreamProcessor<BrowserFeedContract, {
     this.#volatileAgentState = null;
   }
 
-  protected override reduce(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["reduce"]>[0],
-  ): BrowserFeedState {
+  protected override reduce(args: ReduceArgs<BrowserFeedContract>): BrowserFeedState {
     return planBrowserFeedOps(args.state, [args.event]).endState;
   }
 
-  protected override processEvent(
-    args: Parameters<StreamProcessor<BrowserFeedContract>["processEvent"]>[0],
-  ): undefined {
-    // Event-less at-head pass: no per-event work, only the caughtUp reconcile above (if any).
+  protected override processEvent(args: ProcessEventArgs<BrowserFeedContract>): undefined {
+    // Event-less at-head pass: this projection has no at-head work.
     const { event } = args;
     if (event === null) return;
     const { ops } = planBrowserFeedOps(args.previousState, [event]);

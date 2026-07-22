@@ -79,7 +79,7 @@ export async function sendEmailOtp(options: SendEmailOtpOptions) {
   }
   const fromEmail = getEmailOtpSenderAddress(options.senderDomain);
   await options.emailBinding.send({
-    from: { email: fromEmail, name: "Iterate" },
+    from: { email: fromEmail, name: "iterate" },
     to: options.email,
     subject: `Your verification code: ${options.otp}`,
     text: `Your verification code is: ${options.otp}\n\nThis code expires in 5 minutes.`,
@@ -107,18 +107,18 @@ export async function sendOrganizationInvitationEmail(
   const inviterName = options.inviterName || options.inviterEmail;
   const roleLabel = options.role || "member";
   await emailBinding.send({
-    from: { email: fromEmail, name: "Iterate" },
+    from: { email: fromEmail, name: "iterate" },
     to: options.email,
-    subject: `${inviterName} invited you to ${options.organizationName} on Iterate`,
+    subject: `${inviterName} invited you to ${options.organizationName} on iterate`,
     text: [
-      `${inviterName} (${options.inviterEmail}) invited you to join ${options.organizationName} on Iterate as ${roleLabel}.`,
+      `${inviterName} (${options.inviterEmail}) invited you to join ${options.organizationName} on iterate as ${roleLabel}.`,
       "",
       `Accept the invitation: ${options.invitationUrl}`,
       "",
       "You need to sign in with this email address before accepting.",
     ].join("\n"),
     html: [
-      `<p>${escapeHtml(inviterName)} (${escapeHtml(options.inviterEmail)}) invited you to join <strong>${escapeHtml(options.organizationName)}</strong> on Iterate as ${escapeHtml(roleLabel)}.</p>`,
+      `<p>${escapeHtml(inviterName)} (${escapeHtml(options.inviterEmail)}) invited you to join <strong>${escapeHtml(options.organizationName)}</strong> on iterate as ${escapeHtml(roleLabel)}.</p>`,
       `<p><a href="${escapeHtml(options.invitationUrl)}">Accept the invitation</a></p>`,
       "<p>You need to sign in with this email address before accepting.</p>",
     ].join(""),

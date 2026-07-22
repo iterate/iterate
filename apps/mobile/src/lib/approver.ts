@@ -1,6 +1,6 @@
 // The phone as a human-approval-key holder: expo-secure-store binding of the
-// pure crypto in approver-core.ts (which the live e2e drives from Node with
-// no Expo imports at all — same seam split as itx-core.ts/itx.ts).
+// pure crypto in approver-core.ts (which the live e2e drives from Node with no
+// Expo imports at all).
 //
 // Storage is two Keychain items per project: the public half (keyId,
 // publicKey, label) readable without a prompt, so the UI can show enrollment

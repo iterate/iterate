@@ -10,9 +10,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({
-      slug: `build-overlay-${crypto.randomUUID().slice(0, 8)}`,
-    });
+    using project = await itx.projects
+      .get(`build-overlay-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     const { projectId } = await project.__describe();
 
     const fetchHome = async () => {
@@ -42,12 +42,32 @@ test(
       "a successful worker build",
     );
     const homepage = await healthy.response.text();
-    expect(homepage).toContain("Hello from your Iterate project worker");
-    expect(homepage).toContain("__iterateWorkerOverlay");
-    expect(homepage.indexOf("__iterateWorkerOverlay")).toBeGreaterThan(homepage.indexOf("<body"));
+    const overlayMarker = "data-iterate-worker-overlay";
+    expect(homepage).toContain("Hello from your iterate project worker");
+    expect(homepage).toContain(overlayMarker);
+    expect(homepage.indexOf(overlayMarker)).toBeGreaterThan(homepage.indexOf("<body"));
 
     const original = await project.repo.readFile({ path: "worker.ts" });
     expect(original?.content).toContain("export default class ProjectWorker");
+
+    const customIconSource = original!.content.replace(
+      "        <html>\n          <body>",
+      '        <html>\n          <body>\n            <link rel="shortcut ICON" href="/my-icon.svg">',
+    );
+    expect(customIconSource).not.toBe(original!.content);
+    const customized = await project.repo.commitFiles({
+      changes: [{ path: "worker.ts", content: customIconSource }],
+      message: "set a custom favicon",
+    });
+    const customIcon = await pollHome(
+      ({ commitOid, response }) => response.status === 200 && commitOid === customized.commitOid,
+      "the worker with its own favicon",
+    );
+    const customIconHomepage = await customIcon.response.text();
+    // A body icon is valid HTML and can appear after the transform has seen
+    // </head>; the app's icon must still suppress the fallback.
+    expect(customIconHomepage).toContain('rel="shortcut ICON" href="/my-icon.svg"');
+    expect(customIconHomepage).not.toContain("data-iterate-default-favicon");
 
     await project.repo.commitFiles({
       changes: [{ path: "worker.ts", content: "this is not valid typescript ((((" }],
@@ -59,7 +79,9 @@ test(
       "worker-bundler's build failure",
     );
     expect(failed.commitOid).toBeNull();
-    expect(await failed.response.text()).toContain("Worker build failed");
+    const failedHomepage = await failed.response.text();
+    expect(failedHomepage).toContain("Worker build failed");
+    expect(failedHomepage).toContain(`href="/${projectId}/.iterate/favicon.svg"`);
 
     const fixed = await project.repo.commitFiles({
       changes: [{ path: "worker.ts", content: original!.content }],
@@ -70,6 +92,6 @@ test(
       "the fixed worker commit",
     );
     expect(healed).toMatchObject({ commitOid: fixed.commitOid });
-    expect(await healed.response.text()).toContain("Hello from your Iterate project worker");
+    expect(await healed.response.text()).toContain("Hello from your iterate project worker");
   },
 );

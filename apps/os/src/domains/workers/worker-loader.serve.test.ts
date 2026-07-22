@@ -65,22 +65,31 @@ const h = vi.hoisted(() => {
       }),
     },
     WORKER_BUILD_CACHE: kv,
+    WORKER_BUILD_COORDINATOR: {
+      getByName: () => ({
+        build: async (request: import("./worker-build-capability.ts").WorkerBuildRequest) => {
+          const { executeCoordinatedWorkerBuild } = await import("./worker-build-capability.ts");
+          return await executeCoordinatedWorkerBuild(request, itxEnv as never);
+        },
+      }),
+    },
     WORKER_BUNDLER: {},
+    CF_VERSION_METADATA: { id: "version-1" },
     WORKER_SELF: "os-test",
   };
   return { executeWorkerBuild, itxEnv, kv, state };
 });
 
-vi.mock("../../env.ts", () => ({ itxEnv: h.itxEnv }));
+vi.mock("../../env.ts", () => ({
+  itxEnv: h.itxEnv,
+  workerVersion: (env: { CF_VERSION_METADATA?: { id: string } }) =>
+    env.CF_VERSION_METADATA?.id ?? "unversioned",
+}));
 vi.mock("./build-backend.ts", () => ({
   WORKER_BUNDLER_VERSION: "0.2.1",
   WORKER_COMPATIBILITY_DATE: "2026-05-01",
   WORKER_COMPATIBILITY_FLAGS: ["nodejs_compat"],
   executeWorkerBuild: h.executeWorkerBuild,
-  workerVirtualModules: (overrides?: Record<string, string>) => ({
-    "iterate/sdk": "test sdk",
-    ...overrides,
-  }),
 }));
 
 const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
@@ -113,6 +122,7 @@ beforeEach(async () => {
   h.state.failRuntime = false;
   h.state.loaderCalls.splice(0);
   h.state.snapshotCalls.splice(0);
+  h.itxEnv.CF_VERSION_METADATA.id = "version-1";
   h.state.wranglerConfig = undefined;
 });
 
@@ -282,5 +292,35 @@ describe("resolveWorkerSource", () => {
       compatibilityDate: "2026-07-01",
       compatibilityFlags: ["nodejs_compat_v2"],
     });
+    expect(h.state.loaderCalls[0]?.key).toContain("worker-loader:os-test:version-1:");
+  });
+
+  test("does not reuse a loaded isolate across parent deployments", async () => {
+    const resolved = await resolveWorkerSource({
+      projectId: "prj_rollout",
+      source: {
+        createWorker: {
+          files: { files: { "main.js": "export default {};" }, type: "inline" },
+        },
+      },
+      waitUntil,
+    });
+    const load = () =>
+      loadResolvedWorker({
+        bindings: {},
+        globalOutbound: {} as Fetcher,
+        projectId: "prj_rollout",
+        resolved,
+        scopePath: "/",
+      });
+
+    load();
+    h.itxEnv.CF_VERSION_METADATA.id = "version-2";
+    load();
+
+    expect(h.state.loaderCalls.map(({ key }) => key)).toEqual([
+      expect.stringContaining("worker-loader:os-test:version-1:"),
+      expect.stringContaining("worker-loader:os-test:version-2:"),
+    ]);
   });
 });

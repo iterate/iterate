@@ -7,7 +7,8 @@
 // fake, defined here).
 
 import { describe, expect, it } from "vitest";
-import type { ConsumedInput, StreamEvent } from "iterate/processors";
+import type { ConsumedInput, StreamEvent, StreamEventInput } from "iterate/processors";
+import { KEEPALIVE_ALARM_LEAD_MS } from "iterate/processors";
 import {
   makeMemoryProgressStore,
   makeProcessorHarness,
@@ -33,8 +34,8 @@ type AgentEventInput = ConsumedInput<AgentProcessorContract>;
 
 // -----------------------------------------------------------------------------
 // Event literals: the birth bundle and the recurring message shapes. These are
-// event BUILDERS (data), not append wrappers — every test appends through the
-// harness's typed append.
+// event BUILDERS (data), not append wrappers. Consumed inputs use the harness's
+// typed append; core recovery facts use the raw stream handle.
 // -----------------------------------------------------------------------------
 
 const NEW_AGENT_EVENTS = [
@@ -87,7 +88,7 @@ function agentLoopNote(content: string): AgentEventInput {
 const REVIVED = {
   type: "events.iterate.com/stream/processor-revived",
   payload: { processorSlug: "agent", revivals: 1, version: "test" },
-} satisfies AgentEventInput;
+} satisfies StreamEventInput;
 
 // -----------------------------------------------------------------------------
 // Scripted LLM transport: every call parks until the test settles it, and the
@@ -306,6 +307,63 @@ describe("AgentProcessor turn lifecycle", () => {
     expect(h.events(REQUESTED)).toHaveLength(2);
   });
 
+  it("interrupt racing a NON-streamed completion: the cancelled settlement still carries the full text", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("Hello")], ["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(1);
+
+    // Park the success batch at the substrate door: the completion resolves
+    // with its full text (no chunks ever streamed — the unified transport's
+    // non-ReadableStream fallback), but the assistant+settled append has not
+    // committed. This is the window an interrupt races into and wins the
+    // settle key.
+    const realAppend = h.stream.append.bind(h.stream);
+    let releaseSuccessBatch = () => {};
+    const successBatchHeld = new Promise<void>((resolve) => {
+      releaseSuccessBatch = resolve;
+    });
+    h.stream.append = async (...inputs) => {
+      if (inputs.some((input) => input.idempotencyKey?.includes("assistant-context@"))) {
+        await successBatchHeld;
+      }
+      return realAppend(...inputs);
+    };
+
+    await h.play(
+      () => h.llm.respond("The complete non-streamed answer."),
+      ["append", userMessage("actually stop", { behaviour: "interrupt-current-request" })],
+      () => releaseSuccessBatch(),
+    );
+
+    // The interrupt won the settle key, and the dropped success batch took
+    // `completion.text` with it — but the text survives because the resolved
+    // completion is recorded as the in-flight partial BEFORE the success
+    // append is awaited. (Chunk accumulation alone left partialText empty
+    // here: nothing streamed, so the whole response used to vanish.)
+    expect(h.events(SETTLED)).toMatchObject([
+      {
+        payload: {
+          result: {
+            status: "cancelled",
+            reason: "interrupted-by-user-input",
+            partialText: "The complete non-streamed answer.",
+          },
+        },
+      },
+    ]);
+    const preserved = h
+      .state()
+      .contextItems.find((item) => item.payload.content.includes("partial output follows"));
+    expect(preserved!.payload.content).toContain("The complete non-streamed answer.");
+
+    // The interrupting message's own turn sees what the user never saw lost.
+    await h.play(["advanceTime", 10_000]);
+    expect(h.llm.calls).toHaveLength(2);
+    expect(h.llm.calls[1]!.messages.map((message) => message.content).join("\n")).toContain(
+      "The complete non-streamed answer.",
+    );
+  });
+
   it("mirrors a visible web message into assistant history so the model sees what it sent", async () => {
     const h = makeAgentHarness();
     const files = [
@@ -489,8 +547,7 @@ describe("AgentProcessor recovery", () => {
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello?")], // debounce sleep parked…
       ["crash"], // …and dies with the incarnation
-      ["advanceTime", 60_000],
-      ["append", REVIVED],
+      ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1],
     );
 
     // processEvent re-ran over the fold: trigger still pending, window long
@@ -509,9 +566,9 @@ describe("AgentProcessor recovery", () => {
     expect(h.llm.calls).toHaveLength(1); // the doomed attempt
     const requested = h.events(REQUESTED)[0]!;
 
-    await h.play(["crash"], ["advanceTime", 30_000], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
 
-    // No new requested event — the same journaled intent runs again.
+    // No new requested event — the same stream-backed intent runs again.
     expect(h.events(REQUESTED)).toHaveLength(1);
     expect(h.llm.calls).toHaveLength(2);
     await h.play(() => h.llm.respond("Adopted."));
@@ -528,7 +585,7 @@ describe("AgentProcessor recovery", () => {
 
     // The old incarnation's attempt (calls[0]) survives the crash as a zombie
     // closure; the successor adopts the same request as calls[1].
-    await h.play(["crash"], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
     expect(h.llm.calls).toHaveLength(2);
 
     await h.play(() => h.llm.calls[1]!.resolve({ text: "from-successor" }));
@@ -574,8 +631,12 @@ describe("AgentProcessor recovery", () => {
       ["append", ...NEW_AGENT_EVENTS, userMessage("Hello")],
       ["advanceTime", 10_000],
       ["crash"],
-      ["advanceTime", 10 * 60_000 + 1],
-      ["append", REVIVED],
+      () => {
+        // Platform alarms may fire late. Move past the request horizon first,
+        // then let the already-due keepalive alarm wake the incarnation.
+        h.clock.now += 10 * 60_000 + 1;
+      },
+      ["advanceTime", 0],
     );
 
     expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt; never re-run
@@ -600,7 +661,7 @@ describe("AgentProcessor recovery", () => {
 
     // The atomic assistant+settled append hits a stream hiccup: nothing
     // commits (batches are atomic) and the incarnation's in-flight slot
-    // clears, so the request stays owed in the journal.
+    // clears, so the request stays owed in the stream.
     await h.play(
       () => {
         h.stream.failAppendsOfType = SETTLED;
@@ -610,7 +671,7 @@ describe("AgentProcessor recovery", () => {
         h.stream.failAppendsOfType = undefined;
       },
       // Any delivery at head finds the request unsettled → adoption re-dials.
-      ["append", REVIVED],
+      () => h.stream.append(REVIVED),
     );
     expect(h.events(SETTLED)).toHaveLength(0);
     expect(h.llm.calls).toHaveLength(2);
@@ -792,7 +853,7 @@ describe("AgentProcessor script execution", () => {
         },
       },
     ]);
-    const executionId = (scriptRequests[0]!.payload as { executionId: string }).executionId;
+    const executionId = scriptRequests[0]!.payload.executionId;
     expect(h.state().activeScriptExecutionIds).toEqual([executionId]);
 
     // The capability host settles (played by the test); the rendered result is
@@ -885,11 +946,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => { await itx.chat.sendMessage('done'); }\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     const itemsBefore = h.state().contextItems.length;
     await h.play(
@@ -936,11 +994,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     const bigText = "x".repeat(500);
     await h.play([
@@ -972,11 +1027,8 @@ describe("AgentProcessor script execution", () => {
     await h.play(["advanceTime", 60_000], () =>
       h.llm.respond("```ts\nasync (itx) => itx.small()\n```"),
     );
-    const secondExecution = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[1]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const secondExecution = h.events("events.iterate.com/capability-host/script-run-requested")[1]!
+      .payload.executionId;
     await h.play([
       "append",
       {
@@ -1009,11 +1061,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
     await h.play([
       "append",
       {
@@ -1035,11 +1084,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.email.read()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     await h.play(
       [
@@ -1083,11 +1129,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.note()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     await h.play([
       "append",
@@ -1129,11 +1172,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
 
     const result = { items: "x".repeat(500) };
     await h.play([
@@ -1186,7 +1226,7 @@ describe("AgentProcessor script execution", () => {
 
     const requests = h.events("events.iterate.com/capability-host/script-run-requested");
     expect(requests).toHaveLength(1);
-    expect((requests[0]!.payload as { code: string }).code).toBe(script);
+    expect(requests[0]!.payload.code).toBe(script);
   });
 
   it("rejects a mixed-language multi-block response without executing the TypeScript block", async () => {
@@ -1250,11 +1290,8 @@ describe("AgentProcessor script execution", () => {
       ["advanceTime", 10_000],
       () => h.llm.respond("```ts\nasync (itx) => itx.email.unreadCount()\n```"),
     );
-    const executionId = (
-      h.events("events.iterate.com/capability-host/script-run-requested")[0]!.payload as {
-        executionId: string;
-      }
-    ).executionId;
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
     await h.play(
       [
         "append",
@@ -1344,13 +1381,13 @@ describe("AgentProcessor stream facts", () => {
       () => {
         h.stream.failAppendsOfType = undefined;
       },
-      ["append", REVIVED], // any delivery at head: the resume attempt now succeeds
+      () => h.stream.append(REVIVED), // any delivery at head: the resume attempt now succeeds
       ["advanceTime", 10_000], // the re-anchored trigger's window closes → fresh intent
     );
 
     expect(h.events("events.iterate.com/agent/resumed")).toHaveLength(1);
     expect(h.state().paused).toBeNull();
-    // The burned no-op intent is a journal fact; the re-anchored trigger got
+    // The burned no-op intent is a stream fact; the re-anchored trigger got
     // a FRESH key, so a second requested event committed and the turn ran.
     expect(h.events(REQUESTED)).toHaveLength(2);
     expect(h.state().openRequest).not.toBeNull();
@@ -1383,7 +1420,7 @@ describe("AgentProcessor stream facts", () => {
     expect(h.llm.calls).toHaveLength(1);
     const requested = h.events(REQUESTED)[0]!;
     const trigger = h.events(CONTEXT_ADDED)[1]!; // the user message
-    expect((requested.payload as { expiresAt: number }).expiresAt).toBe(
+    expect(requested.payload.expiresAt).toBe(
       Date.parse(trigger.createdAt) + h.state().config.llmRequestExpiryMs,
     );
   });
@@ -1433,7 +1470,7 @@ describe("AgentProcessor stream facts", () => {
     // Evict: the in-flight attempt dies with the incarnation. The revived
     // incarnation, still paused, must adopt the open request rather than
     // returning early and stranding it.
-    await h.play(["crash"], ["advanceTime", 30_000], ["append", REVIVED]);
+    await h.play(["crash"], ["advanceTime", KEEPALIVE_ALARM_LEAD_MS + 1]);
     expect(h.events(REQUESTED)).toHaveLength(1); // same request, not a new one
     expect(h.llm.calls).toHaveLength(2); // adopted and re-dialed despite the pause
 
@@ -1451,8 +1488,15 @@ describe("AgentProcessor stream facts", () => {
       "append",
       { type: "events.iterate.com/agent/paused", payload: { reason: "operator" } },
     ]);
-    // Crash, then let the request's whole expiry horizon lapse before revival.
-    await h.play(["crash"], ["advanceTime", 10 * 60_000 + 1], ["append", REVIVED]);
+    // Crash, let the request's whole expiry horizon lapse, then deliver the
+    // already-due keepalive alarm late.
+    await h.play(
+      ["crash"],
+      () => {
+        h.clock.now += 10 * 60_000 + 1;
+      },
+      ["advanceTime", 0],
+    );
     expect(h.llm.calls).toHaveLength(1); // only the pre-crash attempt; never re-dialed
     expect(h.events(SETTLED)).toMatchObject([
       { payload: { result: { status: "cancelled", reason: "expired" } } },
@@ -1612,7 +1656,7 @@ describe("AgentProcessor stream facts", () => {
       ],
       ["advanceTime", 10_000],
     );
-    expect((h.events(REQUESTED)[1]!.payload as { model: string }).model).toBe("better-model");
+    expect(h.events(REQUESTED)[1]!.payload.model).toBe("better-model");
     expect(h.llm.calls[1]!.model).toBe("better-model");
   });
 
@@ -1651,7 +1695,7 @@ describe("AgentProcessor stream facts", () => {
     expect(AgentLiveState.safeParse({ unexpected: true }).success).toBe(false);
 
     // agent/created is deliberately open (provenance may ride along), but the
-    // fold keeps policy out of the birth certificate: a smuggled config is
+    // reduce keeps policy out of the birth certificate: a smuggled config is
     // inert — configuration only ever enters through agent/configured.
     const h = makeAgentHarness();
     await h.play([
@@ -1663,6 +1707,22 @@ describe("AgentProcessor stream facts", () => {
     ]);
     expect(h.state().birthCertificate).not.toBeNull();
     expect(h.state().config.llm.model).not.toBe("smuggled-model");
+  });
+
+  it("a second birth certificate is a no-op: the first one wins", async () => {
+    const h = makeAgentHarness();
+    await h.play(
+      ["append", { type: "events.iterate.com/agent/created", payload: {} }],
+      [
+        "append",
+        {
+          type: "events.iterate.com/agent/created",
+          payload: { note: "impostor" },
+        },
+      ],
+    );
+
+    expect(h.state().birthCertificate).toEqual({ createdAtOffset: 1 });
   });
 });
 
@@ -2103,7 +2163,7 @@ describe("AgentProcessor compaction", () => {
 
     const compactionRows = h
       .events(CONTEXT_ADDED)
-      .filter((row) => (row.payload as { compaction?: unknown }).compaction !== undefined);
+      .filter((row) => row.payload.compaction !== undefined);
     expect(compactionRows).toHaveLength(2);
     expect(compactionRows[1]).toMatchObject({
       payload: { compaction: { replacesHistoryThrough: secondRequestOffset } },
@@ -2196,9 +2256,7 @@ describe("AgentProcessor compaction", () => {
       () => h.llm.respond("Hi!"), // the vendor reported no usage
     );
     expect(h.events("events.iterate.com/agent/token-usage-reported")).toHaveLength(0);
-    expect(
-      (h.events(SETTLED)[0]!.payload as { result: Record<string, unknown> }).result,
-    ).not.toHaveProperty("usage");
+    expect(h.events(SETTLED)[0]!.payload.result).not.toHaveProperty("usage");
 
     // Failed attempts never report either.
     await h.play(["append", userMessage("again")], ["advanceTime", 10_000], () =>

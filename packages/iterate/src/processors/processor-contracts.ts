@@ -50,32 +50,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // payload types from the same declaration and typos fail at the definition site.
 // =============================================================================
 
-/**
- * One documented example payload for an owned event, rendered on the public
- * event docs site (events.iterate.com). The payload must parse against the
- * event's `payloadSchema` — enforced by the event-docs unit tests rather than
- * at module load, so a bad example fails CI instead of bricking a worker boot.
- */
-export type EventExample = {
-  /** What this example shows, e.g. "Push delivery to another stream's acceptCrossPost". */
-  description: string;
-  /** The example payload, in the payload schema's input shape. */
-  payload: unknown;
-};
-
-/** One owned event: its payload schema plus optional human description and examples. */
+/** One owned event: its payload schema plus an optional human description. */
 export type EventDefinition<PayloadOutput = unknown, PayloadInput = PayloadOutput> = {
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
   /**
    * FORCIBLY ephemeral: every append/parse lane built from this definition
    * defaults the envelope's `ephemeral` flag to `true` and REJECTS an explicit
-   * `ephemeral: false`. For events that must never become durable journal
+   * `ephemeral: false`. For events that must never become durable stream
    * facts (streaming chunks) — declaring it here makes forgetting the flag at
    * an append site impossible instead of a silent storage leak.
    */
   ephemeral?: true;
-  examples?: readonly EventExample[];
 };
 
 /** A contract's owned events, keyed by the durable event type string. */
@@ -178,9 +164,21 @@ type EventFromType<
       infer PayloadOutput,
       unknown
     >
-    ? TypedStreamEvent<Type, PayloadOutput> & { payload: PayloadOutput }
+    ? TypedStreamEvent<Type, PayloadOutput> & { payload: PayloadOutput } & ParsedEphemeralEnvelope<
+          EventDefinitionForType<Events, ProcessorDeps, Type>
+        >
     : never
   : never;
+
+/** A committed event resolved from a contract's owned events or processor dependencies.
+ * Unknown event-type strings retain the untyped {@link StreamEvent} shape. */
+export type ResolvedEvent<Contract, Type extends string> = Contract extends {
+  events: EventCatalog;
+}
+  ? Type extends ResolvedEventType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>>
+    ? EventFromType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Type>
+    : StreamEvent
+  : StreamEvent;
 
 /** Union of committed-event shapes for a `consumes` tuple; `"*"` alone means any `StreamEvent`. */
 type EventFromTypes<
@@ -240,8 +238,26 @@ type ParsedInputFromType<
       infer PayloadOutput,
       unknown
     >
-    ? TypedStreamEventInput<Type, PayloadOutput> & { payload: PayloadOutput }
+    ? TypedStreamEventInput<Type, PayloadOutput> & {
+        payload: PayloadOutput;
+      } & ParsedEphemeralEnvelope<EventDefinitionForType<Events, ProcessorDeps, Type>>
     : never
+  : never;
+
+/** Contract-forced ephemeral inputs default to `true` during parsing. */
+type ParsedEphemeralEnvelope<Definition> = Definition extends { ephemeral: true }
+  ? { ephemeral: true }
+  : unknown;
+
+/** A typed builder preserves the supplied envelope while returning parsed payload/default output. */
+type BuiltInputFromEvent<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Event extends { type: string },
+> = Event extends unknown
+  ? Omit<Event, "payload"> &
+      Pick<ParsedInputFromType<Events, ProcessorDeps, Event["type"]>, "payload"> &
+      ParsedEphemeralEnvelope<EventDefinitionForType<Events, ProcessorDeps, Event["type"]>>
   : never;
 
 /** Parsed durable inputs for a processor's `consumes` tuple. */
@@ -310,7 +326,7 @@ export type ProcessorState<Contract> = Contract extends {
 // Authoring-time validation types for defineProcessorContract.
 // -----------------------------------------------------------------------------
 
-/** Reduced state must be object-shaped and must accept `{}` (the empty fold). */
+/** Reduced state must be object-shaped and must accept `{}` (the empty initial state). */
 type DefaultableObjectStateSchema<StateSchema extends z.ZodType> =
   z.output<StateSchema> extends Record<string, unknown>
     ? {} extends z.input<StateSchema>
@@ -347,21 +363,22 @@ type ProcessorContractBuildEvent<
   > & { type: string },
 >(
   event: Event,
-) => Event;
+) => BuiltInputFromEvent<Events, ProcessorDeps, Event>;
 
-/** `contract.parseEvent(...)`: validate a committed event, optionally narrowed by an explicit type string. */
+/** Resolved contract types compatible with an event's current discriminator type. */
+type ResolvedTypeFromEvent<
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Event extends { type: string },
+> = Extract<ResolvedEventType<Events, ProcessorDeps>, Event["type"]>;
+
+/** `contract.parseEvent(...)`: validate a committed event and infer its output from `event.type`. */
 type ProcessorContractParseEvent<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
-> = {
-  <const Type extends ResolvedEventType<Events, ProcessorDeps>>(
-    type: Type,
-    event: StreamEvent,
-  ): EventFromType<Events, ProcessorDeps, Type>;
-  (
-    event: StreamEvent,
-  ): EventFromType<Events, ProcessorDeps, ResolvedEventType<Events, ProcessorDeps>>;
-};
+> = <const Event extends StreamEvent>(
+  event: Event,
+) => EventFromType<Events, ProcessorDeps, ResolvedTypeFromEvent<Events, ProcessorDeps, Event>>;
 
 /**
  * Same as `parseEvent`, but for append inputs that do not yet have an offset or
@@ -375,15 +392,13 @@ type ProcessorContractParseEvent<
 type ProcessorContractParseEventInput<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
-> = {
-  <const Type extends ResolvedEventType<Events, ProcessorDeps>>(
-    type: Type,
-    event: StreamEventInput,
-  ): ParsedInputFromType<Events, ProcessorDeps, Type>;
-  (
-    event: StreamEventInput,
-  ): ParsedInputFromType<Events, ProcessorDeps, ResolvedEventType<Events, ProcessorDeps>>;
-};
+> = <const Event extends StreamEventInput>(
+  event: Event,
+) => ParsedInputFromType<
+  Events,
+  ProcessorDeps,
+  ResolvedTypeFromEvent<Events, ProcessorDeps, Event>
+>;
 
 /**
  * `contract.parseConsumedInput(...)`: validate one domain-object append
@@ -393,9 +408,15 @@ type ProcessorContractParseConsumedInput<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
   Consumes extends readonly string[],
-> = (
-  event: ConsumedInputFromTypes<Events, ProcessorDeps, Consumes>,
-) => ParsedConsumedInputFromTypes<Events, ProcessorDeps, Consumes>;
+> = <const Event extends ConsumedInputFromTypes<Events, ProcessorDeps, Consumes>>(
+  event: Event,
+) => "*" extends Consumes[number]
+  ? ParsedConsumedInputFromTypes<Events, ProcessorDeps, Consumes>
+  : ParsedConsumedInputFromTypes<
+      Events,
+      ProcessorDeps,
+      readonly Extract<Consumes[number], Event["type"]>[]
+    >;
 
 // =============================================================================
 // Runtime event parsers (bound to this app's event schemas).
@@ -434,7 +455,7 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
 /** The envelope `ephemeral` slot: for a definition marked `ephemeral: true`,
  * absent defaults to `true` and an explicit `false` FAILS the parse — the
  * contract, not the append site, decides that the event never becomes a
- * durable journal fact. */
+ * durable stream fact. */
 function ephemeralEnvelopeSchema(forced: boolean | undefined, standard: z.ZodType): z.ZodType {
   return forced === true ? z.literal(true).default(true) : standard;
 }
@@ -476,14 +497,6 @@ export function getEventInputSchema<
 // =============================================================================
 
 /**
- * Validate an append input against the payload schema resolved from a contract's
- * local `events` plus its `processorDeps`. Used by call sites that hold a
- * contract but not a processor instance (e.g. subscription-configured event
- * builders in `utils.ts`); contracts expose it pre-bound as
- * `contract.buildEvent(...)`.
- */
-
-/**
  * Memoized twins of {@link getEventSchema} / {@link getEventInputSchema} for
  * hot paths. Constructing the zod wrapper per call costs ~20µs (~50x the
  * parse itself), and the reduce/append paths run once per event. Keyed by
@@ -519,29 +532,6 @@ export function cachedEventSchema(args: {
   return cachedSchema(eventSchemaCache, getEventSchema, args);
 }
 
-export function buildEvent<
-  const Contract extends {
-    slug?: string;
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-  },
-  const Event extends ResolvedEventInput<Contract> & { type: string },
->(args: { contract: Contract; event: Event }): Event {
-  const eventDefinition = getResolvedEventDefinition({
-    contract: args.contract,
-    eventType: args.event.type,
-  });
-  if (eventDefinition === undefined) {
-    const owner = args.contract.slug == null ? "contract" : `processor "${args.contract.slug}"`;
-    throw new Error(`${owner} cannot build unresolved event "${args.event.type}".`);
-  }
-  return getEventInputSchema({
-    type: args.event.type,
-    payloadSchema: eventDefinition.payloadSchema,
-    ephemeral: eventDefinition.ephemeral,
-  }).parse(args.event) as unknown as Event;
-}
-
 /** Union of append-input shapes for every event a contract can resolve (own + deps). */
 type ResolvedEventInput<Contract> = Contract extends {
   events: EventCatalog;
@@ -552,6 +542,54 @@ type ResolvedEventInput<Contract> = Contract extends {
       ResolvedEventType<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>>
     >
   : never;
+
+/**
+ * Validate an append input with the payload schema resolved from a processor
+ * contract. Prefer the contract-bound `contract.buildEvent(event)` API, which
+ * carries the same types without repeating the contract in the argument.
+ *
+ * @deprecated Use `contract.buildEvent(event)`.
+ */
+export function buildEvent<
+  const Contract extends {
+    slug?: string;
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+  },
+  const Event extends ResolvedEventInput<NoInfer<Contract>> & { type: string },
+>(args: {
+  contract: Contract;
+  event: Event;
+}): BuiltInputFromEvent<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Event> {
+  return parseResolvedEventInput(args.contract, args.event) as BuiltInputFromEvent<
+    ContractEventCatalog<Contract>,
+    ProcessorDepsOf<Contract>,
+    Event
+  >;
+}
+
+function parseResolvedEventInput(
+  contract: {
+    slug?: string;
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+  },
+  event: { type: string },
+): unknown {
+  const eventDefinition = getResolvedEventDefinition({
+    contract,
+    eventType: event.type,
+  });
+  if (eventDefinition === undefined) {
+    const owner = contract.slug == null ? "contract" : `processor "${contract.slug}"`;
+    throw new Error(`${owner} cannot build unresolved event "${event.type}".`);
+  }
+  return getEventInputSchema({
+    type: event.type,
+    payloadSchema: eventDefinition.payloadSchema,
+    ephemeral: eventDefinition.ephemeral,
+  }).parse(event);
+}
 
 /**
  * Typed identity for processor contracts: validation plus the pre-bound
@@ -597,10 +635,10 @@ export function defineProcessorContract<
   parseEventInput: ProcessorContractParseEventInput<Events, ProcessorDeps>;
   parseConsumedInput: ProcessorContractParseConsumedInput<Events, ProcessorDeps, Consumes>;
 };
-// The implementation is intentionally untyped (`any` return): the single typed
-// overload above carries the whole contract type; TS cannot relate the
-// generic helper-method shapes to the runtime Object.assign result.
-export function defineProcessorContract(contract: unknown): any {
+// The overload above is the public type. The runtime implementation returns
+// `unknown` because TypeScript cannot relate the generic helper-method shapes
+// to the dynamically validated Object.assign result.
+export function defineProcessorContract(contract: unknown): unknown {
   assertNoLocalProcessorDepEventConflicts(contract);
   assertDefaultStateSchema(contract);
   if (typeof contract !== "object" || contract === null) {
@@ -623,13 +661,10 @@ export function defineProcessorContract(contract: unknown): any {
   };
   return Object.assign(typedContract, {
     buildEvent(event: { type: string }) {
-      return buildEvent({
-        contract: typedContract,
-        event: event as ResolvedEventInput<typeof typedContract> & { type: string },
-      });
+      return parseResolvedEventInput(typedContract, event);
     },
-    parseEvent: makeContractEventParser(typedContract, "parseEvent", getEventSchema),
-    parseEventInput: makeContractEventParser(typedContract, "parseEventInput", getEventInputSchema),
+    parseEvent: makeContractEventParser(typedContract, getEventSchema),
+    parseEventInput: makeContractEventParser(typedContract, getEventInputSchema),
     parseConsumedInput: makeContractConsumedInputParser(typedContract),
   });
 }
@@ -683,18 +718,13 @@ function makeContractConsumedInputParser(contract: {
  */
 function makeContractEventParser(
   contract: { events: EventCatalog; processorDeps?: readonly unknown[] },
-  name: "parseEvent" | "parseEventInput",
   schemaFor: (args: { type: string; payloadSchema: z.ZodType; ephemeral?: boolean }) => {
     parse(value: unknown): unknown;
   },
 ) {
   const parserCache = new Map<string, { parse(value: unknown): unknown }>();
-  return (typeOrEvent: string | { type: string }, maybeEvent?: { type: string }) => {
-    const eventType = typeof typeOrEvent === "string" ? typeOrEvent : typeOrEvent.type;
-    const event = typeof typeOrEvent === "string" ? maybeEvent : typeOrEvent;
-    if (event === undefined) {
-      throw new Error(`Processor "${getProcessorSlug(contract)}" ${name} missing event.`);
-    }
+  return (event: { type: string }) => {
+    const eventType = event.type;
     const eventDefinition = getResolvedEventDefinition({ contract, eventType });
     if (eventDefinition == null) {
       throw new Error(
@@ -871,13 +901,13 @@ function getProcessorSlug(contract: unknown): string {
  * its incarnation died owing background work — never emitted by a processor.
  * Per-processor identity rides the payload's `processorSlug` and the
  * `processor-revived:<slug>@...` idempotency key, not the type string.
- * Recovery-wired contracts CONSUME it (the runner's construction check
- * requires that): its ordinary delivery is the guaranteed turn that lands at
- * the stream head, where `processEvent`'s at-head reconcile
- * (`delivery.caughtUp`) re-drives the processor's open obligations. The
- * event DEFINITION (payload schema, examples) lives with the platform's core
- * stream contract; this constant is here so contracts and the runner agree on
- * the type string without importing that contract.
+ * Consuming it is OPTIONAL: a processor should do so only when it reacts to
+ * the fact itself. Its append still wakes delivery when it is unconsumed, and
+ * a head-reaching frame receives the runner's eventless
+ * `processEvent(event: null, caughtUp: true)` pass so open obligations are not
+ * stranded. The event DEFINITION (payload schema) lives with the platform's
+ * core stream contract; this constant is here so contracts and the recovery
+ * adapter agree on the type string without importing that contract.
  */
 export const STREAM_PROCESSOR_REVIVED_EVENT_TYPE = "events.iterate.com/stream/processor-revived";
 
@@ -906,17 +936,17 @@ export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnno
 
 /**
  * Platform stream events a processor contract may CONSUME without owning —
- * pass as a `processorDeps` entry. Currently just the keepalive revival fact:
- * a recovery-wired contract must consume it (the runner enforces this at
- * construction) so the revival append lands an at-head `processEvent` turn.
- * The event's authoritative definition lives with the platform's core stream
- * contract; this catalog is deliberately payload-loose — reducers ignore the
- * revival fact, its delivery IS the point.
+ * pass as a `processorDeps` entry. Currently just the keepalive revival fact.
+ * Consumption is optional and belongs only in processors that react to the
+ * fact itself; an unconsumed revival tail receives the runner's eventless
+ * at-head turn. The event's authoritative definition lives with the
+ * platform's core stream contract, and this catalog is deliberately
+ * payload-loose.
  */
 export const PLATFORM_STREAM_EVENTS = {
   [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {
     description:
-      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work, guaranteeing the revived processor an at-head reconcile turn.",
+      "Platform keepalive revival fact: appended when a processor's incarnation died owing background work; consumed when the processor reacts to the fact itself, otherwise followed by an eventless at-head processEvent turn.",
     payloadSchema: z.looseObject({}),
   },
 };

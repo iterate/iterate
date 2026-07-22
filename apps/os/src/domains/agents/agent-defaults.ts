@@ -4,15 +4,14 @@
 // processor exists on a stream.
 
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
+import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
-import {
-  CapabilityHostProcessorContract,
-  capabilityFallbackForScope,
-} from "../capability-host/capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
@@ -91,10 +90,10 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   AGENT_SUMMARY_INSTRUCTION,
   "",
   'THE CONFIG REPO — the code that governs this project, at "/repos/config":',
-  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one with agent.append(...) after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. Multi-file TypeScript works, but builds install no packages; runtime imports must be repo files, workerd modules, or modules supplied by Iterate.",
+  "- `worker.ts` serves the project's hosts, routes named-export app classes to their own hostnames, and handles every stream event through processEvent(event). Create agents explicitly with itx.agents.get(path).create(); a path or folder alone is not an agent. Configure one with agent.append(...) after creation. AGENTS.md is durable notes: read it early and write stable project knowledge back. Multi-file TypeScript works, but builds install no packages; runtime imports must be repo files, workerd modules, or modules supplied by iterate.",
   "- Every commit lands on MAIN and the project worker/website redeploys automatically — no branches, no push, nothing else to do.",
   '- Two write doors, one rule: `await itx.repo.commitFiles({ message, changes: [{ path, content }] })` for one small file; your private workspace (`itx.workspace` — the config repo mounted at "/", live at latest main: readFile/writeFile/edit/glob) to read and change several files, shipped as ONE commit with `await itx.workspace.git.commit({ message })`. ALWAYS read a file before editing it.',
-  '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route a named-export class; HelloApp and CounterApp show both shapes. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.',
+  '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route an app under apps/; the todo and guestbook createApp pairs show the shape. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.',
   "",
   "`itx.docs.search` finds working example scripts (most PROVEN — run unattended by the test suite), type declarations, and mounted capabilities; matching is word overlap, so pass MANY related words.",
   "",
@@ -266,7 +265,7 @@ export function slackAgentSystemPrompt(connection: string): string {
     `To SEND a file or image to the thread — including ones you generate with itx.ai.run (image models return base64 in response.image) — store it and post its signed url; Slack unfurls image urls into inline previews. NEVER paste base64 into message text: const stored = await itx.agent.addFiles({ files: [{ filename: "cat.png", contentType: "image/png", data: response.image }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); await ${postMessage}({ channel, thread_ts, text: "Here you go! " + stored.files[0].url }); Stored images also stay visible to you on later turns, so you can iterate on what you made.`,
     'If someone posts a URL to an image you need to look at, download it and attach it to your conversation so you can actually see it: const resp = await fetch(url); await itx.agent.addFiles({ files: [{ filename: "photo.jpg", contentType: resp.headers.get("content-type") ?? "application/octet-stream", data: await resp.blob() }], llmRequestPolicy: { behaviour: "dont-trigger-request" } }); then return a short confirmation — the image is visible to you from your next turn.',
     'If asked about email, Gmail, or an inbox: use await itx.integrations.gmail.get().request({ path: "/users/me/messages", query: { maxResults: 10, q: "in:inbox" } }). Pass a connection slug to get(...) only when a specific Google account matters. Do not claim you lack inbox access before checking.',
-    'If asked about GitHub, use `const octokit = itx.integrations.github.get().octokit`; this 99% path selects the first connected installation. Only inspect `await itx.integrations.list()` and pass its connection slug to `get(slug)` when a particular installation matters. `octokit` is the all-in-one client from the `octokit` package, with Iterate supplying installation auth and transport: use `octokit.rest.*` for routine endpoints or `octokit.graphql(query, variables)` when GraphQL is a better fit. Use the package types and https://github.com/octokit/octokit.js/; there is no direct `.rest` or `.graphql` on the connection. GitHub repo.data.permissions is a user-style view and can report every flag false for a GitHub App installation that can write; never call the installation read-only from that field—attempt the requested operation and use GitHub\'s actual error if denied. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
+    'If asked about GitHub, use `const octokit = itx.integrations.github.get().octokit`; this 99% path selects the first connected installation. Only inspect `await itx.integrations.list()` and pass its connection slug to `get(slug)` when a particular installation matters. `octokit` is the all-in-one client from the `octokit` package, with iterate supplying installation auth and transport: use `octokit.rest.*` for routine endpoints or `octokit.graphql(query, variables)` when GraphQL is a better fit. Use the package types and https://github.com/octokit/octokit.js/; there is no direct `.rest` or `.graphql` on the connection. GitHub repo.data.permissions is a user-style view and can report every flag false for a GitHub App installation that can write; never call the installation read-only from that field—attempt the requested operation and use GitHub\'s actual error if denied. Known-good snippets: itx.docs.get({ name: "github-list-repos" }) and itx.docs.get({ name: "github-read-file" }).',
     "Your scripts are tool calls. Whatever your function returns (or throws) comes back as your next input and you get another turn; a script that returns undefined ends your turn. Keep snippets small and single-purpose: fetch data and RETURN it so you can look at it before composing a reply — do not pattern-match response shapes blind or wrap calls in defensive try/catch (a raw thrown error is more useful to you). Use Promise.all to fan out independent calls concurrently.",
     `Keep the thread in the loop on every working turn: when a script does real work, post a short progress note in the same Promise.all as the work itself — Promise.all([${postMessage}({ channel, thread_ts, text: "Checking your email now..." }), itx.integrations.gmail.get().request(...)]) — so the thread is never silent while you fetch.`,
     AGENT_SUMMARY_INSTRUCTION,
@@ -382,11 +381,22 @@ export function agentSystemPromptContextEvent(input: { content: string; idempote
   });
 }
 
+/** The `agent/created` payload — the agent's birth certificate (a loose
+ * object of caller-authored birth facts; `{}` is the norm). */
+export type AgentCreateInput = z.input<
+  (typeof AgentProcessorContract.events)["events.iterate.com/agent/created"]["payloadSchema"]
+>;
+
 /**
  * Build the complete creation batch for one agent stream. Every agent has the
  * same agent + capability-host pair; a router may add one explicitly named
  * sibling processor and its birth certificate. The stream path remains only
  * an address and never selects a processor.
+ *
+ * The created event's idempotency key is payload-free on purpose: a repeated
+ * create with the identical payload dedupes and resolves, while a create over
+ * an EXISTING agent with a different payload is rejected by the stream's
+ * same-key-different-body rule — the loud duplicate-create failure.
  */
 export function agentCreationForPath<
   const SiblingBirthCertificate extends StreamEventInput = never,
@@ -394,6 +404,8 @@ export function agentCreationForPath<
 >(input: {
   agentPath: string;
   projectId: string;
+  /** The `agent/created` birth certificate payload. Defaults to `{}`. */
+  payload?: AgentCreateInput;
   /** Events that must commit in the same creation batch. */
   initialEvents?: readonly InitialEvent[];
   /**
@@ -425,20 +437,19 @@ export function agentCreationForPath<
   const birthCertificate = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/created",
     idempotencyKey: `agent/created:${projectId}:${agentPath}`,
-    payload: {},
+    payload: input.payload ?? {},
   });
-  const capabilityHostBirthCertificate = CapabilityHostProcessorContract.buildEvent({
-    type: "events.iterate.com/capability-host/created",
-    idempotencyKey: `capability-host/created:${projectId}:${agentPath}`,
-    // A capability miss at the agent's scope re-resolves directly at the
-    // project root host — one hop, journaled at birth, no path walking.
-    payload: { config: {}, fallback: capabilityFallbackForScope(agentPath) },
-  });
+  // The agent's own capability scope: the shared capability-host birth batch
+  // (created + processor subscription), with the default one-hop fallback to
+  // the project root host journaled at birth — no path walking.
+  const [capabilityHostBirthCertificate, capabilityHostSubscription] = capabilityHostCreationEvents(
+    { path: agentPath, projectId },
+  );
   const workspaceProvided = CapabilityHostProcessorContract.buildEvent({
     // The agent's own workspace, a durable itx-expression re-evaluated per
-    // call, so agent birth never touches the workspace Durable Object. (No
-    // sandbox mount: sandboxes are pets, created explicitly via
-    // itx.sandboxes.create.)
+    // call. AgentRpcTarget.create explicitly births that addressed workspace
+    // before returning the agent handle. (No sandbox mount: sandboxes are
+    // pets, created explicitly via itx.sandboxes.get(path).create.)
     type: "events.iterate.com/capability-host/capability-provided",
     idempotencyKey: `capability-host/workspace-provided:v${AGENT_WORKSPACE_POLICY_REVISION}:${projectId}:${agentPath}`,
     payload: {
@@ -468,7 +479,17 @@ export function agentCreationForPath<
     // prompt budget test holds the line). System context never wakes the LLM
     // by itself.
     type: "events.iterate.com/agents/context-added",
-    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}`,
+    // The body embeds directory-derived project facts, so the occurrence
+    // identity must carry them too: a create replayed after the directory
+    // record changed (or with facts where a router birth had none) appends a
+    // fresh superseding occurrence in the same keyed slot instead of tripping
+    // the stream's same-key-different-body rejection. Fact-less births keep
+    // the bare key, so router replays dedupe exactly as before.
+    idempotencyKey: `agent/boot-system-context:v${AGENT_BOOT_CONTEXT_REVISION}:${projectId}:${agentPath}${
+      project === undefined
+        ? ""
+        : `:${JSON.stringify([project.name, project.slug, project.workerUrl ?? null])}`
+    }`,
     payload: {
       role: "system",
       key: "agent/boot-context",
@@ -496,12 +517,6 @@ export function agentCreationForPath<
     idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
     processor: ["agents", ["get", agentPath], "processor"],
     processorSlug: AgentProcessorContract.slug,
-  });
-  const capabilityHostSubscription = buildDurableObjectProcessorSubscriptionConfiguredEvent({
-    durableObjectName,
-    idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-    processor: ["capabilityHosts", ["get", agentPath], "processor"],
-    processorSlug: CapabilityHostProcessorContract.slug,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",

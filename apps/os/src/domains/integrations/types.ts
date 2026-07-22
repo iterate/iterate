@@ -44,7 +44,7 @@ export type IntegrationFamily<Connection> = {
   get(connection?: string): Connection;
 };
 
-/** The normal all-in-one Octokit package with Iterate supplying GitHub App
+/** The normal all-in-one Octokit package with iterate supplying GitHub App
  * installation auth and transport. Both REST and GraphQL are available. */
 export type GithubConnection = { octokit: import("octokit").Octokit };
 
@@ -82,7 +82,7 @@ export type TelegramConnection = {
   sendPhoto(params: Record<string, unknown>): Promise<Record<string, unknown>>;
 };
 
-/** Iterate's small, connection-scoped Waitrose client. */
+/** iterate's small, connection-scoped Waitrose client. */
 export type WaitroseConnection = {
   addToTrolley(lineNumber: string, quantity?: number): Promise<Record<string, unknown>>;
   removeFromTrolley(lineNumber: string): Promise<Record<string, unknown>>;

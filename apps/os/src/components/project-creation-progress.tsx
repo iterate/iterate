@@ -24,7 +24,7 @@ type CreationStep = {
 function creationSteps(state: ProjectProcessorState | undefined): CreationStep[] {
   // `undefined` = the first push has not arrived yet: nothing is ticked.
   // Row order mirrors the saga's actual commit order (see the create-timing
-  // steps in projects.create): slack routing is appended right after the root
+  // steps in projects.get(slug).create): slack routing is appended right after the root
   // saga, then the repo seeds (the slow artifact step) — so ticks appear top
   // to bottom instead of a later row completing while an earlier one spins.
   // The onboarding agent is not a saga step: its chat page explicitly creates

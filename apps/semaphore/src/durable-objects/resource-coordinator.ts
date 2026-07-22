@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { z } from "zod";
 import {
   AcquireResourceInput,
   AcquireSpecificResourceInput,
   DeleteResourceInput,
+  RenewResourceLeaseInput,
   ReleaseResourceInput,
   type SemaphoreJsonObject,
   type SemaphoreLeaseRecord,
@@ -21,6 +21,7 @@ type Waiter = {
   type: string;
   leaseMs: number;
   holder: string | null;
+  allowedSlugs: string[] | undefined;
   timeoutHandle: ReturnType<typeof setTimeout>;
   settled: boolean;
   resolve: (value: SemaphoreLeaseRecord | null) => void;
@@ -44,10 +45,11 @@ export class ResourceCoordinator extends DurableObject<Env> {
     leaseMs: number;
     waitMs?: number;
     holder?: string;
+    allowedSlugs?: string[];
   }): Promise<SemaphoreLeaseRecord | null> {
-    const { type, leaseMs, waitMs = 0, holder } = AcquireResourceInput.parse(params);
+    const { type, leaseMs, waitMs = 0, holder, allowedSlugs } = AcquireResourceInput.parse(params);
     this.rememberCoordinatorType(type);
-    const immediate = await this.tryAcquire(type, leaseMs, holder ?? null);
+    const immediate = await this.tryAcquire(type, leaseMs, holder ?? null, allowedSlugs);
     if (immediate) {
       return immediate;
     }
@@ -62,6 +64,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
         type,
         leaseMs,
         holder: holder ?? null,
+        allowedSlugs,
         timeoutHandle: setTimeout(() => {
           if (waiter.settled) {
             return;
@@ -145,10 +148,14 @@ export class ResourceCoordinator extends DurableObject<Env> {
     leaseMs: number;
     holder?: string;
     force?: boolean;
+    allowedSlugs?: string[];
   }) {
     const parsed = AcquireSpecificResourceInput.parse(params);
 
     this.rememberCoordinatorType(parsed.type);
+    if (parsed.allowedSlugs && !parsed.allowedSlugs.includes(parsed.slug)) {
+      return null;
+    }
     await this.reapExpiredLeases(parsed.type);
     const activeLease = this.ctx.storage.sql
       .exec<{ lease_id: string; holder: string | null }>(
@@ -182,14 +189,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
   }
 
   async renew(params: { type: string; slug: string; leaseId: string; leaseMs: number }) {
-    const parsed = z
-      .object({
-        type: AcquireResourceInput.shape.type,
-        slug: DeleteResourceInput.shape.slug,
-        leaseId: z.uuid(),
-        leaseMs: AcquireResourceInput.shape.leaseMs,
-      })
-      .parse(params);
+    const parsed = RenewResourceLeaseInput.parse(params);
 
     this.rememberCoordinatorType(parsed.type);
     await this.reapExpiredLeases(parsed.type);
@@ -337,6 +337,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
     type: string,
     leaseMs: number,
     holder: string | null,
+    allowedSlugs: string[] | undefined,
   ): Promise<SemaphoreLeaseRecord | null> {
     await this.reapExpiredLeases();
 
@@ -356,8 +357,13 @@ export class ResourceCoordinator extends DurableObject<Env> {
     // freed slot often still carries its previous holder's deployment; resting
     // it as long as possible maximizes the chance that holder retakes its own
     // slot before anyone else lands on it.
+    const allowedSlugSet = allowedSlugs ? new Set(allowedSlugs) : null;
     const candidates = inventory
-      .filter((resource) => !activeLeases.has(resource.slug))
+      .filter(
+        (resource) =>
+          !activeLeases.has(resource.slug) &&
+          (allowedSlugSet === null || allowedSlugSet.has(resource.slug)),
+      )
       .sort((left, right) => (left.lastReleasedAt ?? 0) - (right.lastReleasedAt ?? 0));
     if (candidates.length === 0) {
       return null;
@@ -401,40 +407,53 @@ export class ResourceCoordinator extends DurableObject<Env> {
   }
 
   private async dispatchWaiters(): Promise<void> {
-    while (this.waiters.length > 0) {
-      const waiter = this.waiters.shift();
-      if (!waiter) {
-        return;
-      }
-
-      if (waiter.settled) {
-        continue;
-      }
-
-      const lease = await this.tryAcquire(waiter.type, waiter.leaseMs, waiter.holder);
-      if (!lease) {
-        if (!waiter.settled) {
-          this.waiters.unshift(waiter);
+    for (;;) {
+      const queued = this.waiters;
+      const deferred: Waiter[] = [];
+      let capacityFreedDuringPass = false;
+      this.waiters = [];
+      for (const waiter of queued) {
+        if (waiter.settled) {
+          continue;
         }
+
+        const lease = await this.tryAcquire(
+          waiter.type,
+          waiter.leaseMs,
+          waiter.holder,
+          waiter.allowedSlugs,
+        );
+        if (!lease) {
+          if (!waiter.settled) {
+            deferred.push(waiter);
+          }
+          continue;
+        }
+
+        if (waiter.settled) {
+          await this.releaseLease(
+            waiter.type,
+            lease.slug,
+            lease.leaseId,
+            "timed-out-before-delivery",
+            {
+              releasedAt: null,
+            },
+          );
+          capacityFreedDuringPass = true;
+          continue;
+        }
+
+        waiter.settled = true;
+        clearTimeout(waiter.timeoutHandle);
+        waiter.resolve(lease);
+      }
+
+      const arrivals = this.waiters;
+      this.waiters = [...deferred.filter((waiter) => !waiter.settled), ...arrivals];
+      if (!capacityFreedDuringPass && arrivals.length === 0) {
         return;
       }
-
-      if (waiter.settled) {
-        await this.releaseLease(
-          waiter.type,
-          lease.slug,
-          lease.leaseId,
-          "timed-out-before-delivery",
-          {
-            releasedAt: null,
-          },
-        );
-        continue;
-      }
-
-      waiter.settled = true;
-      clearTimeout(waiter.timeoutHandle);
-      waiter.resolve(lease);
     }
   }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent } from "../../../os/src/itx-api.generated.ts";
+import type { StreamEvent } from "iterate/sdk/itx/react";
 import { deriveOpenRequests, EVENT, focusOpenRequest, safeHost } from "./approvals.ts";
 
 test("an unresolved request is open", () => {

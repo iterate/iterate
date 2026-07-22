@@ -11,12 +11,9 @@ import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/v
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
-  type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
-import {
-  CapabilityHostProcessorContract,
-  type ScriptExecutionSettlement,
-} from "./capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
+import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 import type { ProvideCapabilityInput } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
@@ -37,12 +34,17 @@ type ScriptExecutionLoopbackExports = {
 
 /**
  * One capability scope: the durable dynamic-capability table and script
- * journal at one `{projectId, path}`. `provideCapability` always mounts here;
+ * stream at one `{projectId, path}`. `provideCapability` always mounts here;
  * `invokeCapability`/`describeCapabilities` follow the birth certificate's
- * journaled `fallback` expression (usually straight to the project root's
+ * committed `fallback` expression (usually straight to the project root's
  * host) on a local miss.
  */
 export class CapabilityHostDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
@@ -58,12 +60,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery: script executions are consequential
-  // `runInBackground` work (journaled requested/started obligations whose
-  // OUTCOME matters), so an incarnation that dies owing one must be revived —
-  // the keepalive alarm appends the `stream/processor-revived` fact, whose ordinary
-  // delivery lands at head and `processEvent`'s at-head reconcile
-  // (`delivery.caughtUp`) re-drives the obligations (see the registry module
-  // doc's recovery rule).
+  // `runInBackground` work (stream-committed requested/started obligations
+  // whose OUTCOME matters), so an incarnation that dies owing one must be
+  // revived — the keepalive alarm appends the `stream/processor-revived` fact,
+  // whose wake produces the eventless at-head pass (`delivery.caughtUp`) that
+  // re-drives the obligations (see the registry module doc's recovery rule).
   readonly #capabilityHostProcessor = this.#registry.register(
     new CapabilityHostProcessor({
       stream: this.#stream,
@@ -86,11 +87,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   );
   // Runner-backed reads: under runner drive the runner owns the cursors and
   // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (the processor facade, the processor's own fold
+  // read this DO serves (the processor facade, the processor's own state
   // reads via #processorReads) goes through the runner's committed progress.
   readonly #reads = this.#registry.reads(this.#capabilityHostProcessor);
 
-  /** The processor's runner-backed fold reads — lazy closures because #reads
+  /** The processor's runner-backed state reads — lazy closures because #reads
    * is built from the registered processor above; the explicit return type
    * breaks the field-initializer inference cycle. */
   #processorReads(): CapabilityHostProcessorReads {
@@ -150,10 +151,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
     return this.#capabilityHostProcessor.revokeCapability(input);
-  }
-
-  runScript(code: string): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(code);
   }
 
   describeCapabilities(): Promise<CapabilityDescription[]> {

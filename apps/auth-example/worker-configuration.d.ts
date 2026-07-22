@@ -10,6 +10,7 @@ declare namespace Cloudflare {
 		APP_CONFIG_ITERATE_AUTH__CLIENT_ID: string;
 		APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: string;
 		APP_CONFIG_ITERATE_AUTH__REDIRECT_URI: string;
+		APP_CONFIG_ITERATE_AUTH__JWKS: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

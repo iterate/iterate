@@ -11,11 +11,12 @@ import {
   connectIterateSession,
   reconnectIterateSession,
   useIterateSessionQuery,
-} from "iterate/react";
+} from "iterate/sdk/itx/react";
 import type { ProjectListEntry } from "../../../project-deployment-status.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { projectsListQueryKey, projectsListStaleTime } from "~/lib/projects-query.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 type OrganizationSummary = {
   id: string;
@@ -26,10 +27,11 @@ type OrganizationSummary = {
 const NO_ORGANIZATIONS: OrganizationSummary[] = [];
 
 // The plain projects list. The root `/` owns the redirect decision (single
-// project → onboarding agent or project home, server-side before rendering);
+// project → project home, server-side before rendering);
 // navigating here directly always shows the list — the sidebar's "All
 // projects" must not hijack single-project users back into their project.
 export const Route = createFileRoute("/_app/projects/")({
+  staticData: breadcrumbStaticData("Projects"),
   ssr: false,
   loader: async () => ({
     routeConfig: await getPublicRouteConfig(),
@@ -76,7 +78,7 @@ function ProjectsIndexPage() {
   );
 
   // "Set up" for a project the auth worker knows about but this deployment's
-  // engine does not: re-run `projects.create` on the itx session with the
+  // engine does not: run `projects.get(slug).create` on the itx session with the
   // claim's exact id and slug. The auth side is idempotent
   // (createForOrganization returns the existing row), then the engine
   // bootstrap saga runs.
@@ -84,9 +86,8 @@ function ProjectsIndexPage() {
     mutationFn: async (project: ProjectListEntry) => {
       const organizationSlug = organizationSlugFor(project);
       const session = await connectIterateSession();
-      await session.projects.create({
+      await session.projects.get(project.slug).create({
         projectId: project.id,
-        slug: project.slug,
         ...(organizationSlug === undefined ? {} : { organizationSlug }),
       });
     },
@@ -257,8 +258,9 @@ function ProjectNameCell({ project }: { project: ProjectListEntry }) {
     <div className="min-w-0 space-y-0.5">
       {project.deploymentStatus === "ready" ? (
         <Link
-          to="/projects/$projectSlug/agents/new"
+          to="/projects/$projectSlug"
           params={{ projectSlug: project.slug }}
+          search={{}}
           className="block truncate font-medium hover:underline"
         >
           {project.slug}
@@ -309,7 +311,7 @@ function ProjectActionsCell({
           variant="outline"
           size="sm"
           render={
-            <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug: project.slug }} />
+            <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} search={{}} />
           }
         >
           Open

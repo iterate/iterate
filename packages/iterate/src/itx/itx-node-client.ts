@@ -3,7 +3,7 @@ import {
   newWebSocketRpcSession,
   type RpcCompatible as CapnRpcCompatible,
   type RpcStub as CapnRpcStub,
-} from "capnweb";
+} from "@iterate-com/capnweb";
 import type {
   Agent,
   ItxAuthCredentials,

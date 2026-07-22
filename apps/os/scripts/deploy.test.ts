@@ -11,11 +11,136 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   assertPreviewPetshopIntegrationConfigured,
+  detachRetiredWorkerQueueConsumers,
   isExactOsProjectMiss,
   posthogBuildEnv,
+  resolveOsContainerDeployArgs,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+describe("retired Worker Queue consumers", () => {
+  it.each(["script", "script_name"] as const)(
+    "detaches only this Worker's retired consumers when Cloudflare returns %s",
+    async (workerField) => {
+      const calls: Array<{ init?: RequestInit; path: string }> = [];
+      const cf = async <T>(path: string, init?: RequestInit): Promise<T> => {
+        calls.push({ init, path });
+        if (path === "/queues?per_page=100&page=1") {
+          return Array.from({ length: 100 }, (_, index) => ({
+            queue_id: `other-${index}`,
+            queue_name: `other-${index}-events`,
+          })) as T;
+        }
+        if (path === "/queues?per_page=100&page=2") {
+          return [
+            { queue_id: "events-queue-id", queue_name: "os-preview-4-events" },
+            {
+              queue_id: "search-queue-id",
+              queue_name: "os-preview-4-search-index-writes",
+            },
+          ] as T;
+        }
+        if (path === "/queues/events-queue-id/consumers") {
+          return [
+            { consumer_id: "other-consumer", script: "other", type: "worker" },
+            {
+              consumer_id: "events-consumer-id",
+              [workerField]: "os-preview-4",
+              type: "worker",
+            },
+          ] as T;
+        }
+        if (path === "/queues/search-queue-id/consumers") {
+          return [
+            { consumer_id: "http-consumer", type: "http_pull" },
+            {
+              consumer_id: "search-consumer-id",
+              [workerField]: "os-preview-4",
+              type: "worker",
+            },
+          ] as T;
+        }
+        return undefined as T;
+      };
+
+      await expect(
+        detachRetiredWorkerQueueConsumers({ cf, workerName: "os-preview-4" }),
+      ).resolves.toEqual([
+        { queueName: "os-preview-4-events", status: "detached" },
+        { queueName: "os-preview-4-search-index-writes", status: "detached" },
+      ]);
+      expect(calls).toEqual([
+        { path: "/queues?per_page=100&page=1", init: undefined },
+        { path: "/queues?per_page=100&page=2", init: undefined },
+        { path: "/queues/events-queue-id/consumers", init: undefined },
+        { path: "/queues/search-queue-id/consumers", init: undefined },
+        {
+          path: "/queues/events-queue-id/consumers/events-consumer-id",
+          init: { method: "DELETE" },
+        },
+        {
+          path: "/queues/search-queue-id/consumers/search-consumer-id",
+          init: { method: "DELETE" },
+        },
+      ]);
+    },
+  );
+
+  it("is a read-only no-op once the consumer is gone", async () => {
+    const calls: string[] = [];
+    const cf = async <T>(path: string): Promise<T> => {
+      calls.push(path);
+      if (path === "/queues?per_page=100&page=1") {
+        return [{ queue_id: "events-queue-id", queue_name: "os-preview-4-events" }] as T;
+      }
+      return [] as T;
+    };
+
+    await expect(
+      detachRetiredWorkerQueueConsumers({ cf, workerName: "os-preview-4" }),
+    ).resolves.toEqual([
+      { queueName: "os-preview-4-events", status: "absent" },
+      { queueName: "os-preview-4-search-index-writes", status: "absent" },
+    ]);
+    expect(calls).toEqual(["/queues?per_page=100&page=1", "/queues/events-queue-id/consumers"]);
+  });
+});
+
+describe("OS container rollout", () => {
+  it("skips only when preview explicitly proved an unchanged warm deployment", () => {
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: "none",
+      }),
+    ).toEqual(["--containers-rollout", "none"]);
+  });
+
+  it("keeps the full rollout by default and after a first-time bootstrap", () => {
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "bootstrapped",
+        requestedRollout: "none",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects an unknown rollout mode", () => {
+    expect(() =>
+      resolveOsContainerDeployArgs({
+        bootstrapAction: "skipped",
+        requestedRollout: "maybe",
+      }),
+    ).toThrow(/OS_CONTAINERS_ROLLOUT/);
+  });
+});
 
 describe("preview Petshop deployment invariant", () => {
   it("requires first-party Petshop credentials in every preview OS config", () => {
@@ -35,9 +160,9 @@ describe("preview Petshop deployment invariant", () => {
 });
 
 describe("PostHog source-map build credentials", () => {
-  it("passes the Doppler credentials to Vite without adding Worker secrets", () => {
+  it("passes production Doppler credentials to Vite without adding Worker secrets", () => {
     expect(
-      posthogBuildEnv({
+      posthogBuildEnv("prd", {
         POSTHOG_PERSONAL_API_KEY: "phx_personal",
         POSTHOG_PROJECT_ID: "123456",
       }),
@@ -47,15 +172,19 @@ describe("PostHog source-map build credentials", () => {
     });
   });
 
+  it("does not require or expose source-map credentials in previews", () => {
+    expect(posthogBuildEnv("preview_4", {})).toEqual({});
+  });
+
   it.each(["POSTHOG_PERSONAL_API_KEY", "POSTHOG_PROJECT_ID"])(
-    "fails the deploy before building when %s is absent",
+    "fails a production deploy before building when %s is absent",
     (missing) => {
       const secrets = {
         POSTHOG_PERSONAL_API_KEY: "phx_personal",
         POSTHOG_PROJECT_ID: "123456",
       };
       delete secrets[missing as keyof typeof secrets];
-      expect(() => posthogBuildEnv(secrets)).toThrow(missing);
+      expect(() => posthogBuildEnv("prd", secrets)).toThrow(missing);
     },
   );
 });

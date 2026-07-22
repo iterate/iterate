@@ -5,7 +5,7 @@ import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import process from "node:process";
 
 import * as prompts from "@clack/prompts";
-import type { RpcStub } from "capnweb";
+import type { RpcStub } from "@iterate-com/capnweb";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
@@ -368,12 +368,13 @@ export const verifyOsSession = async (input: {
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
   let projectItx: RpcStub<Project> | undefined;
   try {
-    projectItx = (await session.projects.create({
-      projectId: project.id,
-      slug: project.slug,
-      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
-      waitUntilReady: false,
-    })) as unknown as RpcStub<Project>;
+    projectItx = (await session.projects.get(project.slug).create(
+      {
+        projectId: project.id,
+        ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+      },
+      { waitUntilReady: false },
+    )) as unknown as RpcStub<Project>;
   } catch (error) {
     throw new Error(
       `Project "${project.slug}" (${project.id}) exists in auth but is missing in OS. Failed to set it up for chat: ${errorMessage(error)}`,

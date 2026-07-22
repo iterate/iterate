@@ -25,9 +25,11 @@ describe("parseSandboxCreateForm", () => {
         keepAlive: false,
       }),
     ).toEqual({
-      name: "development",
-      instanceType: "standard-2",
-      sleepAfter: "5m",
+      path: "/sandboxes/development",
+      input: {
+        instanceType: "standard-2",
+        sleepAfter: "5m",
+      },
     });
   });
 
@@ -40,9 +42,11 @@ describe("parseSandboxCreateForm", () => {
         keepAlive: true,
       }),
     ).toEqual({
-      name: "always-on",
-      instanceType: "basic",
-      keepAlive: true,
+      path: "/sandboxes/always-on",
+      input: {
+        instanceType: "basic",
+        keepAlive: true,
+      },
     });
   });
 

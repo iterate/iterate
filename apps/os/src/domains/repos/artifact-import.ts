@@ -1,3 +1,4 @@
+import type { StreamEventInput } from "iterate/processors";
 import { isRepoNotSeededError, RepoNotSeededError } from "./utils.ts";
 
 const READY_ATTEMPTS = 120;
@@ -6,12 +7,11 @@ const READY_RETRY_MS = 1_000;
 async function waitForArtifactReady(
   artifacts: Pick<Artifacts, "get">,
   name: string,
-): Promise<void> {
+): Promise<ArtifactsRepo> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= READY_ATTEMPTS; attempt += 1) {
     try {
-      await artifacts.get(name);
-      return;
+      return await artifacts.get(name);
     } catch (error) {
       if (!isRepoNotSeededError(error)) throw error;
       lastError = error;
@@ -36,6 +36,65 @@ export async function importGithubArtifact(
   artifacts: Pick<Artifacts, "get" | "import">,
   input: { branch: string; depth?: number; name: string; owner: string; repo: string },
 ): Promise<void> {
+  await importGithubArtifactRepo(artifacts, input);
+}
+
+/**
+ * Import a public repo, then capture its initial push directly. Cloudflare's
+ * server-side import completes before the Worker can observe that first push,
+ * so read the authoritative Artifacts head and append the equivalent fact.
+ */
+export async function importGithubArtifactWithInitialPushCapture(
+  artifacts: Pick<Artifacts, "get" | "import">,
+  input: { branch: string; depth?: number; name: string; owner: string; repo: string },
+  effects: {
+    append(event: StreamEventInput): Promise<unknown>;
+    namespace: string;
+  },
+): Promise<void> {
+  const repo = await importGithubArtifactRepo(artifacts, input);
+
+  // log() is deployed and documented, but the pinned workers-types release
+  // has not yet published the three Artifacts content-read methods.
+  // https://developers.cloudflare.com/artifacts/api/workers-binding/#log-opts
+  const history = await (
+    repo as ArtifactsRepo & {
+      log(options: { limit: number; ref: string }): Promise<Array<{ hash: string }>>;
+    }
+  ).log({ ref: input.branch, limit: 1 });
+  const commitOid = history[0]?.hash;
+  if (typeof commitOid !== "string" || !/^[0-9a-f]{40}$/i.test(commitOid)) {
+    throw new Error(`Imported Artifact ${input.name} has no valid ${input.branch} head.`);
+  }
+
+  await effects.append({
+    type: "events.iterate.com/repo/cloudflare-artifact-event-received",
+    idempotencyKey: `artifact-import-initial-push:${commitOid}`,
+    payload: {
+      artifactName: input.name,
+      body: {
+        type: "cf.artifacts.repo.pushed",
+        source: {
+          namespace: effects.namespace,
+          repoName: input.name,
+          type: "artifacts.repo",
+        },
+        payload: {
+          after: commitOid,
+          before: "0".repeat(40),
+          ref: `refs/heads/${input.branch}`,
+        },
+      },
+      cloudflareEventType: "cf.artifacts.repo.pushed",
+      namespace: effects.namespace,
+    },
+  });
+}
+
+async function importGithubArtifactRepo(
+  artifacts: Pick<Artifacts, "get" | "import">,
+  input: { branch: string; depth?: number; name: string; owner: string; repo: string },
+): Promise<ArtifactsRepo> {
   try {
     await artifacts.import({
       source: {
@@ -55,5 +114,5 @@ export async function importGithubArtifact(
   // import() can be retried after its side effect committed but before the
   // caller observed the response. Never equate a reserved name with a ready
   // repository: get() is the Artifacts readiness barrier.
-  await waitForArtifactReady(artifacts, input.name);
+  return await waitForArtifactReady(artifacts, input.name);
 }

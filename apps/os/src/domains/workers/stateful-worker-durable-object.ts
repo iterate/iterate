@@ -1,5 +1,5 @@
 import { DurableObject, tracing } from "cloudflare:workers";
-import type { Env } from "../../env.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
   invokeFlattenedPath,
@@ -34,6 +34,11 @@ function statefulWorkerVersion(ref: StatefulDynamicWorkerRef, sourceCacheKey: st
  * identity; instead the facet is aborted and re-created against the same DO.
  */
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
+  /** Report this incarnation's code version for the deployment rollout gate. */
+  deploymentVersion(): string {
+    return workerVersion(this.env);
+  }
+
   readonly #name = DurableObjectNameCodec.parse(this.ctx.id.name!);
   // The hosted Durable Object class sees the same scoped itx binding as a
   // stateless worker at this path. That is what lets a provided durable
@@ -74,7 +79,10 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       // Answer the building/failed cases HERE rather than relying on the
       // error name surviving the Durable Object fetch hop back to the
       // dispatching entrypoint — same pages every fetch-lane hop serves.
-      const buildStatus = workerBuildStatus(error);
+      const buildStatus = workerBuildStatus(
+        error,
+        taken.request.headers.get("x-iterate-url-prefix") ?? "",
+      );
       if (buildStatus !== null) return buildStatus.response;
       throw error;
     }

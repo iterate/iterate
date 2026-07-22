@@ -23,9 +23,9 @@ test(
   async () => {
     using session = withItxSession();
     using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
-    using project = itx.projects.create({
-      slug: `worker-alarm-${crypto.randomUUID().slice(0, 8)}`,
-    });
+    using project = await itx.projects
+      .get(`worker-alarm-${crypto.randomUUID().slice(0, 8)}`)
+      .create({});
     await project.projectId;
 
     const ref: DynamicWorkerRef = {
@@ -36,13 +36,20 @@ test(
       // IterateDurableObject — fires are delivered through the worker's
       // `invokeCapability` dispatcher, because workerd reserves `alarm` as
       // an RPC method name, and the SDK base class carries that dispatcher.
-      // The `iterate/sdk` virtual module only exists in bundled builds.
+      // Like every bundled package import, the SDK is declared in the inline
+      // source's package.json. Preview builds replace this moving main spec
+      // with the deployment's exact APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.
       source: {
         createWorker: {
           entryPoint: "alarm-probe.js",
           files: {
             type: "inline",
             files: {
+              "package.json": JSON.stringify({
+                dependencies: {
+                  iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+                },
+              }),
               "alarm-probe.js": `
                 import { IterateDurableObject } from "iterate/sdk";
 

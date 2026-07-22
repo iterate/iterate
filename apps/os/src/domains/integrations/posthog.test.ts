@@ -91,7 +91,7 @@ describe("first-party PostHog stream integration", () => {
       idempotencyKey: "iterate-platform-posthog-subscription-v2",
       payload: {
         subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
-        description: "Iterate's first-party durable-event PostHog feed",
+        description: "iterate's first-party durable-event PostHog feed",
         delivery: {
           mode: "push",
           expression: ["integrations", "posthog", "processEventBatch"],
@@ -101,12 +101,7 @@ describe("first-party PostHog stream integration", () => {
         onPoison: "park",
       },
     });
-    expect(() =>
-      CoreProcessorContract.parseEventInput(
-        "events.iterate.com/stream/subscription-configured",
-        event,
-      ),
-    ).not.toThrow();
+    expect(() => CoreProcessorContract.parseEventInput(event)).not.toThrow();
   });
 
   it("captures the raw durable event with only useful indexed dimensions", async () => {

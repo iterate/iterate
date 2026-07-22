@@ -1,7 +1,6 @@
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import { BaseSequencer, type TestSpecification } from "vitest/node";
 import {
   appendConsoleLineSync,
   createVitestRunRoot,
@@ -14,6 +13,7 @@ import {
   E2E_TEST_TIMEOUT_MS,
   RetryTelemetryReporter,
 } from "@iterate-com/shared/test-support/e2e-policy";
+import { E2E_FILE_TEST_CONCURRENCY } from "./test-support/concurrency.ts";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys.ts";
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
 
@@ -28,56 +28,6 @@ console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
-
-// Observed wall-clock seconds per file on a green preview lane (Depot run
-// 1wd5nxb87d, 2026-07-09). Used for longest-first scheduling below — vitest
-// hands files to workers in sort order, so a slow file starting LAST becomes
-// the whole lane's tail (the itx catalogue at ~100s used to routinely start
-// mid-run and stretch the lane past 3 minutes). Unlisted files default to 15s
-// (roughly the observed median); exact numbers matter much less than the
-// slow/fast partition, so refresh only when the ranking visibly drifts.
-const observedFileSeconds: Record<string, number> = {
-  "agent-tools.itx.e2e.test.ts": 78,
-  "script-execution-concurrency.e2e.test.ts": 38,
-  "streams.e2e.test.ts": 34,
-  "stream-lifecycle.e2e.test.ts": 33,
-  "sandbox-egress.e2e.test.ts": 33,
-  "live-capability-websocket.e2e.test.ts": 31,
-  // The itx-*.e2e.test.ts entries are the old itx.e2e.test.ts catalogue
-  // (104s as one file) split for file-level parallelism; per-file numbers
-  // are estimates proportional to test counts, not yet observed.
-  "itx-agents.e2e.test.ts": 25,
-  "integrations-userspace.e2e.test.ts": 23,
-  "agent-codemode-fence.itx.e2e.test.ts": 19,
-  "itx-connect.e2e.test.ts": 18,
-  "itx-workers.e2e.test.ts": 18,
-  "slack-agent.e2e.test.ts": 18,
-  "project-ingress.e2e.test.ts": 18,
-  "scheduler.e2e.test.ts": 16,
-  "agent-script-result-spill.itx.e2e.test.ts": 16,
-  "itx-live-capabilities.e2e.test.ts": 15,
-  "stream-security.e2e.test.ts": 15,
-  "worker-build.e2e.test.ts": 15,
-  "workspace.itx.e2e.test.ts": 13,
-  "github-backed-repo.e2e.test.ts": 12,
-  "itx-core.e2e.test.ts": 10,
-  "itx-subscribe.e2e.test.ts": 10,
-  "repo-history.itx.e2e.test.ts": 10,
-  "stream-wire.e2e.test.ts": 10,
-  "itx-egress.e2e.test.ts": 8,
-  "admin-project.itx.e2e.test.ts": 8,
-  "repo-binary.itx.e2e.test.ts": 8,
-  "preview-smoke.e2e.test.ts": 8,
-  "mcp-oauth.e2e.test.ts": 2,
-};
-
-/** Longest-processing-time-first: start the slow files so they never tail the lane. */
-class SlowestFirstSequencer extends BaseSequencer {
-  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
-    const seconds = (spec: TestSpecification) => observedFileSeconds[basename(spec.moduleId)] ?? 15;
-    return [...files].sort((left, right) => seconds(right) - seconds(left));
-  }
-}
 
 const sharedProvide = {
   [E2E_RUN_ROOT_KEY]: vitestRunRoot,
@@ -99,33 +49,24 @@ const sharedResolve = {
 export default defineConfig({
   test: {
     // Run-scheduler options live at the ROOT test level — this is where vitest
-    // reads them, even with `projects`. Parallel in CI: each test provisions
-    // its own project against a deployed slot, so FILES are independent.
+    // reads them, even with `projects`. Parallel in CI: files either provision
+    // isolated projects or lease exclusive projects from the matrix's
+    // runtime-specific pools.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // 4 workers × maxConcurrency 2 = peak ~8 concurrent tests. History of
-    // this number: 4×4 = ~16 overloaded a very cold slot pre-#1601
-    // (DO-storage timeouts), 4×3 = ~12 still produced rotating
-    // stream-delivery timeouts on #1638's runs, so it sat at 4×2 = ~8 for a
-    // while. A later peak-12 revalidation looked green, but the agent-presence
-    // preview lane (2026-07-17) exposed three Cloudflare Durable Object storage
-    // resets during concurrent project births; one was hidden by the suite's
-    // single retry and two recovered inside the birth saga. Re-running the
-    // complete runnable catalogue at peak 8 with retries disabled produced
-    // zero storage resets in the matching trace window. The preview runner
-    // now keeps this peak from overlapping Playwright's eight workers; that
-    // omitted lane-wide load had still produced project-processor timeouts.
-    // Keep this at 4 unless a preview marathon plus trace audit proves a
-    // higher setting clean.
-    maxWorkers: 4,
-    sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
-    maxConcurrency: 2,
+    // These tests spend almost all their wall time waiting on isolated remote
+    // projects. Give every current file a worker immediately instead of
+    // creating scheduling waves on the Depot host. 64 is only a ceiling:
+    // Vitest starts at most one worker per runnable file (currently 48).
+    maxWorkers: 64,
+    sequence: { concurrent: ci },
+    maxConcurrency: E2E_FILE_TEST_CONCURRENCY,
     passWithNoTests: true,
     // Retry telemetry (policy rule 5 — see @iterate-com/shared
     // test-support/e2e-policy/budgets.ts): reporters DO belong at the root
     // test level and apply across projects — unlike `retry`, which vitest
     // only reads from each project config (see the note on the node project).
-    reporters: ["default", new RetryTelemetryReporter()],
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
     projects: [
       {
         resolve: sharedResolve,
@@ -134,7 +75,11 @@ export default defineConfig({
           environment: "node",
           // The engine e2e suites and the itx catalogue matrix are both node
           // black boxes against the deployed slot — one lane.
-          include: ["./e2e/vitest/**/*.test.ts", "./e2e/examples/*.e2e.test.ts"],
+          include: [
+            "./e2e/vitest/**/*.test.ts",
+            "./e2e/examples/*.e2e.test.ts",
+            "./e2e/test-support/*.test.ts",
+          ],
           // Ensure the target exists before any test runs: no-op against a
           // deployed APP_CONFIG_BASE_URL, otherwise reuse-or-start the local
           // dev server — the `pnpm spec` webServer contract (see

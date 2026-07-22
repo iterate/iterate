@@ -55,11 +55,9 @@ export default async function deploy(
         `iterate ${ctx.name} streams playground route host (deploy.ts)`,
       );
 
-      // The playground verifies iterate sessions and bearer tokens against a
-      // static JWKS baked at deploy time (issuer keys + forge public key) —
-      // the same relying-party model as apps/os and apps/semaphore.
-      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = await bakeStaticAuthJwks({
-        authBaseUrl: ctx.env.authBaseUrl,
+      // Derive Auth's public key locally from the shared Doppler private key;
+      // the private half never ships here and Auth need not be live.
+      secretValues.APP_CONFIG_ITERATE_AUTH__JWKS = bakeStaticAuthJwks({
         envName: ctx.name,
         dopplerConfig: ctx.env.dopplerConfig,
         secrets: ctx.secrets,

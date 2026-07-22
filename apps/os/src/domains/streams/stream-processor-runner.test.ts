@@ -15,7 +15,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
-import { defineProcessorContract } from "iterate/processors";
+import {
+  defineProcessorContract,
+  idempotencyConflictMessage,
+  sameIdempotentEvent,
+} from "iterate/processors";
 import { StreamProcessor } from "iterate/processors";
 import { ProcessorKeepalive, type KeepaliveRecord } from "iterate/processors";
 import {
@@ -144,6 +148,7 @@ function makeJournal(homePath = HOME) {
   /** EVERY append attempt, deduped or not — the at-least-once evidence. */
   const attempts: { path: string; event: StreamEventInput; deduped: boolean }[] = [];
   const failNext = new Map<string, Error>();
+  let failNextRead: Error | undefined;
   let createdAtClock = 0;
 
   const rowsFor = (path: string): StreamEvent[] => {
@@ -165,6 +170,9 @@ function makeJournal(homePath = HOME) {
     if (event.idempotencyKey !== undefined) {
       const existing = rows.find((row) => row.idempotencyKey === event.idempotencyKey);
       if (existing !== undefined) {
+        if (!sameIdempotentEvent(existing, event)) {
+          throw new Error(idempotencyConflictMessage(event.idempotencyKey, existing.offset));
+        }
         attempts.push({ path, event, deduped: true });
         return existing;
       }
@@ -194,6 +202,11 @@ function makeJournal(homePath = HOME) {
         const limit = args?.limit ?? 500;
         return {
           next: () => {
+            if (failNextRead !== undefined) {
+              const error = failNextRead;
+              failNextRead = undefined;
+              return Promise.reject(error);
+            }
             const page = rowsFor(path)
               .filter(
                 (row) =>
@@ -229,6 +242,9 @@ function makeJournal(homePath = HOME) {
     },
     failNextAppendTo(path: string, error: Error) {
       failNext.set(path, error);
+    },
+    failNextReadWith(error: Error) {
+      failNextRead = error;
     },
   };
 }
@@ -958,11 +974,7 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     journal.seed({ type: NOISE, payload: {} }); // 2: unconsumed, reaches head
 
     const headCalls: { open: string[]; event: number | null }[] = [];
-    const processPhases: string[] = [];
     const hooks: TaskHooks = {
-      onProcess: (args) => {
-        processPhases.push(`${args.event.offset}:${args.delivery.phase}`);
-      },
       onHead: (args, stableKey) => {
         headCalls.push({ open: [...args.state.open], event: args.event?.offset ?? null });
         for (const id of args.state.open) {
@@ -983,7 +995,6 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // Frame 1: the requested event, delivered mid-catch-up (head is at 2). It
     // is behind head, so NOT caughtUp — nothing may act on a partial fold.
     await sink(deliveryFrame([requestedEvent!], 2));
-    expect(processPhases).toEqual(["1:catching-up"]);
     expect(headCalls).toEqual([]);
     expect(journal.rows(SIBLING)).toHaveLength(0);
 
@@ -998,7 +1009,6 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
       scannedThroughOffset: 2,
       streamMaxOffset: 2,
     });
-    expect(processPhases).toEqual(["1:catching-up"]); // still no per-event processEvent
     expect(headCalls).toEqual([{ open: ["a"], event: null }]); // event-less pass drove it
     expect(comparableRows(journal.rows(SIBLING))).toEqual([
       { type: DRIVEN, idempotencyKey: "test-task/drive:a", payload: { id: "a" } },
@@ -1008,7 +1018,6 @@ describe("StreamProcessorRunner at-head reconcile (delivery.caughtUp)", () => {
     // final fold; drive:a dedupes on its stable key, drive:b is new.
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 3: consumed, at head
     await sink(deliveryFrame([journal.rows()[2]!], 3));
-    expect(processPhases).toEqual(["1:catching-up", "3:live"]);
     expect(headCalls).toEqual([
       { open: ["a"], event: null },
       { open: ["a", "b"], event: 3 },
@@ -1324,6 +1333,41 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
     expect(snapshot.state.open).toContain("ryw");
     expect(harness.store.record?.processing.acknowledgedThroughOffset).toBe(committed.offset);
   });
+
+  it("offset form rejects a failed self-pull promptly instead of parking until its timeout", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const controller = new AbortController();
+    try {
+      const harness = makeHarness();
+      const storageReset = new Error(
+        "Internal error while starting up Durable Object storage caused object to be reset",
+      );
+      harness.journal.failNextReadWith(storageReset);
+
+      const waiting = harness.runner.waitUntilEvent({
+        offset: 8,
+        timeoutMs: 75_000,
+        signal: controller.signal,
+      });
+      const outcome = await Promise.race([
+        waiting.then(
+          () => ({ status: "resolved" as const }),
+          (error: unknown) => ({ error, status: "rejected" as const }),
+        ),
+        tick().then(() => ({ status: "still-parked" as const })),
+      ]);
+
+      // Always settle the old implementation's parked promise so a red test
+      // leaves neither a timer nor an unhandled rejection behind.
+      controller.abort();
+      await waiting.catch(() => undefined);
+
+      expect(outcome).toEqual({ error: storageReset, status: "rejected" });
+    } finally {
+      controller.abort();
+      consoleError.mockRestore();
+    }
+  });
 });
 
 // =============================================================================
@@ -1369,69 +1413,56 @@ describe("StreamProcessorRunner recovery wiring", () => {
     return { clock, kv, revivals, build };
   }
 
-  it("throws at construction when recovery is wired but consumes has no <ns>/revived", () => {
-    const journal = makeJournal();
-    const recovery = makeRecoveryFixture(journal).build();
+  it("recovery needs no revived consumption: construction succeeds and the fact gives an eventless at-head turn", async () => {
+    const streamFixture = makeJournal();
+    const recovery = makeRecoveryFixture(streamFixture).build();
     const noRevivedContract = defineProcessorContract({
       slug: "test-no-revived",
       version: "0.0.1",
-      description: "A contract without a revived event, for the construction check.",
+      description: "A recovery-wired contract that does not react to revival facts.",
       stateSchema: z.object({ count: z.number().default(0) }),
       events: { [REQUESTED]: { payloadSchema: z.object({ id: z.string() }) } },
       consumes: [REQUESTED],
       emits: [],
     });
+    const headTurns: { eventType: string | null; count: number }[] = [];
     const processor = new (class extends StreamProcessor<typeof noRevivedContract> {
       readonly contract = noRevivedContract;
-    })({ stream: journal.stream, path: journal.homePath, projectId: null });
 
-    expect(
-      () =>
-        new StreamProcessorRunner({
-          processor,
-          stream: journal.stream,
-          durability: { progress: makeProgressStore().store as never, recovery },
-        }),
-    ).toThrow(
-      /does not consume the revival fact "events\.iterate\.com\/stream\/processor-revived"/,
-    );
-  });
+      protected override reduce({
+        state,
+      }: Parameters<StreamProcessor<typeof noRevivedContract>["reduce"]>[0]) {
+        return { count: state.count + 1 };
+      }
 
-  it("throws at construction when consumes has SOME /revived event but not the core stream/processor-revived", () => {
-    // The trap the exact-membership check closes: a shape-only check
-    // (endsWith "/revived") accepts a contract that consumes some namespaced
-    // revival-looking event, while the ONE core fact the recovery adapter
-    // appends never invokes the processor — recovery silently recovers
-    // nothing.
-    const OTHER_REVIVED = "events.iterate.com/other-processor/revived";
-    const journal = makeJournal();
-    const recovery = makeRecoveryFixture(journal).build();
-    const wrongRevivedContract = defineProcessorContract({
-      slug: "test-wrong-revived",
-      version: "0.0.1",
-      description: "Consumes a FOREIGN revived event, not its own adapter's.",
-      stateSchema: z.object({ count: z.number().default(0) }),
-      events: {
-        [REQUESTED]: { payloadSchema: z.object({ id: z.string() }) },
-        [OTHER_REVIVED]: { payloadSchema: z.object({}) },
-      },
-      consumes: [REQUESTED, OTHER_REVIVED],
-      emits: [],
+      protected override processEvent(
+        args: Parameters<StreamProcessor<typeof noRevivedContract>["processEvent"]>[0],
+      ) {
+        if (args.delivery.caughtUp) {
+          headTurns.push({ eventType: args.event?.type ?? null, count: args.state.count });
+        }
+        return undefined;
+      }
+    })({
+      stream: streamFixture.stream,
+      path: streamFixture.homePath,
+      projectId: null,
     });
-    const processor = new (class extends StreamProcessor<typeof wrongRevivedContract> {
-      readonly contract = wrongRevivedContract;
-    })({ stream: journal.stream, path: journal.homePath, projectId: null });
+    const runner = new StreamProcessorRunner({
+      processor,
+      stream: streamFixture.stream,
+      durability: { progress: makeProgressStore().store as never, recovery },
+    });
 
-    expect(
-      () =>
-        new StreamProcessorRunner({
-          processor,
-          stream: journal.stream,
-          durability: { progress: makeProgressStore().store as never, recovery },
-        }),
-    ).toThrow(
-      /does not consume the revival fact "events\.iterate\.com\/stream\/processor-revived"/,
-    );
+    streamFixture.seed({ type: REQUESTED, payload: { id: "open" } });
+    await runner.catchUp();
+    await recovery.appendRevived();
+    await runner.catchUp();
+
+    expect(headTurns).toEqual([
+      { eventType: REQUESTED, count: 1 },
+      { eventType: null, count: 1 },
+    ]);
   });
 
   it("blocking, background, AND whole-frame work ride the keepalive; a quiet-clean alarm disarms", async () => {

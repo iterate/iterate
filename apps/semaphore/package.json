@@ -17,7 +17,7 @@
     "seed:environment-config-leases": "pnpm cli seed-environment-config-leases",
     "sync-auth-client": "tsx ./scripts/sync-auth-client.ts",
     "typecheck": "pnpm gen:wrangler && tsc --noEmit",
-    "test": "pnpm typecheck",
+    "test": "pnpm typecheck && vitest run src --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "test:e2e": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
     "test:all": "pnpm run test && pnpm run test:e2e",
     "test:quick": "pnpm test:e2e",

@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Agent, AgentChat, CapabilityHost } from "../../src/itx-api.generated.ts";
 import { defineItxScript, itxScript } from "../test-support/itx-script-builder.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
@@ -19,21 +20,35 @@ test("agent create installs only generic machinery; later events configure it", 
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: `agent-create-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`agent-create-${crypto.randomUUID()}`).create({});
   using agent = project.agents.get(`/agents/create-${crypto.randomUUID()}`);
-  await expect(
-    (
-      agent as unknown as {
-        create(input: { unexpected: true }): Promise<void>;
-      }
-    ).create({ unexpected: true }),
-  ).rejects.toThrow(
-    "agent.create() takes no arguments; append configuration and context through agent.append() after creation",
-  );
   expect((await agent.processor.snapshot()).state.birthCertificate).toBeNull();
 
-  await agent.create();
-  await expect(agent.create()).resolves.toBeUndefined();
+  // create() resolves with the same agent handle, so create chains.
+  using created = await agent.create({ note: "birth facts ride the certificate" });
+  const createdSnapshot = await created.processor.snapshot();
+  expect(createdSnapshot.state).toMatchObject({
+    birthCertificate: { createdAtOffset: expect.any(Number) },
+  });
+  const [birthEvent] = await created.stream.getEvents({
+    eventTypes: ["events.iterate.com/agent/created"],
+  });
+  expect(birthEvent?.payload).toEqual({ note: "birth facts ride the certificate" });
+  // An identical-payload retry dedupes on the birth idempotency keys …
+  using retried = await agent.create({ note: "birth facts ride the certificate" });
+  expect((await retried.processor.snapshot()).state).toMatchObject({
+    birthCertificate: createdSnapshot.state.birthCertificate,
+  });
+  // … while a different payload over the existing agent fails loudly (the
+  // stream rejects a same-key-different-body created event).
+  await expect(
+    (async () => {
+      await agent.create({ note: "a conflicting birth certificate" });
+    })(),
+  ).rejects.toThrow();
+  expect((await agent.processor.snapshot()).state).toMatchObject({
+    birthCertificate: createdSnapshot.state.birthCertificate,
+  });
 
   await expect(
     (
@@ -97,7 +112,7 @@ test("Agent scripts update their summary through the typed append door", async (
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-update-summary" });
+  using project = await itx.projects.get(uniqueFixtureSlug("agent-update-summary")).create({});
   const agentPath = `/agents/update-summary-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -151,7 +166,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-project-tool" });
+  using project = await itx.projects.get(uniqueFixtureSlug("agent-project-tool")).create({});
   const agentPath = `/agents/project-tool-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
   await agent.create();
@@ -174,6 +189,14 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
   const filesOptionReply = agent.stream.waitForEvent({
     eventTypes: [AGENT_WEB_MESSAGE_SENT_TYPE],
     predicate: (event) => event.payload?.message === "string form with files",
+    timeoutMs: 30_000,
+  });
+  const reflectedFilesReply = agent.stream.waitForEvent({
+    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
+    predicate: (event) =>
+      event.payload?.role === "assistant" &&
+      event.payload.content ===
+        "The assistant sent this visible web-chat message: string form with files",
     timeoutMs: 30_000,
   });
   const scriptSettled = agent.stream.waitForEvent({
@@ -210,6 +233,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     },
   });
   await scriptSettled;
+  const reflectedFilesEvent = await reflectedFilesReply;
 
   const events = await agent.stream.getEvents();
   expect(events).toEqual(
@@ -231,15 +255,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     ]),
   );
 
-  const reflectedFilesReply = events.find(
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      event.payload?.role === "assistant" &&
-      event.payload.content ===
-        "The assistant sent this visible web-chat message: string form with files",
-  );
-  expect(reflectedFilesReply?.payload).toMatchObject({ role: "assistant" });
-  expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
+  expect(reflectedFilesEvent.payload).toMatchObject({ role: "assistant" });
+  expect(reflectedFilesEvent.payload).not.toHaveProperty("llmRequestOffset");
 });
 
 test("Agent create replays its earlier birth and setup events through its subscriptions", async () => {
@@ -249,7 +266,7 @@ test("Agent create replays its earlier birth and setup events through its subscr
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: `agent-create-replay-${crypto.randomUUID()}` });
+  using project = await itx.projects.get(`agent-create-replay-${crypto.randomUUID()}`).create({});
   const agentPath = `/agents/create-replay-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
 
@@ -356,7 +373,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "agent-only-tools" });
+  using project = await itx.projects.get(uniqueFixtureSlug("agent-only-tools")).create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/agent-only-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -400,17 +417,27 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       [
         "get",
         {
-          // The seeded stateful app: CounterApp is a named export of the
-          // one-file seeded worker.ts.
-          className: "CounterApp",
+          // A test-authored stateful worker: the proof is about agent-scope
+          // capability provisioning, not any seeded app.
+          className: "CounterDo",
           durableWorkerKey,
           path: agentPath,
-          source: {
-            createWorker: {
-              entryPoint: "worker.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
-            },
-          },
+          source: inlineJsSource("counter-do.js", {
+            "counter-do.js": `
+                import { DurableObject } from "cloudflare:workers";
+
+                export class CounterDo extends DurableObject {
+                  async increment() {
+                    const next = ((await this.ctx.storage.get("n")) ?? 0) + 1;
+                    await this.ctx.storage.put("n", next);
+                    return next;
+                  }
+                  async current() {
+                    return (await this.ctx.storage.get("n")) ?? 0;
+                  }
+                }
+              `,
+          }),
           type: "stateful",
         },
       ],
@@ -497,7 +524,9 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "dynamic-worker-scope-cache" });
+  using project = await itx.projects
+    .get(uniqueFixtureSlug("dynamic-worker-scope-cache"))
+    .create({});
   const { projectId } = await project.__describe();
   const agentPath = `/agents/scope-cache-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -556,7 +585,7 @@ test('An agent scope provides a capability to the whole project via capabilityHo
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "cross-scope-provide" });
+  using project = await itx.projects.get(uniqueFixtureSlug("cross-scope-provide")).create({});
   await project.__describe();
   const agentPath = `/agents/cross-scope-${crypto.randomUUID()}`;
   using agent = project.agents.get(agentPath);
@@ -604,7 +633,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "worker-births-agents" });
+  using project = await itx.projects.get(uniqueFixtureSlug("worker-births-agents")).create({});
   const agentPath = `/agents/policy-probe-${crypto.randomUUID()}`;
   using agentStream = project.streams.get(agentPath);
 
@@ -614,24 +643,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   // offset, not merely the last returned item.
   await project.capabilityHosts.get(agentPath).create();
 
-  const birth = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/created"],
-    timeoutMs: 60_000,
-  });
-  const workspaceMount = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/capability-host/capability-provided"],
-    timeoutMs: 60_000,
-  });
-  const configured = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/configured"],
-    timeoutMs: 60_000,
-  });
-  const basePrompt = agentStream.waitForEvent({
-    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
-    predicate: (event) =>
-      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
-    timeoutMs: 60_000,
-  });
   await project.agents.get(agentPath).create();
 
   // create() is a read-after-create barrier for the collection processor, not
@@ -641,17 +652,33 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
   );
 
-  const birthEvent = await birth;
+  // This test proves the durable birth batch and create()'s read-after-create
+  // barrier, not the live waitForEvent transport. Read the committed facts
+  // after create returns so a deployment replacing a waiter incarnation does
+  // not turn durable product truth into a test-only transient failure.
+  const birthEvents = await agentStream.getEvents({ afterOffset: 0 });
+  const birthEvent = birthEvents.find((event) => event.type === "events.iterate.com/agent/created");
+  const configured = birthEvents.find(
+    (event) => event.type === "events.iterate.com/agent/configured",
+  );
+  const basePrompt = birthEvents.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
+  );
+  const workspaceMount = birthEvents.find(
+    (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+  );
   expect(birthEvent).toMatchObject({ payload: {} });
-  expect((await configured).payload).toMatchObject({
+  expect(configured?.payload).toMatchObject({
     config: { llm: { model: expect.any(String) } },
   });
-  expect((await basePrompt).payload).toMatchObject({
+  expect(basePrompt?.payload).toMatchObject({
     role: "system",
     key: "agent/system-prompt",
     content: expect.stringContaining("async (itx)"),
   });
-  expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+  expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the
@@ -687,7 +714,9 @@ test("Project worker processEventBatch receives events from every project stream
     secret: adminSecret(),
   });
 
-  using project = itx.projects.create({ slug: "project-worker-process-event" });
+  using project = await itx.projects
+    .get(uniqueFixtureSlug("project-worker-process-event"))
+    .create({});
   const marker = `cross-post-${crypto.randomUUID()}`;
   // NOT the root stream: every project stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must

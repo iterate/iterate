@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { ProjectDrawerButton } from "../../../components/project-drawer.tsx";
-import { getItxSession, resetItxSession } from "../../../lib/itx.ts";
+import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
 import { colors, radius, spacing } from "../../../lib/theme.ts";
@@ -13,18 +13,13 @@ export default function ReposScreen() {
     queryKey: ["repos", projectId],
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
-      try {
-        const project = await (await getItxSession(baseUrl)).projects.get(projectId);
-        const rows = await project.repos.list();
-        return [...rows].sort((left, right) => {
-          if (left.path === "/repos/config") return -1;
-          if (right.path === "/repos/config") return 1;
-          return left.path.localeCompare(right.path);
-        });
-      } catch (error) {
-        resetItxSession();
-        throw error;
-      }
+      const project = await getProjectItx(baseUrl, projectId);
+      const rows = await project.repos.list();
+      return [...rows].sort((left, right) => {
+        if (left.path === "/repos/config") return -1;
+        if (right.path === "/repos/config") return 1;
+        return left.path.localeCompare(right.path);
+      });
     },
   });
 

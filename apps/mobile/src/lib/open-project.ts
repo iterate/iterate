@@ -6,12 +6,12 @@
 // appended, meaning no capability host, no scheduler, nothing.
 // deploymentStatus: "missing" is exactly that state. Mirrors the OS web
 // dashboard's own backfill (apps/os/src/lib/project-server-fns.ts's
-// getRootProjectRedirectServerFn): call the real projects.create() with the
+// getRootProjectRedirectServerFn): call projects.get(slug).create() with the
 // EXISTING id/slug to finish the bootstrap, rather than failing later
 // inside whatever screen first touches the project's capability host.
 
-import type { ProjectListEntry } from "../../../os/src/itx-api.generated.ts";
-import type { ItxSession } from "./itx-core.ts";
+import type { ProjectListEntry } from "iterate/sdk/itx/react";
+import type { ItxSession } from "./itx.ts";
 import type { LastProject } from "./storage.ts";
 
 export function rememberedProjectInScope(
@@ -27,10 +27,8 @@ export async function backfillProjectIfMissing(
   project: ProjectListEntry,
 ): Promise<void> {
   if (project.deploymentStatus !== "missing") return;
-  await itx.projects.create({
+  await itx.projects.get(project.slug).create({
     projectId: project.id,
-    slug: project.slug,
-    waitUntilReady: true,
     ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
   });
 }

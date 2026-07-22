@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --reporter=default --reporter=../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
