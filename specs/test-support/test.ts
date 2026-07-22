@@ -75,7 +75,9 @@ export const test = base.extend<{
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
     await use({
       createFixture: (slugPrefix, options) =>
-        createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
+        base.step("create project fixture", () =>
+          createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
+        ),
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {

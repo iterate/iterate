@@ -7,44 +7,19 @@ import {
   startEmailOtpSignIn,
   uniqueSignupEmail,
 } from "./test-support/email-otp-signup.ts";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The seeded config repo's example apps genuinely serve after a project is
-// created: the hello app (stateless WorkerEntrypoint) answers JSON on its own
-// host, the counter app (stateful Durable Object) renders its mini
-// client-side page, increments over fetch, and repaints from the WebSocket
-// broadcast — and the guestbook (stream-processor reduce on /guestbook, Cap'n
-// Web live state + useLiveStateRpc) takes a signature and pushes it live —
-// all through real project ingress, in a real browser.
-test("the seeded hello, counter, and guestbook apps work after creating a project", async ({
+// created: the guestbook (stream-processor reduce on /guestbook, Cap'n Web
+// live state) takes a signature and pushes it live — through real project
+// ingress, in a real browser.
+test("the seeded guestbook app works after creating a project", async ({
   baseURL,
   helpers,
   page,
 }) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   await using fixture = await helpers.createFixture("seeded-apps");
-
-  // Hello: an app's first use is a cold worker build; the router serves a
-  // self-refreshing "building" page until the artifact lands, so seeing the
-  // JSON body means the build completed and ingress routed the host. The
-  // building page is the progress UI — 120s mirrors the ingress e2e's
-  // cold-build budget.
-  await page.goto(appUrl("hello", fixture.project.slug, baseURL!));
-  await page.getByText('"app":"hello"').waitFor({ timeout: 120_000 });
-  await page.getByText(fixture.project.id).waitFor();
-
-  // Counter: same repo source as hello (one worker.ts), so its artifact is
-  // already built — but keep the cold-build budget in case the stateful
-  // facet's first start is slow.
-  await page.goto(appUrl("counter", fixture.project.slug, baseURL!));
-  await page.getByText("count:").waitFor({ timeout: 120_000 });
-
-  // The increment button enables only when the page's WebSocket opens, so
-  // this click also proves the live socket lane; the repaint below comes from
-  // the ws broadcast, not the HTTP response.
-  await page.getByRole("button", { name: "increment" }).click();
-  await page.locator("#n").filter({ hasText: /^1$/ }).waitFor();
 
   // Guestbook: worker-bundler installs the deployment-pinned Iterate package
   // plus its shared Cap'n Web alias and compiles client.tsx into the browser
@@ -63,20 +38,20 @@ test("the seeded hello, counter, and guestbook apps work after creating a projec
   await page.getByText(note).waitFor({ timeout: 30_000 });
 });
 
-// Unlike the public examples above, this proof uses a real Auth-backed user
+// Unlike the public guestbook above, this proof uses a real Auth-backed user
 // and organization: project-member auth deliberately checks the live Auth
 // directory on every request, not merely the OS access-token claims used by
 // the suite's usual forged-session fixture.
-test("the seeded internal app authenticates a real project member", async ({ baseURL, page }) => {
+test("the seeded todo app authenticates a real project member", async ({ baseURL, page }) => {
   test.setTimeout(E2E_HEAVY_TEST_TIMEOUT_MS);
   test.skip(
     !(await startEmailOtpSignIn(page)),
     "Email OTP sign-in is disabled for this deployment (APP_CONFIG_EMAIL_OTP_ENABLED on auth / APP_CONFIG_ITERATE_AUTH__EMAIL_OTP_ENABLED on OS).",
   );
 
-  const slug = uniqueFixtureSlug("internal-app-auth");
+  const slug = uniqueFixtureSlug("todo-app-auth");
   await signUpWithEmailOtp(page, {
-    email: uniqueSignupEmail("internal-app-auth"),
+    email: uniqueSignupEmail("todo-app-auth"),
     projectSlug: slug,
   });
 
@@ -87,31 +62,23 @@ test("the seeded internal app authenticates a real project member", async ({ bas
     await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
   });
 
-  // Put a recognizable event on the root stream so the internal app proves
-  // both authorization and post-auth access to this fixture's project data.
-  const marker = `authenticated-internal-app-${crypto.randomUUID()}`;
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(slug);
-  using root = project.streams.get("/");
-  await root.append({
-    type: "events.iterate.test/spec/authenticated-internal-app",
-    payload: { marker },
-  });
-
   // The project-app origin has no session yet, even though this browser is
   // already signed in to OS. The auth partial owns the request and renders
-  // the form on the app's own origin.
-  const internalUrl = appUrl("internal", slug, baseURL!);
+  // the form on the app's own origin, under its strict CSP; the platform's
+  // worker-status overlay must ride that CSP via its nonce, not inline
+  // script.
+  const todoUrl = appUrl("todo", slug, baseURL!);
   const signInResponsePromise = page.waitForResponse(
     (response) =>
-      response.url() === internalUrl &&
+      response.url() === todoUrl &&
       response.request().resourceType() === "document" &&
       response.headers()["content-security-policy"]?.includes("default-src 'none'") === true,
     { timeout: 120_000 },
   );
-  await page.goto(internalUrl);
-  // A named app's first use may still need its own cold worker start. The
-  // platform's building page is visible progress; 120s matches hello above.
+  await page.goto(todoUrl);
+  // The app's first use may still need its own cold worker start. The
+  // platform's building page is visible progress; 120s mirrors the ingress
+  // e2e's cold-build budget.
   await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 120_000 });
   await page.getByText("This app is available to project members.").waitFor();
   const signInResponse = await signInResponsePromise;
@@ -127,55 +94,12 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   // This follows app -> OS -> app callback. OS reuses the iterate_session
   // cookie installed by the signup flow; the callback redeems a fragment token
   // into an app-host-only HttpOnly cookie before returning to `/`. The click
-  // waits through two origins and three navigations, so give that bounded
-  // protocol work a wider budget than an ordinary in-page action.
+  // waits through two origins and three navigations, then worker-bundler
+  // transforms the package-backed server and compiles the browser entry —
+  // preserve the real cold-build deadline instead of letting spinner-waiter
+  // collapse the wait to its no-spinner fast-fail.
   await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 });
-  await page
-    .getByRole("heading", { name: "Latest project root events" })
-    .waitFor({ timeout: 30_000 });
-  await page.getByText(marker).waitFor();
 
-  // `/api` is an unauthenticated Cap'n Web root. The page explicitly
-  // exchanges its exact-origin app cookie for an app-defined session target;
-  // only that attenuated target (not project ITX) reaches the browser.
-  await page
-    .locator("#identity")
-    .filter({ hasText: /^authenticated as \S+$/ })
-    .waitFor();
-  const refresh = page.getByRole("button", { name: "refresh over Cap'n Web" });
-
-  // Prove the session's LiveState channel, rather than the initial HTML: add
-  // an event after render, invoke the app-session RPC method, and wait for the
-  // pushed snapshot/patch projection to repaint the page.
-  const liveMarker = `capnweb-live-state-${crypto.randomUUID()}`;
-  await root.append({
-    type: "events.iterate.test/spec/internal-app-live-state",
-    payload: { marker: liveMarker },
-  });
-  await refresh.click();
-  await page.getByText(liveMarker).waitFor();
-
-  // Partial-fetch fall-through must preserve the original request. Exercise
-  // that contract across the real dynamic-worker + ITX RPC boundary, not just
-  // in the auth helper: the protected app reads this POST body after auth has
-  // returned null.
-  const echoBody = `app-owned-body-${crypto.randomUUID()}`;
-  const echo = await page.evaluate(async (body) => {
-    const response = await fetch("/echo", { body, method: "POST" });
-    return { body: await response.text(), status: response.status };
-  }, echoBody);
-  expect(echo).toEqual({ body: echoBody, status: 200 });
-
-  // The todo app is a second member-gated origin on the same project. Its own
-  // origin has no app cookie yet, so the auth partial gates it exactly like
-  // the internal app did. After auth, worker-bundler transforms the
-  // package-backed server and compiles the browser entry.
-  await page.goto(appUrl("todo", slug, baseURL!));
-  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor({ timeout: 60_000 });
-  await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 });
-  // The cross-origin callback briefly has neither this heading nor a loading
-  // marker. Preserve the real cold-build deadline instead of letting
-  // spinner-waiter collapse the wait to its no-spinner fast-fail.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     await page.getByRole("heading", { name: "Todo" }).waitFor({ timeout: 120_000 });
   });
@@ -190,7 +114,7 @@ test("the seeded internal app authenticates a real project member", async ({ bas
   await page.getByLabel(`Mark ${todoTitle} not done`).waitFor();
 
   // Durability: the row and its completed state live in the app's Durable
-  // Durable Object state, so a fresh page load reads them back.
+  // Object state, so a fresh page load reads them back.
   await page.reload();
   await page.getByText(todoTitle).waitFor({ timeout: 30_000 });
   await page.getByRole("checkbox", { checked: true, name: `Mark ${todoTitle} not done` }).waitFor();

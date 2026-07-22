@@ -56,6 +56,7 @@ export default defineConfig({
     ["list"],
     ["html", { outputFolder: "test-results/playwright-html", open: "never" }],
     ["json", { outputFile: "test-results/playwright-results.json" }],
+    ["./scripts/ci/playwright-telemetry-reporter.ts"],
   ],
   timeout: videoMode ? 300_000 : SPEC_TEST_TIMEOUT_MS,
   expect: { timeout: SPEC_EXPECT_TIMEOUT_MS },

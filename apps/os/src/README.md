@@ -207,10 +207,10 @@ before returning the same handle. The Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at
-`apps/os/config-repo-template` (ONE TypeScript `worker.ts` — the router as
-its default export plus the example apps as named exports — and `package.json`
-— platform types come from its `iterate` devDependency's `iterate/sdk` export
-— `AGENTS.md`, `ONBOARDING.md`; codegen keeps the seeded file map in
+`apps/os/config-repo-template` (thin TypeScript `worker.ts` router, modular
+apps under `apps/`, and `package.json` — platform types come from its
+`iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
+codegen keeps the seeded file map in
 `domains/repos/config-repo-template.generated.ts` in sync), builds and loads
 the seeded project worker through the worker build pipeline, and then emits
 `project/ready`. The onboarding agent is created separately and explicitly

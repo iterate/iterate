@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GithubRepoLink, Project, StreamEvent, StreamEventInput } from "iterate/sdk";
-import { handleGithubPullRequestWebhook } from "../../../config-repo-template/worker.ts";
+import {
+  makeMemoryProgressStore,
+  makeProcessorHarness,
+  type HarnessSubstrate,
+} from "iterate/processors/testing";
+import {
+  handleGithubPullRequestWebhook,
+  ReviewBotProcessor,
+  ReviewBotProcessorContract,
+  reviewBotFreshnessHorizonMs,
+} from "../../../config-repo-template/apps/review-bot/src/review-bot.ts";
 
 const route = {
   connection: "install-789",
@@ -502,5 +512,103 @@ describe("userspace GitHub pull-request routing", () => {
       payload: { body: { action: "resolved" }, delivery: { name: "pull_request_review_thread" } },
       type: "events.iterate.com/github/webhook-received",
     });
+  });
+});
+
+// The processor half (config-repo-template/apps/review-bot — review-bot.ts)
+// driven by the REAL runner over an in-memory journal via the shared
+// `iterate/processors/testing` harness. The router itself is covered above;
+// these prove the delivery skin around it: which events reach it at all, and
+// the at-least-once redelivery contract.
+describe("userspace review-bot stream processor", () => {
+  function reviewBotHarness(input?: {
+    fake?: ReturnType<typeof harness>;
+    substrate?: HarnessSubstrate;
+  }) {
+    const fake = input?.fake ?? harness();
+    const bot = makeProcessorHarness<typeof ReviewBotProcessorContract, ReviewBotProcessor>({
+      createProcessor: ({ stream, path, projectId, now }) =>
+        new ReviewBotProcessor({
+          stream,
+          path,
+          projectId,
+          now,
+          // The DO host passes `() => env.ITX.get()`; the fake adds the
+          // disposal the handler's `using` expects. Structural cast as in
+          // harness().
+          getItx: async () => ({ ...fake.itx, [Symbol.dispose]: () => {} }) as Project & Disposable,
+        }),
+      path: "/integrations/github/install-789",
+      ...(input?.substrate === undefined ? {} : { substrate: input.substrate }),
+    });
+    return { bot, fake };
+  }
+
+  it("routes a delivered first-hand webhook and re-runs it on a from-zero replay", async () => {
+    const { bot, fake } = reviewBotHarness();
+    await bot.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhook().payload ?? {},
+    });
+    expect(fake.create).toHaveBeenCalledOnce();
+    expect(fake.appendBatches).toHaveLength(1);
+    expect(fake.appendBatches[0]?.path).toBe(agentPath);
+
+    // A fresh progress store over the same journal is the redelivery/replay
+    // shape: the router runs again (at-least-once), and its stable
+    // idempotency keys are what collapse the re-run at the agent stream
+    // (proven above in "does not recreate the agent when an opened delivery
+    // is redelivered").
+    const replay = reviewBotHarness({
+      fake,
+      substrate: { clock: bot.clock, stream: bot.stream, progress: makeMemoryProgressStore() },
+    });
+    await replay.bot.settle();
+    expect(fake.appendBatches).toHaveLength(2);
+  });
+
+  it("skips cross-posted copies", async () => {
+    const { bot, fake } = reviewBotHarness();
+    await bot.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhook().payload ?? {},
+      source: {
+        crossPostedFrom: [
+          {
+            subscriptionKey: "userspace:github-pr:/repos/config",
+            createdAt: "2026-07-17T12:00:00.000Z",
+            offset: 12,
+            path: "/integrations/github/install-789",
+            projectId: "prj_1",
+            type: "events.iterate.com/github/webhook-received",
+          },
+        ],
+      },
+    });
+    expect(fake.create).not.toHaveBeenCalled();
+    expect(fake.append).not.toHaveBeenCalled();
+  });
+
+  it("treats webhooks beyond the freshness horizon as history, not work", async () => {
+    // A newly attached wake subscription replays the stream from offset zero;
+    // the horizon is what keeps that replay from reviewing long-dead PRs. The
+    // raw stream append does NOT drive delivery, so the clock can move before
+    // the runner first sees the event — the replayed-history shape.
+    const stale = reviewBotHarness();
+    await stale.bot.stream.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhook().payload,
+    });
+    await stale.bot.advanceTime(reviewBotFreshnessHorizonMs + 1);
+    expect(stale.fake.create).not.toHaveBeenCalled();
+    expect(stale.fake.append).not.toHaveBeenCalled();
+
+    const fresh = reviewBotHarness();
+    await fresh.bot.stream.append({
+      type: "events.iterate.com/github/webhook-received",
+      payload: webhook().payload,
+    });
+    await fresh.bot.advanceTime(reviewBotFreshnessHorizonMs - 1);
+    expect(fresh.fake.create).toHaveBeenCalledOnce();
   });
 });

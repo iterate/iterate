@@ -10,7 +10,7 @@ export default defineConfig({
   fullyParallel: !!process.env.CI,
   workers: process.env.CI ? 2 : 1,
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  reporter: [["list"]],
+  reporter: [["list"], ["../../scripts/ci/playwright-telemetry-reporter.ts"]],
   webServer: {
     command: "pnpm exec vite dev --host 127.0.0.1 --port 5175",
     url: localUrl,

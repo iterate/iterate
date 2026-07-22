@@ -11,6 +11,9 @@ declare module "cloudflare:workers" {
     protected ctx: DurableObjectState;
     constructor(ctx: DurableObjectState, env: Env);
   }
+  /** Structural stub of workerd's RPC base class (the processor host's wake
+   * door extends it so the `processor` property survives Workers RPC). */
+  export class RpcTarget {}
   /** Structural stub of workerd's tracing API (the processor registry wraps
    * alarm fires in a span). Real spans exist only inside workerd; this keeps
    * the package program checking, and apps/os re-checks the same source

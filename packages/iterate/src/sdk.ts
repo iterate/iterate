@@ -9,7 +9,7 @@
 // Dynamic workers install and bundle this published package from their normal
 // package.json dependency. Preview deployments rewrite that dependency to the
 // exact pkg.pr.new artifact produced by the pull request.
-import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { DurableObject, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   DynamicWorkerCapability,
   DynamicWorkerRef,
@@ -24,6 +24,17 @@ import type {
   StreamPushEventBatch,
 } from "./itx-api.generated.ts";
 import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-handle.ts";
+import type {
+  ProcessorSnapshot,
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+} from "./processors/rpc-types.ts";
+import {
+  createStreamProcessorRegistry,
+  type RegisterableProcessor,
+  type RegisteredProcessorReads,
+  type StreamProcessorRegistry,
+} from "./processors/cloudflare.ts";
 
 // `.ts`-suffixed like every relative import here; tsc's
 // rewriteRelativeImportExtensions keeps the declaration emit for the published
@@ -438,4 +449,133 @@ export class IterateDurableObject<Env extends IterateEnv = IterateEnv> extends D
   async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
     return await invokeCapability(this, input);
   }
+}
+// =============================================================================
+// Durable Object stream-processor hosting.
+// =============================================================================
+
+const HOST_PROJECT_ID_KEY = "iterate:processor-host:project-id";
+const HOST_STREAM_PATH_KEY = "iterate:processor-host:stream-path";
+
+type WakeRegistryLookup = (
+  projectId: string,
+  path: string,
+) => Pick<StreamProcessorRegistry<object>, "wakeStreamSubscriber">;
+
+/** The wake door the stream spine dials. It crosses Workers RPC as a property
+ * read before its method is called, so it must be a real RpcTarget. */
+class ProcessorWakeSubscriber extends RpcTarget {
+  readonly #registryFor: WakeRegistryLookup;
+
+  constructor(registryFor: WakeRegistryLookup) {
+    super();
+    this.#registryFor = registryFor;
+  }
+
+  async wakeStreamSubscriber(
+    request: StreamSubscriberWakeRequest,
+  ): Promise<StreamSubscriberWakeResponse> {
+    if (request.stream.projectId === null) {
+      throw new Error("stream-processor hosts subscribe on project streams only");
+    }
+    // The registry fences mismatched coordinates itself, so a host with a
+    // fixed home stream rejects a stray wake instead of adopting its path.
+    return await this.#registryFor(
+      request.stream.projectId,
+      request.stream.path,
+    ).wakeStreamSubscriber(request);
+  }
+}
+
+export type ProcessorHost<State extends object> = {
+  /** The lazily built registry. Outside a wake request the coordinates come
+   * from the durable cache, the static `path`, or one project dial. */
+  registry(): Promise<StreamProcessorRegistry<State>>;
+  /** One consistent read of the hosted processor's committed fold. */
+  snapshot(): Promise<ProcessorSnapshot<State>>;
+  /** Assign to a `processor` getter — the wake door the stream spine dials. */
+  readonly wakeSubscriber: ProcessorWakeSubscriber;
+  /** Route the Durable Object's `alarm()` here. Nothing cached means no
+   * registry ever armed one, so a stray fire is a no-op. */
+  handleAlarm(alarmInfo?: AlarmInvocationInfo): Promise<void>;
+};
+
+/**
+ * Host one stream processor in a Durable Object: the registry ceremony, the
+ * RPC-safe wake door, the alarm multiplex, and the durable coordinate cache
+ * in one place, so an app class is only its processor plus its own verbs.
+ *
+ * With `path` the host serves one fixed home stream (the guestbook shape).
+ * Without it the host learns its stream from the first wake request and
+ * caches the coordinates durably (the review-bot shape: one Durable Object
+ * per dynamic stream, keyed by the ref that names it). One host per Durable
+ * Object — the cache keys assume it.
+ */
+export function createProcessorHost<State extends object = Record<string, unknown>>(args: {
+  ctx: DurableObjectState;
+  env: IterateEnv;
+  path?: string;
+  /** Post-eviction keepalive recovery, for processors that owe registered work. */
+  recovery?: boolean;
+  createProcessor(deps: {
+    path: string;
+    projectId: string;
+    stream: ProcessorStream;
+  }): RegisterableProcessor;
+}): ProcessorHost<State> {
+  let built:
+    | { reads: RegisteredProcessorReads<State>; registry: StreamProcessorRegistry<State> }
+    | undefined;
+
+  const ensure = (projectId: string, path: string) => {
+    if (built === undefined) {
+      args.ctx.storage.kv.put(HOST_PROJECT_ID_KEY, projectId);
+      args.ctx.storage.kv.put(HOST_STREAM_PATH_KEY, path);
+      const stream = itxProjectStream(args.env, path);
+      const registry = createStreamProcessorRegistry<State>(args.ctx, {
+        path,
+        projectId,
+        stream,
+        version: args.env.ITERATE_WORKER_VERSION,
+      });
+      const processor = registry.register(
+        args.createProcessor({ path, projectId, stream }),
+        args.recovery === undefined ? undefined : { recovery: args.recovery },
+      );
+      built = {
+        // `RegisterableProcessor` erases the contract, so `reads` comes back
+        // `<unknown>`; the caller's `State` is the same assertion it already
+        // makes for the registry generic above.
+        reads: registry.reads(processor) as RegisteredProcessorReads<State>,
+        registry,
+      };
+    }
+    return built;
+  };
+
+  const buildOutsideWake = async () => {
+    if (built !== undefined) return built;
+    const path = args.path ?? args.ctx.storage.kv.get<string>(HOST_STREAM_PATH_KEY);
+    if (path === undefined) {
+      throw new Error("this processor host learns its stream from the first wake request");
+    }
+    const projectId =
+      args.ctx.storage.kv.get<string>(HOST_PROJECT_ID_KEY) ??
+      (await withProject(args.env, async (project) => await project.projectId));
+    return ensure(projectId, path);
+  };
+
+  return {
+    registry: async () => (await buildOutsideWake()).registry,
+    snapshot: async () => await (await buildOutsideWake()).reads.snapshot(),
+    wakeSubscriber: new ProcessorWakeSubscriber(
+      (projectId, path) => ensure(projectId, args.path ?? path).registry,
+    ),
+    async handleAlarm(alarmInfo?: AlarmInvocationInfo) {
+      const projectId = args.ctx.storage.kv.get<string>(HOST_PROJECT_ID_KEY);
+      const path = args.path ?? args.ctx.storage.kv.get<string>(HOST_STREAM_PATH_KEY);
+      if (projectId === undefined || path === undefined) return;
+      await ensure(projectId, path).registry.handleAlarm(alarmInfo);
+    },
+  };
 }

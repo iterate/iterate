@@ -456,6 +456,31 @@ These share the PR's slot and PR-body state with CI (ownership lives in the
 semaphore), so a local run renews (never fights) the slot CI claimed for the
 same PR.
 
+For a focused flake hunt, reuse the exact OS deployment and run one test file
+repeatedly without deploying, erasing the slot, or changing the PR's recorded
+full-suite result:
+
+```bash
+# Vitest target paths are relative to apps/os.
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+  pnpm preview test-target --pull-request-number 1234 --runner vitest \
+  --target e2e/vitest/itx-agents.e2e.test.ts \
+  --grep "Agent scripts can send web-chat messages" --repeat 25
+
+# Playwright target paths are relative to the repository root.
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+  pnpm preview test-target --pull-request-number 1234 --runner playwright \
+  --target specs/repo-ide.spec.ts --grep "discarding a new file" --repeat 25
+```
+
+Each repeat is a fresh runner invocation against the same immutable Worker
+versions and has CI's single test-level retry enabled. Absorbed retries remain
+visible in the per-run output and final summary. All requested samples run so
+the summary preserves the failure rate, then the command exits nonzero if any
+sample failed. The PR must still own its slot and OS plus its test dependencies
+must be recorded at the PR's current head; otherwise the command refuses and
+tells you to deploy first.
+
 ### Story 3: pin a PR to a slot
 
 `preview assign` says "this PR shall have this slot" (or whatever is free)

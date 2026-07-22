@@ -12,7 +12,8 @@ runtime logic in normal scripts under `scripts/ci` instead of embedding large
 Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
 failure-rate analysis lives in PostHog; see
 [CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
-scheduled backfill, required read-only Depot token, and CLI/MCP queries.
+scheduled backfill, dedicated Depot organization token and its scope caveat,
+and CLI/MCP queries.
 
 ## Quick Links
 
@@ -77,6 +78,22 @@ depot ci metrics --run <run-id> --org 0p91s0lz49
 depot ci diagnose <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
+
+List and download retained artifacts:
+
+```bash
+depot_run_id="<run-id>"
+depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json
+artifact_id="<artifact-id>"
+depot ci artifacts download "$artifact_id" \
+  --org 0p91s0lz49 \
+  --output-file /tmp/unit-test-telemetry.zip
+```
+
+For a Depot-hosted workflow, use `depot ci artifacts` as the source of truth.
+The `actions/upload-artifact` log may print a GitHub-looking actions URL, but
+Depot owns the run and artifact; `gh run download` and the GitHub Actions
+artifact API can return 404 for that URL.
 
 Control runs:
 

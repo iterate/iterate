@@ -1,4 +1,11 @@
-export type PostHogEvent = { event: string; properties: Record<string, unknown> };
+import { createHash } from "node:crypto";
+
+export type PostHogEvent = {
+  event: string;
+  timestamp?: string;
+  uuid: string;
+  properties: Record<string, unknown>;
+};
 
 export function readPostHogConfig(environment = process.env): { apiKey: string; host: string } {
   const raw = environment.APP_CONFIG_POSTHOG?.trim();
@@ -14,7 +21,7 @@ export function readPostHogConfig(environment = process.env): { apiKey: string; 
   };
 }
 
-/** Delivers deterministic system events. Callers supply stable `$insert_id`s for backfill safety. */
+/** Delivers deterministic system events. Callers supply stable identities for backfill safety. */
 export async function sendPostHogEvents(events: PostHogEvent[], config = readPostHogConfig()) {
   for (let offset = 0; offset < events.length; offset += 100) {
     const batch = events.slice(offset, offset + 100);
@@ -45,9 +52,12 @@ export function systemEvent(
   insertId: string,
   distinctId: string,
   properties: Record<string, unknown>,
+  timestamp?: string,
 ): PostHogEvent {
   return {
     event,
+    ...(timestamp ? { timestamp } : {}),
+    uuid: deterministicEventUuid(insertId),
     properties: {
       distinct_id: distinctId,
       schema_version: 2,
@@ -56,6 +66,16 @@ export function systemEvent(
       ...properties,
     },
   };
+}
+
+/** UUIDv5 using the RFC URL namespace; PostHog deduplicates retries by this top-level field. */
+function deterministicEventUuid(identity: string) {
+  const urlNamespace = Buffer.from("6ba7b8119dad11d180b400c04fd430c8", "hex");
+  const bytes = createHash("sha1").update(urlNamespace).update(identity).digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export function durationMs(start: string | null | undefined, end: string | null | undefined) {

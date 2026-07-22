@@ -11,7 +11,7 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import {
   assertPreviewPetshopIntegrationConfigured,
-  detachRetiredArtifactEventQueueConsumer,
+  detachRetiredWorkerQueueConsumers,
   isExactOsProjectMiss,
   posthogBuildEnv,
   resolveOsContainerDeployArgs,
@@ -19,9 +19,9 @@ import {
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
-describe("retired Artifact event Queue consumer", () => {
+describe("retired Worker Queue consumers", () => {
   it.each(["script", "script_name"] as const)(
-    "detaches only the legacy consumer for this Worker when Cloudflare returns %s",
+    "detaches only this Worker's retired consumers when Cloudflare returns %s",
     async (workerField) => {
       const calls: Array<{ init?: RequestInit; path: string }> = [];
       const cf = async <T>(path: string, init?: RequestInit): Promise<T> => {
@@ -33,26 +33,54 @@ describe("retired Artifact event Queue consumer", () => {
           })) as T;
         }
         if (path === "/queues?per_page=100&page=2") {
-          return [{ queue_id: "queue-id", queue_name: "os-preview-4-events" }] as T;
+          return [
+            { queue_id: "events-queue-id", queue_name: "os-preview-4-events" },
+            {
+              queue_id: "search-queue-id",
+              queue_name: "os-preview-4-search-index-writes",
+            },
+          ] as T;
         }
-        if (path === "/queues/queue-id/consumers") {
+        if (path === "/queues/events-queue-id/consumers") {
           return [
             { consumer_id: "other-consumer", script: "other", type: "worker" },
-            { consumer_id: "consumer-id", [workerField]: "os-preview-4", type: "worker" },
+            {
+              consumer_id: "events-consumer-id",
+              [workerField]: "os-preview-4",
+              type: "worker",
+            },
+          ] as T;
+        }
+        if (path === "/queues/search-queue-id/consumers") {
+          return [
+            { consumer_id: "http-consumer", type: "http_pull" },
+            {
+              consumer_id: "search-consumer-id",
+              [workerField]: "os-preview-4",
+              type: "worker",
+            },
           ] as T;
         }
         return undefined as T;
       };
 
       await expect(
-        detachRetiredArtifactEventQueueConsumer({ cf, workerName: "os-preview-4" }),
-      ).resolves.toBe("detached");
+        detachRetiredWorkerQueueConsumers({ cf, workerName: "os-preview-4" }),
+      ).resolves.toEqual([
+        { queueName: "os-preview-4-events", status: "detached" },
+        { queueName: "os-preview-4-search-index-writes", status: "detached" },
+      ]);
       expect(calls).toEqual([
         { path: "/queues?per_page=100&page=1", init: undefined },
         { path: "/queues?per_page=100&page=2", init: undefined },
-        { path: "/queues/queue-id/consumers", init: undefined },
+        { path: "/queues/events-queue-id/consumers", init: undefined },
+        { path: "/queues/search-queue-id/consumers", init: undefined },
         {
-          path: "/queues/queue-id/consumers/consumer-id",
+          path: "/queues/events-queue-id/consumers/events-consumer-id",
+          init: { method: "DELETE" },
+        },
+        {
+          path: "/queues/search-queue-id/consumers/search-consumer-id",
           init: { method: "DELETE" },
         },
       ]);
@@ -64,15 +92,18 @@ describe("retired Artifact event Queue consumer", () => {
     const cf = async <T>(path: string): Promise<T> => {
       calls.push(path);
       if (path === "/queues?per_page=100&page=1") {
-        return [{ queue_id: "queue-id", queue_name: "os-preview-4-events" }] as T;
+        return [{ queue_id: "events-queue-id", queue_name: "os-preview-4-events" }] as T;
       }
       return [] as T;
     };
 
     await expect(
-      detachRetiredArtifactEventQueueConsumer({ cf, workerName: "os-preview-4" }),
-    ).resolves.toBe("absent");
-    expect(calls).toEqual(["/queues?per_page=100&page=1", "/queues/queue-id/consumers"]);
+      detachRetiredWorkerQueueConsumers({ cf, workerName: "os-preview-4" }),
+    ).resolves.toEqual([
+      { queueName: "os-preview-4-events", status: "absent" },
+      { queueName: "os-preview-4-search-index-writes", status: "absent" },
+    ]);
+    expect(calls).toEqual(["/queues?per_page=100&page=1", "/queues/events-queue-id/consumers"]);
   });
 });
 
