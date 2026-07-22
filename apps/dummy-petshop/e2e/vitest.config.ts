@@ -12,6 +12,6 @@ export default defineConfig({
     hookTimeout: 60_000,
     testTimeout: 60_000,
     retry: process.env.CI ? E2E_CI_RETRIES : 0,
-    reporters: ["default", new RetryTelemetryReporter()],
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
   },
 });

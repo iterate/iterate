@@ -26,7 +26,7 @@ export default defineConfig({
     // fails both attempts fast.
     retry: process.env.CI ? { count: E2E_CI_RETRIES, delay: E2E_CI_RETRY_DELAY_MS } : 0,
     // Retry telemetry (policy rule 5): absorbed retries surface in the run
-    // log and, via E2E_RETRY_TELEMETRY_FILE, in the preview PR-body table.
-    reporters: ["default", new RetryTelemetryReporter()],
+    // log and, via TEST_TELEMETRY_ARTIFACT_FILE, in the preview PR-body table.
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
   },
 });

@@ -25,6 +25,10 @@ import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
+import {
+  TestTelemetryArtifact,
+  type TestTelemetryArtifactSource,
+} from "../../packages/shared/src/test-support/ci-telemetry.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
   compactRetryFailure,
@@ -43,12 +47,7 @@ import {
   workerSizeStatusContext,
   type WorkerSizeInfo,
 } from "./worker-size.ts";
-import {
-  normalizeError,
-  PreviewE2ePostHog,
-  type PreviewE2eModuleRecord,
-  type PreviewE2eTestRecord,
-} from "./e2e-posthog.ts";
+import { PreviewE2eTelemetryArtifact } from "./e2e-telemetry.ts";
 
 // Flake-hunt notes for the preview e2e lane live in
 // docs/preview-e2e-flake-hunt.md.
@@ -213,13 +212,24 @@ export async function testTarget(options: TestTargetOptions) {
     ...selection,
     repositoryRoot: runtime.repositoryRoot,
   });
-  await mkdir(dirname(plan.telemetryFile), { recursive: true });
+  const telemetryIdentityEnvironment = resolvePreviewTestTelemetryEnvironment({
+    app: app.slug,
+    context,
+    previewSlot: environmentConfigLease.slug,
+  });
+  await Promise.all(
+    [plan.telemetryFile, ...plan.runnerResultFiles].map((file) =>
+      mkdir(dirname(file), { recursive: true }),
+    ),
+  );
 
   let passed = 0;
   let retries = 0;
   const failures: string[] = [];
   for (let iteration = 1; iteration <= selection.repeat; iteration += 1) {
-    await rm(plan.telemetryFile, { force: true });
+    await Promise.all(
+      [plan.telemetryFile, ...plan.runnerResultFiles].map((file) => rm(file, { force: true })),
+    );
     logPreview(
       `target test ${iteration}/${selection.repeat}: ${selection.runner} ${selection.target}${selection.grep ? ` matching ${JSON.stringify(selection.grep)}` : ""} against ${entry.publicUrl}`,
     );
@@ -234,7 +244,8 @@ export async function testTarget(options: TestTargetOptions) {
         "env",
         "CI=true",
         `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
-        `E2E_RETRY_TELEMETRY_FILE=${plan.telemetryFile}`,
+        ...Object.entries(telemetryIdentityEnvironment).map(([name, value]) => `${name}=${value}`),
+        `TEST_TELEMETRY_ARTIFACT_FILE=${plan.telemetryFile}`,
         ...baseUrlEnvironment,
         plan.command,
         ...plan.args,
@@ -245,13 +256,7 @@ export async function testTarget(options: TestTargetOptions) {
       workingDirectory: plan.workingDirectory,
     });
     const summary = await readTestTelemetryLane(`targeted ${selection.runner}`, () =>
-      selection.runner === "vitest"
-        ? readVitestTestTelemetry(plan.telemetryFile, "targeted vitest", runtime.repositoryRoot)
-        : readPlaywrightTestTelemetry(
-            plan.telemetryFile,
-            "targeted playwright",
-            runtime.repositoryRoot,
-          ),
+      readCanonicalTestTelemetry(plan.telemetryFile, `targeted ${selection.runner}`),
     );
     announceRetryTelemetry("os target", summary);
     retries += summary.retried.reduce((total, test) => total + test.retryCount, 0);
@@ -292,25 +297,26 @@ export async function testTarget(options: TestTargetOptions) {
  */
 export async function run(options: DeployCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
-  const deployResult = await deployPreviewApps({ context, options, runtime });
-  if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
-    return deployResult;
-  }
+  return await withPreviewE2eTelemetry(context, runtime, "run", async (telemetry) => {
+    const deployResult = await deployPreviewApps({ context, options, runtime });
+    if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
+      return deployResult;
+    }
 
-  // A "nothing to deploy" skip still tests: the recorded deployments ARE the
-  // current head's code, and their green must be earned, not assumed.
-  return await withPreviewE2eTelemetry(context, runtime, "run", (telemetry) =>
-    testPreviewApps({ context, runtime, state: deployResult.state, telemetry }),
-  );
+    // A "nothing to deploy" skip still tests: the recorded deployments ARE the
+    // current head's code, and their green must be earned, not assumed.
+    return await testPreviewApps({ context, runtime, state: deployResult.state, telemetry });
+  });
 }
 
 async function withPreviewE2eTelemetry<T>(
   context: PullRequestPreviewContext,
   runtime: PreviewRuntime,
   operation: "test" | "run",
-  execute: (telemetry: PreviewE2ePostHog) => Promise<T>,
+  execute: (telemetry: PreviewE2eTelemetryArtifact) => Promise<T>,
 ): Promise<T> {
-  const telemetry = new PreviewE2ePostHog({
+  const telemetry = new PreviewE2eTelemetryArtifact({
+    branch: context.pullRequestHeadRef,
     environment: runtime.commandEnvironment,
     headSha: context.pullRequestHeadSha,
     operation,
@@ -318,7 +324,6 @@ async function withPreviewE2eTelemetry<T>(
     runUrl: context.workflowRunUrl,
   });
   const startedAt = Date.now();
-  telemetry.runStarted();
   let result!: T;
   let operationError: unknown;
   try {
@@ -327,7 +332,7 @@ async function withPreviewE2eTelemetry<T>(
     operationError = error;
   }
   telemetry.runFinished({
-    status: operationError ? "failed" : "passed",
+    status: operationError ? "failed" : previewOperationWasSkipped(result) ? "skipped" : "passed",
     durationMs: Date.now() - startedAt,
     ...(operationError ? { error: operationError } : {}),
   });
@@ -340,12 +345,18 @@ async function withPreviewE2eTelemetry<T>(
   if (operationError && telemetryError) {
     throw new AggregateError(
       [operationError, telemetryError],
-      "Preview test command and PostHog delivery both failed",
+      "Preview command and telemetry artifact recording both failed",
     );
   }
   if (operationError) throw operationError;
   if (telemetryError) throw telemetryError;
   return result;
+}
+
+function previewOperationWasSkipped(result: unknown) {
+  return (
+    typeof result === "object" && result !== null && "skipped" in result && result.skipped === true
+  );
 }
 
 async function deployPreviewApps({
@@ -687,6 +698,7 @@ function resolvePreviewTestTargetPlan(input: {
         ...(input.grep ? ["--testNamePattern", input.grep] : []),
       ],
       command: "pnpm",
+      runnerResultFiles: [],
       telemetryFile: resolve(input.repositoryRoot, "test-results/preview-target-vitest.json"),
       workingDirectory: resolve(input.repositoryRoot, "apps/os"),
     };
@@ -695,7 +707,11 @@ function resolvePreviewTestTargetPlan(input: {
   return {
     args: ["spec", target, ...(input.grep ? ["--grep", input.grep] : [])],
     command: "pnpm",
-    telemetryFile: resolve(input.repositoryRoot, "test-results/playwright-results.json"),
+    runnerResultFiles: [resolve(input.repositoryRoot, "test-results/playwright-results.json")],
+    telemetryFile: resolve(
+      input.repositoryRoot,
+      "test-results/preview-target-playwright-telemetry.json",
+    ),
     workingDirectory: input.repositoryRoot,
   };
 }
@@ -737,7 +753,7 @@ async function testPreviewApps({
 }: {
   context: PullRequestPreviewContext;
   runtime: PreviewRuntime;
-  telemetry: PreviewE2ePostHog;
+  telemetry: PreviewE2eTelemetryArtifact;
   /**
    * In-process state from a just-finished deploy (the `run` path). A fresh
    * PR-body read can lag deploy's write (GitHub read-after-write lag) and
@@ -892,9 +908,13 @@ async function testPreviewApps({
     });
 
     const startedAt = Date.now();
+    const telemetryArtifactDirectory = runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR
+      ? resolve(runtime.repositoryRoot, runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR)
+      : undefined;
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
     );
+    telemetry.appStarted(app.previewTestArtifactSources);
     // One attempt, deliberately: retries live in the individual test
     // (docs/testing.md#retries-and-timeouts) — everything above only
     // watches and fails.
@@ -912,7 +932,17 @@ async function testPreviewApps({
         ...app.previewTestCommandArgs,
       ],
       command: "doppler",
-      environment: runtime.commandEnvironment,
+      environment: {
+        ...runtime.commandEnvironment,
+        ...resolvePreviewTestTelemetryEnvironment({
+          app: app.slug,
+          context,
+          previewSlot: environmentConfigLease.slug,
+        }),
+        ...(telemetryArtifactDirectory
+          ? { TEST_TELEMETRY_ARTIFACT_DIR: telemetryArtifactDirectory }
+          : {}),
+      },
       signal: runtime.signal,
       workingDirectory: resolve(runtime.repositoryRoot, app.appPath),
     });
@@ -925,13 +955,6 @@ async function testPreviewApps({
       repositoryRoot: runtime.repositoryRoot,
     });
     announceRetryTelemetry(app.slug, testSummary);
-    for (const test of testSummary.tests) {
-      telemetry.testFinished({ ...test, app: app.slug, slot: environmentConfigLease.slug });
-    }
-    for (const module of testSummary.modules) {
-      telemetry.moduleFinished({ ...module, app: app.slug, slot: environmentConfigLease.slug });
-    }
-
     const incompleteTelemetry = testSummary.collectionErrors.length
       ? `Structured e2e telemetry was incomplete: ${testSummary.collectionErrors.join("; ")}`
       : null;
@@ -944,7 +967,7 @@ async function testPreviewApps({
       status: testFailure ? "failed" : "passed",
       durationMs: testDurationMs,
       exitCode: testResult.exitCode,
-      testCount: testSummary.tests.length,
+      testCount: testSummary.testCount,
       retryCount: testSummary.retried.reduce((total, test) => total + test.retryCount, 0),
       collectionErrors: testSummary.collectionErrors,
     });
@@ -1703,6 +1726,8 @@ export type CloudflarePreviewApp = {
    */
   previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
   previewTestBaseUrlEnvVar: string;
+  /** Every canonical artifact the app-level test command must produce once. */
+  previewTestArtifactSources: readonly TestTelemetryArtifactSource[];
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
    * Soft wall-clock budgets. When a phase runs slower than its budget we emit
@@ -1714,9 +1739,10 @@ export type CloudflarePreviewApp = {
   previewDeployBudgetMs?: number;
   previewTestBudgetMs?: number;
   /**
-   * Collect every test/module result after the command finishes. A missing
-   * report is an explicit collection error: a green lane must not silently
-   * disappear from latency analytics.
+   * Collect a runner-report test count and retry summary after the command.
+   * A missing report is an explicit collection error: a green lane must not
+   * silently disappear from latency analytics. Detailed records stay in the
+   * canonical runner artifacts consumed by the workflow finalizer.
    */
   collectTestTelemetry: (params: { repositoryRoot: string }) => Promise<PreviewTestSummary>;
 };
@@ -1739,10 +1765,9 @@ export type PreviewRetrySummary = {
   }[];
 };
 
-/** Complete structured timing plus any lane that failed to produce a report. */
+/** Immediate orchestration summary; detailed timing stays in canonical artifacts. */
 export type PreviewTestSummary = PreviewRetrySummary & {
-  tests: PreviewE2eTestRecord[];
-  modules: PreviewE2eModuleRecord[];
+  testCount: number;
   collectionErrors: string[];
 };
 
@@ -1764,127 +1789,24 @@ const authVitestTelemetryFile = "/tmp/auth-preview-vitest-results.json";
 const semaphoreVitestTelemetryFile = "/tmp/semaphore-preview-vitest-results.json";
 const dummyPetshopVitestTelemetryFile = "/tmp/dummy-petshop-preview-vitest-results.json";
 
-/** Reads complete Vitest timing written by RetryTelemetryReporter. */
-async function readVitestTestTelemetry(
+/** Reads an immediate preview summary from any runner's canonical artifact. */
+async function readCanonicalTestTelemetry(
   filePath: string,
   lane: string,
-  repositoryRoot: string,
-  framework: "vitest" | "node-test" | "script" = "vitest",
 ): Promise<PreviewTestSummary> {
-  const TelemetryFile = z.object({
-    tests: z.array(
-      z.object({
-        fullName: z.string(),
-        moduleId: z.string(),
-        retryCount: z.number().int().nonnegative(),
-        passedAfterRetry: z.boolean(),
-        state: z.string(),
-        durationMs: z.number().nonnegative(),
-        startedAtMs: z.number().optional(),
-        scheduleDelayMs: z.number().nonnegative().optional(),
-        beforeEachDurationMs: z.number().nonnegative(),
-        afterEachDurationMs: z.number().nonnegative(),
-        bodyDurationMs: z.number().nonnegative(),
-        phases: z.array(
-          z.object({
-            name: z.string(),
-            category: z.string().optional(),
-            durationMs: z.number().nonnegative(),
-          }),
-        ),
-        errors: z.array(
-          z.object({
-            message: z.string(),
-            name: z.string().optional(),
-            stack: z.string().optional(),
-          }),
-        ),
-      }),
-    ),
-    modules: z.array(
-      z.object({
-        moduleId: z.string(),
-        environmentSetupDurationMs: z.number().nonnegative(),
-        prepareDurationMs: z.number().nonnegative(),
-        collectDurationMs: z.number().nonnegative(),
-        setupDurationMs: z.number().nonnegative(),
-        testAndHookDurationMs: z.number().nonnegative(),
-        importDurationMs: z.number().nonnegative(),
-        queuedAtMs: z.number().optional(),
-        collectedAtMs: z.number().optional(),
-        startedAtMs: z.number().optional(),
-        finishedAtMs: z.number().optional(),
-        queueDurationMs: z.number().nonnegative().optional(),
-        executionWallDurationMs: z.number().nonnegative().optional(),
-      }),
-    ),
-    retried: z.array(
-      z.object({
-        fullName: z.string(),
-        retryCount: z.number().int().positive(),
-        passedAfterRetry: z.boolean(),
-        firstFailure: z.string().optional(),
-      }),
-    ),
-  });
-  const parsed = TelemetryFile.parse(JSON.parse(await readFile(filePath, "utf8")));
+  const parsed = TestTelemetryArtifact.parse(JSON.parse(await readFile(filePath, "utf8")));
   if (parsed.tests.length === 0) throw new Error(`${filePath} contained no test results`);
-  const tests: PreviewE2eTestRecord[] = parsed.tests.map((record) => ({
-    framework,
-    lane,
-    name: record.fullName,
-    moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
-    state: record.state,
-    durationMs: record.durationMs,
-    retryCount: record.retryCount,
-    passedAfterRetry: record.passedAfterRetry,
-    ...(record.startedAtMs === undefined
-      ? {}
-      : { startedAt: new Date(record.startedAtMs).toISOString() }),
-    ...(record.scheduleDelayMs === undefined ? {} : { scheduleDelayMs: record.scheduleDelayMs }),
-    beforeEachDurationMs: record.beforeEachDurationMs,
-    afterEachDurationMs: record.afterEachDurationMs,
-    bodyDurationMs: record.bodyDurationMs,
-    attempts: [],
-    phases: record.phases,
-    errors: record.errors,
-  }));
   return {
-    tests,
-    modules: parsed.modules.map((record) => ({
-      framework,
-      lane,
-      moduleId: normalizeTestModuleId(record.moduleId, repositoryRoot),
-      environmentSetupDurationMs: record.environmentSetupDurationMs,
-      prepareDurationMs: record.prepareDurationMs,
-      collectDurationMs: record.collectDurationMs,
-      setupDurationMs: record.setupDurationMs,
-      testAndHookDurationMs: record.testAndHookDurationMs,
-      importDurationMs: record.importDurationMs,
-      ...(record.queuedAtMs === undefined
-        ? {}
-        : { queuedAt: new Date(record.queuedAtMs).toISOString() }),
-      ...(record.collectedAtMs === undefined
-        ? {}
-        : { collectedAt: new Date(record.collectedAtMs).toISOString() }),
-      ...(record.startedAtMs === undefined
-        ? {}
-        : { startedAt: new Date(record.startedAtMs).toISOString() }),
-      ...(record.finishedAtMs === undefined
-        ? {}
-        : { finishedAt: new Date(record.finishedAtMs).toISOString() }),
-      ...(record.queueDurationMs === undefined ? {} : { queueDurationMs: record.queueDurationMs }),
-      ...(record.executionWallDurationMs === undefined
-        ? {}
-        : { executionWallDurationMs: record.executionWallDurationMs }),
-    })),
-    retried: parsed.retried.map((record) => ({
-      lane,
-      name: record.fullName,
-      retryCount: record.retryCount,
-      passedAfterRetry: record.passedAfterRetry,
-      ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
-    })),
+    testCount: parsed.tests.length,
+    retried: parsed.tests
+      .filter((record) => record.retryCount > 0)
+      .map((record) => ({
+        lane,
+        name: record.fullName,
+        retryCount: record.retryCount,
+        passedAfterRetry: record.passedAfterRetry,
+        ...(record.firstFailure ? { firstFailure: record.firstFailure } : {}),
+      })),
     collectionErrors: [],
   };
 }
@@ -1895,37 +1817,22 @@ async function readVitestTestTelemetry(
  * streams example app). A retried spec has more than one result attempt;
  * Playwright reports "flaky" for passed-after-retry.
  */
-type PlaywrightTelemetryStep = {
-  title?: string;
-  category?: string;
-  duration?: number;
-  steps?: PlaywrightTelemetryStep[];
-};
-
 async function readPlaywrightTestTelemetry(
   filePath: string,
   lane: string,
-  repositoryRoot: string,
 ): Promise<PreviewTestSummary> {
   /** The subset of Playwright's JSON-reporter suite tree we walk. */
   type PlaywrightJsonSuite = {
     title?: string;
-    file?: string;
     suites?: PlaywrightJsonSuite[];
     specs?: {
       title?: string;
-      file?: string;
       tests?: {
         projectName?: string;
         status?: string;
         results?: {
           retry?: number;
           status?: string;
-          duration?: number;
-          startTime?: string;
-          workerIndex?: number;
-          parallelIndex?: number;
-          steps?: PlaywrightTelemetryStep[];
           error?: unknown;
           errors?: unknown[];
         }[];
@@ -1935,45 +1842,31 @@ async function readPlaywrightTestTelemetry(
   const report = JSON.parse(await readFile(filePath, "utf8")) as {
     suites?: PlaywrightJsonSuite[];
   };
-  const tests: PreviewE2eTestRecord[] = [];
+  let testCount = 0;
+  const retried: PreviewRetrySummary["retried"] = [];
   const visit = (suite: PlaywrightJsonSuite, parentTitles: string[] = []) => {
     const titles = suite.title ? [...parentTitles, suite.title] : parentTitles;
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
+        testCount += 1;
         const retryCount = Math.max(0, ...(test.results ?? []).map((result) => result.retry ?? 0));
         const results = test.results ?? [];
         const finalResult = results.at(-1);
-        const errors = results.flatMap((result) => [
-          ...(result.error ? [normalizeError(result.error)] : []),
-          ...(result.errors ?? []).map(normalizeError),
-        ]);
-        tests.push({
-          framework: "playwright",
-          lane,
-          name: [...titles, spec.title ?? "(unknown spec)", test.projectName ?? ""]
-            .filter(Boolean)
-            .join(" › "),
-          moduleId: normalizeTestModuleId(spec.file ?? suite.file ?? "playwright", repositoryRoot),
-          ...(test.projectName ? { project: test.projectName } : {}),
-          state: finalResult?.status ?? test.status ?? "unknown",
-          durationMs: results.reduce((total, result) => total + (result.duration ?? 0), 0),
-          retryCount,
-          passedAfterRetry:
-            retryCount > 0 && (test.status === "flaky" || finalResult?.status === "passed"),
-          ...(results[0]?.startTime ? { startedAt: results[0].startTime } : {}),
-          errors,
-          phases: [],
-          attempts: results.map((result) => ({
-            attemptIndex: result.retry ?? 0,
-            state: result.status ?? "unknown",
-            durationMs: result.duration ?? 0,
-            ...(result.startTime ? { startedAt: result.startTime } : {}),
-            ...(result.workerIndex === undefined ? {} : { workerIndex: result.workerIndex }),
-            ...(result.parallelIndex === undefined ? {} : { parallelIndex: result.parallelIndex }),
-            ...(result.error ? { error: normalizeError(result.error) } : {}),
-            phases: flattenPlaywrightSteps(result.steps ?? []),
-          })),
-        });
+        if (retryCount > 0) {
+          const firstFailure = results.find((result) => result.status !== "passed");
+          const firstFailureSummary = compactRetryFailure(
+            firstFailure?.error ?? firstFailure?.errors?.[0],
+          );
+          retried.push({
+            lane,
+            name: [...titles, spec.title ?? "(unknown spec)", test.projectName ?? ""]
+              .filter(Boolean)
+              .join(" › "),
+            retryCount,
+            passedAfterRetry: test.status === "flaky" || finalResult?.status === "passed",
+            ...(firstFailureSummary ? { firstFailure: firstFailureSummary } : {}),
+          });
+        }
       }
     }
     for (const child of suite.suites ?? []) {
@@ -1983,25 +1876,8 @@ async function readPlaywrightTestTelemetry(
   for (const suite of report.suites ?? []) {
     visit(suite);
   }
-  if (tests.length === 0) throw new Error(`${filePath} contained no test results`);
-  return summaryFromTests(tests);
-}
-
-function flattenPlaywrightSteps(
-  steps: ReadonlyArray<PlaywrightTelemetryStep>,
-  parents: string[] = [],
-): PreviewE2eTestRecord["phases"] {
-  return steps.flatMap((step) => {
-    const path = [...parents, step.title ?? "(unnamed step)"];
-    return [
-      {
-        name: path.join(" › "),
-        ...(step.category ? { category: step.category } : {}),
-        durationMs: step.duration ?? 0,
-      },
-      ...flattenPlaywrightSteps(step.steps ?? [], path),
-    ];
-  });
+  if (testCount === 0) throw new Error(`${filePath} contained no test results`);
+  return { testCount, retried, collectionErrors: [] };
 }
 
 /**
@@ -2018,40 +1894,16 @@ async function readTestTelemetryLane(
   } catch (error) {
     const message = `${label}: ${error instanceof Error ? error.message : String(error)}`;
     console.error(`[preview] test telemetry unavailable for ${message}`);
-    return { tests: [], modules: [], retried: [], collectionErrors: [message] };
+    return { testCount: 0, retried: [], collectionErrors: [message] };
   }
-}
-
-function summaryFromTests(tests: PreviewE2eTestRecord[]): PreviewTestSummary {
-  return {
-    tests,
-    modules: [],
-    retried: tests
-      .filter((test) => test.retryCount > 0)
-      .map((test) => ({
-        lane: test.lane,
-        name: test.name,
-        retryCount: test.retryCount,
-        passedAfterRetry: test.passedAfterRetry,
-        ...(test.errors[0] ? { firstFailure: compactRetryFailure(test.errors[0]) } : {}),
-      })),
-    collectionErrors: [],
-  };
 }
 
 function combineTestSummaries(summaries: PreviewTestSummary[]): PreviewTestSummary {
   return {
-    tests: summaries.flatMap((summary) => summary.tests),
-    modules: summaries.flatMap((summary) => summary.modules),
+    testCount: summaries.reduce((total, summary) => total + summary.testCount, 0),
     retried: summaries.flatMap((summary) => summary.retried),
     collectionErrors: summaries.flatMap((summary) => summary.collectionErrors),
   };
-}
-
-function normalizeTestModuleId(moduleId: string, repositoryRoot: string): string {
-  return moduleId.startsWith(repositoryRoot)
-    ? moduleId.slice(repositoryRoot.length).replace(/^\//, "")
-    : moduleId;
 }
 
 /** One compact human line for the run log and the PR-body table. */
@@ -2172,6 +2024,34 @@ function requirePreviewEnvironment<T>(
   return environment;
 }
 
+function previewScriptArtifactSource(
+  producer: string,
+  lane: string,
+  workspace: string,
+): TestTelemetryArtifactSource {
+  return { producer, framework: "script", testKind: "e2e", lane, workspace };
+}
+
+function previewVitestArtifactSource(workspace: string): TestTelemetryArtifactSource {
+  return {
+    producer: "vitest-retry-telemetry-reporter",
+    framework: "vitest",
+    testKind: "e2e",
+    lane: "vitest",
+    workspace,
+  };
+}
+
+function previewPlaywrightArtifactSource(workspace: string): TestTelemetryArtifactSource {
+  return {
+    producer: "playwright-telemetry-reporter",
+    framework: "playwright",
+    testKind: "e2e",
+    lane: "playwright",
+    workspace,
+  };
+}
+
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   os: {
     slug: "os",
@@ -2230,6 +2110,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
+    previewTestArtifactSources: [
+      previewScriptArtifactSource("onboarding-smoke", "onboarding-smoke", "iterate-root"),
+      previewScriptArtifactSource("tui-quarantine", "tui", "iterate-root"),
+      previewVitestArtifactSource("@iterate-com/os"),
+      previewPlaywrightArtifactSource("iterate-root"),
+    ],
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
@@ -2269,11 +2155,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // preview.ts to fold into the PR body alongside Playwright's report.
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
-        `run_logged_lane smoke /tmp/os-preview-smoke.log env E2E_RETRY_TELEMETRY_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
-        `run_logged_lane tui /tmp/os-preview-tui.log env E2E_RETRY_TELEMETRY_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
-        `run_logged_lane vitest /tmp/os-preview-vitest.log env E2E_RETRY_TELEMETRY_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
+        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
-        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
@@ -2286,21 +2172,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     collectTestTelemetry: async ({ repositoryRoot }) => {
       const [smoke, vitest, specs] = await Promise.all([
         readTestTelemetryLane("os onboarding smoke", () =>
-          readVitestTestTelemetry(
-            osOnboardingSmokeTelemetryFile,
-            "onboarding smoke",
-            repositoryRoot,
-            "script",
-          ),
+          readCanonicalTestTelemetry(osOnboardingSmokeTelemetryFile, "onboarding smoke"),
         ),
         readTestTelemetryLane("os vitest lane", () =>
-          readVitestTestTelemetry(osVitestRetryTelemetryFile, "vitest", repositoryRoot),
+          readCanonicalTestTelemetry(osVitestRetryTelemetryFile, "vitest"),
         ),
         readTestTelemetryLane("os playwright specs", () =>
           readPlaywrightTestTelemetry(
             resolve(repositoryRoot, "test-results/playwright-results.json"),
             "playwright",
-            repositoryRoot,
           ),
         ),
       ]);
@@ -2325,6 +2205,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/semaphore")],
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
     // `doppler run --project _shared --config prd` whose SEMAPHORE_API_TOKEN
     // targets prd and leaks through into this nested env — never the right
@@ -2340,11 +2221,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestCommandArgs: [
       "bash",
       "-c",
-      `rm -f ${semaphoreVitestTelemetryFile}; env -u SEMAPHORE_API_TOKEN E2E_RETRY_TELEMETRY_FILE=${semaphoreVitestTelemetryFile} pnpm test:e2e`,
+      `rm -f ${semaphoreVitestTelemetryFile}; env -u SEMAPHORE_API_TOKEN TEST_TELEMETRY_WORKSPACE=@iterate-com/semaphore TEST_TELEMETRY_ARTIFACT_FILE=${semaphoreVitestTelemetryFile} pnpm test:e2e`,
     ],
-    collectTestTelemetry: async ({ repositoryRoot }) =>
+    collectTestTelemetry: async () =>
       readTestTelemetryLane("semaphore vitest lane", () =>
-        readVitestTestTelemetry(semaphoreVitestTelemetryFile, "vitest", repositoryRoot),
+        readCanonicalTestTelemetry(semaphoreVitestTelemetryFile, "vitest"),
       ),
   },
   // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
@@ -2367,6 +2248,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/auth")],
     // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
     // dynamic registration, authorize → consent → code → token exchange with
     // RFC 8707 resource validation, against the live worker — the lane that
@@ -2378,11 +2260,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestCommandArgs: [
       "bash",
       "-c",
-      `rm -f ${authVitestTelemetryFile}; E2E_RETRY_TELEMETRY_FILE=${authVitestTelemetryFile} pnpm test:e2e`,
+      `rm -f ${authVitestTelemetryFile}; TEST_TELEMETRY_WORKSPACE=@iterate-com/auth TEST_TELEMETRY_ARTIFACT_FILE=${authVitestTelemetryFile} pnpm test:e2e`,
     ],
-    collectTestTelemetry: async ({ repositoryRoot }) =>
+    collectTestTelemetry: async () =>
       readTestTelemetryLane("auth vitest lane", () =>
-        readVitestTestTelemetry(authVitestTelemetryFile, "vitest", repositoryRoot),
+        readCanonicalTestTelemetry(authVitestTelemetryFile, "vitest"),
       ),
   },
   "streams-example-app": {
@@ -2410,6 +2292,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       stableForMs: 10_000,
     },
     previewTestBaseUrlEnvVar: "WORKER_URL",
+    previewTestArtifactSources: [
+      previewVitestArtifactSource("@iterate-com/streams-example-app"),
+      previewPlaywrightArtifactSource("@iterate-com/streams-example-app"),
+    ],
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3
     // of ~37 tests while the rest rotted (docs/testing.md#lanes). Two
@@ -2430,11 +2316,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // via its global setup.
         'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
         "pnpm exec playwright install chromium > /tmp/os-preview-streams-example-pw-install.log 2>&1 & install_pid=$!",
-        `E2E_RETRY_TELEMETRY_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
+        `TEST_TELEMETRY_WORKSPACE=@iterate-com/streams-example-app TEST_TELEMETRY_ARTIFACT_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
         'wait "$install_pid" || { cat /tmp/os-preview-streams-example-pw-install.log; exit 1; }',
         // Capture Playwright's exit without aborting (set -e) so the vitest
         // sub-lane always finishes and its log is replayed.
-        `PW_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
+        `PW_OK=0; TEST_TELEMETRY_WORKSPACE=@iterate-com/streams-example-app timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
         'VITEST_OK=0; wait "$vitest_pid" || VITEST_OK=$?',
         "cat /tmp/os-preview-streams-example-vitest.log",
         '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
@@ -2443,7 +2329,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     collectTestTelemetry: async ({ repositoryRoot }) => {
       const [vitest, playwright] = await Promise.all([
         readTestTelemetryLane("streams-example-app vitest lane", () =>
-          readVitestTestTelemetry(streamsExampleVitestRetryTelemetryFile, "vitest", repositoryRoot),
+          readCanonicalTestTelemetry(streamsExampleVitestRetryTelemetryFile, "vitest"),
         ),
         readTestTelemetryLane("streams-example-app playwright lane", () =>
           readPlaywrightTestTelemetry(
@@ -2452,7 +2338,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
               "apps/streams-example-app/test-results/playwright-results.json",
             ),
             "playwright",
-            repositoryRoot,
           ),
         ),
       ]);
@@ -2482,14 +2367,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/dummy-petshop")],
     previewTestCommandArgs: [
       "bash",
       "-c",
-      `rm -f ${dummyPetshopVitestTelemetryFile}; E2E_RETRY_TELEMETRY_FILE=${dummyPetshopVitestTelemetryFile} pnpm test:e2e`,
+      `rm -f ${dummyPetshopVitestTelemetryFile}; TEST_TELEMETRY_WORKSPACE=@iterate-com/dummy-petshop TEST_TELEMETRY_ARTIFACT_FILE=${dummyPetshopVitestTelemetryFile} pnpm test:e2e`,
     ],
-    collectTestTelemetry: async ({ repositoryRoot }) =>
+    collectTestTelemetry: async () =>
       readTestTelemetryLane("dummy-petshop vitest lane", () =>
-        readVitestTestTelemetry(dummyPetshopVitestTelemetryFile, "vitest", repositoryRoot),
+        readCanonicalTestTelemetry(dummyPetshopVitestTelemetryFile, "vitest"),
       ),
   },
 };
@@ -2782,12 +2668,30 @@ type PullRequestPreviewContext = {
   pullRequestBaseSha: string;
   pullRequestBody: string;
   pullRequestHeadSha: string;
+  pullRequestHeadRef?: string;
   pullRequestIsDraft: boolean;
   pullRequestLabels: string[];
   pullRequestNumber: number;
   repositoryFullName: string;
   workflowRunUrl: string | null;
 };
+
+function resolvePreviewTestTelemetryEnvironment(input: {
+  app: string;
+  context: PullRequestPreviewContext;
+  previewSlot: string;
+}): Record<string, string> {
+  return {
+    TEST_TELEMETRY_KIND: "e2e",
+    TEST_TELEMETRY_APP: input.app,
+    TEST_TELEMETRY_HEAD_SHA: input.context.pullRequestHeadSha,
+    ...(input.context.pullRequestHeadRef
+      ? { TEST_TELEMETRY_BRANCH: input.context.pullRequestHeadRef }
+      : {}),
+    TEST_TELEMETRY_PULL_REQUEST_NUMBER: String(input.context.pullRequestNumber),
+    TEST_TELEMETRY_PREVIEW_SLOT: input.previewSlot,
+  };
+}
 
 type CheckResult = {
   ok: boolean;
@@ -6393,6 +6297,7 @@ async function resolvePullRequestPreviewContext(params: {
     pullRequestBaseSha: pullRequest.data.base.sha,
     pullRequestBody: pullRequest.data.body || "",
     pullRequestHeadSha: pullRequest.data.head.sha,
+    pullRequestHeadRef: pullRequest.data.head.ref,
     pullRequestIsDraft: pullRequest.data.draft === true,
     pullRequestLabels: pullRequest.data.labels.map((label) => label.name),
     pullRequestNumber: params.pullRequestNumber,
@@ -6441,7 +6346,7 @@ export const previewInternals = {
   parseEnvironmentConfigLeaseData,
   readPlaywrightTestTelemetry,
   readPreviewAppConfig,
-  readVitestTestTelemetry,
+  readCanonicalTestTelemetry,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
@@ -6455,6 +6360,7 @@ export const previewInternals = {
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestTargetPlan,
+  resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,

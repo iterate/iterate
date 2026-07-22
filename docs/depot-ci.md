@@ -78,6 +78,22 @@ depot ci diagnose <run-id> --org 0p91s0lz49
 depot ci summary <attempt-id> --org 0p91s0lz49
 ```
 
+List and download retained artifacts:
+
+```bash
+depot_run_id="<run-id>"
+depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output json
+artifact_id="<artifact-id>"
+depot ci artifacts download "$artifact_id" \
+  --org 0p91s0lz49 \
+  --output-file /tmp/unit-test-telemetry.zip
+```
+
+For a Depot-hosted workflow, use `depot ci artifacts` as the source of truth.
+The `actions/upload-artifact` log may print a GitHub-looking actions URL, but
+Depot owns the run and artifact; `gh run download` and the GitHub Actions
+artifact API can return 404 for that URL.
+
 Control runs:
 
 ```bash
