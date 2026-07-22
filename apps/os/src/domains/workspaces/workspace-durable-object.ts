@@ -276,10 +276,22 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       // below it) keeps its owner but can't stay a live file — reads would
       // serve a file at a directory path and its flush would die in the
       // mount-point write guard, wedging every settle barrier.
+      const becameDirectories: string[] = [];
       for (const path of live) {
-        if (isVirtualDirectoryPath(applied.mounts, path)) doomed.add(path);
+        if (isVirtualDirectoryPath(applied.mounts, path)) {
+          doomed.add(path);
+          becameDirectories.push(path);
+        }
       }
       if (doomed.size > 0) this.#collab.endSessions([...doomed]);
+      // The barrier's settle may have flushed an overlay FILE at a path the
+      // new table makes a DIRECTORY — a ghost that would shadow the mounted
+      // subtree (overlay copies win over the virtual-dir mask). Drop it; the
+      // mount transition is the destructive act here, same posture as
+      // endSessions discarding unflushed keystrokes.
+      for (const path of becameDirectories) {
+        await this.#core.revert(path).catch(() => {});
+      }
       return applied;
     });
   }
