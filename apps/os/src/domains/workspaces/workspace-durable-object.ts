@@ -270,8 +270,16 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       // old repo's text as the live truth (and flush it into the NEW mount's
       // repo). Ownership is routeMount's longest-prefix rule, diffed across
       // the transition; the barrier settled dirty work, so nothing is lost.
-      const doomed = reRoutedPaths(before, applied.mounts, this.#collab.livePaths());
-      if (doomed.length > 0) this.#collab.endSessions(doomed);
+      const live = this.#collab.livePaths();
+      const doomed = new Set(reRoutedPaths(before, applied.mounts, live));
+      // A path that BECAME a virtual directory (a nested mount landed at or
+      // below it) keeps its owner but can't stay a live file — reads would
+      // serve a file at a directory path and its flush would die in the
+      // mount-point write guard, wedging every settle barrier.
+      for (const path of live) {
+        if (isVirtualDirectoryPath(applied.mounts, path)) doomed.add(path);
+      }
+      if (doomed.size > 0) this.#collab.endSessions([...doomed]);
       return applied;
     });
   }
@@ -486,11 +494,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // Settle → commit → stamp as ONE fence: no flush timer, open, or
     // configure can interleave, and baselines advance mount-scoped to
     // exactly what the commit contained (a commit never spans mounts;
-    // stamping another mount's session would erase its redline).
-    const mounts = this.#currentConfig().mounts;
+    // stamping another mount's session would erase its redline). The mount
+    // table is read AT CALL TIME — inside the fence — so a configure that
+    // queued ahead of this commit can't leave ownsPath stamping with a
+    // stale table while the commit classified against the new one.
     return this.#collab.commitBarrier(
       () => this.#core.gitCommit(input),
-      (path, mount) => routeMount(mounts, path)?.mountPath === mount,
+      (path, mount) => routeMount(this.#currentConfig().mounts, path)?.mountPath === mount,
     );
   }
 
