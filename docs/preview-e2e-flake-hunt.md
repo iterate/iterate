@@ -52,6 +52,64 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 10 (2026-07-23, post-#2263)
+
+This round starts from `origin/main` at
+`707903ca74da1d9eece8b519933902f36780d486`. PR #2263 fixed the false-green
+boundary exposed by PR #2262: a head that selected no deployment work reused an
+older head's test result and returned success in six seconds. Deployment reuse
+is still allowed, but every triggered PR head now executes every runnable app
+suite against the exact recorded Worker versions. An empty runnable set fails
+loudly with `E2e was NOT run` instead of becoming a skipped success.
+
+The repaired #2262 check at head `1ef0f722…` performed all five app suites and
+passed in 3m37s with zero retries. Its later head `6f1d610f…` then provided an
+important real failure rather than another false green: Playwright and all
+non-OS suites passed, while six OS Vitest cases retried and one still failed.
+The failures spanned unrelated project, agent, MCP, egress, worker-readiness,
+and sandbox cases. One error explicitly said `Durable Object reset because its
+code was updated`; another script execution was orphaned because its
+incarnation disappeared. All affected tests owned distinct projects.
+
+PostHog places the OS deploy-phase finish at `23:05:30.758Z` and the Vitest
+start at `23:05:51.367Z`: only 20.6 seconds separated edge readiness from the
+full fan-out. Exact-version readiness itself took 58ms. The explicit reset
+arrived about 51 seconds after Wrangler uploaded the version. Cloudflare's
+[known-issues documentation](https://developers.cloudflare.com/durable-objects/platform/known-issues/)
+says Worker/DO code propagation is globally eventually consistent for seconds
+to minutes, while the
+[Durable Object lifecycle](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/)
+documents that a code update shuts an object down and can terminate in-flight
+RPC. Exact edge-version health is therefore necessary but cannot certify every
+future Durable Object placement.
+
+A control on the next #2262 head, `410c1774…`, was genuinely green in 3m48s:
+all five suites ran, OS Playwright passed 63/63, OS Vitest passed all 170
+reported cases, and raw telemetry recorded zero retries. On that run OS
+readiness naturally consumed 31.1 seconds before the smoke's 22.6-second path
+to Vitest, giving the deployment about 53.7 seconds of age before fan-out. That
+does not prove 54 seconds is a safe boundary, but the contrast localizes the
+failure cluster to the fresh global-rollout window rather than shared project
+state or one victim test.
+
+Round-10 preflight ledger:
+
+| Proof                     | Revision                                   | Accepted runs | Retries | Outcome                                      |
+| ------------------------- | ------------------------------------------ | ------------: | ------: | -------------------------------------------- |
+| Repaired #2262 full check | `1ef0f722…`                                |          0/25 |       0 | Real five-suite pass in 3m37s                |
+| Fresh-rollout failure     | `6f1d610fdea1521ca93a6e5c4a3bcdee203e5dc0` |          0/25 |       6 | OS Vitest failed after rollout-reset cluster |
+| Natural-readiness control | `410c1774d8b0a614096d89dcfe39c1e44359a9b6` |          0/25 |       0 | Real five-suite pass in 3m48s                |
+
+The smallest deterministic CI boundary is a 90-second minimum age from the
+successful OS deploy command to high-fanout Vitest. The clock starts before
+exact-version readiness and runs concurrently with readiness, onboarding
+smoke, Chromium installation, Playwright, TUI, and every other app suite;
+reused older deployments wait zero seconds. Playwright remains on the critical
+path in the observed runs, so the clock should add little or no wall time. This
+is a visible bounded lifecycle gate, not a retry, test quarantine, synthetic
+Durable Object sampler, or serial deployment barrier. The accepted counter
+remains 0/25 until the new immutable PR head completes the canonical marathon.
+
 ## Round 9 (2026-07-22, post-#2260)
 
 This proof starts from `origin/main` at

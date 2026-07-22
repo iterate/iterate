@@ -29,6 +29,10 @@
  * build where a method-returned surface is a Proxy.
  */
 import { test } from "vitest";
+import {
+  annotateE2ePhase,
+  measureE2ePhase,
+} from "@iterate-com/shared/test-support/measure-e2e-phase";
 import type { Agent, CapabilityHost, StreamEvent } from "../../src/itx-api.generated.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
@@ -46,8 +50,13 @@ type ProofAppend = (event: { type: string; payload: { marker: string } }) => Pro
 test(
   "itx.agents.get(...) pipelines: .message(), .<dynamic capability>(), and .capabilityHost.<dynamic capability>()",
   { timeout: 120_000 },
-  async ({ expect }) => {
-    await using handle = await createTestProject({ slugPrefix: "handle-pipeline" });
+  async ({ annotate, expect }) => {
+    const measurePhase = <Value>(name: string, category: string, operation: () => Promise<Value>) =>
+      measureE2ePhase(annotate, name, category, operation);
+
+    await using handle = await measurePhase("create test project", "fixture", () =>
+      createTestProject({ slugPrefix: "handle-pipeline" }),
+    );
     using itx = handle.itx();
     const agentPath = "/agents/pipeline-target";
     const marker = crypto.randomUUID().slice(0, 8);
@@ -55,25 +64,29 @@ test(
     // Creation is explicit. This call itself is pipelined through get(); the
     // rest of the test proves the other methods still pipeline on the
     // already-created handle.
-    await itx.agents.get(agentPath).create();
+    await measurePhase("create target agent", "fixture", () => itx.agents.get(agentPath).create());
 
     // A DURABLE dynamic capability on the agent's scope (an itx-expression
     // method alias: calling it appends to the proof stream). Durable rather
     // than live because the script below runs server-side, long after this
     // capnweb session's live table would have been the wrong place anyway.
     using host = itx.capabilityHosts.get(agentPath);
-    using _provision = await host.provideCapability({
-      expression: ["streams", ["get", PROOF_STREAM], "append"],
-      instructions: "e2e proof: appends its argument to the proof stream.",
-      path: ["proofAppend"],
-      type: "itx-expression",
-    });
+    using _provision = await measurePhase("provide proof capability", "fixture", () =>
+      host.provideCapability({
+        expression: ["streams", ["get", PROOF_STREAM], "append"],
+        instructions: "e2e proof: appends its argument to the proof stream.",
+        path: ["proofAppend"],
+        type: "itx-expression",
+      }),
+    );
 
     // Run the assertions IN the script lane — a dynamic worker whose itx is a
     // workerd stub. Everything inside is a single un-awaited chain per call:
     // if agents.get() returns anything workerd cannot pipeline on, these
     // throw "The RPC receiver does not implement the method ...".
     using projectHost = itx.capabilityHosts.get("/");
+    const scriptStartedAt = new Date();
+    const scriptStartedAtPerformance = performance.now();
     const run = (
       await itxScript(projectHost)
         .context<{
@@ -133,6 +146,12 @@ test(
           };
         })
     ).execution;
+    await annotateE2ePhase(annotate, {
+      name: "execute pipelined worker script",
+      category: "operation",
+      startedAt: scriptStartedAt,
+      durationMs: performance.now() - scriptStartedAtPerformance,
+    });
 
     expect(run.result).toMatchObject({
       messageActor: { type: "user", origin: "web" },
@@ -155,7 +174,9 @@ test(
 
     // The side effects are real, not just unthrown: the message folded into
     // the agent stream and the dynamic capability appended the proof event.
-    const agentEvents = await itx.streams.get(agentPath).getEvents({});
+    const agentEvents = await measurePhase("read target agent events", "assertion", () =>
+      itx.streams.get(agentPath).getEvents({}),
+    );
     expect(
       agentEvents.some(
         (event) =>
@@ -168,7 +189,9 @@ test(
           event.payload.content === "pipelined hello",
       ),
     ).toBe(true);
-    const proofEvents = await itx.streams.get(PROOF_STREAM).getEvents({});
+    const proofEvents = await measurePhase("read proof events", "assertion", () =>
+      itx.streams.get(PROOF_STREAM).getEvents({}),
+    );
     expect(
       proofEvents.some((event) => event.type === PROOF_TYPE && event.payload?.marker === marker),
     ).toBe(true);

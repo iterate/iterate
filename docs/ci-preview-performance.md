@@ -15,9 +15,10 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-OS starts its onboarding smoke, explicit TUI quarantine marker, Vitest, and
-Playwright as four independent sub-lanes. Therefore, healthy wall time should
-approach:
+OS starts its onboarding smoke, explicit TUI quarantine marker, Chromium setup,
+Playwright, and a bounded deployment-age clock together. High-fanout Vitest
+joins after the smoke and age clock; both gates normally finish under
+Playwright's longer critical path. Therefore, healthy wall time should approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -34,9 +35,10 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
-- OS smoke, the explicit TUI quarantine marker, Vitest, and Playwright run
-  concurrently. Every background process is joined even if another one fails,
-  so a failure cannot orphan work or discard another lane's result.
+- OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
+  the rollout-age clock run concurrently. High-fanout Vitest waits only for the
+  smoke and clock; every background process is joined even if another one
+  fails, so a failure cannot orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
 - OS Vitest gives every current file a worker immediately and permits at most
@@ -70,6 +72,15 @@ serially because they intentionally share one warm container.
   final version on the health probe (no multi-second dwell after first match).
   The probe is a cheap public health request and never wakes synthetic Durable
   Objects.
+- **Global Durable Object rollout gets a bounded age gate.** Cloudflare
+  documents that Worker/DO updates are globally eventually consistent even
+  after the new edge Worker answers, and changing an object's assigned version
+  resets that object. For a newly deployed OS version, the dense Vitest fan-out
+  therefore waits until 90 seconds after the successful deploy command. The
+  clock overlaps exact-version readiness, onboarding smoke, Chromium setup,
+  Playwright, TUI, and every other app suite. Reused old deployments wait zero
+  seconds. This is one visible lifecycle boundary, not a retry or a synthetic
+  placement sample.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests
@@ -78,11 +89,11 @@ serially because they intentionally share one warm container.
   cap, package, or Wrangler-config input. New slots, bootstraps, force-pushes,
   truncated/unavailable comparisons, and relevant changes use the full
   rollout.
-- **Durable Object resets are handled by product operations.** Cloudflare may
-  still move an individual Durable Object to new code after edge readiness.
-  Idempotent operations must redeliver after that explicit lifecycle outcome
-  without committing terminal failure state. A finite placement sample cannot
-  prove the whole fleet, so readiness does not pretend otherwise.
+- **Product operations still handle lifecycle resets.** The CI age gate avoids
+  deliberately launching the densest test burst during the documented rollout
+  window; it cannot make arbitrary in-flight product operations replay-safe.
+  Idempotent operations must still redeliver after an explicit lifecycle
+  outcome without committing terminal failure state.
 - **Readiness retries are bounded and diagnostic.** Each request has a short
   watchdog, the overall deploy check has a hard deadline, and the final HTTP
   response body or transport error is retained in the failure message.
@@ -112,7 +123,8 @@ serially because they intentionally share one warm container.
 - `depot ci metrics --run <run-id> --org 0p91s0lz49` shows host CPU and memory.
 - `[preview] deploy passed: <app> (Ns)` and `[preview] test passed: <app> (Ns)`
   in the run log show phase wall times.
-- `[preview:os] lane start/finish` lines show the four overlapping OS lanes.
+- `[preview:os] lane start/finish` lines show the overlapping OS work, including
+  the visible `rollout-settle` clock and when Vitest was released.
 - The managed preview block in the PR body records per-app deploy duration,
   test duration, and consumed retries.
 - The reporting tail remains part of the end-to-end budget. Test events are

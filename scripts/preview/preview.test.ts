@@ -56,6 +56,7 @@ const {
   resolvePreviewCompareBaseSha,
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
+  resolvePreviewRolloutRemainingSeconds,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestTargetPlan,
   resolvePreviewTestTelemetryEnvironment,
@@ -878,7 +879,7 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("gates high-fanout OS Vitest on the production-shaped rollout smoke", () => {
+  test("gates high-fanout OS Vitest on rollout age and the production-shaped smoke", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
@@ -896,26 +897,70 @@ describe("preview test commands", () => {
     );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
+    expect(script).toContain("ROLLOUT_PID");
     expect(script).toContain("TUI_PID");
     expect(script).toContain("E2E_PID");
     expect(script).toContain("SPEC_PID");
     expect(script).toContain('wait "$SMOKE_PID"');
+    expect(script).toContain('wait "$ROLLOUT_PID"');
     expect(script).toContain('wait "$TUI_PID"');
     expect(script).toContain('wait "$E2E_PID"');
     expect(script).toContain('[ "$SMOKE_OK" -eq 0 ]');
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
     // Independent setup starts immediately. Playwright begins as soon as
-    // Chromium is ready, while the production-shaped smoke becomes the only
-    // rollout gate in front of high-fanout Vitest.
-    for (const lane of [smokeLane, tuiLane]) {
+    // Chromium is ready, while the production-shaped smoke and bounded
+    // deployment-age clock gate only high-fanout Vitest.
+    for (const lane of ["run_visible_lane rollout-settle sleep", smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
     expect(script.indexOf('wait "$PW_INSTALL_PID"')).toBeLessThan(script.indexOf(playwrightSpec));
     expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$SMOKE_PID"'));
+    expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf('wait "$ROLLOUT_PID"'));
+    expect(script.indexOf('wait "$ROLLOUT_PID"')).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf('wait "$SMOKE_PID"')).toBeLessThan(script.indexOf(e2eLane));
     expect(script.indexOf(playwrightSpec)).toBeLessThan(script.indexOf('wait "$E2E_PID"'));
-    expect(script).not.toContain("sleep ");
+    expect(script).toContain(
+      'run_visible_lane rollout-settle sleep "$PREVIEW_APP_ROLLOUT_REMAINING_SECONDS"',
+    );
+  });
+
+  test("waits at most 90 seconds from a fresh OS deployment and only gates OS", () => {
+    const deployedAt = "2026-07-22T23:05:30.000Z";
+    const now = Date.parse(deployedAt);
+
+    expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", deployedAt, nowMs: now })).toBe(
+      90,
+    );
+    expect(
+      resolvePreviewRolloutRemainingSeconds({
+        appSlug: "os",
+        deployedAt,
+        nowMs: now + 20_001,
+      }),
+    ).toBe(70);
+    expect(
+      resolvePreviewRolloutRemainingSeconds({
+        appSlug: "os",
+        deployedAt,
+        nowMs: now + 90_000,
+      }),
+    ).toBe(0);
+    expect(
+      resolvePreviewRolloutRemainingSeconds({
+        appSlug: "auth",
+        deployedAt,
+        nowMs: now,
+      }),
+    ).toBe(0);
+    expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", nowMs: now })).toBe(0);
+    expect(() =>
+      resolvePreviewRolloutRemainingSeconds({
+        appSlug: "os",
+        deployedAt: "not-a-timestamp",
+        nowMs: now,
+      }),
+    ).toThrow(/Invalid preview deployment timestamp/);
   });
 
   test("guards the parallel OS preview lane with target budgets", () => {

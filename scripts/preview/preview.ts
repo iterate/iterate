@@ -62,6 +62,16 @@ const draftPreviewNotice = [
   `To get previews: add the \`${previewOptInLabel}\` label, mark the PR ready for review, or dispatch the Cloudflare Previews workflow for a one-off run.`,
 ].join(" ");
 
+// Cloudflare documents that a Worker/DO code update is globally eventually
+// consistent after the new edge Worker version is serving. A newly addressed
+// Durable Object can therefore still be assigned the prior code for seconds
+// to minutes, and an in-flight RPC is reset when that assignment changes.
+// Keep the one dense OS fan-out behind a bounded deployment-age gate; smoke,
+// browser tests, browser installation, and every other app keep running while
+// this clock elapses, so it normally stays off the critical path.
+const osPreviewMinimumDeploymentAgeMs = 90_000;
+const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
+
 /**
  * Draft PRs don't hold preview slots unless they ask: there are only nine
  * slots and drafts are the default for agent-opened PRs, so a busy night of
@@ -824,6 +834,24 @@ function resolvePreviewTestWorkerVersionOverrides(input: {
   );
 }
 
+function resolvePreviewRolloutRemainingSeconds(input: {
+  appSlug: CloudflarePreviewAppSlugType;
+  deployedAt?: string | null;
+  nowMs?: number;
+}) {
+  if (input.appSlug !== "os" || !input.deployedAt) {
+    return 0;
+  }
+
+  const deployedAtMs = Date.parse(input.deployedAt);
+  if (!Number.isFinite(deployedAtMs)) {
+    throw new Error(`Invalid preview deployment timestamp: ${input.deployedAt}`);
+  }
+
+  const elapsedMs = Math.max(0, (input.nowMs ?? Date.now()) - deployedAtMs);
+  return Math.ceil(Math.max(0, osPreviewMinimumDeploymentAgeMs - elapsedMs) / 1_000);
+}
+
 async function testPreviewApps({
   context,
   runtime,
@@ -967,6 +995,13 @@ async function testPreviewApps({
       app,
       apps: recorded.apps,
     });
+    const rolloutRemainingSeconds = resolvePreviewRolloutRemainingSeconds({
+      appSlug: app.slug,
+      // Entries written before deployedAt existed fall back to their last
+      // recorded transition. That may wait conservatively on one legacy
+      // rerun, but it cannot release a genuinely fresh deployment early.
+      deployedAt: existingEntry.deployedAt ?? existingEntry.updatedAt,
+    });
 
     const startedAt = Date.now();
     const telemetryArtifactDirectory = runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR
@@ -989,6 +1024,9 @@ async function testPreviewApps({
         "--",
         "env",
         `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
+        ...(app.slug === "os"
+          ? [`${previewRolloutRemainingSecondsEnvironment}=${rolloutRemainingSeconds}`]
+          : []),
         ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
       ],
@@ -2175,11 +2213,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
         // Smoke and TUI own isolated state, so start them with the Chromium
         // install. Playwright starts as soon as Chromium is ready. The
-        // high-fanout Vitest lane waits for the production-shaped onboarding
-        // smoke to prove that the freshly deployed Durable Objects can serve a
-        // complete project/agent/stream flow. This absorbs rollout propagation
-        // under Playwright's longer critical path instead of probing synthetic
-        // Durable Object names or sleeping for an arbitrary interval.
+        // high-fanout Vitest lane waits for both the production-shaped
+        // onboarding smoke and a bounded age on a newly deployed OS version.
+        // Edge readiness cannot prove global Durable Object code propagation:
+        // Cloudflare may reset an object when its assigned version changes.
+        // The age clock starts when deploy completes and overlaps every lane
+        // above, so this does not serialize the suite or probe synthetic DOs.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -2196,19 +2235,21 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // preview.ts to fold into the PR body alongside Playwright's report.
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
+        `run_visible_lane rollout-settle sleep "$${previewRolloutRemainingSecondsEnvironment}" & ROLLOUT_PID=$!`,
         `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
         `SPEC_OK=0; SPEC_PID=""; if [ "$PW_INSTALL_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
         'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
-        `E2E_OK=0; E2E_PID=""; if [ "$SMOKE_OK" -eq 0 ]; then run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!; else E2E_OK=$SMOKE_OK; fi`,
+        'ROLLOUT_OK=0; wait "$ROLLOUT_PID" || ROLLOUT_OK=$?',
+        `E2E_OK="$SMOKE_OK"; if [ "$E2E_OK" -eq 0 ]; then E2E_OK="$ROLLOUT_OK"; fi; E2E_PID=""; if [ "$E2E_OK" -eq 0 ]; then run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!; fi`,
         'if [ -n "$E2E_PID" ]; then wait "$E2E_PID" || E2E_OK=$?; fi',
         'if [ -n "$SPEC_PID" ]; then wait "$SPEC_PID" || SPEC_OK=$?; fi',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         "cat /tmp/os-preview-smoke.log",
         "if [ -f /tmp/os-preview-vitest.log ]; then cat /tmp/os-preview-vitest.log; fi",
         "cat /tmp/os-preview-tui.log",
-        '[ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
+        '[ "$ROLLOUT_OK" -eq 0 ] && [ "$SMOKE_OK" -eq 0 ] && [ "$E2E_OK" -eq 0 ] && [ "$TUI_OK" -eq 0 ] && [ "$SPEC_OK" -eq 0 ]',
       ].join("; "),
     ],
     collectTestTelemetry: async ({ repositoryRoot }) => {
@@ -2499,6 +2540,8 @@ export const CloudflarePreviewAppEntry = z.object({
   appSlug: z.string().trim().min(1),
   status: CloudflarePreviewStatus,
   updatedAt: z.string().trim().min(1),
+  /** When the successful app deploy command completed for this exact version. */
+  deployedAt: z.iso.datetime({ offset: true }).nullable().optional(),
   headSha: z.string().trim().min(1).nullable().optional(),
   message: z.string().trim().min(1).nullable().optional(),
   publicUrl: z.string().trim().url().nullable().optional(),
@@ -4215,6 +4258,7 @@ async function deployPreviewApp(input: {
       );
       return CloudflarePreviewAppEntry.parse({
         ...baseEntry,
+        deployedAt: existingEntry.deployedAt,
         deployedFingerprint: fingerprint,
         deployedWorkerName: existingEntry.deployedWorkerName,
         deployedWorkerVersion: existingEntry.deployedWorkerVersion,
@@ -4257,6 +4301,7 @@ async function deployPreviewApp(input: {
       status: "deploy-failed",
     });
   }
+  const deployedAt = new Date().toISOString();
 
   const deployedWorkerVersion = parseLastDeployedWorkerVersionId(
     `${deployResult.stdout}\n${deployResult.stderr}`,
@@ -4265,6 +4310,7 @@ async function deployPreviewApp(input: {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
+      deployedAt,
       deployCommandDurationMs,
       deployReuseProofDurationMs,
       message:
@@ -4289,6 +4335,7 @@ async function deployPreviewApp(input: {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
+      deployedAt,
       deployCommandDurationMs,
       deployReadinessDurationMs,
       deployReuseProofDurationMs,
@@ -4300,6 +4347,7 @@ async function deployPreviewApp(input: {
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
     ...sizeFields,
+    deployedAt,
     deployCommandDurationMs,
     deployReadinessDurationMs,
     deployReuseProofDurationMs,
@@ -6102,6 +6150,7 @@ export const previewInternals = {
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewRolloutRemainingSeconds,
   resolvePreviewTestTargetPlan,
   resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
