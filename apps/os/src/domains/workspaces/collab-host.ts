@@ -54,11 +54,10 @@ export interface CollabSessionStore extends CollabStore {
    * multi-file advancement after a crash is unrepresentable. Entries whose
    * session ended (or rotated epoch) are skipped, never mis-stamped. */
   setBases(files: { content: string; epoch: string; path: string; version: number }[]): void;
-  /** The redline baseline: seed content at birth, re-stamped at each commit.
-   * Retention keeps ops back to this version, so tracked changes are always
-   * reconstructable — the op log IS the redline data. */
+  /** The redline baseline: seed content at birth, re-stamped at each commit
+   * (via setBases). Retention keeps ops back to this version, so tracked
+   * changes are always reconstructable — the op log IS the redline data. */
   getBase(path: string): { content: string; version: number } | null;
-  setBase(path: string, base: { content: string; version: number }): void;
   /** Delete the session, its snapshot, its ops, and its base — the durable end. */
   endSession(path: string): void;
 }
@@ -251,10 +250,11 @@ export class CollabHost {
     await this.#opened(path);
     // Register BEFORE the first pull: an update landing between pull and
     // registration would otherwise be silently missed for a whole timeout.
+    let finish!: () => void;
     const woke = new Promise<void>((resolve) => {
       const waiters = this.#waiters.get(path) ?? new Set();
       this.#waiters.set(path, waiters);
-      const finish = () => {
+      finish = () => {
         clearTimeout(timer);
         waiters.delete(finish);
         if (waiters.size === 0) this.#waiters.delete(path);
@@ -265,7 +265,7 @@ export class CollabHost {
     });
     const first = await this.#engine.pull(path, epoch, afterVersion, clientId);
     if (first.status !== "ops" || first.ops.length > 0) {
-      this.#wake(path); // release our own registration
+      finish(); // release OUR registration only — no spurious wake of peers
       return first;
     }
     await woke;

@@ -67,10 +67,6 @@ export function fakeSessionStore() {
       }
     },
     getBase: (path) => structuredClone(bases.get(path) ?? null),
-    setBase: (path, base) => {
-      bases.set(path, structuredClone(base));
-      prune(path);
-    },
     endSession: (path) => {
       sessions.delete(path);
       snapshots.delete(path);

@@ -213,25 +213,6 @@ export function sqliteCollabStore(storage: {
       if (!row) return null;
       return { content: row.content as string, version: row.version as number };
     },
-    // A new baseline licenses pruning everything the old one retained.
-    setBase: (path, base) => {
-      storage.transactionSync(() => {
-        sql.exec(
-          `INSERT OR REPLACE INTO collab_bases(path, version, content) VALUES (?, ?, ?)`,
-          path,
-          base.version,
-          base.content,
-        );
-        const snapshotVersion =
-          (sql.exec(`SELECT version FROM collab_snapshots WHERE path = ?`, path).toArray()[0]
-            ?.version as number | undefined) ?? base.version;
-        sql.exec(
-          `DELETE FROM collab_ops WHERE path = ? AND version < ?`,
-          path,
-          Math.min(base.version, snapshotVersion),
-        );
-      });
-    },
     endSession: (path) => {
       storage.transactionSync(() => {
         sql.exec(`DELETE FROM collab_sessions WHERE path = ?`, path);

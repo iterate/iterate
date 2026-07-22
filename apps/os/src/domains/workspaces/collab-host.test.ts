@@ -586,7 +586,7 @@ describe("retention quota on the agent gateway", () => {
     await pushOne(host, opened, "hi ", SEED.length);
     // Rewind the baseline so the head sits exactly at the quota — the same
     // arithmetic a 10k-op session reaches, without pushing 10k ops.
-    store.setBase(PATH, { content: SEED, version: 1 - 10_000 });
+    store.setBases([{ content: SEED, epoch: opened.epoch, path: PATH, version: 1 - 10_000 }]);
     await expect(host.writeFile(PATH, "agent text")).rejects.toThrow(/retention quota/);
     await expect(host.edit({ newString: "x", oldString: "hi", path: PATH })).rejects.toThrow(
       /retention quota/,

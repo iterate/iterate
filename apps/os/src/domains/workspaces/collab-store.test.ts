@@ -111,7 +111,7 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "v3", epoch: EPOCH, version: 3 });
     expect((await store.readOps(PATH, EPOCH, -1)).map((entry) => entry.version)).toEqual([0, 1, 2]);
     // A commit advances the baseline — NOW the covered ops may go.
-    store.setBase(PATH, { content: "v3", version: 3 });
+    store.setBases([{ content: "v3", epoch: EPOCH, path: PATH, version: 3 }]);
     expect(await store.readOps(PATH, EPOCH, -1)).toEqual([]);
     expect(store.getBase(PATH)).toEqual({ content: "v3", version: 3 });
   });
@@ -124,7 +124,7 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
       { birth: true },
     );
     await store.append(PATH, EPOCH, [op(0), op(1)]);
-    store.setBase(PATH, { content: "v2", version: 2 }); // commit first
+    store.setBases([{ content: "v2", epoch: EPOCH, path: PATH, version: 2 }]); // commit first
     await store.append(PATH, EPOCH, [op(2), op(3)]);
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "v4", epoch: EPOCH, version: 4 });
     // Baseline v2 keeps ops 2,3 (redline); snapshot v4 needs nothing below 4.
