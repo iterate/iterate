@@ -192,12 +192,13 @@ describe("watchdogs the shell can't import stay in sync", () => {
   });
 
   it("keeps the retry annotation parseable by the marathon's ledger", () => {
-    // flake-hunt-loop.sh cannot import renderPreviewRetrySummary, so it seds
-    // the annotation preview.ts prints. Pin the sed pattern in the shell and
-    // prove a real rendered summary still matches its JS mirror — a wording
-    // change in either file fails here instead of silently zeroing the
-    // ledger's retry column.
+    // flake-hunt-loop.sh cannot import renderPreviewRetrySummary. Depot's
+    // finite log export converts the raw workflow command to ##[notice] or
+    // ##[warning], so pin both the exported form and the raw fallback. This
+    // fixture comes from a real canonical Depot preview log; changing either
+    // side must not silently zero the ledger's retry column again.
     const shell = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
+    expect(shell).toContain("s/.*##\\[(notice|warning)\\][^:]+: ([0-9]+) retried:.*/\\2/p");
     expect(shell).toContain("s/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\\1/p");
 
     const rendered = previewInternals.renderPreviewRetrySummary({
@@ -206,8 +207,10 @@ describe("watchdogs the shell can't import stay in sync", () => {
         { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
       ],
     });
-    const annotation = `::notice title=Preview e2e retries::os: ${rendered}. The retry passed and does not fail this run.`;
-    expect(annotation.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
+    const raw = `::notice title=Preview e2e retries::os: ${rendered}. The retry passed and does not fail this run.`;
+    expect(raw.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
+    const depotExport = `2026-07-22T07:24:00.175Z ##[warning]os: ${rendered}. The retry passed and does not fail this run.`;
+    expect(depotExport.match(/.*##\[(?:notice|warning)\][^:]+: (\d+) retried:.*/)?.[1]).toBe("2");
   });
 });
 

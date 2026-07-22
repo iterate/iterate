@@ -74,10 +74,19 @@ json_run_field() {
 
 retry_count() {
   local log=$1 annotations onboarding
+  # Depot's finite log export renders GitHub workflow commands as
+  # `##[notice]`/`##[warning]`. Keep the raw command fallback for older CLI
+  # exports, but never sum both representations of the same annotations.
   annotations=$(
-    sed -nE 's/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\1/p' "$log" |
+    sed -nE 's/.*##\[(notice|warning)\][^:]+: ([0-9]+) retried:.*/\2/p' "$log" |
       awk '{ total += $1 } END { print total + 0 }'
   )
+  if [ "$annotations" -eq 0 ]; then
+    annotations=$(
+      sed -nE 's/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\1/p' "$log" |
+        awk '{ total += $1 } END { print total + 0 }'
+    )
+  fi
   onboarding=$(grep -cF '[retry-telemetry] onboarding smoke passed on attempt 2/2' "$log" || true)
   echo $((annotations + onboarding))
 }
