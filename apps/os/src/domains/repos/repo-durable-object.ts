@@ -801,9 +801,19 @@ export class RepoDurableObject extends DurableObject<Env> {
       if (outcome.kind === "rejected") {
         // The ref moved under us (out-of-band writer): one resync + retry —
         // the clone lane's visibility posture. A rejection is proof nothing
-        // was pushed.
-        await reader.syncToHead(await reader.resolveRemoteHead());
-        outcome = await reader.commitFiles(command, { onApplied });
+        // was pushed. The resolved tip is trusted ONLY when it differs from
+        // everything we already hold — a lagging replica advertising our own
+        // base (or older) must not reinstall history; those cases skip the
+        // retry and take the clone lane, whose machinery owns that window.
+        const base = reader.head()?.commitOid;
+        const floor = this.ctx.storage.kv.get<string>(repoPushedHeadStorageKey(branch));
+        const tip = await reader.resolveRemoteHead();
+        if (tip !== base && tip !== floor) {
+          await reader.syncToHead(tip, {
+            stillWanted: () => reader.head()?.commitOid !== tip,
+          });
+          outcome = await reader.commitFiles(command, { onApplied });
+        }
       }
     } catch (error) {
       return { detail: String(error), kind: "fallback-safe" };
