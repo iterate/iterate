@@ -184,6 +184,11 @@ describe("watchdogs the shell can't import stay in sync", () => {
       "group: cloudflare-previews-${{ inputs.pull-request-number }}",
     );
     expect(marathonWorkflow).toContain("cancel-in-progress: false");
+    expect(
+      source.match(
+        /doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview/g,
+      ),
+    ).toHaveLength(2);
     // Uncounted priming runs are a masking layer; every run counts.
     expect(marathonWorkflow).not.toContain("warmup-runs");
   });
