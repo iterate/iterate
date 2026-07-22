@@ -49,13 +49,16 @@ synthetic projects at CI scale and acknowledge the durable subscription
 without sending those facts to PostHog. Ephemeral events are excluded in both
 the subscription and capture paths.
 
-Every production row is named `append:<type>` and contains the complete
-committed `StreamEvent` under `stream_event`. The only custom properties beside
-that raw event are `stream_event_type`, `stream_path`,
-`stream_event_truncated`, and `stream_event_original_json_bytes`. Nested raw
-fields remain available in HogQL; type and path are promoted because they are
-the common UI filters and breakdowns. The only payload reduction is
-deterministic JSON truncation above 100 KiB.
+Every production row is named `stream:append` and contains the complete
+committed `StreamEvent` under `stream_event`. The committed stream type is
+**not** part of the PostHog event name — it lives on `stream_event_type` (and
+inside the raw event) so the catalogue stays one event while queries still
+filter and break down by type. The only other custom properties beside the raw
+event are `stream_path`, `stream_event_truncated`, and
+`stream_event_original_json_bytes`. Nested raw fields remain available in
+HogQL; type and path are promoted because they are the common UI filters and
+breakdowns. The only payload reduction is deterministic JSON truncation above
+100 KiB.
 
 Machine events do not pretend to have a human actor. They use one stable,
 namespaced distinct ID per deployment/project and carry

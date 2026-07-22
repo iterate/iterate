@@ -116,7 +116,11 @@ export async function linkRepoToGithub(
     );
   }
 
-  const octokit = connectionOctokit({ connection: input.connection, projectId: input.projectId });
+  const octokit = connectionOctokit({
+    connection: input.connection,
+    streamContext: { kind: "scope", scopePath: repoPath },
+    projectId: input.projectId,
+  });
   let created = false;
   let repositoryId: number;
   try {

@@ -1,5 +1,9 @@
 import { normalizePath } from "../durable-object-names.ts";
 import { BUILTIN_INTEGRATION_SLUGS } from "../integrations/utils.ts";
+import {
+  StreamContext as StreamContextSchema,
+  type StreamContext,
+} from "../projects/stream-context.ts";
 
 /**
  * Minimal ExecutionContext shape the RPC adapter layer needs.
@@ -47,6 +51,7 @@ const RESERVED_DYNAMIC_PATH_SEGMENTS: ReadonlySet<string> = new Set([
 ]);
 
 export type ItxEntrypointScope = {
+  streamContext: StreamContext;
   path: string;
   /** The host-minted lane determines whether this binding can reach delivery-only sinks. */
   purpose: "stream-delivery" | "userspace";
@@ -72,6 +77,7 @@ export type ItxEntrypointProps = ItxEntrypointScope;
  */
 export function itxEntrypointProps(input: ItxEntrypointScope): ItxEntrypointProps {
   return {
+    streamContext: input.streamContext,
     path: normalizePath(input.path),
     projectId: input.projectId,
     purpose: input.purpose,
@@ -96,6 +102,7 @@ export function scopeFromItxEntrypointProps(
     throw new Error("env.ITX.get() requires purpose to be userspace or stream-delivery");
   }
   return {
+    streamContext: StreamContextSchema.parse(props.streamContext),
     path: normalizePath(props.path),
     projectId: props.projectId,
     purpose: props.purpose,

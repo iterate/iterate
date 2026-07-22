@@ -84,10 +84,10 @@ export class SchedulerDurableObject extends DurableObject<Env> {
       // is a project-global service, so its scripts see the same surface an
       // agent's project-root capability chain does.
       dynamicWorkers: new DynamicWorkerRunner({
+        streamContext: { kind: "scope", scopePath: this.#name.path },
         exports: this.ctx.exports,
         projectId: this.#name.projectId,
         scopePath: "/",
-        waitUntil: (promise) => this.ctx.waitUntil(promise),
       }),
       now: () => Date.now(),
       // Keep the incarnation alive while an execution attempt runs (the old

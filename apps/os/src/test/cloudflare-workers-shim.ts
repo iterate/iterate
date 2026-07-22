@@ -22,7 +22,15 @@ export class WorkerEntrypoint<Env = unknown, Props = unknown> {
     waitUntil(promise: Promise<unknown>): void;
   };
 }
-export class DurableObject {}
+export class DurableObject<Env = unknown> {
+  protected env: Env;
+  protected ctx: DurableObjectState;
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+}
 export const env = {};
 
 export type RecordedSpan = {

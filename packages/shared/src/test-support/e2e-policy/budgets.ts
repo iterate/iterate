@@ -110,10 +110,11 @@ export const OS_TUI_LANE_TIMEOUT_SECS = 180;
 export const OS_PREVIEW_LANE_TIMEOUT_SECS = 480;
 
 /**
- * Watchdog on one whole preview e2e run (flake-hunt-loop.sh, marathon). A
- * healthy full-fleet run is a few minutes; per rule 3 this deliberately does
- * NOT budget for a test double-burning its heavy-cap retry — both historical
- * watchdog kills were genuine infra wedges where retrying was hopeless.
+ * Watchdog on one canonical Depot preview run as observed by
+ * flake-hunt-loop.sh. A healthy full-fleet run is a few minutes; per rule 3
+ * this deliberately does NOT budget for a test double-burning its heavy-cap
+ * retry — both historical watchdog kills were genuine infra wedges where
+ * retrying was hopeless. Expiry cancels that Depot run; it never re-runs it.
  */
 export const PREVIEW_RUN_WATCHDOG_SECS = 600;
 

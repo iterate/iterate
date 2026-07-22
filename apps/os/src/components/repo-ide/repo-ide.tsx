@@ -1,6 +1,6 @@
 import { Suspense, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import {
   FilesIcon,
   GitBranchIcon,
@@ -19,6 +19,7 @@ import {
   ResizablePanelGroup,
 } from "@iterate-com/ui/components/resizable";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { useItx, useItxQuery } from "iterate/sdk/itx/react";
 import { isBinaryRepoPath } from "./repo-file-kinds.ts";
 import { localFileToBase64, pickLocalFile } from "./local-file.ts";
@@ -46,6 +47,7 @@ import {
 export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: string }) {
   const itx = useItx();
   const queryClient = useQueryClient();
+  const routePending = useRouterState({ select: (state) => state.isLoading });
   const files = useItxQuery({
     key: ["repo-files", projectId, repoPath],
     query: (itx) => itx.repos.get(repoPath).listFiles(),
@@ -220,7 +222,17 @@ export function RepoIde({ projectId, repoPath }: { projectId: string; repoPath: 
   });
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-row">
+      {routePending ? (
+        <div
+          className="pointer-events-none absolute top-2 right-2 z-20 flex items-center gap-1.5 rounded border bg-background/95 px-2 py-1 text-xs text-muted-foreground shadow-sm"
+          data-spinner="true"
+          role="status"
+        >
+          <Spinner className="size-3.5" />
+          Updating view...
+        </div>
+      ) : null}
       {/* vscode-style activity strip: Files / Source control / History / GitHub. */}
       <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
         <Button

@@ -42,7 +42,10 @@ export async function finalizeTestTelemetry(options: {
   if (loaded.length === 0 && !options.cancelled) {
     throw new Error(`No test telemetry artifacts found below ${rawDirectory}`);
   }
-  const runnerEvents = loaded.flatMap(({ artifact }) => testTelemetryEvents(artifact));
+  const telemetryEvents = loaded.flatMap(({ artifact }) => testTelemetryEvents(artifact));
+  const runnerEventCount = telemetryEvents.filter(({ event }) =>
+    event.startsWith("ci test "),
+  ).length;
   const completeness = analyzeTestTelemetryCompleteness(
     loaded.map(({ artifact }) => artifact),
     options.expectedWorkspaces ?? [],
@@ -58,7 +61,7 @@ export async function finalizeTestTelemetry(options: {
     primaryArtifact,
   } = completeness;
   const events = [
-    ...runnerEvents,
+    ...telemetryEvents,
     ...(primaryArtifact
       ? [
           testTelemetryFinalizerEvent({
@@ -73,7 +76,7 @@ export async function finalizeTestTelemetry(options: {
             observedArtifactSourceCount: observedArtifactSources.length,
             observedWorkspaceCount: observedWorkspaces.length,
             primaryArtifact,
-            runnerEventCount: runnerEvents.length,
+            runnerEventCount,
           }),
         ]
       : []),

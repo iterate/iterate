@@ -82,17 +82,21 @@ smokes (CI notifications and agent smoke posts). It is **not** the product bot:
 |          | Product bot under test                                                                                                                           | Trigger actor                                                        |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | Identity | production `iterate`, or `iterate-preview-N`                                                                                                     | `Niterate` / `iterate_ci_preview_bo`                                 |
-| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional fallback `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** on `os/*` configs **and** `_shared/prd`     |
+| Doppler  | project secret `/secrets/integrations/slack/<connection>/bot-token` (Connect Slack); optional fallback `APP_CONFIG_INTEGRATIONS__SLACK.botToken` | **`SLACK_CI_BOT_TOKEN`** in `_shared/prd`                            |
 | Used for | receiving events, 👀, replies                                                                                                                    | `chat.postMessage` only                                              |
 | Code     | outbound Web API via OS / `itx.integrations.slack`                                                                                               | [`scripts/ci/slack.ts`](../scripts/ci/slack.ts) `getSlackBotToken()` |
 
 ```bash
-# Resolve the CI actor token (never print it)
-doppler secrets get SLACK_CI_BOT_TOKEN --project os --config prd --plain >/dev/null
-
-# Same secret is mirrored on _shared/prd (what scripts/ci/slack.ts falls back to):
-#   doppler secrets --project _shared --config prd get --plain SLACK_CI_BOT_TOKEN
+# Confirm the canonical CI actor exists without printing it.
+doppler secrets get SLACK_CI_BOT_TOKEN --project _shared --config prd --plain >/dev/null
 ```
+
+`scripts/ci/slack.ts` uses an explicitly injected `SLACK_CI_BOT_TOKEN`, or uses
+`DOPPLER_TOKEN` to read this canonical secret. Preview configs do not need a
+copy. Prove the selected trigger token with `auth.test` before posting. Check
+for a missing environment variable before constructing the Authorization
+header: `Bearer undefined` also returns `invalid_auth`, but says nothing about
+the stored token.
 
 ### Channel membership (common failure mode)
 
@@ -149,22 +153,29 @@ idempotent success and must not appear in error telemetry. In production traces
 for a `C…` or `G…` channel thread, any `assistant.threads.*` call is a defect.
 
 ```bash
-doppler run --project os --config prd -- python3 - <<'PY'
+doppler run --project _shared --config prd -- python3 - <<'PY'
 import json, os, urllib.request
-token, ch = os.environ["SLACK_CI_BOT_TOKEN"], "C096Q1M4Y86"
+token, ch = os.environ.get("SLACK_CI_BOT_TOKEN"), "C096Q1M4Y86"
+if not token:
+    raise RuntimeError("SLACK_CI_BOT_TOKEN is missing from _shared/prd")
+
 # production iterate user id in the Iterate workspace (confirm via users.list)
 iterate_uid = "U08NQR1GCRE"
 
-def post(text):
+def slack(method, payload):
     req = urllib.request.Request(
-        "https://slack.com/api/chat.postMessage",
-        data=json.dumps({"channel": ch, "text": text}).encode(),
+        f"https://slack.com/api/{method}",
+        data=json.dumps(payload).encode(),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
     return json.loads(urllib.request.urlopen(req).read())
 
-print(post("ambient smoke — should not wake"))
-print(post(f"<@{iterate_uid}> mention smoke — should reply"))
+auth = slack("auth.test", {})
+if not auth.get("ok"):
+    raise RuntimeError(f"canonical Slack CI actor failed auth.test: {auth.get('error')}")
+
+print(slack("chat.postMessage", {"channel": ch, "text": "ambient smoke — should not wake"}))
+print(slack("chat.postMessage", {"channel": ch, "text": f"<@{iterate_uid}> mention smoke — should reply"}))
 PY
 ```
 

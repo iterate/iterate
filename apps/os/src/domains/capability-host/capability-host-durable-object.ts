@@ -73,6 +73,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       itx: itxForScope({
         auth: trustedInternalAuthContext(),
         ctx: this.ctx,
+        streamContext: { kind: "scope", scopePath: this.#name.path },
         path: this.#name.path,
         projectId: this.#name.projectId,
       }),

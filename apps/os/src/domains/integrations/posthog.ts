@@ -170,7 +170,11 @@ function posthogEvents(args: {
       offset: event.offset,
     });
     return {
-      event: `append:${event.type}`,
+      // One fixed PostHog event name for every durable stream append. The
+      // committed stream type stays on `stream_event_type` (and inside
+      // `stream_event`) so analytics break down by type without exploding
+      // PostHog's event catalogue.
+      event: "stream:append",
       properties: {
         $geoip_disable: true,
         $groups: groups,
@@ -237,7 +241,7 @@ export async function capturePosthogStreamEventBatch(
     // keeping it observable prevents a future regression from appearing as
     // unexplained time in the parent Stream.append invocation.
     const events = posthogEvents(args);
-    const durableCount = events.filter((event) => event.event.startsWith("append:")).length;
+    const durableCount = events.filter((event) => event.event === "stream:append").length;
     span.setAttribute("iterate.stream.durable_event_count", durableCount);
     // An all-ephemeral delivery (or one that yields no PostHog rows) is a
     // successful no-op — do not fail the subscriber or call the capture API.

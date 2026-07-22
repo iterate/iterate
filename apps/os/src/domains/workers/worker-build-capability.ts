@@ -1,3 +1,4 @@
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv as env, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
@@ -13,11 +14,18 @@ export type WorkerBuildRequest = {
   source: DynamicWorkerSource;
 };
 
+/** A caller-owned wait on a build whose execution is anchored by the coordinator actor. */
+type WorkerBuildOperation = Promise<WorkerBuildArtifact> & Partial<Disposable>;
+
 /** Route one immutable build to its globally keyed coordinator actor. */
-export async function coordinateWorkerBuild(
+export function coordinateWorkerBuild(
   request: WorkerBuildRequest,
-): Promise<WorkerBuildArtifact> {
-  return await env.WORKER_BUILD_COORDINATOR.getByName(request.buildKey).build(request);
+  buildBudgetMs?: number,
+): WorkerBuildOperation {
+  return env.WORKER_BUILD_COORDINATOR.getByName(request.buildKey).build(
+    request,
+    buildBudgetMs,
+  ) as WorkerBuildOperation;
 }
 
 /**
@@ -83,5 +91,9 @@ async function resolvedSourceFiles(
     exclude: resolved.exclude,
     include: resolved.include,
   });
-  return snapshot.files;
+  try {
+    return snapshot.files;
+  } finally {
+    disposeIgnoredRpcResult(snapshot);
+  }
 }

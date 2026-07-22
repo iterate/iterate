@@ -176,16 +176,19 @@ dimensions, never separate event families.
 | execution           | workflow/run/attempt/job URLs, runner provider, preview slot, test project             |
 | identity            | stable artifact, test-run, logical-test, and execution IDs                             |
 
-| Event                          | Grain                                  | Evidence                                                                                                                             |
-| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `ci test run started/finished` | runner or orchestration operation      | status, wall duration, test/failure/retry/module/lane counts, incomplete-telemetry flag                                              |
-| `ci test lane finished`        | app/lane command                       | status, exit code, wall duration, collection errors and incomplete-telemetry flag                                                    |
-| `ci test finished`             | logical test                           | source location, raw state, expected outcome, total/body/hooks/schedule time, timeout, retries, heap, tags, annotations, first error |
-| `ci test attempt finished`     | concrete attempt                       | index, state, duration, schedule delay, worker, attachments, stdout/stderr bytes, error                                              |
-| `ci test phase finished`       | explicit operation or Playwright step  | nested title, category, start/duration, source, attachments, error                                                                   |
-| `ci test module finished`      | Vitest module                          | environment, prepare, collect, setup, import, queue, and execution timing                                                            |
-| `ci test import finished`      | imported module within a Vitest module | self and total import duration                                                                                                       |
-| `ci test telemetry finalized`  | one finalizer job                      | expected/observed/missing workspaces and runner sources, incomplete artifacts, runner-event count, final status                      |
+| Event                            | Grain                                  | Evidence                                                                                                                             |
+| -------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `ci test run started/finished`   | runner or orchestration operation      | status, wall duration, test/failure/retry/module/lane counts, incomplete-telemetry flag                                              |
+| `ci test lane finished`          | app/lane command                       | status, exit code, wall duration, collection errors and incomplete-telemetry flag                                                    |
+| `ci test finished`               | logical test                           | source location, raw state, expected outcome, total/body/hooks/schedule time, timeout, retries, heap, tags, annotations, first error |
+| `ci test attempt finished`       | concrete attempt                       | index, state, duration, schedule delay, worker, attachments, stdout/stderr bytes, error                                              |
+| `ci test phase finished`         | explicit operation or Playwright step  | nested title, category, start/duration, source, attachments, error                                                                   |
+| `ci test module finished`        | Vitest module                          | environment, prepare, collect, setup, import, queue, and execution timing                                                            |
+| `ci test import finished`        | imported module within a Vitest module | self and total import duration                                                                                                       |
+| `ci test telemetry finalized`    | one finalizer job                      | expected/observed/missing workspaces and runner sources, incomplete artifacts, runner-event count, final status                      |
+| `ci deploy run started/finished` | preview deployment operation           | status, total wall duration, preview slot, and bounded error                                                                         |
+| `ci deploy lane finished`        | one preview app deployment             | app wall duration, Worker identity, and config/command/readiness/reuse-proof timings                                                 |
+| `ci deploy phase finished`       | one measured app-deploy phase          | phase name and duration, app, slot, status, and immutable Worker identity                                                            |
 
 `attempt_detail` is `complete` when all attempts are present and
 `aggregate-only` when only the runner's aggregate retry count/duration exists.
@@ -455,8 +458,8 @@ SELECT properties.telemetry_source AS telemetry_source,
   argMax(toInt(properties.event_count), timestamp) AS event_count,
   argMax(properties.telemetry_sync_id, timestamp) AS telemetry_sync_id,
   argMax(properties.collector_head_sha, timestamp) AS collector_head_sha,
-  argMax(properties.error_name, timestamp) AS error_name,
-  argMax(properties.error_message, timestamp) AS error_message
+  nullIf(argMax(ifNull(properties.error_name, ''), timestamp), '') AS error_name,
+  nullIf(argMax(ifNull(properties.error_message, ''), timestamp), '') AS error_message
 FROM events
 WHERE event = 'ci telemetry source sync finished'
   AND timestamp >= now() - INTERVAL 7 DAY
@@ -468,6 +471,12 @@ ORDER BY telemetry_source
 Expect one fresh row each for `github-actions`, `github-reviews`, and `depot`.
 Do not trust a provider's downstream tiles when its row is missing, failed, or
 older than 30 minutes.
+
+The `ifNull` inside `argMax` is load-bearing: ClickHouse skips null aggregate
+arguments, so a plain `argMax(properties.error_message, timestamp)` can attach
+an older failure to the latest healthy row. Converting null to an empty string
+before aggregation and back afterwards makes the error fields belong to the
+same latest observation as the status.
 
 `telemetry_incomplete = true` means reporter shutdown did not finish and the
 dataset may omit test details, or an expected runner artifact is wholly absent.

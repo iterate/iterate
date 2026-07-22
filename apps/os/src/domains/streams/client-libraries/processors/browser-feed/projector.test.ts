@@ -232,6 +232,38 @@ describe("browser-feed projector — one interleaved order", () => {
     ]);
   });
 
+  it("collapses consecutive pretty stream wakes into the final wake with a count", () => {
+    const { ops, endState } = planBrowserFeedOps(START, [
+      event(1, CREATED),
+      event(2, WOKEN),
+      event(3, WOKEN),
+      event(4, WOKEN),
+      userMessage(5, "wake boundary"),
+      event(6, WOKEN),
+      event(7, WOKEN),
+    ]);
+    const agentOps = ops.filter(
+      (op) => op.kind === "replace" || (op.kind === "insert" && op.itemKind.startsWith("agent.")),
+    );
+
+    expect(agentOps).toMatchObject([
+      { kind: "insert", localIndex: 2, data: { kind: "stream-woken", id: "stream-woken-3" } },
+      {
+        kind: "replace",
+        localIndex: 2,
+        data: { kind: "stream-woken", id: "stream-woken-4", count: 2 },
+      },
+      { kind: "insert", localIndex: 5, data: { kind: "user", id: "user-5" } },
+      { kind: "insert", localIndex: 7, data: { kind: "stream-woken", id: "stream-woken-6" } },
+      {
+        kind: "replace",
+        localIndex: 7,
+        data: { kind: "stream-woken", id: "stream-woken-7", count: 2 },
+      },
+    ]);
+    expect(endState.nextLocalIndex).toBe(10);
+  });
+
   it("does not retain replacement indexes for ordinary settled feed items", () => {
     const projected = planBrowserFeedOps(START, [
       userMessage(1, "hello"),

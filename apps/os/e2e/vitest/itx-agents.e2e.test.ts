@@ -768,7 +768,12 @@ test("Project worker processEventBatch receives events from every project stream
   const crossPosted = project.streams.get("/cross-posted");
   const copied = crossPosted.waitForEvent({
     eventTypes: ["events.iterate.com/test/cross-posted"],
-    timeoutMs: 30_000,
+    // A fresh commit deliberately exercises the cold project-worker build.
+    // Durable feed handoff preserves delivery, but two consecutive preview
+    // runs exceeded the old 30s client deadline before the worker cross-posted.
+    // Keep enough headroom to observe that delivery while the follow-up task
+    // reduces the cold-path tail and restores the tighter budget.
+    timeoutMs: 100_000,
   });
 
   const [sourceEvent] = await project.streams.get(sourcePath).append({

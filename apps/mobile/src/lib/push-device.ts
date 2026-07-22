@@ -64,7 +64,12 @@ export async function revokeEnrolledPushDevices(baseUrl: string): Promise<void> 
     await Promise.all(
       projectIds.map(async (projectId) => {
         const project = await getProjectItx(baseUrl, projectId);
-        await project.devices.get(deviceId).revoke("sign-out");
+        const device = project.devices.get(deviceId);
+        // Old deployments reject revoke() when a locally remembered device no
+        // longer exists server-side (for example after an environment reset).
+        // The new API is idempotent too, but this read keeps sign-out working
+        // while a phone is still connected to an older deployment.
+        if ((await device.__describe()).created) await device.revoke("sign-out");
       }),
     );
     await AsyncStorage.setItem(

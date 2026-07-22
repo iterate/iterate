@@ -1,7 +1,8 @@
+import { minimatch } from "minimatch";
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@cloudflare/shell";
 import type { WorkspaceMount } from "./workspace-processor-contract.ts";
-import { WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
+import { reRoutedPaths, WorkspaceCore, type MountRepoAccess } from "./workspace-core.ts";
 
 /** The slice of `@cloudflare/shell`'s Workspace the core touches, in memory. */
 function fakeLocalLayer() {
@@ -58,6 +59,7 @@ function fakeKv() {
  * post-commit fall-through assertions test the real read-your-write shape. */
 function fakeRepo(tree: Record<string, string>) {
   const commits: { changes: unknown[]; message: string }[] = [];
+  const snapshotCalls: string[][] = [];
   const repo: MountRepoAccess = {
     readFile: async ({ encoding, path }) => {
       const content = tree[path];
@@ -69,6 +71,22 @@ function fakeRepo(tree: Record<string, string>) {
       };
     },
     listFiles: async () => ({ commitOid: "head-oid", paths: Object.keys(tree).sort() }),
+    getFilesSnapshot: async (input) => {
+      // The real repo object serializes this record across a workerd RPC with
+      // a 32MiB cap — an unscoped call on a big repo IS the outage (43.7MB
+      // crossed for 560KB of task files on iterate/iterate). Refusing it here
+      // means no fall-through pathway can regress to full-tree pulls.
+      if (input?.paths === undefined) {
+        throw new Error("unscoped getFilesSnapshot: the full HEAD tree must never cross the RPC");
+      }
+      snapshotCalls.push([...input.paths]);
+      const files: Record<string, string> = {};
+      for (const path of input.paths) {
+        const content = tree[path];
+        if (content !== undefined) files[path] = content;
+      }
+      return { commitOid: "head-oid", files };
+    },
     commitFiles: async (input) => {
       commits.push({ changes: input.changes, message: input.message });
       for (const change of input.changes) {
@@ -94,7 +112,7 @@ function fakeRepo(tree: Record<string, string>) {
       ].slice(0, limit ?? 1),
     }),
   };
-  return { commits, repo };
+  return { commits, repo, snapshotCalls };
 }
 
 const MOUNTS: Record<string, WorkspaceMount> = {
@@ -151,16 +169,76 @@ describe("mount-routed reads", () => {
       "/iterate/tasks/two.md",
       "/scratch/notes.txt",
     ]);
-    await expect(core.glob("**/tasks/**/*.md")).resolves.toEqual([
-      "/config/tasks/one.md",
-      "/iterate/tasks/two.md",
-    ]);
+    expect(
+      (await core.listAllFiles()).filter((path) =>
+        minimatch(path, "**/tasks/**/*.md", { dot: true }),
+      ),
+    ).toEqual(["/config/tasks/one.md", "/iterate/tasks/two.md"]);
   });
 
   test("readFileBytes decodes the mount's base64 lane", async () => {
     const { core } = subject();
     const bytes = await core.readFileBytes("/iterate/README.md");
     expect(new TextDecoder().decode(bytes!)).toBe("# iterate");
+  });
+});
+
+describe("batched mount reads", () => {
+  test("readMountFiles pays ONE scoped snapshot per mount, asking for exactly the routed paths", async () => {
+    const { config, core, iterate } = subject();
+    await expect(
+      core.readMountFiles([
+        "/config/worker.ts",
+        "/config/tasks/one.md",
+        "/iterate/tasks/two.md",
+        "/iterate/missing.md",
+        "/unmounted/scratch.txt",
+      ]),
+    ).resolves.toEqual({
+      "/config/worker.ts": "export default {}",
+      "/config/tasks/one.md": "# one",
+      "/iterate/tasks/two.md": "# two",
+      "/iterate/missing.md": null,
+      "/unmounted/scratch.txt": null,
+    });
+    expect(config.snapshotCalls).toEqual([["worker.ts", "tasks/one.md"]]);
+    expect(iterate.snapshotCalls).toEqual([["tasks/two.md", "missing.md"]]);
+  });
+
+  test("a big repo's unrequested files never ride the snapshot", async () => {
+    // The prod shape: iterate/iterate's 73 task files are 560KB, its full
+    // HEAD tree 43.7MB — past the RPC cap. The fixture throws on unscoped
+    // calls, so this resolving proves the board-seed read is bounded by what
+    // was asked, not by repo size.
+    const big = fakeRepo({
+      "tasks/board.md": "# board",
+      "vendored/blob.txt": "x".repeat(4096),
+    });
+    const { workspace } = fakeLocalLayer();
+    const core = new WorkspaceCore({
+      kv: fakeKv(),
+      mounts: async () => ({ "/": { policy: "commit-to-main", repoPath: "/repos/big" } }),
+      repo: () => big.repo,
+      workspace,
+    });
+    await expect(core.readMountFiles(["/tasks/board.md"])).resolves.toEqual({
+      "/tasks/board.md": "# board",
+    });
+    expect(big.snapshotCalls).toEqual([["tasks/board.md"]]);
+  });
+
+  test("whiteouts and virtual directories mask batched reads exactly like readFile", async () => {
+    const { config, core } = subject();
+    await core.deleteFile("/config/worker.ts");
+    await expect(
+      core.readMountFiles(["/config/worker.ts", "/config", "/config/tasks/one.md"]),
+    ).resolves.toEqual({
+      "/config/worker.ts": null,
+      "/config": null,
+      "/config/tasks/one.md": "# one",
+    });
+    // The masked paths never reached the repo — only the surviving one did.
+    expect(config.snapshotCalls).toEqual([["tasks/one.md"]]);
   });
 });
 
@@ -710,7 +788,9 @@ describe("virtual directory coherence", () => {
   test("listing masks the outer file at a virtual ancestor", async () => {
     const { core } = nestedCollisionCore();
     expect(await core.listAllFiles()).toEqual(["/a/b/note.md", "/worker.ts"]);
-    expect(await core.glob("/**")).toEqual(["/a/b/note.md", "/worker.ts"]);
+    expect(
+      (await core.listAllFiles()).filter((path) => minimatch(path, "/**", { dot: true })),
+    ).toEqual(["/a/b/note.md", "/worker.ts"]);
   });
 
   test("deleteFile() refuses virtual ancestors and installs no whiteout", async () => {
@@ -726,5 +806,54 @@ describe("virtual directory coherence", () => {
   test("deleteFile() at an exact mount point throws instead of no-op'ing", async () => {
     const { core } = nestedCollisionCore();
     await expect(core.deleteFile("/a/b")).rejects.toThrow(/mount point/);
+  });
+});
+
+describe("delete whiteout surface", () => {
+  test("isMaskedFromMount is the batched-reader truth: set by delete, cleared by rewrite", async () => {
+    const { core } = subject();
+    expect(core.isMaskedFromMount("/config/worker.ts")).toBe(false);
+    await core.deleteFile("/config/worker.ts");
+    expect(core.isMaskedFromMount("/config/worker.ts")).toBe(true);
+    expect(core.isMaskedFromMount("config/worker.ts")).toBe(true); // canonicalized
+    await core.writeFile("/config/worker.ts", "fresh");
+    expect(core.isMaskedFromMount("/config/worker.ts")).toBe(false);
+  });
+});
+
+describe("reRoutedPaths", () => {
+  const root: Record<string, WorkspaceMount> = {
+    "/": { policy: "commit-to-main", repoPath: "/repos/config" },
+  };
+  test("adding a nested mount re-routes exactly the stolen paths", () => {
+    const after = {
+      ...root,
+      "/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
+    };
+    expect(reRoutedPaths(root, after, ["/sub/tasks/a.md", "/tasks/b.md"])).toEqual([
+      "/sub/tasks/a.md",
+    ]);
+  });
+  test("re-pointing a mount re-routes its paths; removal re-routes to the parent", () => {
+    const after: Record<string, WorkspaceMount> = {
+      "/": { policy: "commit-to-main", repoPath: "/repos/swapped" },
+    };
+    expect(reRoutedPaths(root, after, ["/tasks/b.md"])).toEqual(["/tasks/b.md"]);
+    const nested = {
+      ...root,
+      "/sub": { policy: "commit-to-main" as const, repoPath: "/repos/other" },
+    };
+    expect(reRoutedPaths(nested, root, ["/sub/tasks/a.md"])).toEqual(["/sub/tasks/a.md"]);
+  });
+  test("an unchanged nested mount survives sibling changes", () => {
+    const before = {
+      ...root,
+      "/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
+    };
+    const after = {
+      "/": { policy: "commit-to-main" as const, repoPath: "/repos/swapped" },
+      "/keep": { policy: "read-only" as const, repoPath: "/repos/keep" },
+    };
+    expect(reRoutedPaths(before, after, ["/keep/x.md", "/y.md"])).toEqual(["/y.md"]);
   });
 });
