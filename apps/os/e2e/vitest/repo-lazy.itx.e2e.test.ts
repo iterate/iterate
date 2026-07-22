@@ -34,10 +34,14 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
       { path: "ONBOARDING.md", delete: true },
     ],
   });
-  expect(batch.noChanges).toBe(false);
-  expect(batch.changedPaths).toEqual(
-    expect.arrayContaining(["tasks/alpha.md", "deep/nested/dir/tasks/gamma.md", "ONBOARDING.md"]),
-  );
+  expect(batch).toMatchObject({
+    changedPaths: expect.arrayContaining([
+      "tasks/alpha.md",
+      "deep/nested/dir/tasks/gamma.md",
+      "ONBOARDING.md",
+    ]),
+    noChanges: false,
+  });
 
   // -- read-your-write at the itx surface, immediately
   const [alpha, gamma, gone, pixel] = await Promise.all([
@@ -53,8 +57,10 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
   expect(pixel?.content).toBe(btoa(String.fromCharCode(...bytes)));
 
   const listing = await project.repo.listFiles();
-  expect(listing.commitOid).toBe(batch.commitOid);
-  expect(listing.paths).toEqual(expect.arrayContaining(["tasks/alpha.md", "tasks/beta.md"]));
+  expect(listing).toMatchObject({
+    commitOid: batch.commitOid,
+    paths: expect.arrayContaining(["tasks/alpha.md", "tasks/beta.md"]),
+  });
   expect(listing.paths).not.toContain("ONBOARDING.md");
 
   // -- a second lazy commit stacks on the first
@@ -81,7 +87,7 @@ test("lazy commits, reads, and clone-lane writes share one history", async () =>
     newString: "# alpha v3 (edited via the clone lane)",
     message: "clone-lane edit",
   });
-  expect(edited.noChanges).toBe(false);
+  expect(edited).toMatchObject({ noChanges: false });
   const afterEdit = await project.repo.readFile({ path: "tasks/alpha.md" });
   expect(afterEdit?.content).toBe("# alpha v3 (edited via the clone lane)\n");
   expect(afterEdit?.commitOid).toBe(edited.commitOid);

@@ -35,6 +35,17 @@ import type { GitObjectStore, ManifestFile, StoredHead } from "./repo-object-sto
  * Object judges candidates against its branch authority).
  */
 
+const GITLINK_MODE = "160000";
+const DIR_MODE = "40000";
+/** git's canonical empty tree — a commit may legally empty the repository. */
+const EMPTY_TREE_OID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+const parentDirOf = (path: string): string =>
+  path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+
 type LazyCommitOutcome =
   | {
       changedPaths: string[];
@@ -47,17 +58,6 @@ type LazyCommitOutcome =
     }
   | { detail: string; kind: "rejected" }
   | { detail: string; kind: "indeterminate"; proposedCommitOid: string };
-
-const GITLINK_MODE = "160000";
-const DIR_MODE = "40000";
-/** git's canonical empty tree — a commit may legally empty the repository. */
-const EMPTY_TREE_OID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
-
-const parentDirOf = (path: string): string =>
-  path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 
 export function createLazyRepoReader(input: {
   branch: string;
