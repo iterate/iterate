@@ -9,6 +9,7 @@
 
 import { expect, test } from "vitest";
 import {
+  APPROVAL_BODY_INSPECTION_LIMIT_BYTES,
   buildApprovalMessage,
   bytesToBase64,
   type HumanApprovalRequestedPayload,
@@ -119,14 +120,22 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       status: 200,
     });
 
-    // ── reject lane: a human refusal turns into a 403 for the caller.
+    // ── reject lane: a human refusal turns into a 403 for the caller, and an
+    // oversized readable body stays a bounded inspection prefix in the event.
+    const oversizedBody = "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000);
     const rejectedFetch = project.egress.fetch(
-      new Request(echo.url, { method: "POST", body: "please reject" }),
+      new Request(echo.url, { method: "POST", body: oversizedBody }),
     );
     const rejectedRequested = await stream.waitForEvent({
       afterOffset: settled.offset,
       eventTypes: [REQUESTED],
       timeoutMs: 30_000,
+    });
+    expect((rejectedRequested.payload as HumanApprovalRequestedPayload).body).toEqual({
+      encoding: "utf8",
+      content: "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
+      originalByteLength: oversizedBody.length,
+      truncated: true,
     });
     await stream.append({
       type: REJECTED,
