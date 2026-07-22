@@ -78,7 +78,6 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       exports: this.ctx.exports,
       projectId,
       scopePath: taken.dispatch.ref.path,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
     try {
       // Routers forward the browser's own headers, so a document navigation

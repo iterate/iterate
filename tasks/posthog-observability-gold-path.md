@@ -239,7 +239,9 @@ this OS-only subscription.
 
 “All events” means one PostHog occurrence for every non-ephemeral committed row
 still owned by the stream, without a type selector, sampling, success/error
-filter, or payload allowlist. Its event name is `append:<type>`.
+filter, or payload allowlist. Its event name is always `stream:append`; the
+committed stream type is indexed on `stream_event_type` (and nested under
+`stream_event`), not encoded into the PostHog event name.
 The complete committed event is sent under `properties.stream_event`,
 including payload, metadata, source/cross-post provenance, idempotency key,
 ephemerality, offset, commit time, type, and raw path. It remains byte-for-byte
@@ -464,7 +466,7 @@ alarm actions. Possible later operation adapters are:
 - [ ] Only public-batch HTTP acceptance gates the durable cursor; transport
       failures eventually park, and the proof checks PostHog's asynchronous
       ingestion-warning surface without claiming exactly-once indexing.
-- [ ] Each `append:<type>` occurrence contains the complete committed event
+- [ ] Each `stream:append` occurrence contains the complete committed event
       through 100 KiB, with type and path promoted for ordinary UI slicing.
       Larger JSON is visibly and deterministically chopped, with original byte
       size and truncation indexed; no event-field allowlist or sampling exists.

@@ -18,13 +18,18 @@ const h = vi.hoisted(() => {
 
   const kv = new FakeKv();
   const state = {
+    artifactDisposals: 0,
     buildCalls: [] as string[],
     buildGate: undefined as Promise<void> | undefined,
+    buildOperations: [] as Promise<unknown>[],
+    coordinatorBudgets: [] as Array<number | undefined>,
     failBuilds: false,
     failRuntime: false,
     files: { "worker.ts": "v1" } as Record<string, string>,
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
+    headDisposals: 0,
     loaderCalls: [] as Array<{ config: Record<string, unknown>; key: string }>,
+    snapshotDisposals: 0,
     snapshotCalls: [] as Array<Record<string, unknown>>,
     wranglerConfig: undefined as
       | { compatibilityDate?: string; compatibilityFlags?: string[] }
@@ -59,17 +64,48 @@ const h = vi.hoisted(() => {
       getByName: () => ({
         getFilesSnapshot: async (input: Record<string, unknown>) => {
           state.snapshotCalls.push(input);
-          return { files: state.files };
+          return {
+            files: state.files,
+            [Symbol.dispose]() {
+              state.snapshotDisposals++;
+            },
+          };
         },
-        getHead: async () => state.head,
+        getHead: async () => ({
+          ...state.head,
+          [Symbol.dispose]() {
+            state.headDisposals++;
+          },
+        }),
       }),
     },
     WORKER_BUILD_CACHE: kv,
     WORKER_BUILD_COORDINATOR: {
       getByName: () => ({
-        build: async (request: import("./worker-build-capability.ts").WorkerBuildRequest) => {
-          const { executeCoordinatedWorkerBuild } = await import("./worker-build-capability.ts");
-          return await executeCoordinatedWorkerBuild(request, itxEnv as never);
+        build: (
+          request: import("./worker-build-capability.ts").WorkerBuildRequest,
+          buildBudgetMs?: number,
+        ) => {
+          state.coordinatorBudgets.push(buildBudgetMs);
+          const operation = (async () => {
+            const { executeCoordinatedWorkerBuild } = await import("./worker-build-capability.ts");
+            return await executeCoordinatedWorkerBuild(request, itxEnv as never);
+          })();
+          state.buildOperations.push(operation);
+          const result =
+            buildBudgetMs === 0
+              ? Promise.reject(
+                  Object.assign(new Error("This worker is still building."), {
+                    name: "WorkerBuildInProgressError",
+                  }),
+                )
+              : operation.then((artifact) => ({
+                  ...artifact,
+                  [Symbol.dispose]() {
+                    state.artifactDisposals++;
+                  },
+                }));
+          return result;
         },
       }),
     },
@@ -96,11 +132,6 @@ const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
 const { isWorkerBuildInProgressError, loadResolvedWorker, resolveWorkerSource } =
   await import("./worker-loader.ts");
 
-const pending: Promise<unknown>[] = [];
-const waitUntil = (promise: Promise<unknown>) => {
-  pending.push(promise);
-};
-
 const repoSource = (repoPath: string): DynamicWorkerSource => ({
   createWorker: {
     entryPoint: "worker.ts",
@@ -114,13 +145,17 @@ function setCommit(commitOid: string, contentHash: string, workerTs: string) {
 }
 
 beforeEach(async () => {
-  await Promise.allSettled(pending.splice(0));
+  await Promise.allSettled(h.state.buildOperations.splice(0));
   h.kv.data.clear();
+  h.state.artifactDisposals = 0;
   h.state.buildCalls.splice(0);
   h.state.buildGate = undefined;
+  h.state.coordinatorBudgets.splice(0);
   h.state.failBuilds = false;
   h.state.failRuntime = false;
+  h.state.headDisposals = 0;
   h.state.loaderCalls.splice(0);
+  h.state.snapshotDisposals = 0;
   h.state.snapshotCalls.splice(0);
   h.itxEnv.CF_VERSION_METADATA.id = "version-1";
   h.state.wranglerConfig = undefined;
@@ -132,12 +167,14 @@ describe("resolveWorkerSource", () => {
     const first = await resolveWorkerSource({
       projectId: "prj_a",
       source: repoSource("/repos/fresh-build"),
-      waitUntil,
     });
 
     expect(first.commitOid).toBe("c1");
     expect(first.modules["worker.js"]).toContain("A1");
     expect(h.state.buildCalls).toEqual(["A1"]);
+    expect(h.state.artifactDisposals).toBe(1);
+    expect(h.state.headDisposals).toBe(1);
+    expect(h.state.snapshotDisposals).toBe(1);
     expect([...h.kv.data.keys()]).toEqual([
       expect.stringMatching(/^worker-build\/v9\/complete\/.+\.json$/),
     ]);
@@ -145,7 +182,6 @@ describe("resolveWorkerSource", () => {
     const second = await resolveWorkerSource({
       projectId: "prj_a",
       source: repoSource("/repos/fresh-build"),
-      waitUntil,
     });
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(h.state.buildCalls).toEqual(["A1"]);
@@ -154,8 +190,8 @@ describe("resolveWorkerSource", () => {
   test("shares deterministic artifacts across projects", async () => {
     setCommit("c1", "shared-build", "SHARED");
     const source = repoSource("/repos/shared-build");
-    const first = await resolveWorkerSource({ projectId: "prj_1", source, waitUntil });
-    const second = await resolveWorkerSource({ projectId: "prj_2", source, waitUntil });
+    const first = await resolveWorkerSource({ projectId: "prj_1", source });
+    const second = await resolveWorkerSource({ projectId: "prj_2", source });
 
     expect(second.cacheKey).toBe(first.cacheKey);
     expect(h.state.buildCalls).toEqual(["SHARED"]);
@@ -166,13 +202,13 @@ describe("resolveWorkerSource", () => {
     const source = repoSource("/repos/broken-build");
     h.state.failBuilds = true;
 
-    const first = resolveWorkerSource({ projectId: "prj_broken", source, waitUntil });
+    const first = resolveWorkerSource({ projectId: "prj_broken", source });
     await expect(first).rejects.toSatisfy(isWorkerBuildFailedError);
     expect(h.state.buildCalls).toEqual(["BROKEN"]);
     expect(h.kv.data.size).toBe(0);
 
     h.state.failBuilds = false;
-    const recovered = await resolveWorkerSource({ projectId: "prj_broken", source, waitUntil });
+    const recovered = await resolveWorkerSource({ projectId: "prj_broken", source });
     expect(recovered.modules["worker.js"]).toContain("BROKEN");
     expect(h.state.buildCalls).toEqual(["BROKEN", "BROKEN"]);
   });
@@ -181,13 +217,13 @@ describe("resolveWorkerSource", () => {
     setCommit("c1", "runtime-failure", "RETRY");
     const source = repoSource("/repos/runtime-failure");
     h.state.failRuntime = true;
-    const failed = resolveWorkerSource({ projectId: "prj_retry", source, waitUntil });
+    const failed = resolveWorkerSource({ projectId: "prj_retry", source });
     await expect(failed).rejects.toThrow("build runtime interrupted");
     await expect(failed).rejects.not.toSatisfy(isWorkerBuildFailedError);
     expect(h.kv.data.size).toBe(0);
 
     h.state.failRuntime = false;
-    const recovered = await resolveWorkerSource({ projectId: "prj_retry", source, waitUntil });
+    const recovered = await resolveWorkerSource({ projectId: "prj_retry", source });
     expect(recovered.modules["worker.js"]).toContain("RETRY");
     expect(h.state.buildCalls).toEqual(["RETRY", "RETRY"]);
   });
@@ -201,7 +237,6 @@ describe("resolveWorkerSource", () => {
           files: { repoPath: "/repos/no-default-masks", type: "repo" },
         },
       },
-      waitUntil,
     });
 
     expect(h.state.snapshotCalls).toEqual([
@@ -226,22 +261,24 @@ describe("resolveWorkerSource", () => {
       buildBudgetMs: 0,
       projectId: "prj_slow",
       source: repoSource("/repos/budgeted-build"),
-      waitUntil,
     });
     try {
       await expect(budgeted).rejects.toSatisfy(isWorkerBuildInProgressError);
-      expect(pending).toHaveLength(1);
+      expect(h.state.coordinatorBudgets).toEqual([0]);
     } finally {
       releaseBuild();
-      await Promise.all(pending.splice(0));
+      await Promise.all(h.state.buildOperations.splice(0));
       h.state.buildGate = undefined;
     }
     expect(h.state.buildCalls).toEqual(["SLOW"]);
+    expect(h.state.snapshotDisposals).toBe(1);
+    expect([...h.kv.data.keys()]).toEqual([
+      expect.stringMatching(/^worker-build\/v9\/complete\/.+\.json$/),
+    ]);
 
     const ready = await resolveWorkerSource({
       projectId: "prj_slow",
       source: repoSource("/repos/budgeted-build"),
-      waitUntil,
     });
     expect(ready.modules["worker.js"]).toContain("SLOW");
     expect(h.state.buildCalls).toEqual(["SLOW"]);
@@ -257,7 +294,6 @@ describe("resolveWorkerSource", () => {
           files: { files: { "main.js": "export default {};" }, type: "inline" },
         },
       },
-      waitUntil,
     });
 
     expect(resolved.commitOid).toBeUndefined();
@@ -277,7 +313,6 @@ describe("resolveWorkerSource", () => {
           files: { files: { "main.js": "export default {};" }, type: "inline" },
         },
       },
-      waitUntil,
     });
 
     loadResolvedWorker({
@@ -303,7 +338,6 @@ describe("resolveWorkerSource", () => {
           files: { files: { "main.js": "export default {};" }, type: "inline" },
         },
       },
-      waitUntil,
     });
     const load = () =>
       loadResolvedWorker({

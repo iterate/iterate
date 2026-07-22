@@ -4323,7 +4323,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
   ): DynamicWorkerCapability<T> {
     const parsed = WorkerRefSchema.parse(ref);
     return new DynamicWorkerRpcTarget({
-      buildBudgetMs: options?.buildBudgetMs,
+      buildBudgetMs: streamDeliveryBuildBudget(this.props.auth, options?.buildBudgetMs),
       ctx: this.props.ctx,
       flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
@@ -4373,7 +4373,6 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
       exports: this.#props.ctx.exports,
       projectId: this.#props.projectId,
       scopePath: this.#ref.path,
-      waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
     });
     return this.#lazyRunner;
   }
@@ -5714,6 +5713,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    */
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return new DynamicWorkerRpcTarget({
+      buildBudgetMs: streamDeliveryBuildBudget(this.#props.auth),
       ctx: this.#props.ctx,
       flattenNestedPaths: true,
       projectId: this.#projectId,
@@ -5721,6 +5721,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       traceRole: "project_config",
     }) as unknown as DynamicWorkerCapability<ProjectWorker>;
   }
+}
+
+/** Cache misses hand their build to the coordinator instead of pinning a stream alarm. */
+function streamDeliveryBuildBudget(auth: ItxAuth, requestedBudgetMs?: number): number | undefined {
+  return isStreamDeliveryAuth(auth) ? 0 : requestedBudgetMs;
 }
 
 // Provide-time collision guard: a dynamic capability's root segment may not
