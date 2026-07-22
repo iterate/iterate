@@ -49,6 +49,9 @@ patchedDependencies:
   '@better-auth/oauth-provider@1.6.9':
     hash: e05b6e0e968dd85c546197511b6b7bdeaf9f4449572e4a143d90d5d31008fb40
     path: patches/@better-auth__oauth-provider@1.6.9.patch
+  '@cloudflare/sandbox@0.12.3':
+    hash: ea669d99cbc7919697d6388129b469e444d53f36b4a76b77ed91e172e38ad724
+    path: patches/@cloudflare__sandbox@0.12.3.patch
   '@cloudflare/worker-bundler@0.2.1':
     hash: 73256eb6fd3dcae81991c5c1730c823d847cb51938ee0cdb524018a167f938c9
     path: patches/@cloudflare__worker-bundler@0.2.1.patch
@@ -536,7 +539,7 @@ importers:
         version: 0.3.7
       '@cloudflare/sandbox':
         specifier: 0.12.3
-        version: 0.12.3
+        version: 0.12.3(patch_hash=ea669d99cbc7919697d6388129b469e444d53f36b4a76b77ed91e172e38ad724)
       '@cloudflare/shell':
         specifier: ^0.3.4
         version: 0.3.6(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6)
@@ -14213,7 +14216,7 @@ snapshots:
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
-  '@cloudflare/sandbox@0.12.3':
+  '@cloudflare/sandbox@0.12.3(patch_hash=ea669d99cbc7919697d6388129b469e444d53f36b4a76b77ed91e172e38ad724)':
     dependencies:
       '@cloudflare/containers': 0.3.7
       aws4fetch: 1.0.20
