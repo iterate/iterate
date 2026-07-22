@@ -251,7 +251,9 @@ export class RepoDurableObject extends DurableObject<Env> {
    * A masked file snapshot at a branch head or pinned commit — the repo file
    * source for the worker build pipeline, and the one clone-and-read pathway
    * every read on this object goes through. Include/exclude globs bound what
-   * becomes build input.
+   * becomes build input; `paths` selects exact repo-relative files, which is
+   * how bulk consumers on big repos stay under the 32MiB RPC value cap (a
+   * monorepo's full HEAD tree does not fit — 43.7MB on iterate/iterate).
    *
    * With `commitOid`, `branch` names where that commit lives (git clones are
    * single-branch): worker builds pin a late-bound branch ref to the head it
@@ -263,6 +265,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid?: string;
       exclude?: string[];
       include?: string[];
+      paths?: string[];
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const branch = input.branch ?? REPO_DEFAULT_BRANCH;
@@ -272,8 +275,12 @@ export class RepoDurableObject extends DurableObject<Env> {
       input.exclude === undefined &&
       input.include === undefined;
     if (cacheable) {
-      return this.#headFilesSnapshot.get(
-        () => this.#loadFilesSnapshot({ ...input, branch }),
+      // A `paths` selection rides (and primes) the whole-head cache: the pick
+      // below keeps the RETURN small — the RPC cap binds the serialized
+      // value, not this object's memory — while repeat readers share one
+      // clone instead of re-cloning per scoped call.
+      const snapshot = await this.#headFilesSnapshot.get(
+        () => this.#loadFilesSnapshot({ branch }),
         (snapshot) => {
           // #checkout deliberately returns its last clone after the bounded
           // eventual-consistency retries. Let current callers use that result,
@@ -281,6 +288,13 @@ export class RepoDurableObject extends DurableObject<Env> {
           return decideHeadResolution(this.#branchAuthority(branch), snapshot.commitOid).cache;
         },
       );
+      if (input.paths === undefined) return snapshot;
+      const files: Record<string, string> = {};
+      for (const path of input.paths) {
+        const content = snapshot.files[path];
+        if (content !== undefined) files[path] = content;
+      }
+      return { commitOid: snapshot.commitOid, files };
     }
     return this.#loadFilesSnapshot(input);
   }
@@ -291,19 +305,23 @@ export class RepoDurableObject extends DurableObject<Env> {
       commitOid?: string;
       exclude?: string[];
       include?: string[];
+      paths?: string[];
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
     const { filesystem, head } = await this.#checkout(input);
 
     // Mask paths BEFORE reading contents: an excluded tree (a committed
-    // node_modules/, build output) should cost a directory walk, not reads.
-    const paths = await walkCheckoutPaths(filesystem, REPO_DIR);
-    const selected = filterWorkerSnapshotPaths(paths.sort(), {
+    // node_modules/, build output) should cost a directory walk, not reads —
+    // and a `paths` selection reads only the requested files.
+    const walked = await walkCheckoutPaths(filesystem, REPO_DIR);
+    const selected = filterWorkerSnapshotPaths(walked.sort(), {
       exclude: input.exclude,
       include: input.include,
     });
+    const wanted = input.paths === undefined ? null : new Set(input.paths);
     const files: Record<string, string> = {};
     for (const path of selected) {
+      if (wanted !== null && !wanted.has(path)) continue;
       files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
     }
     return { commitOid: head.oid, files };
