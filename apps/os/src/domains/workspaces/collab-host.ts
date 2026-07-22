@@ -146,6 +146,9 @@ export class CollabHost {
   /** The engine for a durable session, recovered lazily after eviction. */
   async #opened(path: string) {
     return this.#engine.open(path, () => {
+      // A destructive end can land between a liveness check and this
+      // recovery: rows gone ⇒ clean "reopen" signal, not corruption.
+      if (!this.isLive(path)) throw new Error(`no live session for ${path} — open first`);
       throw new Error(`session for ${path} is durable but has no snapshot — store corruption`);
     });
   }
@@ -362,7 +365,15 @@ export class CollabHost {
         continue;
       }
       const head = await this.#opened(session.path);
-      const content = (await this.#fs.readFile(session.path)) ?? head.content;
+      // Still clean at report time ⇒ the head IS the overlay state (a
+      // never-flushed session has no overlay copy, and fs.readFile would
+      // fall through to a possibly-moved mount HEAD — never stamp that).
+      // If a racing push advanced the head mid-loop, the overlay copy the
+      // earlier flushes wrote is the settled truth.
+      const content =
+        head.version === session.overlayVersion
+          ? head.content
+          : ((await this.#fs.readFile(session.path)) ?? head.content);
       settled.push({
         content,
         epoch: head.epoch,
