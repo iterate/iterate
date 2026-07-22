@@ -7,6 +7,12 @@ export type PostHogEvent = {
   properties: Record<string, unknown>;
 };
 
+// PostHog accepts batch request bodies up to 20 MB. Keep our event payload at
+// one quarter of that ceiling so the API key/envelope and future event-shape
+// growth retain generous headroom, while avoiding one HTTP round trip per 100
+// test events (the preview suite currently emits roughly 7,000 per run).
+const POSTHOG_BATCH_EVENT_BUDGET_BYTES = 5_000_000;
+
 export function readPostHogConfig(environment = process.env): { apiKey: string; host: string } {
   const raw = environment.APP_CONFIG_POSTHOG?.trim();
   if (!raw) throw new Error("APP_CONFIG_POSTHOG is required for CI telemetry");
@@ -23,8 +29,7 @@ export function readPostHogConfig(environment = process.env): { apiKey: string; 
 
 /** Delivers deterministic system events. Callers supply stable identities for backfill safety. */
 export async function sendPostHogEvents(events: PostHogEvent[], config = readPostHogConfig()) {
-  for (let offset = 0; offset < events.length; offset += 100) {
-    const batch = events.slice(offset, offset + 100);
+  for (const batch of postHogEventBatches(events)) {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -45,6 +50,32 @@ export async function sendPostHogEvents(events: PostHogEvent[], config = readPos
     }
     if (lastError) throw new Error("PostHog CI telemetry delivery failed", { cause: lastError });
   }
+}
+
+export function postHogEventBatches(
+  events: readonly PostHogEvent[],
+  eventBudgetBytes = POSTHOG_BATCH_EVENT_BUDGET_BYTES,
+): PostHogEvent[][] {
+  if (!Number.isSafeInteger(eventBudgetBytes) || eventBudgetBytes <= 0) {
+    throw new TypeError("PostHog batch event budget must be a positive safe integer");
+  }
+
+  const batches: PostHogEvent[][] = [];
+  let batch: PostHogEvent[] = [];
+  let batchBytes = 0;
+  for (const event of events) {
+    const eventBytes = Buffer.byteLength(JSON.stringify(event));
+    const separatorBytes = batch.length === 0 ? 0 : 1;
+    if (batch.length > 0 && batchBytes + separatorBytes + eventBytes > eventBudgetBytes) {
+      batches.push(batch);
+      batch = [];
+      batchBytes = 0;
+    }
+    batch.push(event);
+    batchBytes += (batch.length === 1 ? 0 : 1) + eventBytes;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
 }
 
 export function systemEvent(
