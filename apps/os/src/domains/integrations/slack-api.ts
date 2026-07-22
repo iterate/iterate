@@ -14,7 +14,7 @@ import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { itxEnv } from "../../env.ts";
 import { isPathMissMessage } from "../../itx/path-proxy.ts";
 import { projectStub } from "../projects/egress.ts";
-import { withStreamContext } from "../projects/stream-context.ts";
+import { withStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import {
   mintProjectFileUrl,
@@ -55,6 +55,7 @@ const SLACK_CREDENTIAL_ERRORS = new Set([
 function slackEgressAdapter(input: {
   connection: string;
   projectId: string;
+  streamContext: StreamContext;
   stub: SlackEgressStub;
 }): NonNullable<WebClientOptions["adapter"]> {
   return async (config) => {
@@ -85,6 +86,7 @@ function slackEgressAdapter(input: {
       connection: input.connection,
       method: slackMethodFromUrl(url),
       projectId: input.projectId,
+      streamContext: input.streamContext,
       stub: input.stub,
     });
     const text = await response.text();
@@ -114,7 +116,11 @@ function slackEgressAdapter(input: {
  * path (chat.postMessage, conversations.list, …) straight onto this instance,
  * so it IS the Slack SDK — no hand-mapped method table.
  */
-export function connectionSlackClient(input: { connection: string; projectId: string }): WebClient {
+export function connectionSlackClient(input: {
+  connection: string;
+  projectId: string;
+  streamContext: StreamContext;
+}): WebClient {
   const placeholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   return new WebClient(placeholder, {
     // Dials the project egress door so project interceptors and approval rules
@@ -122,6 +128,7 @@ export function connectionSlackClient(input: { connection: string; projectId: st
     adapter: slackEgressAdapter({
       connection: input.connection,
       projectId: input.projectId,
+      streamContext: input.streamContext,
       stub: projectStub(itxEnv.PROJECT, input.projectId),
     }),
     // The egress door + our own error handling own retries; the SDK's node-retry
@@ -168,6 +175,7 @@ export async function callProjectSlackWebApi(input: {
   connection: string;
   method: string;
   projectId: string;
+  streamContext: StreamContext;
 }): Promise<SlackWebApiResult> {
   const response = await fetchSlackWithCredentialRecovery({
     buildRequest: (credential) =>
@@ -182,6 +190,7 @@ export async function callProjectSlackWebApi(input: {
     connection: input.connection,
     method: input.method,
     projectId: input.projectId,
+    streamContext: input.streamContext,
     stub: projectStub(itxEnv.PROJECT, input.projectId),
   });
   if (response.status === 404 || response.status === 400) {
@@ -261,14 +270,12 @@ async function fetchSlackWithCredentialRecovery(input: {
   connection: string;
   method: string;
   projectId: string;
+  streamContext: StreamContext;
   stub: SlackEgressStub;
 }): Promise<Response> {
   const primaryPlaceholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
   const primaryResponse = await input.stub.fetch(
-    withStreamContext(input.buildRequest(primaryPlaceholder), {
-      kind: "scope",
-      scopePath: "/",
-    }),
+    withStreamContext(input.buildRequest(primaryPlaceholder), input.streamContext),
   );
   if (!(await isSlackCredentialFailure(primaryResponse))) return primaryResponse;
   return await retrySlackRequestWithDeploymentCredential({ ...input, primaryResponse });

@@ -169,6 +169,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
             connection,
             method: "reactions.add",
             projectId: this.#name.projectId,
+            streamContext: { kind: "scope", scopePath: this.#name.path },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -202,6 +203,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
           connection,
           method: "sendMessage",
           projectId: this.#name.projectId,
+          streamContext: { kind: "scope", scopePath: this.#name.path },
         }),
       telegramAccessSettingsUrl: async ({ connection, projectId }) => {
         const project = await readProjectById(this.env.PROJECT_DIRECTORY, projectId);

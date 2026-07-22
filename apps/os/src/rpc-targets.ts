@@ -3039,7 +3039,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // API path onto it (chat.postMessage, conversations.list, …) — the real
       // SDK, its transport riding the connection secret's substituting egress
       // (slack-api.ts).
-      const slack = connectionSlackClient({ connection, projectId: this.props.projectId });
+      const slack = connectionSlackClient({
+        connection,
+        projectId: this.props.projectId,
+        streamContext: this.props.streamContext,
+      });
       try {
         return await replayPathCall(slack, { args, path: method });
       } catch (error) {
@@ -3144,6 +3148,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         connection,
         method: method[0]!,
         projectId: this.props.projectId,
+        streamContext: this.props.streamContext,
       });
     }
 
@@ -3168,6 +3173,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       const waitrose = connectionWaitroseClient({
         connection,
         projectId: this.props.projectId,
+        streamContext: this.props.streamContext,
       });
       return await replayPathCall(waitrose, { args, path: method });
     }

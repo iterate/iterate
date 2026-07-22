@@ -61,7 +61,11 @@ describe("connectionSlackClient", () => {
     {
       name: "a WebClient call rides project egress and succeeds first try",
       act: () =>
-        connectionSlackClient({ connection: "main", projectId: "prj_1" }).chat.postMessage({
+        connectionSlackClient({
+          connection: "main",
+          projectId: "prj_1",
+          streamContext: { kind: "scope", scopePath: "/" },
+        }).chat.postMessage({
           channel: "C1",
           text: "hi",
         }),
@@ -72,7 +76,11 @@ describe("connectionSlackClient", () => {
       name: "an invalid connection token retries with the same-workspace deployment token",
       primaryResult: { error: "invalid_auth", ok: false },
       act: () =>
-        connectionSlackClient({ connection: "main", projectId: "prj_1" }).chat.postMessage({
+        connectionSlackClient({
+          connection: "main",
+          projectId: "prj_1",
+          streamContext: { kind: "scope", scopePath: "/" },
+        }).chat.postMessage({
           channel: "C1",
           text: "hi",
         }),
@@ -84,7 +92,11 @@ describe("connectionSlackClient", () => {
       primaryResult: { error: "invalid_auth", ok: false },
       fallbackTeamId: "T_OTHER",
       act: () =>
-        connectionSlackClient({ connection: "main", projectId: "prj_1" }).chat.postMessage({
+        connectionSlackClient({
+          connection: "main",
+          projectId: "prj_1",
+          streamContext: { kind: "scope", scopePath: "/" },
+        }).chat.postMessage({
           channel: "C1",
           text: "hi",
         }),
@@ -101,6 +113,7 @@ describe("connectionSlackClient", () => {
           connection: "main",
           method: "reactions.add",
           projectId: "prj_1",
+          streamContext: { kind: "scope", scopePath: "/" },
         }),
       expectedEgressUrls: ["https://slack.com/api/reactions.add"],
       expectedDeploymentPaths: ["/api/auth.test", "/api/reactions.add"],
@@ -114,6 +127,7 @@ describe("connectionSlackClient", () => {
           connection: "main",
           method: "auth.revoke",
           projectId: "prj_1",
+          streamContext: { kind: "scope", scopePath: "/" },
         }),
       expectedRejection: "invalid_auth",
       expectedEgressUrls: ["https://slack.com/api/auth.revoke"],
@@ -168,6 +182,7 @@ describe("connectionSlackClient", () => {
         connection: "main",
         method: "reactions.add",
         projectId: "prj_1",
+        streamContext: { kind: "scope", scopePath: "/" },
       }),
     ).rejects.toMatchObject({ slackErrorCode: "already_reacted" });
   });

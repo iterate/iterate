@@ -21,6 +21,7 @@ Every new egress approval explains the exact request, the policy that caught it,
 - [x] Prove bare `fetch(...)` and scoped/integration egress inherit the same script provenance. *The production-shaped approval e2e holds and releases both lanes from one agent script.*
 - [x] Keep approval-gated WebSockets on fetch-native transport. *A production-shaped e2e opens a worker WebSocket, grants its held handshake, and completes an echo round-trip; the private context header is absent from the recorded request.*
 - [x] Prevent loaded workers from reusing stale invocation context. *The loaded-isolate cache key includes the validated stream context, so a later script execution cannot inherit an earlier runner's ITX or global-outbound provenance bindings.*
+- [x] Preserve script provenance through every built-in integration egress helper. *Slack, Telegram, and Waitrose now require and forward the caller's stream context; processor and disconnect callers supply an explicit durable scope.*
 - [x] Show policy explanation and source metadata in the mobile Approvals view. *Approval cards now identify the source scope/script and show the policy description.*
 - [x] Add an expandable script block resolved from the exact source event. *The mobile client reads the recorded stream offset and verifies path, event type, and execution id before rendering code.*
 - [x] Add a link to the owning agent thread. *Agent stream sources route to the existing project chat screen.*
@@ -29,7 +30,7 @@ Every new egress approval explains the exact request, the policy that caught it,
 - [x] Collapse handled approvals by default. *Resolved cards start as a method/host summary with an Approved/Rejected badge; tapping reveals all provenance and request details.*
 - [x] Collapse consecutive stream wakes in chat. *Each adjacent run renders only its final wake marker with the run length, while wakes separated by real feed items stay separate.*
 - [x] Apply stream-wake compaction to the OS feed. *The browser-feed projection replaces an adjacent pretty wake row with the final event and accumulated count, keeping virtual row counts coherent.*
-- [x] Run focused tests, typechecks, formatting, and the production-shaped approval e2e. *223 OS unit files, 12 mobile unit files, both e2e approval suites, root typecheck/lint/format all pass.*
+- [x] Run focused tests, typechecks, formatting, and the production-shaped approval e2e. *226 OS unit files, 12 mobile unit files, both e2e approval suites, root typecheck/lint/format all pass.*
 
 ## Decisions
 
@@ -44,7 +45,7 @@ Every new egress approval explains the exact request, the policy that caught it,
 - Kept egress on the distinguished fetch transport so WebSocket upgrades never cross an ordinary RPC method boundary.
 - Trusted entrypoints turn their props into an overwritten private fetch header; callers cannot supply provenance and the receiving Project DO strips the carrier immediately.
 - Explicit non-script callers use a scope stream context so a new approval is never ambiguous.
-- Gmail, GitHub, MCP, OpenAPI, Parallel, nested workers, and bare worker fetch all retain the originating source.
+- Gmail, GitHub, Slack, Telegram, Waitrose, MCP, OpenAPI, Parallel, nested workers, and bare worker fetch all retain the originating source.
 - AsyncLocalStorage capability-call stacks remain a separate follow-up in `tasks/capability-invocation-context.md`; this change establishes the stream context carrier they can extend.
 - Approval events cap body inspection data at 64 KiB of original bytes so one held upload cannot create an unbounded durable event or exceed Workers RPC serialization limits.
 - Stateless workers retain cache reuse only within one stream context; script executions intentionally get distinct loaded isolates until the capability-context follow-up provides a per-invocation propagation mechanism.
