@@ -617,11 +617,11 @@ async function deployPreviewApps({
   // resurrect a pre-claim "waiting for a slot" banner.
   const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of orderPreviewDeployBatches(appsToDeploy)) {
-    const entries = await mapWithConcurrency(
+    const completedDeploys = await mapWithConcurrency(
       batch,
       defaultPreviewDeployConcurrency,
       async (app) => {
-        return await deployPreviewAppWithStatus({
+        const entry = await deployPreviewAppWithStatus({
           app,
           existingEntry: current.state.apps[app.slug] ?? null,
           commandEnvironment: {
@@ -643,16 +643,22 @@ async function deployPreviewApps({
           runUrl: context.workflowRunUrl,
           signal: runtime.signal,
         });
+        // Capture this before waiting for slower siblings in the batch. The
+        // lane timestamp must describe this app's own completion, not the tail
+        // of the concurrent deploy fleet.
+        return { entry, finishedAt: new Date().toISOString() };
       },
     );
+    const entries = completedDeploys.map(({ entry }) => entry);
     if (entries.some((entry) => entry.status === "deploy-failed")) {
       ok = false;
     }
 
-    for (const entry of entries) {
+    for (const { entry, finishedAt } of completedDeploys) {
       accumulatedEntries[entry.appSlug] = entry;
       telemetry.deployAppFinished({
         app: entry.appSlug,
+        finishedAt,
         slot: environmentConfigLease.slug,
         status: entry.status === "awaiting-tests" ? "passed" : "failed",
         durationMs: entry.deployDurationMs ?? 0,

@@ -47,6 +47,7 @@ it("stores orchestration timing separately from runner artifacts", () => {
   telemetry.deployRunStarted();
   telemetry.deployAppFinished({
     app: "os",
+    finishedAt: "2026-07-21T12:00:12.000Z",
     slot: "preview-3",
     status: "passed",
     durationMs: 12_000,
@@ -99,6 +100,7 @@ it("stores orchestration timing separately from runner artifacts", () => {
       lanes: [
         {
           app: "os",
+          finishedAt: "2026-07-21T12:00:12.000Z",
           previewSlot: "preview-3",
           durationMs: 12_000,
           configDurationMs: 500,
@@ -134,6 +136,7 @@ it("retains the preview slot when deployment fails after an app lane completes",
   telemetry.deployRunStarted();
   telemetry.deployAppFinished({
     app: "os",
+    finishedAt: "2026-07-21T12:00:12.000Z",
     slot: "preview-3",
     status: "failed",
     durationMs: 12_000,

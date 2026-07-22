@@ -79,6 +79,7 @@ export class PreviewE2eTelemetryArtifact {
 
   deployAppFinished(input: {
     app: string;
+    finishedAt: string;
     slot?: string;
     status: "passed" | "failed";
     durationMs: number;
@@ -94,7 +95,7 @@ export class PreviewE2eTelemetryArtifact {
       ...(input.slot ? { previewSlot: input.slot } : {}),
       status: input.status,
       durationMs: input.durationMs,
-      finishedAt: new Date().toISOString(),
+      finishedAt: input.finishedAt,
       configDurationMs: input.configDurationMs,
       commandDurationMs: input.commandDurationMs,
       readinessDurationMs: input.readinessDurationMs,
