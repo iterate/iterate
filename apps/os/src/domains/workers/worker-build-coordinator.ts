@@ -32,6 +32,7 @@ export class WorkerBuildCoordinator {
   readonly #now: () => number;
   readonly #observe: (event: WorkerBuildCoordinatorEvent) => void;
   #flight: Flight | undefined;
+  #settled: { artifact: WorkerBuildArtifact; buildKey: string } | undefined;
 
   constructor(
     execute: (request: WorkerBuildRequest) => Promise<WorkerBuildArtifact>,
@@ -46,13 +47,15 @@ export class WorkerBuildCoordinator {
   }
 
   async build(request: WorkerBuildRequest): Promise<WorkerBuildArtifact> {
+    const settled = this.#settled;
+    if (settled !== undefined) {
+      this.#assertBuildKey(settled.buildKey, request.buildKey);
+      return settled.artifact;
+    }
+
     const existing = this.#flight;
     if (existing !== undefined) {
-      if (existing.buildKey !== request.buildKey) {
-        throw new Error(
-          `Worker build coordinator for ${existing.buildKey} received ${request.buildKey}.`,
-        );
-      }
+      this.#assertBuildKey(existing.buildKey, request.buildKey);
       return await new Promise<WorkerBuildArtifact>((resolve, reject) => {
         existing.waiters.add({ reject, resolve });
         this.#emit(existing, "coalesced");
@@ -68,6 +71,12 @@ export class WorkerBuildCoordinator {
     this.#emit(flight, "started");
     try {
       const artifact = await this.#execute(request);
+      // One actor owns one immutable build key. Keep its successful result in
+      // memory so callers from other OS isolates do not fall back through the
+      // eventually-consistent KV cache immediately after the first build.
+      // Actor eviction remains the cache eviction policy; after that, the KV
+      // write is visible at the coordinator's stable location.
+      this.#settled = { artifact, buildKey: request.buildKey };
       this.#emit(flight, "settled", "built");
       for (const waiter of flight.waiters) waiter.resolve(artifact);
       return artifact;
@@ -81,6 +90,12 @@ export class WorkerBuildCoordinator {
       throw error;
     } finally {
       this.#flight = undefined;
+    }
+  }
+
+  #assertBuildKey(expected: string, received: string): void {
+    if (expected !== received) {
+      throw new Error(`Worker build coordinator for ${expected} received ${received}.`);
     }
   }
 

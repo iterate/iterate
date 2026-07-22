@@ -24,6 +24,16 @@ const artifact: WorkerBuildArtifact = {
 };
 
 describe("WorkerBuildCoordinator", () => {
+  it("reuses its settled artifact without consulting the eventually-consistent store again", async () => {
+    const execute = vi.fn(async () => artifact);
+    const coordinator = new WorkerBuildCoordinator(execute);
+
+    await expect(coordinator.build(request)).resolves.toBe(artifact);
+    await expect(coordinator.build(request)).resolves.toBe(artifact);
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it("gives concurrent followers their own answer from one build", async () => {
     const build = Promise.withResolvers<WorkerBuildArtifact>();
     const execute = vi.fn(async () => await build.promise);
