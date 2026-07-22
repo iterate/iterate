@@ -5,7 +5,9 @@ test("hydrates the client-only reactivity route without rebuilding the shell", a
   helpers,
   page,
 }) => {
-  await using fixture = await helpers.createFixture("reactivity-hydration");
+  await using fixture = await helpers.createFixture("reactivity-hydration", {
+    readiness: "core",
+  });
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
 

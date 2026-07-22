@@ -98,10 +98,10 @@ function releaseSlot(state: ProjectPoolState, slot: ProjectSlot): void {
   else state.availableSlots.push(slot);
 }
 
-async function createProject(session: RpcStub<Session>, slugPrefix: string): Promise<string> {
+async function createProject(session: RpcStub<Session>, slugPrefix: string) {
   const slug = uniqueFixtureSlug(slugPrefix, { maxPrefixLength: 20 });
   using project = await session.projects.get(slug).create({});
-  const { projectId } = await project.__describe();
-  console.log(`[project-pool] created ${slug} (${projectId})`);
-  return projectId;
+  const identity = await project.identity();
+  console.log(`[project-pool] created ${identity.slug} (${identity.projectId})`);
+  return identity.projectId;
 }

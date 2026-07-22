@@ -1,7 +1,7 @@
 /**
  * Create-latency probe (diagnostic, not a test): time the create-project
  * critical path exactly as the dashboard form drives it — connect,
- * projects.get(slug).create({}, { waitUntilReady: false }) with identity()
+ * projects.get(slug).create({}, { readiness: "exists" }) with identity()
  * pipelined through it — and print per-phase client timings. Pair with
  * `wrangler tail <os-worker> --format json | grep create-timing` for the
  * server-side step breakdown (tasks/os-cold-create-latency.md has the
@@ -23,7 +23,7 @@ for (let i = 0; i < runs; i++) {
   using session = connectItx({ baseUrl, auth: { type: "admin-secret", secret } });
   await session.__describe();
   const t1 = performance.now();
-  using project = session.projects.get(slug).create({}, { waitUntilReady: false });
+  using project = session.projects.get(slug).create({}, { readiness: "exists" });
   const identity = await project.identity();
   const t2 = performance.now();
   console.log(

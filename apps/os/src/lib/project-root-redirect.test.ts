@@ -83,6 +83,6 @@ test("the missing-project SSR bootstrap does not wait for project readiness", as
 
   expect(create).toHaveBeenCalledWith(
     { organizationSlug: "acme", projectId: "prj_missing" },
-    { waitUntilReady: false },
+    { readiness: "exists" },
   );
 });

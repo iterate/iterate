@@ -276,6 +276,7 @@ describe("preview workflow scope", () => {
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
       ],
       os: [
+        "preview-project-prewarm:script/e2e/project-prewarm@iterate-root",
         "onboarding-smoke:script/e2e/onboarding-smoke@iterate-root",
         "tui-quarantine:script/e2e/tui@iterate-root",
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/os",

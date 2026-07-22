@@ -438,7 +438,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_missing",
     });
-    expect(createOptions).toEqual({ waitUntilReady: false });
+    expect(createOptions).toEqual({ readiness: "exists" });
     expect(fake.disposeProject).toHaveBeenCalledOnce();
   });
 
@@ -476,7 +476,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_default",
     });
-    expect(createOptions).toEqual({ waitUntilReady: false });
+    expect(createOptions).toEqual({ readiness: "exists" });
   });
 
   test("passes the organization slug when setting up a missing project", async () => {
@@ -513,7 +513,7 @@ describe("resolveChatProject", () => {
       organizationSlug: "acme",
       projectId: "prj_org_project",
     });
-    expect(createOptions).toEqual({ waitUntilReady: false });
+    expect(createOptions).toEqual({ readiness: "exists" });
   });
 
   test("rejects a configured project slug that is not accessible", async () => {

@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
+import type { AdminItxSession } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Deliberately hostile markdown: repo content is user-supplied, so the
@@ -18,10 +18,10 @@ Plain paragraph with **bold** text.
 test("markdown files get a sanitized Code | Preview toggle in the repo IDE", async ({
   helpers,
   page,
-  baseURL,
+  adminItx,
 }) => {
   await using fixture = await helpers.createFixture("md-preview");
-  await using _repo = await seedRepoWithMarkdown(baseURL!, fixture.project.id, {
+  await seedRepoWithMarkdown(adminItx, fixture.project.id, {
     "notes.md": NOTES_MD,
   });
 
@@ -59,16 +59,14 @@ test("markdown files get a sanitized Code | Preview toggle in the repo IDE", asy
 
 /** Creates `/repos/demo` in the project and commits the given files to HEAD. */
 async function seedRepoWithMarkdown(
-  baseUrl: string,
+  admin: AdminItxSession,
   projectId: string,
   files: Record<string, string>,
 ) {
-  const admin = await connectAdminItx(baseUrl);
-  const repo = admin.projects.get(projectId).repos.get("/repos/demo");
+  using repo = admin.projects.get(projectId).repos.get("/repos/demo");
   await repo.create({ type: "empty" });
   await repo.commitFiles({
     message: "seed markdown fixture",
     changes: Object.entries(files).map(([path, content]) => ({ path, content })),
   });
-  return admin;
 }

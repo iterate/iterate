@@ -166,15 +166,15 @@ validation.
 Every test event has `schema_version = 2`. Framework and test type are
 dimensions, never separate event families.
 
-| Dimension           | Values / examples                                                                      |
-| ------------------- | -------------------------------------------------------------------------------------- |
-| `framework`         | `vitest`, `playwright`, `node-test`, `script`; orchestration aggregates may be `mixed` |
-| `test_kind`         | `unit`, `integration`, `e2e`                                                           |
-| `workspace` / `app` | pnpm package and deployed application                                                  |
-| `lane`              | `unit`, `vitest`, `playwright`, `onboarding-smoke`, `tui`, `preview`                   |
-| source              | repository, SHA, branch, pull request                                                  |
-| execution           | workflow/run/attempt/job URLs, runner provider, preview slot, test project             |
-| identity            | stable artifact, test-run, logical-test, and execution IDs                             |
+| Dimension           | Values / examples                                                                       |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `framework`         | `vitest`, `playwright`, `node-test`, `script`; orchestration aggregates may be `mixed`  |
+| `test_kind`         | `unit`, `integration`, `e2e`                                                            |
+| `workspace` / `app` | pnpm package and deployed application                                                   |
+| `lane`              | `unit`, `vitest`, `playwright`, `project-prewarm`, `onboarding-smoke`, `tui`, `preview` |
+| source              | repository, SHA, branch, pull request                                                   |
+| execution           | workflow/run/attempt/job URLs, runner provider, preview slot, test project              |
+| identity            | stable artifact, test-run, logical-test, and execution IDs                              |
 
 | Event                          | Grain                                  | Evidence                                                                                                                             |
 | ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -211,7 +211,16 @@ the full graph.
 | Playwright       | yes                            | yes               | all nested steps including hooks, fixtures, expects, and API calls; worker/parallel index; errors; output/attachment sizes; timeout/tags/annotations               |
 | Node `test`      | yes                            | no                | runner attempt duration and error; reporter infers start from observation time minus duration and labels it `inferred`                                             |
 | Vitest           | no: aggregate retry count only | yes               | before/after-each duration, body remainder, explicit `e2e-phase` annotations, heap/slow/repeat diagnostics when enabled, module lifecycle, individual import costs |
+| Project prewarm  | yes                            | reporter clock    | exact-version-pinned admin connection, full project readiness, canonical identity, project correlation, and expected non-gating failure/timeout outcome            |
 | Onboarding smoke | yes                            | reporter clock    | explicit project creation, agent readiness, greeting, and failure phases, including partial phases on a failed attempt                                             |
+
+Playwright fixture phases use stable low-cardinality names: `fixture:
+establish admin ITX session`, `fixture: wait for full project readiness`,
+`fixture: read project identity`, `fixture: forge browser session`,
+`fixture: install browser session cookie`, and (for the REPL catalogue)
+`fixture: acquire REPL project`. Fixture annotations and attachments carry the
+project IDs/slugs, so a slow row can be joined to `create-timing` traces without
+putting high-cardinality project values in phase names.
 
 Vitest's public reporter receives one final `onTestCaseResult`; its diagnostic
 contains aggregate duration/retry count but not each attempt's duration. Do not

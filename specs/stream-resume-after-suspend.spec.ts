@@ -1,6 +1,5 @@
 import { expect, type Page } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Regression suite for the "stream feed wedges after browser suspend" bug:
@@ -45,15 +44,13 @@ const RECOVERY_DELIVERY_MS = 90_000;
 test("control: appended event is delivered to a live stream feed", async ({
   helpers,
   page,
-  baseURL,
+  adminItx,
 }) => {
   test.setTimeout(240_000);
-  await using fixture = await helpers.createFixture("suspend-control");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await using fixture = await helpers.createFixture("suspend-control", { readiness: "core" });
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
+  using project = adminItx.projects.get(fixture.project.id);
   using agent = project.agents.get(ONBOARDING_AGENT_PATH);
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
@@ -81,16 +78,14 @@ test("control: appended event is delivered to a live stream feed", async ({
 test("feed resumes after the /api WebSocket dies (clean close)", async ({
   helpers,
   page,
-  baseURL,
+  adminItx,
 }) => {
   test.setTimeout(240_000);
-  await using fixture = await helpers.createFixture("suspend-socket");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await using fixture = await helpers.createFixture("suspend-socket", { readiness: "core" });
   await installSocketKillSwitch(page);
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
+  using project = adminItx.projects.get(fixture.project.id);
   using agent = project.agents.get(ONBOARDING_AGENT_PATH);
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
@@ -131,17 +126,15 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
 test("feed resumes after page freeze + socket death (mobile suspend shape)", async ({
   helpers,
   page,
-  baseURL,
+  adminItx,
 }) => {
   test.setTimeout(240_000);
-  await using fixture = await helpers.createFixture("suspend-freeze");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await using fixture = await helpers.createFixture("suspend-freeze", { readiness: "core" });
   await installSocketKillSwitch(page);
   await installSuspendTimerProbe(page);
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
+  using project = adminItx.projects.get(fixture.project.id);
   using agent = project.agents.get(ONBOARDING_AGENT_PATH);
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);
@@ -218,18 +211,16 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
 test("feed resumes after the /api WebSocket goes half-open (no close frame)", async ({
   helpers,
   page,
-  baseURL,
+  adminItx,
 }) => {
   // The greeting-settle wait (up to 120s) stacks on the probe window and the
   // two send assertions, so this lane gets the heavy ceiling.
   test.setTimeout(300_000);
-  await using fixture = await helpers.createFixture("suspend-halfopen");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await using fixture = await helpers.createFixture("suspend-halfopen", { readiness: "core" });
   await installSocketKillSwitch(page);
   const consoleLines = captureStreamConsole(page);
 
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
+  using project = adminItx.projects.get(fixture.project.id);
   using agent = project.agents.get(ONBOARDING_AGENT_PATH);
 
   await page.goto(`/projects/${fixture.project.slug}/agents/streams/agents/onboarding`);

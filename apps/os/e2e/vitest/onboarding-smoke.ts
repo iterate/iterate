@@ -55,9 +55,9 @@ async function attemptOnboardingSmoke(phases: SmokePhase[]): Promise<void> {
   const start = Date.now();
   using root = session.authenticate({ type: "admin-secret", secret: secret! });
   using project = await root.projects.get(`onboarding-smoke-${marker}`).create({});
-  const description = await project.__describe();
+  const identity = await project.identity();
   phases.push({ name: "create project", category: "fixture", durationMs: Date.now() - start });
-  console.log(`project created in ${Date.now() - start}ms:`, description.projectId);
+  console.log(`project created in ${Date.now() - start}ms:`, identity.projectId);
 
   using agent = project.agents.get("/agents/onboarding");
   // Match the dashboard's explicit onboarding flow: agent birth is generic,

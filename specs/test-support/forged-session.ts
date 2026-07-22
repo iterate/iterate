@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { z } from "zod/v4";
+import type { RpcStub } from "capnweb";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
   IterateAuthProjectClaim,
@@ -7,6 +8,7 @@ import type {
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
+import type { Session } from "../../apps/os/src/itx-api.generated.ts";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
 
@@ -47,71 +49,207 @@ export type MintedIterateSession = {
   idToken: string;
 };
 
+export type AdminItxSession = RpcStub<Session>;
+
+type DuplicableAdminItxSession = AdminItxSession & {
+  dup(): DuplicableAdminItxSession;
+  [Symbol.dispose](): void;
+};
+
+/**
+ * Own one authenticated admin transport per Playwright worker. Tests receive
+ * duplicate capabilities with independent disposal; no application RPC is
+ * replayed. A failed test invalidates the transport only for the next test.
+ */
+export class AdminItxSessionOwner {
+  #root: DuplicableAdminItxSession | undefined;
+  #baseUrl: string | undefined;
+
+  constructor(
+    private readonly connect: (baseUrl: string) => Promise<AdminItxSession>,
+    private readonly log: Pick<Console, "info" | "warn"> = console,
+  ) {}
+
+  async acquire(baseUrl: string): Promise<AdminItxSession> {
+    if (this.#baseUrl !== undefined && this.#baseUrl !== baseUrl) {
+      throw new Error(
+        `A Playwright worker cannot share one admin ITX session across ${this.#baseUrl} and ${baseUrl}.`,
+      );
+    }
+    this.#baseUrl = baseUrl;
+    if (this.#root === undefined) {
+      this.log.info("[playwright-fixture] establishing worker admin ITX session");
+      const root = (await this.connect(baseUrl)) as DuplicableAdminItxSession;
+      try {
+        // Force the WebSocket upgrade and authentication at this explicit test
+        // boundary. Session metadata is cheap and has no domain side effects.
+        await root.__describe();
+      } catch (error) {
+        root[Symbol.dispose]();
+        throw error;
+      }
+      this.#root = root;
+    }
+    return this.#root.dup();
+  }
+
+  invalidate(reason: string): void {
+    if (this.#root === undefined) return;
+    this.log.warn(`[playwright-fixture] retiring worker admin ITX session: ${reason}`);
+    const root = this.#root;
+    this.#root = undefined;
+    root[Symbol.dispose]();
+  }
+
+  [Symbol.dispose](): void {
+    const root = this.#root;
+    this.#root = undefined;
+    root?.[Symbol.dispose]();
+  }
+}
+
 let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
 
 export async function createProjectFixture(
   slugPrefix: string,
-  input: { baseURL: string | undefined; page: Page; projectCount?: number },
+  input: {
+    adminItx: AdminItxSession;
+    baseURL: string | undefined;
+    page: Page;
+    projectCount?: number;
+    readiness?: "core" | "full";
+    step?: <T>(name: string, body: () => Promise<T>) => Promise<T>;
+  },
 ) {
   const baseUrl = input.baseURL;
   if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
 
   const projectSlug = uniqueFixtureSlug(slugPrefix);
-  const projectFixtures = await Promise.all(
-    Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
-      createAdminProject({
-        baseUrl,
-        slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
-      }),
-    ),
+  const step = input.step ?? (async (_name, body) => await body());
+  const readiness = input.readiness ?? "full";
+  const projectHandlePromises = Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
+    createAdminProject({
+      session: input.adminItx,
+      slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
+      readiness,
+    }),
   );
+  let projectHandles: Array<Awaited<ReturnType<typeof createAdminProject>>>;
   try {
-    const organization = {
-      id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
-      name: `Playwright ${projectSlug}`,
-      role: "admin" as const,
-      slug: uniqueFixtureSlug(`${slugPrefix}-org`),
-    };
-    const session = await mintIterateSession({
-      baseUrl,
-      email: `forged-${projectSlug}+test@nustom.com`,
-      organizations: [organization],
-      projects: projectFixtures.map(({ project }) => ({
-        ...project,
-        organizationId: organization.id,
-      })),
-    });
+    projectHandles = await step(`fixture: wait for ${readiness} project readiness`, () =>
+      Promise.all(projectHandlePromises),
+    );
+  } catch (error) {
+    const settled = await Promise.allSettled(projectHandlePromises);
+    await Promise.all(
+      settled.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value[Symbol.asyncDispose]()] : [],
+      ),
+    );
+    throw error;
+  }
+  let projectFixtures: Array<{
+    handle: Awaited<ReturnType<typeof createAdminProject>>;
+    project: { id: string; slug: string };
+  }>;
+  try {
+    projectFixtures = await step("fixture: read project identity", () =>
+      Promise.all(
+        projectHandles.map(async (created) => {
+          const identity = await created.project.identity();
+          return {
+            handle: created,
+            project: { id: identity.projectId, slug: identity.slug },
+          };
+        }),
+      ),
+    );
+  } catch (error) {
+    await Promise.all(projectHandles.map((handle) => handle[Symbol.asyncDispose]()));
+    throw error;
+  }
+  return await createForgedBrowserFixture(
+    slugPrefix,
+    {
+      baseURL: baseUrl,
+      page: input.page,
+      step,
+    },
+    projectFixtures.map(({ project }) => project),
+    async () => {
+      await Promise.all(projectFixtures.map(({ handle }) => handle[Symbol.asyncDispose]()));
+    },
+  );
+}
 
-    await input.page.context().addCookies([
-      {
-        expires: Math.floor(session.expiresAtMs / 1000),
-        httpOnly: true,
-        name: "iterate_session",
-        sameSite: "Lax",
-        secure: new URL(baseUrl).protocol === "https:",
-        url: baseUrl,
-        value: encodeURIComponent(
-          JSON.stringify({
-            accessToken: session.accessToken,
-            accessTokenExpiresAt: session.expiresAtMs,
-            idToken: session.idToken,
-            tokenType: "bearer",
-          }),
-        ),
-      },
-    ]);
+export type ForgedFixtureProject = { id: string; slug: string };
+
+/** Mint and install a fresh browser identity for already-created projects. */
+export async function createForgedBrowserFixture(
+  slugPrefix: string,
+  input: {
+    baseURL: string;
+    page: Page;
+    step?: <T>(name: string, body: () => Promise<T>) => Promise<T>;
+  },
+  projects: ForgedFixtureProject[],
+  disposeProjects: () => Promise<void> = async () => {},
+) {
+  const project = projects[0];
+  if (!project) {
+    await disposeProjects();
+    throw new Error("A forged browser fixture requires at least one project.");
+  }
+  const step = input.step ?? (async (_name, body) => await body());
+  const organization = {
+    id: `org_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`,
+    name: `Playwright ${project.slug}`,
+    role: "admin" as const,
+    slug: uniqueFixtureSlug(`${slugPrefix}-org`),
+  };
+  try {
+    const session = await step("fixture: forge browser session", () =>
+      mintIterateSession({
+        baseUrl: input.baseURL,
+        email: `forged-${project.slug}+test@nustom.com`,
+        organizations: [organization],
+        projects: projects.map((fixtureProject) => ({
+          ...fixtureProject,
+          organizationId: organization.id,
+        })),
+      }),
+    );
+
+    await step("fixture: install browser session cookie", () =>
+      input.page.context().addCookies([
+        {
+          expires: Math.floor(session.expiresAtMs / 1000),
+          httpOnly: true,
+          name: "iterate_session",
+          sameSite: "Lax",
+          secure: new URL(input.baseURL).protocol === "https:",
+          url: input.baseURL,
+          value: encodeURIComponent(
+            JSON.stringify({
+              accessToken: session.accessToken,
+              accessTokenExpiresAt: session.expiresAtMs,
+              idToken: session.idToken,
+              tokenType: "bearer",
+            }),
+          ),
+        },
+      ]),
+    );
 
     return {
       organization,
-      project: projectFixtures[0]!.project,
-      projects: projectFixtures.map(({ project }) => project),
+      project,
+      projects,
       session,
-      async [Symbol.asyncDispose]() {
-        await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
-      },
+      [Symbol.asyncDispose]: disposeProjects,
     };
   } catch (error) {
-    await Promise.all(projectFixtures.map((fixture) => fixture[Symbol.asyncDispose]()));
+    await disposeProjects();
     throw error;
   }
 }
@@ -130,22 +268,18 @@ export async function connectAdminItx(baseUrl: string) {
   });
 }
 
-export async function createAdminProject(input: { baseUrl: string; slug: string }) {
-  const config = await resolveOsPlaywrightAuthConfig();
-  // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
-  // token})`) and then poll `project.processor.onStateChange` until the
-  // project reached phase "ready". The itx create resolves only after the
-  // bootstrap saga commits project/ready (sibling processors born, config repo
-  // seeded, project worker probed), so the readiness wait is gone and auth is
-  // an explicit admin-secret credential on connect.
-  using session = connectItx({
-    auth: { type: "admin-secret", secret: config.adminApiSecret },
-    baseUrl: input.baseUrl,
-    headers: cloudflareWorkerVersionOverrideHeaders(process.env),
-  });
-  using created = await session.projects.get(input.slug).create({});
-  const description = await created.__describe();
-  const project = { id: description.projectId, slug: input.slug };
+export async function createAdminProject(input: {
+  session: AdminItxSession;
+  slug: string;
+  readiness: "core" | "full";
+}) {
+  // The default full readiness contract resolves after project/ready (sibling
+  // processors born, config repo seeded, project worker probed). The caller
+  // owns the worker-scoped authenticated session and this returned project
+  // capability is disposed with that test's duplicate.
+  const project = await input.session.projects
+    .get(input.slug)
+    .create({}, { readiness: input.readiness });
 
   return {
     project,
@@ -153,6 +287,7 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
       // itx-v4 cutover: this used to `projects.remove({id})`. TODO(task #13):
       // project removal on itx — disposable Playwright projects
       // are leaked until then (stages reset periodically).
+      project[Symbol.dispose]();
       return Promise.resolve();
     },
   };

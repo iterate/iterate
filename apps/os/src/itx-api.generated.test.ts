@@ -50,6 +50,9 @@ test("itx-api.generated.ts resolves its exact vendor types from iterate's depend
   const script = `
     import type { Project, StreamEvent } from "./itx-api.generated.ts";
     export async function run(itx: Project): Promise<StreamEvent> {
+      await itx.create({}, { readiness: "exists" });
+      await itx.create({}, { readiness: "core" });
+      await itx.create({}, { readiness: "full" });
       const [event] = await itx.streams.get("/demo").append({ type: "demo/ping" });
       await itx.repo.edit({ message: "m", path: "a.ts", oldString: "x", newString: "y" });
       return event;

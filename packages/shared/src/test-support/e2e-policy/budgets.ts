@@ -85,6 +85,13 @@ export const E2E_HEAVY_TEST_TIMEOUT_MS = 240_000;
 export const OS_ONBOARDING_SMOKE_TIMEOUT_SECS = 240;
 
 /**
+ * Outer watchdog for the one-project preview prewarm. The script's own 70s
+ * operation deadline leaves five seconds to close its ITX transport and write
+ * a completed non-gating telemetry artifact before this process backstop.
+ */
+export const OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS = 75;
+
+/**
  * Watchdog on the built Iterate CLI's PTY lane. The independent 55s workflows
  * run concurrently; one case may retry in a fresh process/project after a 5s
  * pause. Package build and project setup still fit comfortably. Expiry is a

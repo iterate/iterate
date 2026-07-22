@@ -54,8 +54,8 @@ function createSessionStub() {
           const projectId = `project-${createdProjectIds.length + 1}`;
           createdProjectIds.push(projectId);
           return {
-            async __describe() {
-              return { projectId };
+            async identity() {
+              return { projectId, slug: `slug-${projectId}` };
             },
             [Symbol.dispose]() {},
           };

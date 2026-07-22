@@ -3,8 +3,7 @@ import { spinnerWaiter } from "middlewright";
 import JSON5 from "json5";
 import { EXAMPLE_CASES } from "../apps/os/e2e/examples/example-cases.ts";
 import { ITX_EXAMPLES } from "../apps/os/src/itx/examples.ts";
-import { connectAdminItx } from "./test-support/forged-session.ts";
-import { test } from "./test-support/test.ts";
+import { test } from "./test-support/repl-test.ts";
 
 const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
   const example = ITX_EXAMPLES.find((candidate) => candidate.id === id);
@@ -17,14 +16,17 @@ const REPL_EXAMPLES = Object.entries(EXAMPLE_CASES).map(([id, exampleCase]) => {
 
 test.describe("itx REPL catalogue examples", () => {
   for (const { example, exampleCase } of REPL_EXAMPLES) {
-    test(`runs "${example.id}" through the project REPL`, async ({ baseURL, helpers, page }) => {
+    test(`runs "${example.id}" through the project REPL`, async ({
+      adminItx,
+      page,
+      replFixture: fixture,
+    }) => {
       // Cold-path examples declare their own completion budget (see
       // ExampleCase.completionTimeoutMs); the playwright test timeout must
       // not undercut it.
       if (exampleCase.completionTimeoutMs) {
         test.setTimeout(exampleCase.completionTimeoutMs + 60_000);
       }
-      await using fixture = await helpers.createFixture(`repl-${example.id}`);
       await test.step("open project REPL", async () => {
         await page.goto(`/projects/${fixture.project.slug}/repl`);
         // exact: the project slug can contain "run", which substring-matches sidebar buttons
@@ -49,10 +51,10 @@ test.describe("itx REPL catalogue examples", () => {
       const cleanup = async () => {
         if (!exampleCase.cleanup) return;
         try {
-          using admin = await connectAdminItx(baseURL!);
-          using project = admin.projects.get(fixture.project.id);
+          using project = adminItx.projects.get(fixture.project.id);
           await exampleCase.cleanup(project, ctx);
         } catch (error) {
+          fixture.retire();
           console.warn(`example "${example.id}" cleanup failed (ignored):`, error);
         }
       };

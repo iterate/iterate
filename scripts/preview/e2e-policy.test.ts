@@ -8,6 +8,7 @@ import {
   E2E_TEST_TIMEOUT_MS,
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
+  OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
   PREVIEW_RUN_PROOF_BUDGET_SECS,
   PREVIEW_RUN_WATCHDOG_SECS,
@@ -30,6 +31,7 @@ describe("budget ladder", () => {
       SPEC_ACTION_TIMEOUT_MS,
       SPEC_EXPECT_TIMEOUT_MS,
       TUI_TEST_TIMEOUT_MS,
+      OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS * 1000,
       SPEC_TEST_TIMEOUT_MS,
       E2E_TEST_TIMEOUT_MS,
       OS_TUI_LANE_TIMEOUT_SECS * 1000,
@@ -130,13 +132,16 @@ describe("retries live in exactly one layer", () => {
     expect(runner).not.toContain("spawn");
   });
 
-  it("the os preview lane wraps all four sub-lanes in plain watchdogs — no lane retry", () => {
+  it("the os preview lane wraps all five sub-lanes in plain watchdogs — no lane retry", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
       `timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts`,
     );
     expect(script).toContain(
       `timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts`,
+    );
+    expect(script).toContain(
+      `timeout --signal=TERM --kill-after=5s ${OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS}s pnpm exec tsx e2e/vitest/preview-project-prewarm.ts`,
     );
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e`);
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec`);
@@ -145,6 +150,20 @@ describe("retries live in exactly one layer", () => {
     expect(script.split("pnpm e2e --project node")).toHaveLength(2);
     expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
     expect(script.split("pnpm exec tsx e2e/vitest/onboarding-smoke.ts")).toHaveLength(2);
+    expect(script.split("pnpm exec tsx e2e/vitest/preview-project-prewarm.ts")).toHaveLength(2);
+  });
+
+  it("finishes the prewarm before starting the burst lanes but keeps smoke concurrent", () => {
+    const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
+    const smoke = script.indexOf("pnpm exec tsx e2e/vitest/onboarding-smoke.ts");
+    const prewarm = script.indexOf("pnpm exec tsx e2e/vitest/preview-project-prewarm.ts");
+    const vitest = script.indexOf("pnpm e2e --project node");
+    const playwright = script.indexOf("pnpm --dir ../.. spec");
+    expect(smoke).toBeLessThan(prewarm);
+    expect(prewarm).toBeLessThan(vitest);
+    expect(prewarm).toBeLessThan(playwright);
+    expect(script.slice(smoke, prewarm)).toContain("& SMOKE_PID=$!");
+    expect(script).not.toContain('[ "$PREWARM_OK" -eq 0 ] &&');
   });
 
   it("the onboarding smoke gets one retry, like every other test", () => {

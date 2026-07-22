@@ -5,7 +5,9 @@ test("hydrates the client-only integrations route without rebuilding the shell",
   helpers,
   page,
 }) => {
-  await using fixture = await helpers.createFixture("integrations-hydration");
+  await using fixture = await helpers.createFixture("integrations-hydration", {
+    readiness: "core",
+  });
   const hydrationErrors: Error[] = [];
   page.on("pageerror", (error) => {
     if (error.message.includes("Hydration failed")) hydrationErrors.push(error);

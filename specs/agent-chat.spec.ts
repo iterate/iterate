@@ -1,5 +1,4 @@
 import { spinnerWaiter } from "middlewright";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // The feed marks settled chat messages with data-testid="agent-feed-message"
@@ -9,19 +8,17 @@ const assistantMessage = '[data-testid="agent-feed-message"][data-kind="assistan
 const userMessage = '[data-testid="agent-feed-message"][data-kind="user"]';
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 
-test("agent replies to a browser chat message in the feed", async ({ helpers, page, baseURL }) => {
+test("agent replies to a browser chat message in the feed", async ({ adminItx, helpers, page }) => {
   // One LLM turn plus UI paint. Onboarding birth and its automatic greeting
   // are independently covered; repeating that turn made this routing proof
   // the preview critical path.
   test.setTimeout(240_000);
-  await using fixture = await helpers.createFixture("agent-chat");
-  if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+  await using fixture = await helpers.createFixture("agent-chat", { readiness: "core" });
 
   // Backend wait (itx) is the durable signal that a turn finished; UI assert
   // confirms the feed painted the same event. Decouples LLM latency from
   // "did the stream subscription land in the browser".
-  using admin = await connectAdminItx(baseURL);
-  using project = admin.projects.get(fixture.project.id);
+  using project = adminItx.projects.get(fixture.project.id);
   const agentPath = `/agents/e2e-chat-${crypto.randomUUID().slice(0, 8)}`;
   using agent = project.agents.get(agentPath);
   await agent.create();

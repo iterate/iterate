@@ -55,5 +55,5 @@ export async function createMissingRootRedirectProject(
   project: Pick<ProjectRpcTarget, "create">,
   args: Parameters<ProjectRpcTarget["create"]>[0],
 ): Promise<void> {
-  await project.create(args, { waitUntilReady: false });
+  await project.create(args, { readiness: "exists" });
 }

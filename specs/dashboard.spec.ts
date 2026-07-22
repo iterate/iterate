@@ -2,14 +2,16 @@ import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
 test("can enter the dashboard with a forged session", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("dashboard");
+  await using fixture = await helpers.createFixture("dashboard", { readiness: "core" });
 
   await page.goto("/projects");
   await page.getByRole("link", { name: fixture.project.slug }).waitFor();
 });
 
 test("loads project navigation only when it opens", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("lazy-project-navigation");
+  await using fixture = await helpers.createFixture("lazy-project-navigation", {
+    readiness: "core",
+  });
   const dialogRequests: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("command-palette-dialog")) dialogRequests.push(request.url());
@@ -29,7 +31,10 @@ test("loads project navigation only when it opens", async ({ helpers, page }) =>
 });
 
 test("opening OS returns to the most recently active project", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("recent-project", { projectCount: 2 });
+  await using fixture = await helpers.createFixture("recent-project", {
+    projectCount: 2,
+    readiness: "core",
+  });
   const recent = fixture.projects[1]!;
 
   await page.goto(`/projects/${recent.slug}`);
@@ -40,7 +45,7 @@ test("opening OS returns to the most recently active project", async ({ helpers,
 });
 
 test("project settings is available under /settings", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("project-settings");
+  await using fixture = await helpers.createFixture("project-settings", { readiness: "core" });
 
   await page.goto(`/projects/${fixture.project.slug}/settings`);
   await page.getByTestId("project-settings-panel").waitFor();

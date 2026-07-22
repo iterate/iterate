@@ -54,14 +54,14 @@ export function CreateProjectForm({
       const session = await connectIterateSession();
       // ONE pipelined round trip: identity() rides the create call. Create
       // resolves once the project EXISTS (identity registered, directory
-      // primed, birth events appended — `waitUntilReady: false`); the
+      // primed, birth events appended — `readiness: "exists"`); the
       // bootstrap saga runs behind the handle, driven by create's own
       // server-side nudge, and the project home plays it from live pushes.
       const project = session.projects.get(input.slug).create(
         {
           ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
         },
-        { waitUntilReady: false },
+        { readiness: "exists" },
       );
       // Navigate to the server's canonical slug, not the form's: auth may
       // normalize it (reserved names, all-numeric).

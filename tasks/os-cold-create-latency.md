@@ -7,12 +7,12 @@ tags: [os, performance, streams, secrets]
 
 # Cold project-create latency: the background saga is still seconds
 
-The caller-facing half is fixed: `create({}, { waitUntilReady: false })`
+The caller-facing half is fixed: `create({}, { readiness: "exists" })`
 returns after auth-register + directory prime + the atomic root append, and
 the dashboard navigates immediately while the saga streams into the creation
 checklist. This task tracks the remaining latency of the saga itself — it now
 runs behind the response, but it is what the checklist user actually watches,
-and the `waitUntilReady` lane (scripts, e2e) still pays it in full.
+and the `readiness: "full"` lane (scripts, e2e) still pays it in full.
 
 Measured on prd 2026-07-21 (`[create-timing]` via `wrangler tail os-prd`,
 three admin-lane creates):

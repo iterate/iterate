@@ -15,8 +15,9 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-OS starts its onboarding smoke, explicit TUI quarantine marker, Vitest, and
-Playwright as four independent sub-lanes. Therefore, healthy wall time should
+OS starts its onboarding smoke while one non-gating full project prewarms the
+slot. The explicit TUI quarantine marker, Vitest, and Playwright burst starts
+after that prewarm completes. Therefore, healthy wall time should
 approach:
 
 ```text
@@ -34,16 +35,27 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
-- OS smoke, the explicit TUI quarantine marker, Vitest, and Playwright run
-  concurrently. Every background process is joined even if another one fails,
-  so a failure cannot orphan work or discard another lane's result.
-- Chromium installation begins before the four OS lanes and overlaps their
-  startup.
+- Chromium installation and OS onboarding smoke begin before the project
+  prewarm and overlap it. The smoke remains an independent product test; it is
+  not serialized behind the optimization.
+- One exact-version-pinned full project create finishes before the TUI,
+  Vitest, and Playwright remote burst. It warms the shared project bootstrap
+  path without masking a defect: its 70-second operation deadline and outcome
+  are telemetry, while failure is non-gating and the normal isolated suites
+  still prove the product. There is no retry.
+- TUI, Vitest, and Playwright then run concurrently. Every background process
+  is joined even if another one fails, so a failure cannot orphan work or
+  discard another lane's result.
 - OS Vitest gives every current file a worker immediately and permits at most
   two concurrent tests per file in CI. Each file owns isolated projects; the
   examples matrix still overlaps its isolated runtimes inside each case.
-- Root Playwright uses eight fully parallel workers in CI. Preview runs queue the
-  long reconnect/resume specs first so their fixed probe windows overlap the
+- Root Playwright uses eight fully parallel workers in CI. Each worker owns one
+  authenticated admin ITX transport and duplicates it per test; failed tests
+  retire the transport at the next test boundary, with no in-test RPC replay.
+  The REPL catalogue alone reuses one project per worker, mints a fresh forged
+  JWT/cookie for every example, and retires the project after any failed,
+  timed-out, interrupted, or cleanup-failed case. Preview runs queue the long
+  reconnect/resume specs first so their fixed probe windows overlap the
   ordinary catalogue.
 - The job uses a 16-core Depot runner. Measurements on larger runners showed
   the overlapping local work peaking below ten cores; the deployed Worker and
@@ -112,7 +124,9 @@ serially because they intentionally share one warm container.
 - `depot ci metrics --run <run-id> --org 0p91s0lz49` shows host CPU and memory.
 - `[preview] deploy passed: <app> (Ns)` and `[preview] test passed: <app> (Ns)`
   in the run log show phase wall times.
-- `[preview:os] lane start/finish` lines show the four overlapping OS lanes.
+- `[preview:os] lane start/finish` lines show the prewarm and four OS product
+  lanes. Canonical test telemetry breaks project setup into the admin-session,
+  full-readiness, identity, token-forge, and cookie-install phases.
 - The managed preview block in the PR body records per-app deploy duration,
   test duration, and consumed retries.
 

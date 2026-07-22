@@ -1,5 +1,4 @@
 import { expect, type Page } from "@playwright/test";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 // Post-append delivery waits get an explicit backstop in addition to the
@@ -19,7 +18,7 @@ test("reactivity page repaints from a stream subscription after a page action", 
   helpers,
   page,
 }) => {
-  await using projectFixture = await helpers.createFixture("reactivity");
+  await using projectFixture = await helpers.createFixture("reactivity", { readiness: "core" });
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
   await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
@@ -43,7 +42,9 @@ test("reactivity page appends a batch and renders every delivered marker", async
   helpers,
   page,
 }) => {
-  await using projectFixture = await helpers.createFixture("reactivity-batch");
+  await using projectFixture = await helpers.createFixture("reactivity-batch", {
+    readiness: "core",
+  });
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
   await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
@@ -71,7 +72,9 @@ test("reactivity page appends a batch and renders every delivered marker", async
 });
 
 test("reactivity page replays already appended events after reload", async ({ helpers, page }) => {
-  await using projectFixture = await helpers.createFixture("reactivity-replay");
+  await using projectFixture = await helpers.createFixture("reactivity-replay", {
+    readiness: "core",
+  });
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
   await page.getByTestId("reactivity-stream-status").getByText("live").waitFor(STREAM_READY_WAIT);
@@ -96,7 +99,9 @@ test("reactivity page delivers an appended event to another open tab", async ({
   helpers,
   page,
 }) => {
-  await using projectFixture = await helpers.createFixture("reactivity-tabs");
+  await using projectFixture = await helpers.createFixture("reactivity-tabs", {
+    readiness: "core",
+  });
   const otherPage = await context.newPage();
   try {
     await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
@@ -123,11 +128,13 @@ test("reactivity page delivers an appended event to another open tab", async ({
 });
 
 test("reactivity page processor panel goes live and repaints from a server push", async ({
-  baseURL,
+  adminItx,
   helpers,
   page,
 }) => {
-  await using projectFixture = await helpers.createFixture("reactivity-processor");
+  await using projectFixture = await helpers.createFixture("reactivity-processor", {
+    readiness: "core",
+  });
 
   await page.goto(`/projects/${projectFixture.project.slug}/reactivity`);
   // The processor panel must actually be LIVE (a live-state push
@@ -142,8 +149,7 @@ test("reactivity page processor panel goes live and repaints from a server push"
   // Birth a brand-new child stream SERVER-SIDE (no page interaction at all):
   // that changes the project's folded state (streams[]), and the server must
   // push the new fold into the open page.
-  using adminSession = await connectAdminItx(baseURL!);
-  using adminProject = adminSession.projects.get(projectFixture.project.id);
+  using adminProject = adminItx.projects.get(projectFixture.project.id);
   using stream = adminProject.streams.get(`/spec-processor-push/${Date.now().toString(36)}`);
   await stream.append({
     type: "events.iterate.test/spec/processor-push",

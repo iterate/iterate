@@ -338,11 +338,11 @@ been circling:
   ID, then atomically appends the Project and Notification birth certificates
   plus both subscriptions. The Project processor explicitly births the root
   capability host, scheduler, config repo, and email router; `project/ready`
-  records completion. Create always waits both root processors through the
-  batch, then waits for readiness by default and returns the same handle.
-  Callers that render bootstrap progress themselves pass
-  `{ waitUntilReady: false }` as the second argument to skip only the final
-  ready barrier.
+  records completion. Create returns the same handle at one explicit boundary:
+  full readiness by default; `{ readiness: "exists" }` after the atomic birth
+  batch for callers that render bootstrap progress themselves; or
+  `{ readiness: "core" }` after the root and sibling processor birth barrier,
+  without waiting for the seeded repo/worker terminal facts.
   The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd

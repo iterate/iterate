@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
 test("project REPL accepts a forged session", async ({ helpers, page }) => {
-  await using fixture = await helpers.createFixture("basic-repl");
+  await using fixture = await helpers.createFixture("basic-repl", { readiness: "core" });
   await page.goto(`/projects/${fixture.project.slug}/repl`);
   // exact: the project slug can contain "run", which substring-matches sidebar buttons
   await page.getByRole("button", { name: "Run", exact: true }).waitFor();

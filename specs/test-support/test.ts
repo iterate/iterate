@@ -10,7 +10,12 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
+import {
+  type AdminItxSession,
+  AdminItxSessionOwner,
+  connectAdminItx,
+  createProjectFixture as createForgedProjectFixture,
+} from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
 
 const addPagePlugins = (page: Page, testInfo: TestInfo) =>
@@ -33,15 +38,52 @@ const addPagePlugins = (page: Page, testInfo: TestInfo) =>
     boxedStackPrefixes: (defaults) => [...defaults, import.meta.dirname],
   });
 
-export const test = base.extend<{
-  helpers: {
-    createFixture: (
-      slugPrefix: string,
-      options?: { projectCount?: number },
-    ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
-  };
-  page: Awaited<ReturnType<typeof addPagePlugins>>;
-}>({
+export const test = base.extend<
+  {
+    adminItx: AdminItxSession;
+    helpers: {
+      createFixture: (
+        slugPrefix: string,
+        options?: { projectCount?: number; readiness?: "core" | "full" },
+      ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
+    };
+    page: Awaited<ReturnType<typeof addPagePlugins>>;
+  },
+  { adminItxSessionOwner: AdminItxSessionOwner }
+>({
+  adminItxSessionOwner: [
+    async ({ browserName: _browserName }, use) => {
+      using owner = new AdminItxSessionOwner(connectAdminItx);
+      await use(owner);
+    },
+    { scope: "worker" },
+  ],
+  adminItx: async ({ adminItxSessionOwner, baseURL }, use, testInfo) => {
+    if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
+    const session = await base.step("fixture: establish admin ITX session", () =>
+      adminItxSessionOwner.acquire(baseURL),
+    );
+    let disposeFailed = false;
+    try {
+      await use(session);
+    } finally {
+      try {
+        session[Symbol.dispose]();
+      } catch (error) {
+        disposeFailed = true;
+        console.warn("[playwright-fixture] admin ITX duplicate disposal failed", error);
+      }
+      const failedTest =
+        testInfo.status === "failed" ||
+        testInfo.status === "timedOut" ||
+        testInfo.status === "interrupted";
+      if (disposeFailed || failedTest) {
+        adminItxSessionOwner.invalidate(
+          disposeFailed ? "duplicate disposal failed" : `test ended ${testInfo.status}`,
+        );
+      }
+    }
+  },
   context: async ({ context }, use) => {
     if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0) {
       await context.route("**/*", async (route) => {
@@ -71,13 +113,32 @@ export const test = base.extend<{
     }
     await use(context);
   },
-  helpers: async ({ baseURL, page }, use) => {
+  helpers: async ({ adminItx, baseURL, page }, use, testInfo) => {
     if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
     await use({
       createFixture: (slugPrefix, options) =>
-        base.step("create project fixture", () =>
-          createForgedProjectFixture(slugPrefix, { baseURL, page, ...options }),
-        ),
+        base.step("create project fixture", async () => {
+          const fixture = await createForgedProjectFixture(slugPrefix, {
+            adminItx,
+            baseURL,
+            page,
+            step: (name, body) => base.step(name, body),
+            ...options,
+          });
+          const correlation = {
+            projectIds: fixture.projects.map(({ id }) => id),
+            projectSlugs: fixture.projects.map(({ slug }) => slug),
+          };
+          testInfo.annotations.push({
+            type: "fixture-projects",
+            description: JSON.stringify(correlation),
+          });
+          await testInfo.attach("fixture-projects", {
+            body: JSON.stringify(correlation, null, 2),
+            contentType: "application/json",
+          });
+          return fixture;
+        }),
     });
   },
   page: async ({ page: basePage }, use, testInfo) => {

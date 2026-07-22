@@ -33,6 +33,7 @@ import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
   compactRetryFailure,
   OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
+  OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
@@ -1780,6 +1781,8 @@ export type PreviewTestSummary = PreviewRetrySummary & {
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
 /** Structured timing for the standalone onboarding smoke's logical test. */
 const osOnboardingSmokeTelemetryFile = "/tmp/os-preview-onboarding-smoke.json";
+/** Non-gating full-project prewarm, serialized before the burst lanes. */
+const osProjectPrewarmTelemetryFile = "/tmp/os-preview-project-prewarm.json";
 /** Same JSON shape, written by the Microsoft TUI Test wrapper. */
 const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
@@ -2111,6 +2114,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
     previewTestArtifactSources: [
+      previewScriptArtifactSource("preview-project-prewarm", "project-prewarm", "iterate-root"),
       previewScriptArtifactSource("onboarding-smoke", "onboarding-smoke", "iterate-root"),
       previewScriptArtifactSource("tui-quarantine", "tui", "iterate-root"),
       previewVitestArtifactSource("@iterate-com/os"),
@@ -2131,14 +2135,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
-        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osOnboardingSmokeTelemetryFile} ../../test-results/playwright-results.json`,
+        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osOnboardingSmokeTelemetryFile} ${osProjectPrewarmTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
-        // let it overlap the smoke and the vitest lane; it's ready by the
+        // let it overlap the smoke and project prewarm; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
-        // Smoke, TUI, Vitest, and Playwright own isolated state, so start them
-        // together. The examples matrix shares one project but marker-isolates
-        // every mutable resource.
+        // Smoke owns isolated state and starts immediately. One full project
+        // prewarm then finishes before the TUI/Vitest/Playwright burst. The
+        // REPL examples matrix shares only its worker-local pooled projects
+        // and marker-isolates every mutable resource.
         //
         // The `timeout` on the vitest lane is a WATCHDOG, not a retry
         // (docs/testing.md#retries-and-timeouts): it sits just above a
@@ -2156,6 +2161,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `PREWARM_OK=0; run_visible_lane project-prewarm env TEST_TELEMETRY_LANE=project-prewarm TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osProjectPrewarmTelemetryFile} timeout --signal=TERM --kill-after=5s ${OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS}s pnpm exec tsx e2e/vitest/preview-project-prewarm.ts || PREWARM_OK=$?`,
+        'if [ "$PREWARM_OK" -ne 0 ]; then echo "[preview:os] project prewarm infrastructure failed (non-gating for product lanes): exit $PREWARM_OK"; fi',
         `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         `run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
@@ -2170,7 +2177,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ].join("; "),
     ],
     collectTestTelemetry: async ({ repositoryRoot }) => {
-      const [smoke, vitest, specs] = await Promise.all([
+      const [prewarm, smoke, vitest, specs] = await Promise.all([
+        readTestTelemetryLane("os project prewarm", () =>
+          readCanonicalTestTelemetry(osProjectPrewarmTelemetryFile, "project-prewarm"),
+        ),
         readTestTelemetryLane("os onboarding smoke", () =>
           readCanonicalTestTelemetry(osOnboardingSmokeTelemetryFile, "onboarding smoke"),
         ),
@@ -2185,7 +2195,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         ),
       ]);
       // TUI is currently an explicit no-op skip and produces no test report.
-      return combineTestSummaries([smoke, vitest, specs]);
+      return combineTestSummaries([prewarm, smoke, vitest, specs]);
     },
   },
   semaphore: {

@@ -5056,19 +5056,33 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Register (for a prospective slug) and append the complete root birth
    * batch. By default this resolves once the bootstrap saga has committed
    * `project/ready` — the right shape for scripts that use the project
-   * immediately. `waitUntilReady: false` resolves as soon as the project
-   * EXISTS (identity registered, directory primed, birth events appended):
-   * the caller renders bootstrap progress itself, so nobody is left waiting.
-   * The durable-delivery subscriptions committed in the birth batch are what
-   * guarantee the saga runs; create also nudges both root processors AFTER
-   * this response, and a failed nudge is telemetry, not a create failure —
-   * the checklist's stall detector covers the rest. Either lane returns this
-   * same handle, and addressing an unknown slug is side-effect free.
+   * immediately. `readiness: "exists"` resolves as soon as identity is
+   * registered, the directory is primed, and birth events are appended; the
+   * caller renders bootstrap progress itself. `readiness: "core"` additionally
+   * waits both root processors through that birth batch, which transitively
+   * waits the root capability host, scheduler, config-repo processor, and
+   * email router through their own birth batches. It deliberately does not
+   * wait for the config repo's terminal seed certificate or default worker.
+   *
+   * Durable-delivery subscriptions committed in the root batch guarantee the
+   * saga runs. The exists lane also nudges both root processors after its
+   * response; a failed nudge is telemetry, not a create failure, because
+   * durable delivery still owns completion. Every lane returns this same
+   * handle, and addressing an unknown slug is side-effect free.
    */
   async create(
     args: { organizationSlug?: string; projectId?: string } = {},
-    options?: { waitUntilReady?: boolean },
+    options?: { readiness?: "exists" | "core" | "full" },
   ): Promise<ProjectRpcTarget> {
+    const unknownOption = Object.keys(options ?? {}).find((key) => key !== "readiness");
+    if (unknownOption !== undefined) {
+      throw new TypeError(`Unknown project create option ${JSON.stringify(unknownOption)}.`);
+    }
+    const readiness = options?.readiness ?? "full";
+    if (readiness !== "exists" && readiness !== "core" && readiness !== "full") {
+      throw new TypeError(`Unknown project create readiness ${JSON.stringify(readiness)}.`);
+    }
+
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -5189,19 +5203,30 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           }),
         ]),
       );
-    // Fast path: identity + directory + committed birth events are enough for
-    // callers that watch the saga as live state. The seed and the birth drive
-    // run behind the response: the durable-delivery subscriptions committed in
-    // the birth batch are what guarantee the saga runs; these nudges only
-    // accelerate it, so the caller no longer pays for either.
-    if (options?.waitUntilReady === false) {
+    // Exists lane: identity + directory + committed birth events are enough
+    // for callers that watch the saga as live state. The seed and birth drive
+    // run behind the response. Durable delivery owns completion; these nudges
+    // only accelerate it, so the caller no longer pays for either.
+    if (readiness === "exists") {
       const ctx = this.#props.ctx;
       ctx.waitUntil(timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey));
       ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
       return this;
     }
 
-    // Ready lane: the birth events are already committed and durable delivery
+    // Core lane: wait the existing root/sibling processor birth barrier, but
+    // leave the independent API-key seed and config-repo terminal certificate
+    // behind the response. A caller that needs either the repo or worker must
+    // use the full lane instead of trading this modelled boundary for a UI wait.
+    if (readiness === "core") {
+      this.#props.ctx.waitUntil(
+        timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
+      );
+      await driveBirth("wait-project-birth");
+      return this;
+    }
+
+    // Full lane: the birth events are already committed and durable delivery
     // is already driving both processors, so the seed's own barrier and the
     // birth wait overlap safely — sequencing them would only add latency.
     await Promise.all([

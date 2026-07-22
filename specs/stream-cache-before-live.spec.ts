@@ -1,16 +1,16 @@
 import { expect, type WebSocketRoute } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
-import { connectAdminItx } from "./test-support/forged-session.ts";
 import { test } from "./test-support/test.ts";
 
 test("empty agent feeds distinguish waiting from filtered zero matches", async ({
-  baseURL,
+  adminItx,
   helpers,
   page,
 }) => {
-  await using fixture = await helpers.createFixture("agent-initializing");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  await using fixture = await helpers.createFixture("agent-initializing", {
+    readiness: "core",
+  });
+  using project = adminItx.projects.get(fixture.project.id);
   const agentPath = `/agents/waiting-${crypto.randomUUID().slice(0, 8)}`;
   using agent = project.agents.get(agentPath);
 
@@ -54,13 +54,14 @@ test("empty agent feeds distinguish waiting from filtered zero matches", async (
 });
 
 test("a cold stream stays pending until its server history catches up", async ({
-  baseURL,
+  adminItx,
   helpers,
   page,
 }) => {
-  await using fixture = await helpers.createFixture("stream-cold-history");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+  await using fixture = await helpers.createFixture("stream-cold-history", {
+    readiness: "core",
+  });
+  using project = adminItx.projects.get(fixture.project.id);
   const streamPath = `/spec/cold-history-${crypto.randomUUID().slice(0, 8)}`;
   using stream = project.streams.get(streamPath);
   await stream.append({ type: "events.iterate.com/spec/cold-history", payload: {} });
@@ -86,10 +87,9 @@ test("a cold stream stays pending until its server history catches up", async ({
     .waitFor({ timeout: 30_000 });
 });
 
-test("a cached stream opens before its live connection", async ({ baseURL, helpers, page }) => {
-  await using fixture = await helpers.createFixture("stream-cache");
-  using admin = await connectAdminItx(baseURL!);
-  using project = admin.projects.get(fixture.project.id);
+test("a cached stream opens before its live connection", async ({ adminItx, helpers, page }) => {
+  await using fixture = await helpers.createFixture("stream-cache", { readiness: "core" });
+  using project = adminItx.projects.get(fixture.project.id);
   const streamPath = `/spec/cache-before-live-${crypto.randomUUID().slice(0, 8)}`;
   using stream = project.streams.get(streamPath);
   await stream.append({

@@ -202,8 +202,14 @@ registers that slug with the auth worker (the project directory — OS has no
 database of its own), adopts the directory-issued project ID, primes the KV
 cache, then appends the Project and notification birth certificates plus both
 processor subscriptions onto the project's root stream in one atomic batch.
-It waits both processors through that batch and then waits for `project/ready`
-before returning the same handle. The Project processor
+The default `{ readiness: "full" }` waits both processors through that batch
+and then waits for `project/ready` before returning the same handle.
+`{ readiness: "exists" }` returns after the atomic root batch and leaves the
+durable saga self-driving for progress UIs. `{ readiness: "core" }` waits the
+existing root-processor barrier: root sibling processors have reduced their
+birth/request batches, but the config-repo seed and default worker are not yet
+guaranteed ready. Repo- or worker-using callers therefore stay on `full`. The
+Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at

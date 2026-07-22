@@ -84,18 +84,23 @@ export interface Project {
    * Register (for a prospective slug) and append the complete root birth
    * batch. By default this resolves once the bootstrap saga has committed
    * `project/ready` — the right shape for scripts that use the project
-   * immediately. `waitUntilReady: false` resolves as soon as the project
-   * EXISTS (identity registered, directory primed, birth events appended):
-   * the caller renders bootstrap progress itself, so nobody is left waiting.
-   * The durable-delivery subscriptions committed in the birth batch are what
-   * guarantee the saga runs; create also nudges both root processors AFTER
-   * this response, and a failed nudge is telemetry, not a create failure —
-   * the checklist's stall detector covers the rest. Either lane returns this
-   * same handle, and addressing an unknown slug is side-effect free.
+   * immediately. `readiness: "exists"` resolves as soon as identity is
+   * registered, the directory is primed, and birth events are appended; the
+   * caller renders bootstrap progress itself. `readiness: "core"` additionally
+   * waits both root processors through that birth batch, which transitively
+   * waits the root capability host, scheduler, config-repo processor, and
+   * email router through their own birth batches. It deliberately does not
+   * wait for the config repo's terminal seed certificate or default worker.
+   *
+   * Durable-delivery subscriptions committed in the root batch guarantee the
+   * saga runs. The exists lane also nudges both root processors after its
+   * response; a failed nudge is telemetry, not a create failure, because
+   * durable delivery still owns completion. Every lane returns this same
+   * handle, and addressing an unknown slug is side-effect free.
    */
   create(
     args: { organizationSlug?: string; projectId?: string },
-    options?: { waitUntilReady?: boolean },
+    options?: { readiness?: "exists" | "core" | "full" },
   ): Promise<Project>;
   /**
    * Canonical identity from the project directory: id, slug (the auth
