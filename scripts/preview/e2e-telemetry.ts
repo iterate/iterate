@@ -4,6 +4,8 @@ import {
   testTelemetryArtifactId,
   writeTestTelemetryArtifact,
   writeTestTelemetryFailureSentinel,
+  type DeploymentTelemetry,
+  type DeploymentTelemetryLane,
   type TestTelemetryArtifact,
   type TestTelemetryArtifactSource,
   type TestTelemetryLane,
@@ -13,7 +15,7 @@ type RunContext = {
   branch?: string;
   environment: NodeJS.ProcessEnv;
   headSha: string;
-  operation: "test" | "run";
+  operation: "deploy" | "test" | "run";
   pullRequestNumber: number;
   runUrl: string | null;
 };
@@ -32,7 +34,10 @@ export class PreviewE2eTelemetryArtifact {
   };
   private readonly environment: NodeJS.ProcessEnv;
   private readonly expectedArtifactSources: TestTelemetryArtifactSource[] = [];
+  private readonly deploymentLanes: DeploymentTelemetryLane[] = [];
   private readonly lanes: TestTelemetryLane[] = [];
+  private deploymentResult: DeploymentTelemetry | null = null;
+  private deploymentStartedAtMs: number | null = null;
   private runResult: TestTelemetryArtifact["run"] | null = null;
   private startedAtMs = Date.now();
 
@@ -66,6 +71,57 @@ export class PreviewE2eTelemetryArtifact {
     // If the orchestrator is killed, the finalizer can still prove which
     // runner artifacts should have appeared instead of accepting their silence.
     this.writeFailureSentinel();
+  }
+
+  deployRunStarted() {
+    this.deploymentStartedAtMs = Date.now();
+  }
+
+  deployAppFinished(input: {
+    app: string;
+    slot?: string;
+    status: "passed" | "failed";
+    durationMs: number;
+    configDurationMs?: number | null;
+    commandDurationMs?: number | null;
+    readinessDurationMs?: number | null;
+    reuseProofDurationMs?: number | null;
+    workerName?: string | null;
+    workerVersion?: string | null;
+  }) {
+    this.deploymentLanes.push({
+      app: input.app,
+      ...(input.slot ? { previewSlot: input.slot } : {}),
+      status: input.status,
+      durationMs: input.durationMs,
+      finishedAt: new Date().toISOString(),
+      configDurationMs: input.configDurationMs,
+      commandDurationMs: input.commandDurationMs,
+      readinessDurationMs: input.readinessDurationMs,
+      reuseProofDurationMs: input.reuseProofDurationMs,
+      workerName: input.workerName,
+      workerVersion: input.workerVersion,
+    });
+  }
+
+  deployRunFinished(input: {
+    status: "passed" | "failed" | "skipped";
+    durationMs: number;
+    slot?: string;
+    error?: unknown;
+  }) {
+    const finishedAt = new Date().toISOString();
+    const startedAtMs = this.deploymentStartedAtMs ?? Date.now() - input.durationMs;
+    this.deploymentResult = {
+      deploymentKind: "cloudflare-preview",
+      status: input.status,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt,
+      durationMs: input.durationMs,
+      ...(input.slot ? { previewSlot: input.slot } : {}),
+      ...(input.error ? { error: normalizeTestTelemetryError(input.error) } : {}),
+      lanes: this.deploymentLanes,
+    };
   }
 
   appFinished(input: {
@@ -144,6 +200,7 @@ export class PreviewE2eTelemetryArtifact {
       context: this.context,
       expectedArtifactSources: this.expectedArtifactSources,
       run: this.runResult,
+      ...(this.deploymentResult ? { deployment: this.deploymentResult } : {}),
       lanes: this.lanes,
       tests: [],
       modules: [],

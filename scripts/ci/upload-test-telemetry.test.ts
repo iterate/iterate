@@ -159,6 +159,54 @@ it("transmogrifies one runner-independent artifact into the shared PostHog event
   });
 });
 
+it("normalizes retained preview deployment evidence without reporter network I/O", () => {
+  const events = testTelemetryEvents({
+    ...artifact,
+    deployment: {
+      deploymentKind: "cloudflare-preview",
+      status: "passed",
+      startedAt: "2026-07-21T09:58:00.000Z",
+      finishedAt: "2026-07-21T10:00:00.000Z",
+      durationMs: 120_000,
+      previewSlot: "preview-3",
+      lanes: [
+        {
+          app: "os",
+          previewSlot: "preview-3",
+          status: "passed",
+          durationMs: 115_500,
+          finishedAt: "2026-07-21T09:59:58.000Z",
+          configDurationMs: 500,
+          commandDurationMs: 42_900,
+          readinessDurationMs: 72_100,
+          workerName: "os-preview-3",
+          workerVersion: "11111111-1111-4111-8111-111111111111",
+        },
+      ],
+    },
+  });
+  const deploymentEvents = events.filter(({ event }) => event.startsWith("ci deploy "));
+
+  expect(deploymentEvents.map(({ event }) => event)).toEqual([
+    "ci deploy run started",
+    "ci deploy lane finished",
+    "ci deploy phase finished",
+    "ci deploy phase finished",
+    "ci deploy phase finished",
+    "ci deploy run finished",
+  ]);
+  expect(deploymentEvents[1]).toMatchObject({
+    timestamp: "2026-07-21T09:59:58.000Z",
+    properties: {
+      app: "os",
+      command_duration_ms: 42_900,
+      readiness_duration_ms: 72_100,
+      worker_name: "os-preview-3",
+      worker_version: "11111111-1111-4111-8111-111111111111",
+    },
+  });
+});
+
 it("keeps raw and normalized JSON for replay while dry-run skips delivery", async () => {
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-finalizer-"));
   writeTestTelemetryArtifact(artifact, { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") });
