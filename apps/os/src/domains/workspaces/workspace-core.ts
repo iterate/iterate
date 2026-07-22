@@ -41,10 +41,12 @@ export interface MountRepoAccess {
     encoding?: "utf8" | "base64";
   }): Promise<{ commitOid: string; content: string; path: string } | null>;
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-  /** The whole HEAD tree's text contents in ONE call (head-cache-backed) —
-   * bulk consumers must use this instead of fanning readFile() per path,
-   * which overloads the repo object. */
-  getFilesSnapshot(input?: { branch?: string }): Promise<{
+  /** HEAD tree text contents in ONE call (head-cache-backed) — bulk consumers
+   * must use this instead of fanning readFile() per path, which overloads the
+   * repo object. `paths` scopes the returned record to exactly those
+   * repo-relative files; mount reads MUST pass it, because a big repo's full
+   * tree does not fit a 32MiB RPC (iterate/iterate: 43.7MB at HEAD). */
+  getFilesSnapshot(input?: { branch?: string; paths?: string[] }): Promise<{
     commitOid: string;
     files: Record<string, string>;
   }>;
@@ -229,10 +231,55 @@ export class WorkspaceCore {
     return resolved === null || resolved.repoRelativePath === "" ? null : resolved;
   }
 
-  /** The OVERLAY copy only — no mount fall-through (bulk readers group the
-   * fall-through per mount themselves; see the DO's readFiles). */
+  /** The OVERLAY copy only — no mount fall-through (bulk readers take the
+   * batched fall-through arm instead; see readMountFiles). */
   async readOverlayFile(path: string): Promise<string | null> {
     return this.#workspace.readFile(path);
+  }
+
+  /**
+   * The batched mount fall-through — readFile's routing at bulk-read scale.
+   * Each mount pays ONE snapshot RPC scoped to exactly the repo-relative
+   * paths routed to it: fanning readFile() per path overloads the repo
+   * object, and an UNSCOPED snapshot ships the whole HEAD tree across a
+   * 32MiB-capped RPC (43.7MB on iterate/iterate — the board-seed outage).
+   * Paths that resolve to no mount (whiteouts, virtual directories, scratch)
+   * read as null.
+   */
+  async readMountFiles(paths: string[]): Promise<Record<string, string | null>> {
+    const result: Record<string, string | null> = {};
+    // ONE mount-table read, then synchronous grouping — an awaited read per
+    // path could interleave with a configure, mint two groups for one mount,
+    // and route them by different tables.
+    const mounts = await this.#mounts();
+    const byMount = new Map<
+      string,
+      { entries: { path: string; repoRelativePath: string }[]; repoPath: string }
+    >();
+    for (const path of paths) {
+      const resolved = this.resolveMountFallThrough(mounts, path);
+      if (resolved === null) {
+        result[path] = null;
+        continue;
+      }
+      const group = byMount.get(resolved.mountPath) ?? {
+        entries: [],
+        repoPath: resolved.mount.repoPath,
+      };
+      group.entries.push({ path, repoRelativePath: resolved.repoRelativePath });
+      byMount.set(resolved.mountPath, group);
+    }
+    await Promise.all(
+      [...byMount.values()].map(async (group) => {
+        const snapshot = await this.#repo(group.repoPath).getFilesSnapshot({
+          paths: group.entries.map((entry) => entry.repoRelativePath),
+        });
+        for (const entry of group.entries) {
+          result[entry.path] = snapshot.files[entry.repoRelativePath] ?? null;
+        }
+      }),
+    );
+    return result;
   }
 
   /** The BASE of a path — its mount's content at HEAD, ignoring the overlay

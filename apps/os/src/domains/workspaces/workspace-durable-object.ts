@@ -362,39 +362,11 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
         leftover.push(path);
       }),
     );
-    // Grouping is SYNCHRONOUS — an awaited get/set per path could interleave,
-    // mint two groups for one mount, and drop the first group's members. The
-    // fall-through mirrors readFile exactly: whiteouts mask, virtual
-    // directories are directories, and the ROUTED repo-relative key (not a
-    // string slice of the raw path) addresses the snapshot. The mount table
-    // is read HERE — after the awaits — so a configure landing during the
-    // local reads routes exactly as a fresh per-file readFile would.
-    const mounts = this.#currentConfig().mounts;
-    const byMount = new Map<
-      string,
-      { entries: { path: string; repoRelativePath: string }[]; repoPath: string }
-    >();
-    for (const path of leftover) {
-      const resolved = this.#core.resolveMountFallThrough(mounts, path);
-      if (resolved === null) {
-        result[path] = null;
-        continue;
-      }
-      const group = byMount.get(resolved.mountPath) ?? {
-        entries: [],
-        repoPath: resolved.mount.repoPath,
-      };
-      group.entries.push({ path, repoRelativePath: resolved.repoRelativePath });
-      byMount.set(resolved.mountPath, group);
-    }
-    await Promise.all(
-      [...byMount.values()].map(async (group) => {
-        const snapshot = await this.#repoStub(group.repoPath).getFilesSnapshot();
-        for (const entry of group.entries) {
-          result[entry.path] = snapshot.files[entry.repoRelativePath] ?? null;
-        }
-      }),
-    );
+    // The core groups the fall-through per mount and asks each repo for
+    // exactly the routed paths — the mount table is read THERE, after the
+    // local awaits, so a configure landing during them routes exactly as a
+    // fresh per-file readFile would.
+    Object.assign(result, await this.#core.readMountFiles(leftover));
     return result;
   }
 
