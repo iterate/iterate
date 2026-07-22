@@ -155,7 +155,7 @@ export function encodeTree(entries: TreeEntry[]): Uint8Array {
   );
 }
 
-export interface CommitFields {
+interface CommitFields {
   message: string;
   parents: string[];
   tree: string;
@@ -442,7 +442,7 @@ export function parseLsRefs(body: Uint8Array): LsRefsEntry[] {
   return refs;
 }
 
-export interface FetchResponse {
+interface FetchResponse {
   acks: string[];
   pack: Uint8Array;
   shallow: string[];
