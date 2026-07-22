@@ -73,31 +73,41 @@ export async function runCapabilityHostScript(input: {
     throw new Error(`Script execution "${command.executionId}" committed no request event.`);
   }
 
+  const settlementIdempotencyKey = `capability-host/script-run-settled@${command.executionId}`;
   const timeoutMs = command.expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - now();
-  if (timeoutMs <= 0) {
-    throw new Error(
-      `Script execution "${command.executionId}" did not settle before its absolute deadline.`,
-    );
-  }
-
-  // Replay from the durable request offset. A settlement that committed
-  // before the append acknowledgement or before this wait opened cannot fall
-  // into a cursor-less subscription gap.
   let completedEvent: StreamEvent;
-  try {
-    completedEvent = await stream.waitForEvent({
-      afterOffset: requested.offset,
-      eventTypes: [SCRIPT_SETTLED],
-      predicate: (event) =>
-        event.idempotencyKey === `capability-host/script-run-settled@${command.executionId}`,
-      timeoutMs,
+  if (timeoutMs <= 0) {
+    // A slow append acknowledgement can arrive after the observation window
+    // even though the processor already committed the keyed settlement. One
+    // point read preserves that authoritative outcome without opening a new
+    // unbounded wait after the absolute deadline.
+    const committedSettlement = await stream.getEvent({
+      idempotencyKey: settlementIdempotencyKey,
     });
-  } catch (error) {
-    if (!isStreamWaitTimeoutError(error)) throw error;
-    throw new Error(
-      `Script execution "${command.executionId}" did not settle before its absolute deadline.`,
-      { cause: error },
-    );
+    if (committedSettlement === undefined) {
+      throw new Error(
+        `Script execution "${command.executionId}" did not settle before its absolute deadline.`,
+      );
+    }
+    completedEvent = committedSettlement;
+  } else {
+    // Replay from the durable request offset. A settlement that committed
+    // before the append acknowledgement or before this wait opened cannot fall
+    // into a cursor-less subscription gap.
+    try {
+      completedEvent = await stream.waitForEvent({
+        afterOffset: requested.offset,
+        eventTypes: [SCRIPT_SETTLED],
+        predicate: (event) => event.idempotencyKey === settlementIdempotencyKey,
+        timeoutMs,
+      });
+    } catch (error) {
+      if (!isStreamWaitTimeoutError(error)) throw error;
+      throw new Error(
+        `Script execution "${command.executionId}" did not settle before its absolute deadline.`,
+        { cause: error },
+      );
+    }
   }
   if (
     completedEvent.type !== SCRIPT_SETTLED ||

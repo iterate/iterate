@@ -71,6 +71,29 @@ describe("runCapabilityHostScript", () => {
     expect(stream.events.filter((event) => event.type === SCRIPT_SETTLED)).toHaveLength(1);
   });
 
+  it("returns a settlement committed before a late append acknowledgement", async () => {
+    const startedAt = Date.parse("2026-07-22T00:00:00Z");
+    const stream = await bornStream();
+    const now = vi
+      .fn<() => number>()
+      .mockReturnValueOnce(startedAt)
+      .mockReturnValue(startedAt + 75_001);
+
+    await expect(
+      runCapabilityHostScript({
+        command: command(startedAt),
+        now,
+        path: PATH,
+        projectId: PROJECT_ID,
+        stream: settleBeforeRequestAcknowledgement(stream, {
+          status: "succeeded",
+          result: 42,
+        }),
+      }),
+    ).resolves.toMatchObject({ executionId: "exec-stable", result: 42 });
+    expect(now).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces a successor incarnation's orphan settlement instead of waiting on the dead one", async () => {
     const now = Date.parse("2026-07-22T00:00:00Z");
     const stream = await bornStream();

@@ -4799,11 +4799,20 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
       executionId: crypto.randomUUID(),
       expiresAt: Date.now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
     };
-    return await runCapabilityHostScript({
-      command,
-      path: this.#props.path,
-      projectId: this.#props.projectId,
-      stream: this.#stream,
+    return await retryLoggedIdempotentOperation({
+      context: {
+        executionId: command.executionId,
+        path: this.#props.path,
+        projectId: this.#props.projectId,
+      },
+      message: "script run rejoining after stream Durable Object reset",
+      operation: async () =>
+        await runCapabilityHostScript({
+          command,
+          path: this.#props.path,
+          projectId: this.#props.projectId,
+          stream: this.#stream,
+        }),
     });
   }
 
