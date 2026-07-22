@@ -127,6 +127,7 @@ export class AgentDurableObject extends DurableObject<Env> {
           connection,
           method,
           projectId: this.#name.projectId,
+          streamContext: { kind: "scope", scopePath: this.#name.path },
         });
       },
       getAgentRuntimeTransition: () => this.#agentReads.currentState.runtimeChange,
@@ -137,6 +138,7 @@ export class AgentDurableObject extends DurableObject<Env> {
             connection,
             method: "conversations.info",
             projectId: this.#name.projectId,
+            streamContext: { kind: "scope", scopePath: this.#name.path },
           })) as { channel?: { name?: unknown } };
           const name = result.channel?.name;
           return typeof name === "string" && name.length > 0 ? name : null;
@@ -209,6 +211,7 @@ export class AgentDurableObject extends DurableObject<Env> {
             connection,
             method,
             projectId: this.#name.projectId,
+            streamContext: { kind: "scope", scopePath: this.#name.path },
           });
         } catch (error) {
           console.error("[telegram-agent] Telegram side effect failed", {
@@ -227,6 +230,7 @@ export class AgentDurableObject extends DurableObject<Env> {
           connection,
           method: "sendMessage",
           projectId: this.#name.projectId,
+          streamContext: { kind: "scope", scopePath: this.#name.path },
         });
         const messageId = (result.result as { message_id?: unknown } | undefined)?.message_id;
         if (typeof messageId !== "number") {

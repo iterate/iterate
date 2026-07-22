@@ -15,6 +15,7 @@ import { Octokit } from "octokit";
 import { itxEnv } from "../../env.ts";
 import { isPathMissMessage } from "../../itx/path-proxy.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import { githubAccessTokenPlaceholder } from "./utils.ts";
 
 /**
@@ -29,6 +30,7 @@ import { githubAccessTokenPlaceholder } from "./utils.ts";
 export function connectionOctokit(input: {
   baseUrl?: string;
   connection: string;
+  streamContext: StreamContext;
   projectId: string;
 }): Octokit {
   const placeholder = `Bearer ${githubAccessTokenPlaceholder(input.connection)}`;
@@ -48,7 +50,9 @@ export function connectionOctokit(input: {
       fetch: (url: string, init: RequestInit = {}) => {
         const headers = new Headers(init.headers);
         headers.set("authorization", placeholder);
-        return egress.fetch(new Request(url, { ...init, headers }));
+        return egress.fetch(
+          withStreamContext(new Request(url, { ...init, headers }), input.streamContext),
+        );
       },
     },
   });

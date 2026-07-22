@@ -22,6 +22,7 @@ test("a Gmail API request enters project egress with its access-token placeholde
   const response = await callGmailApi({
     authorization:
       'Bearer getSecret("/secrets/integrations/google/alice", { field: "accessToken" })',
+    streamContext: { kind: "scope", scopePath: "/agents/gmail" },
     projectId: "prj_1",
     request: {
       body: { raw: "base64url-mime" },
@@ -32,6 +33,10 @@ test("a Gmail API request enters project egress with its access-token placeholde
 
   expect(response).toMatchObject({ data: { id: "message-123" }, status: 200 });
   expect(captured.projectDurableObjectName).toContain("prj_1");
+  expect(JSON.parse(captured.request!.headers.get("x-iterate-internal-stream-context")!)).toEqual({
+    kind: "scope",
+    scopePath: "/agents/gmail",
+  });
   expect(captured.request).toMatchObject({
     method: "POST",
     url: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",

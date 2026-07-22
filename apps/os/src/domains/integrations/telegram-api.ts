@@ -13,6 +13,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import { telegramBotTokenSecretPath } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
@@ -44,6 +45,7 @@ export async function callProjectTelegramBotApi(input: {
   connection: string;
   method: string;
   projectId: string;
+  streamContext: StreamContext;
 }): Promise<TelegramBotApiResult> {
   const placeholder = `getSecret("${telegramBotTokenSecretPath(input.connection)}")`;
   const request = new Request(
@@ -54,7 +56,9 @@ export async function callProjectTelegramBotApi(input: {
       method: "POST",
     },
   );
-  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(request);
+  const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(
+    withStreamContext(request, input.streamContext),
+  );
   if (response.status === 400 || response.status === 403 || response.status === 404) {
     // secret_not_found / secret_not_allowed_for_origin errors from the secret
     // pipeline — not a Telegram response. Name the connection so the failure

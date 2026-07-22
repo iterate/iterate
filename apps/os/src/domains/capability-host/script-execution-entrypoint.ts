@@ -1,7 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
-import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { normalizePath } from "../durable-object-names.ts";
+import type { StreamContext } from "../projects/stream-context.ts";
+import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";
@@ -64,11 +65,13 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       emittedJs?: string;
       /** Absolute epoch-ms deadline for the complete dynamic-worker call. */
       expiresAt: number;
+      streamContext: Extract<StreamContext, { kind: "script-execution" }>;
     },
   ): Promise<ScriptExecutionSettlement> {
     const projectId = this.ctx.props.projectId;
     const scopePath = normalizePath(this.ctx.props.scopePath);
     const dynamicWorkers = new DynamicWorkerRunner({
+      streamContext: options.streamContext,
       exports: this.ctx.exports,
       projectId,
       scopePath,

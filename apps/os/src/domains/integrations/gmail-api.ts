@@ -5,11 +5,13 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext, type StreamContext } from "../projects/stream-context.ts";
 import type { GmailRequestInput } from "./types.ts";
 
 export async function callGmailApi(input: {
   /** The Gmail REST call. */
   request: GmailRequestInput;
+  streamContext: StreamContext;
   projectId: string;
   /** The Authorization header VALUE — a `Bearer getSecret(...)` placeholder the
    * connection secret substitutes; never a raw token. */
@@ -18,17 +20,20 @@ export async function callGmailApi(input: {
   const method = (input.request.method ?? "GET").trim().toUpperCase();
   const url = gmailUrl(input.request);
   const response = await projectStub(itxEnv.PROJECT, input.projectId).fetch(
-    new Request(url, {
-      method,
-      headers: {
-        ...(input.request.body === undefined ? {} : { "content-type": "application/json" }),
-        ...(input.request.headers ?? {}),
-        authorization: input.authorization,
-      },
-      ...(input.request.body === undefined || method === "GET" || method === "HEAD"
-        ? {}
-        : { body: JSON.stringify(input.request.body) }),
-    }),
+    withStreamContext(
+      new Request(url, {
+        method,
+        headers: {
+          ...(input.request.body === undefined ? {} : { "content-type": "application/json" }),
+          ...(input.request.headers ?? {}),
+          authorization: input.authorization,
+        },
+        ...(input.request.body === undefined || method === "GET" || method === "HEAD"
+          ? {}
+          : { body: JSON.stringify(input.request.body) }),
+      }),
+      input.streamContext,
+    ),
   );
 
   const contentType = response.headers.get("content-type") ?? "";
