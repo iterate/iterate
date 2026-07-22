@@ -53,7 +53,6 @@ export class DynamicWorkerRunner {
   readonly #globalOutbound: Fetcher;
   readonly #projectId: string;
   readonly #scopePath: string;
-  readonly #waitUntil: (promise: Promise<unknown>) => void;
 
   constructor(props: {
     /** The hosting context's `ctx.exports` — loopback entrypoints are minted
@@ -62,9 +61,6 @@ export class DynamicWorkerRunner {
     projectId: string;
     /** The itx scope the loaded code runs in (its `env.ITX` answers here). */
     scopePath: string;
-    /** The host's `ctx.waitUntil` — keeps budget-expired cold builds alive
-     * past the request that gave up on them (see resolveWorkerSource). */
-    waitUntil: (promise: Promise<unknown>) => void;
   }) {
     const itxScope = itxEntrypointProps({
       path: props.scopePath,
@@ -75,7 +71,6 @@ export class DynamicWorkerRunner {
     this.#globalOutbound = projectEgressFetcher(props.exports, props.projectId);
     this.#projectId = props.projectId;
     this.#scopePath = props.scopePath;
-    this.#waitUntil = props.waitUntil;
   }
 
   /**
@@ -150,7 +145,6 @@ export class DynamicWorkerRunner {
           buildBudgetMs,
           projectId: this.#projectId,
           source: ref.source,
-          waitUntil: this.#waitUntil,
         });
         const asset = await env.WORKER_BUNDLER.handleAssetRequest(
           request,
@@ -179,7 +173,6 @@ export class DynamicWorkerRunner {
           buildBudgetMs,
           projectId: this.#projectId,
           source: ref.source,
-          waitUntil: this.#waitUntil,
         });
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
@@ -275,7 +268,6 @@ export class DynamicWorkerRunner {
       buildBudgetMs,
       projectId: this.#projectId,
       source: ref.source,
-      waitUntil: this.#waitUntil,
     });
     return { resolved, worker: this.#loadResolved(resolved) };
   }

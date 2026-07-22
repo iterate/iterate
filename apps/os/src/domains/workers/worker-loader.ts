@@ -1,3 +1,4 @@
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv as env, workerVersion } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
@@ -8,11 +9,7 @@ import {
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
 import { WORKER_COMPATIBILITY_DATE, WORKER_COMPATIBILITY_FLAGS } from "./build-backend.ts";
-import { coordinateWorkerBuild } from "./worker-build-capability.ts";
-
-class WorkerBuildInProgressError extends Error {
-  override readonly name = "WorkerBuildInProgressError";
-}
+import { coordinateWorkerBuild, type WorkerBuildRequest } from "./worker-build-capability.ts";
 
 /** Name-based because the error crosses Workers RPC. */
 export function isWorkerBuildInProgressError(error: unknown): boolean {
@@ -39,46 +36,17 @@ export async function resolveWorkerSource({
   buildBudgetMs,
   projectId,
   source,
-  waitUntil,
 }: {
-  /** Give up on a cold resolve after this long; the build continues. */
+  /** Stop waiting on a cache-missed build after this long; the coordinator continues it. */
   buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
-  waitUntil: (promise: Promise<unknown>) => void;
 }): Promise<ResolvedWorkerSource> {
-  const resolution = resolveThroughBuild({ projectId, source });
-  return await withBuildBudget(resolution, buildBudgetMs, waitUntil);
-}
-
-/** Race a cold resolve against the browser budget without cancelling it. */
-async function withBuildBudget(
-  resolution: Promise<ResolvedWorkerSource>,
-  budgetMs: number | undefined,
-  waitUntil: (promise: Promise<unknown>) => void,
-): Promise<ResolvedWorkerSource> {
-  if (budgetMs === undefined) return await resolution;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      resolution,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          waitUntil(
-            resolution.catch((error: unknown) => {
-              console.error("background dynamic worker build failed", error);
-            }),
-          );
-          reject(new WorkerBuildInProgressError("This worker is still building."));
-        }, budgetMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await resolveThroughBuild({ buildBudgetMs, projectId, source });
 }
 
 async function resolveThroughBuild(input: {
+  buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
@@ -98,6 +66,7 @@ async function resolveThroughBuild(input: {
   const artifact =
     resolvedArtifactMemo.get(buildKey) ??
     (await resolveArtifact(buildKey, {
+      buildBudgetMs: input.buildBudgetMs,
       projectId: input.projectId,
       resolved,
       iteratePackageSpec,
@@ -109,6 +78,7 @@ async function resolveThroughBuild(input: {
 async function resolveArtifact(
   buildKey: string,
   context: {
+    buildBudgetMs?: number;
     projectId: string;
     resolved: ResolvedWorkerFileSource;
     iteratePackageSpec?: string;
@@ -117,13 +87,25 @@ async function resolveArtifact(
 ): Promise<ResolvedWorkerSource> {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const artifact = await store.get(buildKey);
-  return memoizeArtifact(
-    artifact ??
-      (await coordinateWorkerBuild({
-        buildKey,
-        ...context,
-      })),
-  );
+  if (artifact !== null) return memoizeArtifact(artifact);
+
+  const request: WorkerBuildRequest = {
+    buildKey,
+    iteratePackageSpec: context.iteratePackageSpec,
+    projectId: context.projectId,
+    resolved: context.resolved,
+    source: context.source,
+  };
+  const operation = coordinateWorkerBuild(request, context.buildBudgetMs);
+  let built: WorkerBuildArtifact | undefined;
+  try {
+    built = await operation;
+    return memoizeArtifact(built);
+  } finally {
+    // RPC adds a disposal group to object results even when they contain only
+    // data today. Memoization copied the fields we retain, so release it now.
+    disposeIgnoredRpcResult(built);
+  }
 }
 
 function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
@@ -170,15 +152,19 @@ async function resolveFileSource({
     DurableObjectNameCodec.stringify({ path: files.repoPath, projectId }),
   );
   const head = await repo.getHead(files.ref === undefined ? {} : { branch: files.ref.branch });
-  return {
-    branch: head.branch,
-    commitOid: head.commitOid,
-    contentHash: head.contentHash,
-    exclude: files.exclude,
-    include: files.include,
-    repoPath: files.repoPath,
-    type: "repo",
-  };
+  try {
+    return {
+      branch: head.branch,
+      commitOid: head.commitOid,
+      contentHash: head.contentHash,
+      exclude: files.exclude,
+      include: files.include,
+      repoPath: files.repoPath,
+      type: "repo",
+    };
+  } finally {
+    disposeIgnoredRpcResult(head);
+  }
 }
 
 export function loadResolvedWorker({

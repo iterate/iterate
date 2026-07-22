@@ -47,7 +47,6 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     exports: this.ctx.exports,
     projectId: this.#name.projectId,
     scopePath: this.#name.path,
-    waitUntil: (promise) => this.ctx.waitUntil(promise),
   });
 
   /**

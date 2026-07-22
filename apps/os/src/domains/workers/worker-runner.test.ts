@@ -102,7 +102,6 @@ describe("dynamic worker spans", () => {
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: `/${privateMarker}`,
-      waitUntil: () => undefined,
     });
 
     await expect(
@@ -165,7 +164,6 @@ describe("createApp asset dispatch", () => {
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
-      waitUntil: () => undefined,
     });
 
     const response = await runner.fetch({
@@ -184,7 +182,6 @@ describe("createApp asset dispatch", () => {
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
-      waitUntil: () => undefined,
     });
 
     const response = await runner.fetch({
