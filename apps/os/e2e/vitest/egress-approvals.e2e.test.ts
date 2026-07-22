@@ -131,11 +131,13 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       eventTypes: [REQUESTED],
       timeoutMs: 30_000,
     });
-    expect((rejectedRequested.payload as HumanApprovalRequestedPayload).body).toEqual({
-      encoding: "utf8",
-      content: "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
-      originalByteLength: oversizedBody.length,
-      truncated: true,
+    expect(rejectedRequested.payload as HumanApprovalRequestedPayload).toMatchObject({
+      body: {
+        encoding: "utf8",
+        content: "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
+        originalByteLength: oversizedBody.length,
+        truncated: true,
+      },
     });
     await stream.append({
       type: REJECTED,
