@@ -243,29 +243,53 @@ therefore use the sync's actual observation time. Event timestamps are the
 provider's completion time or the snapshot's observation time, not an
 unrelated PR-updated timestamp.
 
-| Event                      | Source                        | Questions answered                                                        |
-| -------------------------- | ----------------------------- | ------------------------------------------------------------------------- |
-| `ci workflow finished`     | GitHub Actions and Depot APIs | failure/cancellation rate, queue/run/total wall time by workflow/provider |
-| `ci job finished`          | GitHub Actions and Depot APIs | slow/failing jobs and failed-step rate                                    |
-| `ci job attempt finished`  | Depot metrics                 | retries, availability, queue/run time, average/peak CPU and memory        |
-| `ci review finished`       | GitHub checks/reviews         | immutable completion/duration for Cursor Bugbot and Iterate Review        |
-| `ci review state observed` | GitHub review threads         | current findings and unresolved findings by provider and PR head          |
+The scheduled collector reads `github-actions`, `github-reviews`, and `depot` as
+independent sources. A failed provider cannot erase healthy events from either
+of the others: the collector sends every successful source plus one health
+event per source, then fails the job. All three health rows share
+`telemetry_sync_id`; CI rows also share `collector_head_sha`. Each records
+status, event count, lookback, duration, and a bounded error name/message.
+PostHog delivery failure still fails the job, and the dashboard then becomes
+stale rather than claiming the collection was healthy. The two GitHub sources
+run serially on their shared token while Depot collects concurrently.
+
+| Event                               | Source                        | Questions answered                                                        |
+| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------- |
+| `ci workflow finished`              | GitHub Actions and Depot APIs | failure/cancellation rate, queue/run/total wall time by workflow/provider |
+| `ci job finished`                   | GitHub Actions and Depot APIs | slow/failing jobs and failed-step rate                                    |
+| `ci job attempt finished`           | Depot metrics                 | retries, availability, queue/run time, average/peak CPU and memory        |
+| `ci review finished`                | GitHub checks/reviews         | immutable completion/duration for Cursor Bugbot and Iterate Review        |
+| `ci review state observed`          | GitHub review threads         | current findings and unresolved findings by provider and PR head          |
+| `ci telemetry source sync finished` | scheduled collector           | freshness, success/failure, event count, error, and collector version     |
 
 Finding counts are mutable and therefore belong only to the state snapshot;
 they are not rewritten into immutable review-completion events. Iterate Review
 is captured from submitted GitHub App reviews even when it has no check-run.
 Thread authors are normalized to the correct provider before counting.
 
-CI needs a read-only Depot organization token named
-`DEPOT_CI_TELEMETRY_TOKEN`. The scheduled job intentionally fails if it is
-missing:
+CI needs a dedicated [Depot organization API token](https://depot.dev/docs/cli/authentication#organization-tokens) named
+`DEPOT_CI_TELEMETRY_TOKEN`. Depot does not currently expose a read-only token
+limited to CI metrics, so this credential has broad organization API scope.
+Never reuse a developer's personal Depot login token. Create a dedicated token
+named `CI telemetry` in Depot Organization Settings, then store it as a secret
+variant restricted to this repository and workflow. The scheduled job
+intentionally fails if it is missing:
 
 ```bash
 read -rs DEPOT_TELEMETRY_VALUE
 printf '%s' "$DEPOT_TELEMETRY_VALUE" | \
-  depot ci secrets add DEPOT_CI_TELEMETRY_TOKEN --org 0p91s0lz49
+  depot ci secrets set DEPOT_CI_TELEMETRY_TOKEN ci-telemetry \
+    --from-stdin \
+    --org 0p91s0lz49 \
+    --repo iterate/iterate \
+    --workflow ci-telemetry.yml \
+    --description "Dedicated Depot organization API token for historical CI telemetry"
 unset DEPOT_TELEMETRY_VALUE
 ```
+
+Confirm the variant scope with `depot ci secrets list --org 0p91s0lz49`.
+Rotate or revoke the organization token immediately if it is ever exposed;
+deleting the secret alone does not revoke the token at Depot.
 
 Local collection uses `gh` auth and the developer's Depot CLI login:
 
@@ -279,14 +303,62 @@ GH_TOKEN="$(gh auth token)" \
 
 - [Test reliability & performance](https://eu.posthog.com/project/115112/dashboard/839068)
   ranks no-retry tests, failure/flake rates, module/import startup, scheduling,
-  hooks/body, named phases, and incomplete/missing runner evidence.
+  hooks/body, named phases, and incomplete/missing runner evidence. The first
+  two tables make finalizer completeness explicit for both unit jobs (expected
+  workspaces) and preview jobs (expected runner sources).
 - [CI reliability & performance](https://eu.posthog.com/project/115112/dashboard/839069)
   covers GitHub/Depot workflow and job reliability, queue/execution latency,
-  Depot saturation, and Cursor/Iterate review outcomes and unresolved state.
+  Depot saturation, telemetry-source freshness, and Cursor/Iterate review
+  outcomes and unresolved state.
+
+Both dashboards default to 30 days and honor the dashboard date filter. A
+healthy zero never renders as a blank table:
+
+- test finalizers say `HEALTHY` or `INCOMPLETE`;
+- review snapshots say `HEALTHY`, `ACTION REQUIRED`, or
+  `NO SNAPSHOTS RECEIVED`;
+- source health says `HEALTHY`, `EMPTY COLLECTION`, `STALE`,
+  `ACTION REQUIRED`, or `NO HEALTH EVENT`.
+
+`EMPTY COLLECTION` means the provider call succeeded but returned no events;
+inspect it whenever repository activity was expected. `STALE` means the newest
+health event is more than 30 minutes old (twice the schedule interval). Blank,
+missing, stale, unknown, incomplete, and foreign evidence are never success
+states.
+
+Workflow, job, and review tables keep failures, cancellations,
+skipped/neutral outcomes, and unknown outcomes in separate columns. Failure
+rate is `failures / (successes + failures)`; cancellation rate is
+`cancellations / all observations`. Any non-zero `unknown_outcomes` is a data
+model defect to investigate, not a bucket to normalize away.
 
 Dashboards answer routine questions. Use HogQL for one SHA, run, branch, test,
-or unusual time window. Production insights filter
+or unusual time window. Production test insights filter
 `execution_context = 'ci'` where that property applies.
+
+### Dashboard acceptance check
+
+After changing ingestion or a saved insight, force every tile to execute. The
+command must return every listed tile with no query error. Seeded health tiles
+must return their documented status rows; pure aggregations may have zero rows
+for a legitimately quiet filtered window. Then read once through the cache
+path used by the UI:
+
+```bash
+posthog-cli api info dashboard-insights-run
+posthog-cli api call dashboard-insights-run \
+  '{"id":839068,"refresh":"force_blocking"}'
+posthog-cli api call dashboard-insights-run \
+  '{"id":839069,"refresh":"force_blocking"}'
+posthog-cli api call dashboard-insights-run \
+  '{"id":839068,"refresh":"force_cache"}'
+posthog-cli api call dashboard-insights-run \
+  '{"id":839069,"refresh":"force_cache"}'
+```
+
+Finally open both links in PostHog and verify the rendered tables with the same
+date filter. API success is necessary but does not prove that the saved tile
+renders or that the browser is using the intended project.
 
 ## Analyse With `posthog-cli`
 
@@ -336,6 +408,12 @@ SELECT properties.workflow_name AS workflow,
   properties.job_name AS job,
   count() AS finalizer_count,
   countIf(properties.telemetry_incomplete = true) AS incomplete_count,
+  sum(toInt(properties.expected_workspace_count)) AS expected_workspaces,
+  sum(toInt(properties.observed_workspace_count)) AS observed_workspaces,
+  sum(toInt(properties.missing_workspace_count)) AS missing_workspaces,
+  sum(toInt(properties.expected_artifact_source_count)) AS expected_sources,
+  sum(toInt(properties.observed_artifact_source_count)) AS observed_sources,
+  sum(toInt(properties.matched_expected_artifact_source_count)) AS matched_sources,
   sum(toInt(properties.missing_artifact_source_count)) AS missing_source_count,
   sum(toInt(properties.incomplete_artifact_count)) AS incomplete_artifact_count,
   sum(toInt(properties.foreign_artifact_count)) AS foreign_artifact_count
@@ -347,6 +425,37 @@ WHERE event = 'ci test telemetry finalized'
 GROUP BY workflow, job
 ORDER BY incomplete_count DESC, missing_source_count DESC, finalizer_count DESC
 ```
+
+Unit finalizers enforce workspace cardinality and can legitimately have zero
+expected runner sources. Preview finalizers enforce exact runner-source
+cardinality and can legitimately have zero expected workspaces. Always inspect
+both sets of columns; source counts alone make healthy unit evidence look
+incomplete.
+
+Check whether the historical CI dataset itself is trustworthy before using its
+rates or latency:
+
+```sql
+SELECT properties.telemetry_source AS telemetry_source,
+  argMax(properties.status, timestamp) AS latest_status,
+  max(timestamp) AS last_observed_at,
+  dateDiff('minute', last_observed_at, now()) AS age_minutes,
+  argMax(toInt(properties.event_count), timestamp) AS event_count,
+  argMax(properties.telemetry_sync_id, timestamp) AS telemetry_sync_id,
+  argMax(properties.collector_head_sha, timestamp) AS collector_head_sha,
+  argMax(properties.error_name, timestamp) AS error_name,
+  argMax(properties.error_message, timestamp) AS error_message
+FROM events
+WHERE event = 'ci telemetry source sync finished'
+  AND timestamp >= now() - INTERVAL 7 DAY
+  AND toInt(properties.schema_version) = 2
+GROUP BY telemetry_source
+ORDER BY telemetry_source
+```
+
+Expect one fresh row each for `github-actions`, `github-reviews`, and `depot`.
+Do not trust a provider's downstream tiles when its row is missing, failed, or
+older than 30 minutes.
 
 `telemetry_incomplete = true` means reporter shutdown did not finish and the
 dataset may omit test details, or an expected runner artifact is wholly absent.
@@ -442,6 +551,11 @@ discovery sequence rather than inventing tool arguments:
 1. Search for `schema events SQL HogQL`.
 2. Inspect `read-data-schema`, then call it for the event being queried.
 3. Inspect `execute-sql`, then pass one of the bounded HogQL queries above.
+4. For a dashboard, discover and inspect `dashboard-insights-run`, then run
+   dashboard `839068` or `839069` with `refresh = force_blocking`. Every tile
+   must return no error; seeded health tiles must return status rows, while a
+   pure aggregation may be empty in a legitimately quiet filtered window.
+   Repeat with `force_cache` to verify the UI cache path.
 
 Conceptual call payload after discovery:
 
@@ -476,7 +590,12 @@ review-state events. The dashboard links above are stable human hand-offs.
 - Low CPU plus a long runtime/network phase: waiting on external state rather
   than compute saturation.
 
-## What The Current Data Says
+## Investigation Case Studies
+
+These are dated examples of how telemetry changed a diagnosis, not live
+performance baselines. Keep a case only while it explains an enduring test or
+analysis technique; replace superseded snapshots instead of appending a run
+log. Use the dashboards and exact-head queries above for current measurements.
 
 The first 2026-07-21 PostHog sample (eight executions per test) changed the
 original diagnosis. The longest no-retry test was Vitest e2e
@@ -531,6 +650,117 @@ zero-retry `preview_19` validation did not reproduce the outlier: it passed in
 navigation/readiness, 5.0 seconds of catalogue execution, and no cleanup time.
 Future recurrences will therefore distinguish project bootstrap, page
 readiness, the example operation, and cleanup instead of leaving an opaque gap.
+
+The completed PR #2237 preview artifact at historical branch head
+`4556d58d12d6ed4d0f4864ade32270671a890950` (2026-07-22) then made the new
+longest Playwright result unambiguous: `feed resumes after page freeze + socket
+death` took 63.4 seconds, including two sequential, named `Wait for timeout`
+phases of 25.0 seconds each. The first was an arbitrary frozen-page hold even
+though the test explicitly kills the socket; a timer probe then proved its
+experimental `Page.setWebLifecycleState` command did not actually suspend the
+current headless CI browser. The second slept for a guessed probe window before
+beginning the actual delivery assertion. The test now uses
+`Emulation.setScriptExecutionDisabled`, verifies the two-second suspension with
+an armed page-timer gap, appends its durable marker immediately after resume,
+and polls marker delivery for the existing bounded 90-second recovery window.
+A healthy run can finish as soon as recovery is observed, while the historical
+permanent wedge still exhausts the same ceiling and fails with its runtime
+evidence. This verification is required because the CDP lifecycle command is
+experimental and only promises to _try_ the transition; see the official
+[Page domain](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-setWebLifecycleState)
+and [Emulation domain](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setScriptExecutionDisabled).
+
+The longest Vitest result in that artifact was the concurrency proof at 60.7
+seconds. Its phases account for the time: 11.9 seconds creating the project,
+48.8 seconds executing the scripts, and an intentional 30-second remote hold
+inside that execution phase. The remaining 18.8 seconds is actual orchestration
+and completion overhead. This is why named phases matter: the dashboard can
+separate a test's contractual wait from runner contention and product latency
+without inferring a cause from one aggregate duration.
+
+The PR #2241 deployment-shaped validation at historical branch head
+`382a2e7d95c00215345d92cb8eeba321de8192c4` (2026-07-22) then completed the
+shortened suspend test in 18.2 seconds with zero retries, down 71% from 63.4
+seconds. Its largest phases were 10.2 seconds of project-fixture creation, 3.0
+seconds waiting for real post-thaw delivery, and the one-second suspend
+stimulus. The same run also showed why lane timing must stay separate from
+individual test timing: Playwright took 140.8 seconds because an unrelated
+project-creation test spent 60 seconds waiting for its composer and then passed
+its retry. That test recorded 85.6 seconds total, including 66.7 seconds of
+retry work, while the preview test orchestrator recorded 148.8 seconds for the
+whole OS lane. With the fixed sleeps gone, the longest no-retry e2e on that code
+head became the Vitest sandbox-deadline proof at 55.1 seconds. All 55.1 seconds
+were test body time with no hook or retry work. That duration is contractual:
+the test sets a 60-second absolute script deadline and proves that a requested
+20-minute sandbox timeout is capped to it. The next result was the concurrency
+proof at 53.9 seconds, including its explicit 30-second remote hold. Neither
+should be reported as unexplained runner idle time.
+
+The finalizer retained seven raw artifacts, normalized 5,732 events, matched
+all six expected preview runner sources, and reported no missing, incomplete,
+or foreign artifacts. The seventh artifact was the preview orchestrator's own
+artifact, which declared the six expected runner sources. The full SHAs above
+are historical PostHog `head_sha` values rather than promises that their branch
+refs or retained raw artifacts live forever. Query them with the CLI examples
+above while they remain in the configured PostHog retention window.
+
+A later PR #2241 preview at head
+`510a34bcbcb51bb822d7758f7e8221c53ee90c1a` caught a remaining modelling
+mistake: the suspend case still took 52.2 seconds. Timestamped step evidence
+showed about 22 seconds of fixture/subscription setup and another 30 seconds
+after socket close. The runtime logged a 10-second liveness timeout because CDP
+disabled page script before the browser delivered the socket's close event;
+the case had accidentally become a second half-open test and paid two guarded
+timeout windows plus redial. The suite already has a dedicated no-close-frame
+case for that path. The suspend case now waits for every original socket's
+close event, takes the network offline, freezes script for two seconds, then
+retires any replacement dial created synchronously by the close handler before
+emitting the returning browser's online signal. This prevents either a
+race-to-open dial or Chromium's offline-started dial from bypassing the intended
+transition. Three zero-retry headed runs against that same preview completed in
+29.4, 28.3, and 30.4 seconds, with the recovered runtime subscribed, zero timeout
+strikes, and no reconnect warning. This is the kind of distinction the phase
+model is meant to force: a shorter stimulus did not remove the slow path until
+the evidence proved which production recovery lane the test was actually
+exercising. A later review caught the remaining close-handler race. The
+hardened version retired exactly one transition socket in each of two headed,
+zero-retry runs, passed in 35.9 and 17.9 seconds, returned subscribed with zero
+connect failures and timeout strikes, and emitted no reconnect warnings. A
+constructor-throw gate was explicitly rejected: its trial reproduced the
+permanent reconnect wedge for 1.8 minutes because it poisoned the shared dial
+path instead of preserving real WebSocket close semantics.
+
+The next exact-head artifact made the Vitest sandbox-deadline proof the longest
+zero-retry E2E at 65.1 seconds. Aggregate runner telemetry could localize all of
+that time to the test body, but could not explain the body because the test had
+no named phases. An instrumented zero-retry baseline against `preview_1` took
+48.5 seconds: 7.6 seconds creating the project, 3.8 seconds creating the agent,
+3.6 seconds creating the sandbox, 1.6 seconds warming its container, and 30.8
+seconds waiting for script settlement. Vitest setup, collection, and scheduling
+were negligible. The actual cause was therefore the test's own 60-second
+absolute horizon. Production reserves 15 seconds for durable settlement and
+another 15 seconds for sandbox process-tree cleanup; the generated worker then
+capped the requested 20-minute command timeout to the remainder.
+
+The minimum safe horizon was established experimentally rather than guessed. A
+35-second trial left a nominal five-second command ceiling, but failed in 22.6
+seconds because dynamic-worker startup consumed that remainder before the
+sandbox command began. A 45-second horizon leaves a 15-second command ceiling
+before startup overhead. Two deployment-shaped, zero-retry validations passed
+in 35.2 and 34.1 seconds; the latter split into 16.6 seconds of fixtures, 16.5
+seconds waiting for the deliberately bounded script, 0.5 seconds verifying the
+process group, and 0.3 seconds of cleanup. The test now records every one of
+those phases plus the configured horizon, derived command ceiling, actual
+timeout forwarded to the sandbox, and pre-command budget consumption. Deadline
+and budget configuration use distinct categories from elapsed
+`configured-delay` phases so attribution queries cannot mistake them for wall
+time. This preserves the production contract and makes future regressions
+distinguish fixture provisioning, pre-command startup, sandbox execution,
+verification, and cleanup. The amended artifact passed in 33.5 seconds and
+reported a 12.1-second timeout actually forwarded to the sandbox plus 2.9
+seconds of pre-command budget consumption; a future margin regression is now
+visible before it becomes the failed "no time to start" settlement seen in the
+35-second experiment.
 
 ## Adding Or Changing A Reporter
 
