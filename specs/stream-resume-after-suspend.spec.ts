@@ -20,11 +20,15 @@ import { test } from "./test-support/test.ts";
 const ONBOARDING_AGENT_PATH = "/agents/onboarding";
 const MARKER_EVENT_TYPE = "events.iterate.test/spec/suspend-marker";
 const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
-// This is the failure stimulus, not a recovery budget: keeping the page
-// frozen briefly proves that its timers stop while avoiding the old arbitrary
-// 25s hold. Socket death is modeled explicitly below, so it does not depend on
-// the browser or OS reaping a connection during this window.
+// This is the failure stimulus, not a recovery budget. The test arms an
+// in-page timer immediately before CDP suspends script execution and verifies
+// its gap after resume. Socket death is modeled explicitly, so the stimulus
+// need not wait for the OS to reap a connection during a guessed long window.
 const SUSPEND_STIMULUS_MS = 1_000;
+
+type SuspendTimerEvidence = {
+  maxTimerGapMs: number;
+};
 
 // Fresh streams' first post-subscribe delivery can stall and needs the ~10s
 // probe self-heal (see reactivity.spec.ts's DELIVERY_WAIT rationale), so the
@@ -104,10 +108,11 @@ test("feed resumes after the /api WebSocket dies (clean close)", async ({
   // Append immediately: delivery is the recovery invariant, so polling it
   // covers however many liveness-probe intervals the runtime actually needs
   // without paying a guessed probe delay before starting the real assertion.
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-socket-death" },
-  });
+  const [marker] = await test.step("clean close: append recovery marker", () =>
+    agent.stream.append({
+      type: MARKER_EVENT_TYPE,
+      payload: { marker: "after-socket-death" },
+    }));
   const { delivered, snapshot } =
     await test.step("clean close: redial and deliver a new stream event", () =>
       pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
@@ -131,6 +136,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   await using fixture = await helpers.createFixture("suspend-freeze");
   if (!baseURL) throw new Error("Playwright baseURL fixture is required.");
   await installSocketKillSwitch(page);
+  await installSuspendTimerProbe(page);
   const consoleLines = captureStreamConsole(page);
 
   using admin = await connectAdminItx(baseURL);
@@ -141,34 +147,43 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   const keys = runtimeDebugKeys(fixture.project.id);
   await waitForSubscribed(page, keys);
 
-  // Mobile suspend ≈ frozen page + the OS reaping the TCP connection. Script
-  // execution is suspended while frozen, so the socket close must happen
-  // BEFORE Page.setWebLifecycleState (page.evaluate would hang otherwise);
-  // setOffline while frozen additionally models the radio dropping, though
-  // CDP's emulateNetworkConditions does not reliably kill established
-  // WebSockets on its own — the explicit close is the guaranteed death.
+  // Mobile suspend ≈ suspended page script + the OS reaping the TCP
+  // connection. The socket close must happen BEFORE script suspension because
+  // page.evaluate is unavailable during it. Going offline while suspended also
+  // models the radio dropping, though CDP's network emulation does not reliably
+  // kill established WebSockets on its own; the explicit close guarantees it.
   const cdp = await page.context().newCDPSession(page);
   const closed = await page.evaluate(() =>
     (window as unknown as { __closeAllApiSockets: () => string[] }).__closeAllApiSockets(),
   );
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
-  await test.step("freeze page, drop network, and thaw", async () => {
-    await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
+  await test.step("suspend page script, drop network, and resume", async () => {
+    await page.evaluate(() =>
+      (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
+    );
+    await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
     await page.context().setOffline(true);
     await page.waitForTimeout(SUSPEND_STIMULUS_MS);
     await page.context().setOffline(false);
-    await cdp.send("Page.setWebLifecycleState", { state: "active" });
+    await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
+    await expect
+      .poll(async () => (await readSuspendTimerEvidence(page)).maxTimerGapMs, {
+        message: "the armed page timer should remain suspended for the stimulus window",
+        timeout: 5_000,
+      })
+      .toBeGreaterThanOrEqual(SUSPEND_STIMULUS_MS);
   });
 
-  // Timers were suspended while frozen and the probe strikes only start after
-  // thaw. Append immediately and wait on the durable delivery invariant; a
-  // permanently wedged runtime still consumes the full bounded recovery
-  // window, while a healthy runtime finishes as soon as it has really healed.
-  const [marker] = await agent.stream.append({
-    type: MARKER_EVENT_TYPE,
-    payload: { marker: "after-freeze" },
-  });
+  // Going back online invokes the runtime's resume check; its periodic probe
+  // remains the fallback. Append immediately and wait on durable delivery so
+  // a healthy runtime finishes when it heals, while the historical permanent
+  // wedge still consumes the full bounded recovery window and fails.
+  const [marker] = await test.step("thaw: append recovery marker", () =>
+    agent.stream.append({
+      type: MARKER_EVENT_TYPE,
+      payload: { marker: "after-freeze" },
+    }));
   const { delivered, snapshot } =
     await test.step("thaw: redial and deliver a new stream event", () =>
       pollDelivered(page, keys, marker!.offset, RECOVERY_DELIVERY_MS));
@@ -409,6 +424,33 @@ async function pollDelivered(page: Page, keys: string[], offset: number, timeout
   }
 }
 
+function installSuspendTimerProbe(page: Page) {
+  return page.addInitScript(() => {
+    const timerEvidence: SuspendTimerEvidence = { maxTimerGapMs: 0 };
+    let previousTimerTick = performance.now();
+    let armed = false;
+    setInterval(() => {
+      const timerTick = performance.now();
+      if (armed)
+        timerEvidence.maxTimerGapMs = Math.max(
+          timerEvidence.maxTimerGapMs,
+          timerTick - previousTimerTick,
+        );
+      previousTimerTick = timerTick;
+    }, 50);
+    const testWindow = window as unknown as {
+      __suspendTimerEvidence: SuspendTimerEvidence;
+      __armSuspendTimerProbe: () => void;
+    };
+    testWindow.__suspendTimerEvidence = timerEvidence;
+    testWindow.__armSuspendTimerProbe = () => {
+      timerEvidence.maxTimerGapMs = 0;
+      previousTimerTick = performance.now();
+      armed = true;
+    };
+  });
+}
+
 /**
  * Registry of live main-thread WebSockets + two failure switches for the /api
  * ones (the itx capnweb transport — the stream runtimes ride it too). Must be
@@ -500,6 +542,18 @@ function installSocketKillSwitch(page: Page) {
     // the corpse passes a bare census of "small number" — this doesn't.
     (window as { __mutedApiSocketsStillOpen?: () => number }).__mutedApiSocketsStillOpen = () =>
       mutedList.filter((ws) => ws.readyState < WebSocket.CLOSING).length;
+  });
+}
+
+function readSuspendTimerEvidence(page: Page) {
+  return page.evaluate(() => {
+    const evidence = (
+      window as unknown as {
+        __suspendTimerEvidence?: SuspendTimerEvidence;
+      }
+    ).__suspendTimerEvidence;
+    if (!evidence) throw new Error("suspend timer evidence was not installed before navigation");
+    return evidence;
   });
 }
 

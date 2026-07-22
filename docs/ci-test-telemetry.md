@@ -476,7 +476,12 @@ review-state events. The dashboard links above are stable human hand-offs.
 - Low CPU plus a long runtime/network phase: waiting on external state rather
   than compute saturation.
 
-## What The Current Data Says
+## Investigation Case Studies
+
+These are dated examples of how telemetry changed a diagnosis, not live
+performance baselines. Keep a case only while it explains an enduring test or
+analysis technique; replace superseded snapshots instead of appending a run
+log. Use the dashboards and exact-head queries above for current measurements.
 
 The first 2026-07-21 PostHog sample (eight executions per test) changed the
 original diagnosis. The longest no-retry test was Vitest e2e
@@ -532,16 +537,24 @@ navigation/readiness, 5.0 seconds of catalogue execution, and no cleanup time.
 Future recurrences will therefore distinguish project bootstrap, page
 readiness, the example operation, and cleanup instead of leaving an opaque gap.
 
-The completed `4556d58` artifact then made the new longest Playwright result
-unambiguous: `feed resumes after page freeze + socket death` took 63.4 seconds,
-including two sequential, named `Wait for timeout` phases of 25.0 seconds each.
-The first was an arbitrary frozen-page hold even though the test explicitly
-kills the socket; the second slept for a guessed probe window before beginning
-the actual delivery assertion. The test now keeps a one-second freeze as the
-failure stimulus, appends its durable marker immediately after thaw, and polls
-marker delivery for the existing bounded 90-second recovery window. A healthy
-run can finish as soon as recovery is observed, while the historical permanent
-wedge still exhausts the same ceiling and fails with its runtime evidence.
+The completed PR #2237 preview artifact at historical branch head
+`4556d58d12d6ed4d0f4864ade32270671a890950` (2026-07-22) then made the new
+longest Playwright result unambiguous: `feed resumes after page freeze + socket
+death` took 63.4 seconds, including two sequential, named `Wait for timeout`
+phases of 25.0 seconds each. The first was an arbitrary frozen-page hold even
+though the test explicitly kills the socket; a timer probe then proved its
+experimental `Page.setWebLifecycleState` command did not actually suspend the
+current headless CI browser. The second slept for a guessed probe window before
+beginning the actual delivery assertion. The test now uses
+`Emulation.setScriptExecutionDisabled`, verifies the one-second suspension with
+an armed page-timer gap, appends its durable marker immediately after resume,
+and polls marker delivery for the existing bounded 90-second recovery window.
+A healthy run can finish as soon as recovery is observed, while the historical
+permanent wedge still exhausts the same ceiling and fails with its runtime
+evidence. This verification is required because the CDP lifecycle command is
+experimental and only promises to _try_ the transition; see the official
+[Page domain](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-setWebLifecycleState)
+and [Emulation domain](https://chromedevtools.github.io/devtools-protocol/tot/Emulation/#method-setScriptExecutionDisabled).
 
 The longest Vitest result in that artifact was the concurrency proof at 60.7
 seconds. Its phases account for the time: 11.9 seconds creating the project,
@@ -551,27 +564,31 @@ and completion overhead. This is why named phases matter: the dashboard can
 separate a test's contractual wait from runner contention and product latency
 without inferring a cause from one aggregate duration.
 
-The deployment-shaped validation of the shortened suspend test (`382a2e7`)
-then completed in 18.2 seconds with zero retries, down 71% from 63.4 seconds.
-Its largest phases were 10.2 seconds of project-fixture creation, 3.0 seconds
-waiting for real post-thaw delivery, and the one-second suspend stimulus. The
-same run also showed why lane timing must stay separate from individual test
-timing: Playwright took 140.8 seconds because an unrelated project-creation
-test spent 60 seconds waiting for its composer and then passed its retry. That
-test recorded 85.6 seconds total, including 66.7 seconds of retry work, while
-the preview test orchestrator recorded 148.8 seconds for the whole OS lane.
-With the fixed sleeps gone, the longest no-retry e2e on that code head became
-the Vitest sandbox-deadline proof at 55.1 seconds. All 55.1 seconds were test
-body time with no hook or retry work. That duration is contractual: the test
-sets a 60-second absolute script deadline and proves that a requested 20-minute
-sandbox timeout is capped to it. The next result was the concurrency proof at
-53.9 seconds, including its explicit 30-second remote hold. Neither should be
-reported as unexplained runner idle time.
+The PR #2241 deployment-shaped validation at historical branch head
+`382a2e7d95c00215345d92cb8eeba321de8192c4` (2026-07-22) then completed the
+shortened suspend test in 18.2 seconds with zero retries, down 71% from 63.4
+seconds. Its largest phases were 10.2 seconds of project-fixture creation, 3.0
+seconds waiting for real post-thaw delivery, and the one-second suspend
+stimulus. The same run also showed why lane timing must stay separate from
+individual test timing: Playwright took 140.8 seconds because an unrelated
+project-creation test spent 60 seconds waiting for its composer and then passed
+its retry. That test recorded 85.6 seconds total, including 66.7 seconds of
+retry work, while the preview test orchestrator recorded 148.8 seconds for the
+whole OS lane. With the fixed sleeps gone, the longest no-retry e2e on that code
+head became the Vitest sandbox-deadline proof at 55.1 seconds. All 55.1 seconds
+were test body time with no hook or retry work. That duration is contractual:
+the test sets a 60-second absolute script deadline and proves that a requested
+20-minute sandbox timeout is capped to it. The next result was the concurrency
+proof at 53.9 seconds, including its explicit 30-second remote hold. Neither
+should be reported as unexplained runner idle time.
+
 The finalizer retained seven raw artifacts, normalized 5,732 events, matched
-all six expected preview producers, and reported no missing, incomplete, or
-foreign artifacts. These values are queryable by the commit SHA in either the
-CLI examples above or the dashboards; they are not conclusions inferred from
-the console log.
+all six expected preview runner sources, and reported no missing, incomplete,
+or foreign artifacts. The seventh artifact was the preview orchestrator's own
+artifact, which declared the six expected runner sources. The full SHAs above
+are historical PostHog `head_sha` values rather than promises that their branch
+refs or retained raw artifacts live forever. Query them with the CLI examples
+above while they remain in the configured PostHog retention window.
 
 ## Adding Or Changing A Reporter
 
