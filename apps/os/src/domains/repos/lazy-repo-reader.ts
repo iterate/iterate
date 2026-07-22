@@ -203,19 +203,39 @@ export function createLazyRepoReader(input: {
     return out;
   };
 
-  /** The ref is the truth: after an ambiguous push, poll it a few times. */
+  /**
+   * After an ambiguous push, RE-SEND the same pack: the CAS (parent→proposed)
+   * is idempotent at the commit-oid level, so a retry either applies it,
+   * reports "already moved" (then the tip tells us whether it moved to US),
+   * or stays ambiguous. Seeing the PARENT on a ref read proves nothing —
+   * Artifacts head visibility is eventually consistent — so a stale parent
+   * never downgrades to `rejected`; a rejected CAS retry alongside a
+   * parent-reading ls-refs is a CONTRADICTION and stays indeterminate.
+   */
   const reconcilePush = async (
     detail: string,
-    proposedOid: string,
-    parentOid: string,
+    push: { newOid: string; oldOid: string; pack: Uint8Array; ref: string },
   ): Promise<PushReport> => {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let retried: PushReport | undefined;
+      try {
+        retried = await wire.push(push);
+      } catch {
+        // transport still failing; fall through to the tip read
+      }
+      if (retried?.kind === "applied") return { kind: "applied" };
       try {
         const tip = await resolveRemoteHead();
-        if (tip === proposedOid) return { kind: "applied" };
-        if (tip === parentOid && attempt === 2) {
-          // Provably still at our parent after retries: never applied.
-          return { detail, kind: "rejected" };
+        if (tip === push.newOid) return { kind: "applied" };
+        if (retried?.kind === "rejected") {
+          if (tip === push.oldOid) {
+            // The CAS says the ref moved; ls-refs says it did not. One of
+            // them is stale — never authorize a re-run on contradiction.
+            return { detail: `${detail}; CAS/ls-refs contradiction`, kind: "indeterminate" };
+          }
+          // The ref moved to something that is not our commit: a competing
+          // writer won. Our pack provably did not land.
+          return { detail: retried.detail, kind: "rejected" };
         }
       } catch {
         // the reconcile read itself failed; keep trying
@@ -269,6 +289,30 @@ export function createLazyRepoReader(input: {
         return { bytes: await readPathBytesLocked(paths), head };
       }),
 
+    /**
+     * The ENTIRE snapshot — head, every path, every content — as ONE
+     * observation. Only for small manifests (the caller gates by byte size);
+     * feeds contentHash publication, which must never mix two snapshots.
+     */
+    readHeadSnapshot: (): Promise<{ files: Record<string, string>; head: StoredHead }> =>
+      serialized(async () => {
+        const head = store.head(branch);
+        if (head === null) throw new Error("readHeadSnapshot requires a synced head");
+        const paths = store
+          .manifest(branch)
+          .filter((file) => file.mode !== GITLINK_MODE)
+          .map((file) => file.path);
+        const bytes = await readPathBytesLocked(paths);
+        const files: Record<string, string> = {};
+        paths.forEach((path, index) => {
+          const payload = bytes[index];
+          if (payload !== null && payload !== undefined) {
+            files[path] = textDecoder.decode(payload);
+          }
+        });
+        return { files, head };
+      }),
+
     /** Contents at the synced head, unlabeled — probe/test convenience. */
     readPaths: async (paths: string[]): Promise<(string | null)[]> =>
       serialized(async () =>
@@ -282,11 +326,23 @@ export function createLazyRepoReader(input: {
      * paths' ancestor directories — and push it under a compare-and-swap.
      * Returns a typed outcome; see LazyCommitOutcome for the caller contract.
      */
-    commitFiles: async (input: {
+    commitFiles: (input: {
       author: { date: Date; email: string; name: string };
       changes: RepoFileChange[];
       message: string;
-    }): Promise<LazyCommitOutcome> => {
+    }): Promise<LazyCommitOutcome> => serialized(() => commitFilesLocked(input)),
+  };
+
+  /** The whole commit — snapshot capture, compile, push, local install —
+   * runs as ONE chained operation: a sync arriving mid-commit queues behind
+   * it, so a delta computed against head A can never install over a newer
+   * head B that slipped in between. */
+  async function commitFilesLocked(input: {
+    author: { date: Date; email: string; name: string };
+    changes: RepoFileChange[];
+    message: string;
+  }): Promise<LazyCommitOutcome> {
+    {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
@@ -433,21 +489,22 @@ export function createLazyRepoReader(input: {
       );
 
       // Push, then classify. `rejected` must be a PROOF the ref did not
-      // move; a dead transport or an ambiguous report reconciles against
-      // the ref itself before judging.
+      // move; a dead transport or an ambiguous report reconciles by
+      // re-sending the idempotent CAS before judging.
+      const pushDescriptor = {
+        newOid: commitOid,
+        oldOid: head.commitOid,
+        pack,
+        ref: `refs/heads/${branch}`,
+      };
       let report: PushReport;
       try {
-        report = await wire.push({
-          newOid: commitOid,
-          oldOid: head.commitOid,
-          pack,
-          ref: `refs/heads/${branch}`,
-        });
+        report = await wire.push(pushDescriptor);
       } catch (transportError) {
         report = { detail: String(transportError), kind: "indeterminate" };
       }
       if (report.kind === "indeterminate") {
-        report = await reconcilePush(report.detail, commitOid, head.commitOid);
+        report = await reconcilePush(report.detail, pushDescriptor);
       }
       if (report.kind === "rejected") return { detail: report.detail, kind: "rejected" };
       if (report.kind === "indeterminate") {
@@ -458,15 +515,13 @@ export function createLazyRepoReader(input: {
       // the verdict — the caller must never re-run the mutation.
       const changedPaths = [...new Set([...upserts.keys(), ...removes])].sort();
       try {
-        await serialized(async () => {
-          store.putObjects(packCandidates);
-          store.installSnapshot(branch, {
-            commitOid,
-            dirs: [...newDirs.entries()].map(([path, treeOid]) => ({ path, treeOid })),
-            removes,
-            rootTreeOid: newRootOid,
-            upserts: [...upserts.values()],
-          });
+        store.putObjects(packCandidates);
+        store.installSnapshot(branch, {
+          commitOid,
+          dirs: [...newDirs.entries()].map(([path, treeOid]) => ({ path, treeOid })),
+          removes,
+          rootTreeOid: newRootOid,
+          upserts: [...upserts.values()],
         });
       } catch (localInstallError) {
         return {
@@ -478,6 +533,6 @@ export function createLazyRepoReader(input: {
         };
       }
       return { changedPaths, commitOid, kind: "applied", parentCommitOid: head.commitOid };
-    },
-  };
+    }
+  }
 }

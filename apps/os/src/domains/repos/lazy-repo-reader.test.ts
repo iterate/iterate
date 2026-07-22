@@ -86,7 +86,13 @@ function fakeRemote() {
     lastPushPackOids: [] as string[],
     pushes: 0,
   };
-  const faults = { lsRefsErrors: 0, pushError: null as null | "apply-then-throw" | "throw" };
+  const faults = {
+    lsRefsErrors: 0,
+    pushErrors: 0,
+    pushMode: "throw" as "apply-then-throw" | "throw",
+    staleRefReads: 0,
+  };
+  let staleRefsSnapshot: Map<string, string> | null = null;
 
   const closure = (oid: string, out: Set<string>, cutParents: boolean) => {
     if (out.has(oid)) return;
@@ -138,21 +144,27 @@ function fakeRemote() {
         faults.lsRefsErrors -= 1;
         throw new Error("ls-refs transiently unavailable");
       }
+      // Eventually-consistent reads: serve a pre-push snapshot while armed.
+      const source =
+        faults.staleRefReads > 0 && staleRefsSnapshot !== null ? staleRefsSnapshot : refs;
+      if (faults.staleRefReads > 0) faults.staleRefReads -= 1;
       // gitty ignores ref-prefix filters; always return everything.
       const entries: LsRefsEntry[] = [];
-      for (const [name, oid] of refs) entries.push({ name, oid });
+      for (const [name, oid] of source) entries.push({ name, oid });
       return entries;
     },
     push: async ({ newOid, oldOid, pack, ref }) => {
       log.pushes += 1;
-      if (faults.pushError === "throw") {
-        faults.pushError = null;
+      if (faults.pushErrors > 0) {
+        faults.pushErrors -= 1;
+        if (faults.pushMode === "apply-then-throw") {
+          // The stale snapshot is the PRE-push world, captured once — a
+          // lagging replica keeps serving it across every retry.
+          staleRefsSnapshot ??= new Map(refs);
+          await applyPush(pack, ref, oldOid, newOid);
+          throw new Error("response lost after the server applied the push");
+        }
         throw new Error("socket closed before response");
-      }
-      if (faults.pushError === "apply-then-throw") {
-        faults.pushError = null;
-        await applyPush(pack, ref, oldOid, newOid);
-        throw new Error("response lost after the server applied the push");
       }
       return applyPush(pack, ref, oldOid, newOid);
     },
@@ -683,7 +695,8 @@ describe("lazy commits", () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
     await syncTip(reader);
-    remote.faults.pushError = "apply-then-throw";
+    remote.faults.pushMode = "apply-then-throw";
+    remote.faults.pushErrors = 1;
     const outcome = await reader.commitFiles({
       author: AUTHOR,
       changes: [{ content: "# survived\n", path: "tasks/one.md" }],
@@ -695,26 +708,77 @@ describe("lazy commits", () => {
     await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# survived\n"]);
   });
 
-  test("push transport death reconciles: rejected when the ref never moved", async () => {
+  test("a single transport death HEALS: the idempotent CAS retry lands the commit", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
     await syncTip(reader);
-    remote.faults.pushError = "throw";
+    remote.faults.pushErrors = 1; // first send dies before the server acts
     const outcome = await reader.commitFiles({
       author: AUTHOR,
-      changes: [{ content: "# never landed\n", path: "tasks/one.md" }],
-      message: "socket died",
+      changes: [{ content: "# landed on retry\n", path: "tasks/one.md" }],
+      message: "socket died once",
     });
-    expect(outcome.kind).toBe("rejected");
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    expect(remote.refs.get("refs/heads/main")).toBe(outcome.commitOid);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# landed on retry\n"]);
+  });
+
+  test("applied push + STALE parent-reading ls-refs is INDETERMINATE, never rejected", async () => {
+    // The server applies the push, loses the response, and its ref reads
+    // keep serving the pre-push tip (eventual consistency). Three parent
+    // sightings must not manufacture a rejection — a rejection would
+    // authorize re-running the mutation through another lane.
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    remote.faults.pushMode = "apply-then-throw";
+    remote.faults.pushErrors = 3; // the reconcile retries die the same way
+    remote.faults.staleRefReads = 8; // every tip read shows the PARENT
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# ghost\n", path: "tasks/one.md" }],
+      message: "response lost, reads stale",
+    });
+    expect(outcome.kind).toBe("indeterminate");
+  });
+
+  test("a mid-commit sync queues BEHIND the whole commit — states never mix", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader, store } = subject(remote);
+    await syncTip(reader);
+    // Start a commit and, while it is in flight, enqueue a sync targeting the
+    // PRE-commit head (what a concurrent caller would have resolved). The
+    // commit's capture→compile→push→install is ONE chained operation, so the
+    // sync applies strictly after it: the store lands on a CONSISTENT
+    // snapshot of the old head — never head A's label over head C's rows or
+    // any other mixture. (Choosing which targets are trustworthy is the
+    // DO's authority gate, not the reader's.)
+    const commit = reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# serialized\n", path: "tasks/one.md" }],
+      message: "whole-op lock",
+    });
+    const chasingSync = reader.syncToHead(head);
+    const outcome = await commit;
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    await chasingSync;
+    // The queued old-target sync applied last, and applied WHOLLY.
+    expect(store.head("main")?.commitOid).toBe(head);
     await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one\n"]);
+    // The remote still carries the commit; syncing forward converges.
+    expect(remote.refs.get("refs/heads/main")).toBe(outcome.commitOid);
+    await syncTip(reader);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# serialized\n"]);
   });
 
   test("push transport death with an unreachable ref is INDETERMINATE — never a plain error", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
     await syncTip(reader);
-    remote.faults.pushError = "throw";
-    remote.faults.lsRefsErrors = 3; // every reconcile attempt fails too
+    remote.faults.pushErrors = 3; // initial + both reconcile retries
+    remote.faults.lsRefsErrors = 4; // every reconcile tip read fails too // every reconcile attempt fails too
     const outcome = await reader.commitFiles({
       author: AUTHOR,
       changes: [{ content: "# unknown\n", path: "tasks/one.md" }],

@@ -257,11 +257,13 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /**
    * A masked file snapshot at a branch head or pinned commit — the repo file
-   * source for the worker build pipeline, and the one clone-and-read pathway
-   * every read on this object goes through. Include/exclude globs bound what
-   * becomes build input; `paths` selects exact repo-relative files, which is
-   * how bulk consumers on big repos stay under the 32MiB RPC value cap (a
-   * monorepo's full HEAD tree does not fit — 43.7MB on iterate/iterate).
+   * source for the worker build pipeline. Scoped default-head reads
+   * (`paths`) serve from the LAZY snapshot first (manifest + verified store
+   * bytes, no clone); everything else rides the clone-backed lanes.
+   * Include/exclude globs bound what becomes build input; `paths` selects
+   * exact repo-relative files, which is how bulk consumers on big repos stay
+   * under the 32MiB RPC value cap (a monorepo's full HEAD tree does not fit
+   * — 43.7MB on iterate/iterate).
    *
    * With `commitOid`, `branch` names where that commit lives (git clones are
    * single-branch): worker builds pin a late-bound branch ref to the head it
@@ -579,37 +581,31 @@ export class RepoDurableObject extends DurableObject<Env> {
       return stored;
     }
     const head = await reader.syncToHead(candidate!);
-    // Publish the head record for worker builds (same raced/authority rules
-    // as the clone lane) when the snapshot is small enough to hash cheaply.
-    // The endorsement is RE-CHECKED here: an observation that arrived while
-    // the sync's awaits ran may have outdated the pre-sync decision, and a
-    // now-rejected head must be served once, never published durably.
-    const endorsed = decideHeadResolution(this.#branchAuthority(branch), head.commitOid).cache;
-    const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
-    if (
-      endorsed &&
-      !isRepoHeadRecord(raced) &&
-      this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES
-    ) {
-      this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
-        commitOid: head.commitOid,
-        contentHash: await this.#lazyContentHash(),
-      });
+    if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
+      await this.#publishLazyHeadRecord(head.commitOid);
     }
     return head;
   }
 
-  /** The whole-snapshot contentHash from store bytes (small manifests only). */
-  async #lazyContentHash(): Promise<string> {
-    const reader = this.#lazyReader();
-    const { paths } = await reader.listHead();
-    const contents = await reader.readPaths(paths);
-    const files: Record<string, string> = {};
-    paths.forEach((path, index) => {
-      const content = contents[index];
-      if (content !== null && content !== undefined) files[path] = content;
+  /**
+   * Publish the head record (worker builds read it) from ONE consistent
+   * snapshot observation. Every guard runs AFTER the last await, immediately
+   * before the synchronous put: the snapshot must still name the intended
+   * commit, the authority must still endorse it, and a record a racing
+   * writer landed must never be clobbered — a stale or mixed publication
+   * would poison build-cache identity durably.
+   */
+  async #publishLazyHeadRecord(expectedCommitOid: string): Promise<void> {
+    const branch = REPO_DEFAULT_BRANCH;
+    const { files, head } = await this.#lazyReader().readHeadSnapshot();
+    const contentHash = await repoContentHash(files);
+    if (head.commitOid !== expectedCommitOid) return;
+    if (!decideHeadResolution(this.#branchAuthority(branch), head.commitOid).cache) return;
+    if (isRepoHeadRecord(this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch)))) return;
+    this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+      commitOid: head.commitOid,
+      contentHash,
     });
-    return repoContentHash(files);
   }
 
   /**
@@ -810,12 +806,10 @@ export class RepoDurableObject extends DurableObject<Env> {
           `lazy commit ${outcome.commitOid} pushed; local install failed: ${String(outcome.localInstallError)}`,
         );
       } else if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
-        // Keep worker builds hot after config-repo commits: publish the head
-        // record inline while the snapshot is cheap to hash.
-        this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
-          commitOid: outcome.commitOid,
-          contentHash: await this.#lazyContentHash(),
-        });
+        // Keep worker builds hot after config-repo commits — same guarded
+        // publisher as the sync path (snapshot must still name OUR commit
+        // and stay endorsed at the moment of the put).
+        await this.#publishLazyHeadRecord(outcome.commitOid);
       }
     } catch (error) {
       this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
