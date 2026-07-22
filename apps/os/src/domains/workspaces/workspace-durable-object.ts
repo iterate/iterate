@@ -459,6 +459,12 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     if (isVirtualDirectoryPath(this.#currentConfig().mounts, path)) {
       throw new Error(`cannot open a collaborative session on directory "${path}"`);
     }
+    // A whiteouted path is DELETED: an empty-seed birth would make it exist
+    // again (and its first flush would clear the whiteout, undoing the
+    // delete). Recreation is an explicit write, never an open.
+    if (this.#core.isMaskedFromMount(path) && (await this.#core.readOverlayFile(path)) === null) {
+      throw new Error(`"${path}" was deleted — write it to recreate before opening a session`);
+    }
     return this.#collab.open(path);
   }
 
