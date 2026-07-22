@@ -656,7 +656,7 @@ importers:
         version: '@iterate-com/capnweb@0.10.0'
       captun:
         specifier: https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz
-        version: https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
+        version: https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
       codemirror-json-schema:
         specifier: 0.8.1
         version: 0.8.1(@codemirror/language@6.12.2)(@codemirror/lint@6.9.5)(@codemirror/state@6.5.4)(@codemirror/view@6.39.16)(@lezer/common@1.5.1)
@@ -684,6 +684,9 @@ importers:
       octokit:
         specifier: ^5.0.5
         version: 5.0.5
+      pako:
+        specifier: ^3.0.1
+        version: 3.0.1
       postal-mime:
         specifier: ^2.7.5
         version: 2.7.5
@@ -698,7 +701,7 @@ importers:
         version: 19.2.7(react@19.2.7)
       sqlfu:
         specifier: 0.1.1
-        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
+        version: 0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.3.2
         version: 4.3.2
@@ -774,7 +777,7 @@ importers:
         version: 4.20260701.0
       trpc-cli:
         specifier: 0.15.1
-        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+        version: 0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       tsx:
         specifier: ^4.20.3
         version: 4.21.0
@@ -10740,6 +10743,9 @@ packages:
   pako@1.0.11:
     resolution: {integrity: sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==}
 
+  pako@3.0.1:
+    resolution: {integrity: sha512-GupotUUI0mlhugKjUs4bjOwLt3nrehy9Ys2dxC0GtgVef5cnKggkDMmf2bq2poCCuVXopWPmqsc9VDT2iJUy+w==}
+
   parent-module@1.0.1:
     resolution: {integrity: sha512-GQ2EWRpQV8/o+Aw8YqtfZZPfNRWZYkbidE9k5rpl/hC3vtHHBfGm2Ifi6qWV+coDGkrUKZAxE3Lot5kcsRlh+g==}
     engines: {node: '>=6'}
@@ -20534,7 +20540,7 @@ snapshots:
       '@noble/ciphers': 2.1.1
       '@noble/hashes': 2.2.0
       better-call: 1.3.5(zod@4.3.6)
-      defu: 6.1.4
+      defu: 6.1.7
       jose: 6.2.2
       kysely: 0.28.16
       nanostores: 1.1.1
@@ -20703,12 +20709,12 @@ snapshots:
 
   caniuse-lite@1.0.30001793: {}
 
-  captun@https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
+  captun@https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       capnweb: '@iterate-com/capnweb@0.10.0'
-      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
+      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     optionalDependencies:
       vite: 8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
@@ -25050,6 +25056,8 @@ snapshots:
 
   pako@1.0.11: {}
 
+  pako@3.0.1: {}
+
   parent-module@1.0.1:
     dependencies:
       callsites: 3.1.0
@@ -26512,15 +26520,14 @@ snapshots:
       - valibot
       - ws
 
-  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+  sqlfu@0.1.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      trpc-cli: 0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       zod: 4.3.6
     optionalDependencies:
       better-auth: 1.6.9(@cloudflare/workers-types@4.20260621.1(patch_hash=ae8908e1d45f2ea02ffeabf1230701598cc2878240ef700403ff76df72677af2))(@opentelemetry/api@1.9.0)(@tanstack/react-start@1.168.25(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.11)(vitest@4.1.8)(vue@3.5.30(typescript@5.9.3))
-      effect: 3.19.19
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@trpc/server'
@@ -26871,6 +26878,26 @@ snapshots:
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.4.3
 
+  trpc-cli@0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.3.6
+
+  trpc-cli@0.14.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.4.3
+
   trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
     dependencies:
       commander: 14.0.3
@@ -26892,6 +26919,16 @@ snapshots:
       effect: 3.19.19
       valibot: 1.2.0(typescript@5.9.3)
       zod: 4.4.3
+
+  trpc-cli@0.15.1(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6):
+    dependencies:
+      commander: 14.0.3
+    optionalDependencies:
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      '@trpc/server': 11.12.0(typescript@5.9.3)
+      '@valibot/to-json-schema': 1.5.0(valibot@1.2.0(typescript@5.9.3))
+      valibot: 1.2.0(typescript@5.9.3)
+      zod: 4.3.6
 
   ts-api-utils@2.4.0(typescript@5.9.3):
     dependencies:
