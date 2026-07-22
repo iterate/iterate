@@ -120,12 +120,20 @@ Use at least three unchanged warm-slot runs when changing concurrency. A single
 green run proves neither the tail nor the retry rate. Classify every retry and
 audit matching Cloudflare errors before calling an operational change proven.
 
-For a release-level stability proof, dispatch `preview-e2e-marathon.yml`. Each
-counted run repeats the complete critical path (full-fleet deploy, then all test
-lanes), records duration and retry count in `summary.tsv`, and fails fast on a
-functional failure or a duration at or above five minutes. The acceptance bar
-is 25 consecutive accepted runs; environment ownership refusals are recorded
-but uncounted because the guard fires before any tests run.
+For a release-level stability proof, run the thin Depot orchestrator:
+
+```bash
+PR_NUMBER=<pr> REF=<branch> RUNS=25 ./scripts/preview/flake-hunt-loop.sh
+```
+
+It sequentially dispatches the canonical `cloudflare-previews.yml` workflow;
+there is no second deploy/test implementation and no nested marathon runner.
+Every counted iteration therefore has its own ordinary Depot runner, artifacts,
+GitHub timing, and PostHog telemetry. The ledger records the immutable head,
+Depot run/attempt IDs, whole-run duration (dispatch creation through finish),
+and retry count. It fails fast on a workflow failure, moved head, absorbed test
+retry, or duration at or above five minutes. The acceptance bar is 25
+consecutive zero-retry runs of one head.
 
 ## Cost
 

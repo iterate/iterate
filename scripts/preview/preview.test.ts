@@ -750,19 +750,6 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("normalizes marathon artifacts before Depot upload", () => {
-    const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
-      "utf8",
-    );
-
-    expect(workflow).toContain("scripts/preview/collect-test-artifacts.sh test-results");
-    expect(workflow).toContain("path: test-results");
-    expect(workflow).toContain("include-hidden-files: true");
-    expect(workflow).not.toContain("            /tmp/os-e2e-*");
-    expect(workflow).not.toContain("            /tmp/marathon");
-  });
-
   test("starts every isolated OS sub-lane in parallel", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";

@@ -5274,9 +5274,8 @@ async function retakeRecordedSlotIfFree(input: {
 /**
  * Why a slot action was refused: the semaphore no longer attributes a slot
  * to this holder. CONTRACT: the message always contains the exact substring
- * "no longer belongs to" — scripts/preview/flake-hunt-loop.sh and on-call
- * humans grep for it to tell a slot steal apart from ordinary failures.
- * Change both sides together.
+ * "no longer belongs to" — on-call humans grep for it to tell a slot steal
+ * apart from ordinary failures.
  */
 function describeLostSlotOwnership(input: {
   currentHolder: string | null;

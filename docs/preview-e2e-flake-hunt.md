@@ -7,8 +7,9 @@
 
 Current goal: run the complete preview pipeline against a real preview
 environment 25 times in a row without a single failure, with every full-fleet
-deploy plus e2e run completing in under five minutes. Fix and document every
-failure or tail encountered along the way.
+deploy plus e2e run completing in under five minutes and without an absorbed
+test retry. Fix and document every failure, retry, or tail encountered along
+the way.
 
 Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
 Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
@@ -17,12 +18,20 @@ write serialization supersedes round 2's standalone flake-15 fix. Later rounds
 repeat the same proof after substantial platform changes and record their exact
 base revision, run IDs, and findings below.
 
-Method: loop a full-fleet `pnpm preview deploy --all-apps` followed by
-`pnpm preview test`, failing fast on the first functional failure or run at or
-above five minutes. Every failure gets a root-cause diagnosis and the smallest
-reliable fix, recorded below; a failure resets the consecutive-green counter.
-`scripts/preview/flake-hunt-loop.sh` drives the loop and writes a machine-readable
-per-run duration and retry ledger.
+Method: `scripts/preview/flake-hunt-loop.sh` sequentially dispatches the
+canonical Depot `cloudflare-previews.yml` workflow. Every iteration is a normal
+fresh-runner preview check—full-fleet deploy, every e2e lane, artifact upload,
+GitHub timing, and PostHog telemetry—not a second implementation hidden inside
+one long-running job. It fails fast on the first functional failure, moved
+head, absorbed retry, or run at or above five minutes, and writes a
+machine-readable ledger containing the immutable head plus Depot run/attempt
+IDs, whole-run duration, and retry count. Every failure, retry, or tail gets a
+root-cause diagnosis and the smallest reliable fix; any of them resets the
+consecutive-clean counter.
+
+This zero-retry acceptance rule applies to new proof runs from 2026-07-22
+onward. Historical ledgers below retain the semantics and retry counts they
+recorded at the time; they are evidence, not retroactively relabelled runs.
 
 Once a failing test is isolated, use `pnpm preview test-target` to run its
 Vitest file or Playwright spec repeatedly against the PR's already-deployed
@@ -31,13 +40,17 @@ preview. It does not deploy, erase, or overwrite the full-suite result; see
 for exact commands. This focused loop is diagnostic only: the accepted streak
 still consists of complete deploy-plus-e2e runs on Depot.
 
-The trustworthy count runs **in Depot CI, not on a workstation** (a laptop
-sleeping mid-loop produced hours of phantom "degradation" — see the lab note):
-`.depot/workflows/preview-e2e-marathon.yml` runs that same loop on Depot infra,
-launched with `depot ci dispatch --workflow preview-e2e-marathon.yml --ref
-<branch> --input pull-request-number=<pr>`.
-Local runs are for fast iteration while fixing a flake; the consecutive-green
-bar is measured on Depot's same 16-core runner shape as the normal preview job.
+Run the orchestrator from an authenticated workstation:
+
+```bash
+PR_NUMBER=<pr> REF=<branch> RUNS=25 ./scripts/preview/flake-hunt-loop.sh
+```
+
+The workstation only dispatches and observes. Every counted attempt executes
+independently in Depot on the normal preview job's 16-core runner and sends the
+normal telemetry; if the workstation sleeps or exits, no running test is
+misclassified and no later run is silently counted. Resume by explicitly
+starting a new proof—accepted streaks are never inferred across ledgers.
 
 ## Round 7 (2026-07-21, post-#2226 and #2227)
 
@@ -203,10 +216,9 @@ for a future revival. See the stub's header and
 
 Goal: 25 consecutive green runs on Depot, re-validating the lane after a week
 of heavy merging (subagents/unified messaging, stream metrics,
-MCP OAuth, sandbox AI-gateway egress, …). Method unchanged: Depot marathon
-(`preview-e2e-marathon.yml`) against this PR's leased slot, fail fast, root
-cause + fix every failure, merge main into this branch between marathons so
-the lane is always tested at (or ahead of) main's head.
+MCP OAuth, sandbox AI-gateway egress, …). The then-current method used the
+since-retired nested `preview-e2e-marathon.yml` workflow against this PR's
+leased slot, failing fast and fixing every root cause before resuming.
 
 Result: **96 consecutive green runs in one night, zero test failures, zero
 flakes found** — the goal met on the first marathon and re-proven three more
@@ -563,8 +575,9 @@ a failure instead of silently freezing the marathon.
 - The watchdog fired at 30 min but its `SIGTERM` did **not** propagate down the
   deep `doppler → pnpm → trpc-cli → inner doppler → bash → vitest` tree, so the
   wedged run hung ~58 min past the timeout, still holding the loop's `wait`.
-  Fix: the watchdog now walks the whole descendant tree and `SIGKILL`s it
-  leaf-first (`kill_tree` in `flake-hunt-loop.sh`).
+  Historical fix: the then-current in-process loop walked the whole descendant
+  tree and `SIGKILL`ed it leaf-first. That `kill_tree` implementation was
+  retired when the marathon became an observer of canonical Depot runs.
 - More importantly, the wedge is now **self-healing at the source** instead of
   costing a whole run: the preview test orchestration (`previewTestCommandArgs`
   in `preview.ts`) wraps the vitest node lane in `timeout` and retries it once
@@ -649,13 +662,10 @@ but not `semaphore, streams-example-app` — tripping the full-fleet guard
 shrink to the changed apps, and without the guard a partial lane would count as
 green.
 
-Fix (`scripts/preview/flake-hunt-loop.sh`): a fresh marathon (`START_AT=1`) now
-runs a full-fleet deploy preflight before counting runs and refuses to start on
-a `deploy-failed`/`claim-failed` app (exit 4). Because `scripts/preview/**` is a
-preview shared path, any change under it (envs.ts and scripts/lib/\*\* too) forces
-`preview deploy` to redeploy the whole fleet, reunifying the head — so the
-preflight both guarantees a unified fleet and repairs a split one. Set
-`SKIP_PREFLIGHT_DEPLOY=1` when resuming a marathon whose fleet is already unified.
+Historical fix in the then-current loop: a fresh marathon ran a full-fleet
+deploy preflight before counting. The current orchestrator instead dispatches
+the canonical workflow, whose manual-dispatch path passes `--all-apps`; every
+counted Depot run therefore deploys and tests the complete fleet directly.
 
 **Preflight hardening (round 3):** the preflight originally relied on the
 marathon commit happening to touch a fleet-shared path to force a full-fleet
@@ -761,11 +771,9 @@ see flake 23 for the real fix (destroy on idle).
 Fix (`apps/os/scripts/generate-wrangler-config.ts`): raise the cap to **100**
 for previews and **50** for prd (`lite` instances bill on usage, not
 reservation, so a high cap is free headroom). The durable idle reaper keeps
-cleanup reliable at any cap. Also added `WARMUP_RUNS` to
-`scripts/preview/flake-hunt-loop.sh`: a freshly-deployed slot boots cold (os
-worker + DO chain + sandbox containers on first use), so the marathon can run N
-uncounted priming runs before counting, keeping a cold run 1 from resetting the
-streak.
+cleanup reliable at any cap. That round also briefly added uncounted warmups;
+they were later removed because cold-start behaviour is part of the production
+path and every proof run must count.
 
 ### 20. Sandbox tests must budget for cold container image provisioning
 

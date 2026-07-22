@@ -191,10 +191,6 @@ describe("Depot credential boundaries", () => {
       },
     },
     {
-      file: ".depot/workflows/preview-e2e-marathon.yml",
-      permissions: { contents: "read", "pull-requests": "write", statuses: "read" },
-    },
-    {
       file: ".depot/workflows/release.yml",
       permissions: { contents: "write" },
     },
@@ -299,7 +295,6 @@ describe("Depot validation capacity", () => {
   it.each([
     { file: ".depot/workflows/test.yml", jobId: "test" },
     { file: ".depot/workflows/cloudflare-previews.yml", jobId: "preview" },
-    { file: ".depot/workflows/preview-e2e-marathon.yml", jobId: "marathon" },
   ])("$file always finalizes and retains test telemetry", ({ file, jobId }) => {
     const steps = loadWorkflow(file).jobs[jobId]?.steps ?? [];
     const finalizer = steps.find((step) =>
@@ -338,7 +333,6 @@ describe("Depot validation capacity", () => {
   it.each([
     { file: ".depot/workflows/test.yml", jobId: "test" },
     { file: ".depot/workflows/cloudflare-previews.yml", jobId: "preview" },
-    { file: ".depot/workflows/preview-e2e-marathon.yml", jobId: "marathon" },
   ])("$file sends finalized test telemetry to the canonical PostHog project", ({ file, jobId }) => {
     const finalizer = loadWorkflow(file).jobs[jobId]?.steps?.find((step) =>
       step.run?.includes("scripts/ci/upload-test-telemetry.ts"),
