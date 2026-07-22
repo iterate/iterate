@@ -18,8 +18,6 @@ export type RunScriptCommand = {
   expiresAt: number;
 };
 
-type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
-
 /** The small stream surface needed by the public script-run protocol. */
 export type CapabilityHostScriptStream = {
   append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
@@ -50,7 +48,7 @@ export async function runCapabilityHostScript(input: {
   path: string;
   projectId: string;
   stream: CapabilityHostScriptStream;
-}): Promise<RunScriptResult> {
+}): Promise<Awaited<ReturnType<CapabilityHost["runScript"]>>> {
   const { command, path, projectId, stream } = input;
   const now = input.now ?? Date.now;
   if (now() >= command.expiresAt) {
