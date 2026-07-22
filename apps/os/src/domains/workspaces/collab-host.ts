@@ -5,6 +5,7 @@ import { attributedChanges } from "./collab-changes.ts";
 import type { EditWorkspaceFileInput, EditWorkspaceFileResult } from "./types.ts";
 import {
   CollabEngine,
+  type CollabBroadcast,
   MAX_DOC_BYTES,
   minimalSplice,
   type CollabPull,
@@ -114,13 +115,22 @@ export class CollabHost {
   readonly #flushTimers = new Map<string, { max: number; timer: ReturnType<typeof setTimeout> }>();
   readonly #lastActivity = new Map<string, number>();
 
-  constructor(options: { fs: CollabSettledFs; store: CollabSessionStore }) {
+  readonly #onBroadcast?: (event: CollabBroadcast) => void;
+
+  constructor(options: {
+    fs: CollabSettledFs;
+    /** Observability tap: every accepted batch (live-edit pulse). */
+    onBroadcast?: (event: CollabBroadcast) => void;
+    store: CollabSessionStore;
+  }) {
     this.#fs = options.fs;
     this.#store = options.store;
+    this.#onBroadcast = options.onBroadcast;
     this.#engine = new CollabEngine({
       broadcast: (event) => {
         this.#wake(event.path);
         this.#scheduleFlush(event.path);
+        this.#onBroadcast?.(event);
       },
       store: options.store,
     });

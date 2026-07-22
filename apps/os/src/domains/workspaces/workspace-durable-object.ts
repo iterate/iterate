@@ -303,6 +303,22 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   // collab-host.ts for the invariants.
   readonly #collab = new CollabHost({
     fs: this.#core,
+    // The live pulse: every accepted batch appends an EPHEMERAL stream event
+    // (delivered to live subscribers, never replayed — the llm-chunk lane's
+    // idiom), so the workspace's event sheet breathes while people type.
+    onBroadcast: (event) => {
+      void this.#stream
+        .append({
+          ephemeral: true,
+          payload: {
+            clients: [...new Set(event.ops.map((op) => op.clientId))],
+            path: event.path,
+            toVersion: event.toVersion,
+          },
+          type: "events.iterate.com/workspace/live-edit",
+        } as StreamEventInput)
+        .catch(() => {});
+    },
     store: sqliteCollabStore(this.ctx.storage),
   });
 
@@ -465,7 +481,15 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     if (this.#core.isMaskedFromMount(path) && (await this.#core.readOverlayFile(path)) === null) {
       throw new Error(`"${path}" was deleted — write it to recreate before opening a session`);
     }
-    return this.#collab.open(path);
+    const opened = await this.#collab.open(path);
+    void this.#stream
+      .append({
+        ephemeral: true,
+        payload: { epoch: opened.epoch, path, version: opened.version },
+        type: "events.iterate.com/workspace/session-opened",
+      } as StreamEventInput)
+      .catch(() => {});
+    return opened;
   }
 
   async collabPush(input: CollabPush): Promise<CollabPushResult> {
