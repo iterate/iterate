@@ -29,10 +29,7 @@
  * build where a method-returned surface is a Proxy.
  */
 import { test } from "vitest";
-import {
-  annotateE2ePhase,
-  measureE2ePhase,
-} from "@iterate-com/shared/test-support/measure-e2e-phase";
+import { measureE2ePhase } from "@iterate-com/shared/test-support/measure-e2e-phase";
 import type { Agent, CapabilityHost, StreamEvent } from "../../src/itx-api.generated.ts";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { itxScript } from "../test-support/itx-script-builder.ts";
@@ -85,73 +82,72 @@ test(
     // if agents.get() returns anything workerd cannot pipeline on, these
     // throw "The RPC receiver does not implement the method ...".
     using projectHost = itx.capabilityHosts.get("/");
-    const scriptStartedAt = new Date();
-    const scriptStartedAtPerformance = performance.now();
-    const run = (
-      await itxScript(projectHost)
-        .context<{
-          agents: {
-            get(path: string): Agent & {
-              proofAppend: ProofAppend;
-              capabilityHost: CapabilityHost & { proofAppend: ProofAppend };
-            };
-          };
-          capabilityHosts: { get(path: string): CapabilityHost & { proofAppend: ProofAppend } };
-        }>()
-        .vars({ agentPath, marker, proofType: PROOF_TYPE })
-        .execute(async (itx, vars) => {
-          // 1. message() on the pipelined result of get(). The agent was born
-          //    explicitly above; message is an ordinary post-birth command.
-          const sent = await itx.agents.get(vars.agentPath).message("pipelined hello");
+    const run = await measurePhase(
+      "execute pipelined worker script",
+      "operation",
+      async () =>
+        (
+          await itxScript(projectHost)
+            .context<{
+              agents: {
+                get(path: string): Agent & {
+                  proofAppend: ProofAppend;
+                  capabilityHost: CapabilityHost & { proofAppend: ProofAppend };
+                };
+              };
+              capabilityHosts: { get(path: string): CapabilityHost & { proofAppend: ProofAppend } };
+            }>()
+            .vars({ agentPath, marker, proofType: PROOF_TYPE })
+            .execute(async (itx, vars) => {
+              // 1. message() on the pipelined result of get(). The agent was born
+              //    explicitly above; message is an ordinary post-birth command.
+              const sent = await itx.agents.get(vars.agentPath).message("pipelined hello");
 
-          // 2. A dynamic capability DIRECTLY on the fetched handle: proofAppend
-          //    is an unknown member, resolved by the prototype-chain fallback
-          //    and dispatched through the agent scope's capability host —
-          //    all one un-awaited chain.
-          const [appended] = await itx.agents.get(vars.agentPath).proofAppend({
-            type: vars.proofType,
-            payload: { marker: vars.marker },
-          });
+              // 2. A dynamic capability DIRECTLY on the fetched handle: proofAppend
+              //    is an unknown member, resolved by the prototype-chain fallback
+              //    and dispatched through the agent scope's capability host —
+              //    all one un-awaited chain.
+              const [appended] = await itx.agents.get(vars.agentPath).proofAppend({
+                type: vars.proofType,
+                payload: { marker: vars.marker },
+              });
 
-          // 3. The same capability through the explicit capabilityHost door —
-          //    equivalent spelling, also pipelined (capabilityHost is a
-          //    property hop, proofAppend the dynamic name).
-          const [appendedViaHost] = await itx.agents
-            .get(vars.agentPath)
-            .capabilityHost.proofAppend({
-              type: vars.proofType,
-              payload: { marker: vars.marker + "-via-host" },
-            });
+              // 3. The same capability through the explicit capabilityHost door —
+              //    equivalent spelling, also pipelined (capabilityHost is a
+              //    property hop, proofAppend the dynamic name).
+              const [appendedViaHost] = await itx.agents
+                .get(vars.agentPath)
+                .capabilityHost.proofAppend({
+                  type: vars.proofType,
+                  payload: { marker: vars.marker + "-via-host" },
+                });
 
-          // 4. Another method-returned surface entirely: capabilityHosts.get()
-          //    used to hand back a Proxy too — a declared CLASS method must
-          //    pipeline (__describe), and so must a DYNAMIC capability name
-          //    resolved by the same hop (proofAppend, mounted above).
-          const hostDescription = await itx.capabilityHosts.get(vars.agentPath).__describe();
-          const [appendedViaHostsGet] = await itx.capabilityHosts.get(vars.agentPath).proofAppend({
-            type: vars.proofType,
-            payload: { marker: vars.marker + "-via-hosts-get" },
-          });
+              // 4. Another method-returned surface entirely: capabilityHosts.get()
+              //    used to hand back a Proxy too — a declared CLASS method must
+              //    pipeline (__describe), and so must a DYNAMIC capability name
+              //    resolved by the same hop (proofAppend, mounted above).
+              const hostDescription = await itx.capabilityHosts.get(vars.agentPath).__describe();
+              const [appendedViaHostsGet] = await itx.capabilityHosts
+                .get(vars.agentPath)
+                .proofAppend({
+                  type: vars.proofType,
+                  payload: { marker: vars.marker + "-via-hosts-get" },
+                });
 
-          return {
-            messageActor: sent.payload?.actor,
-            messageOffset: sent.offset,
-            messageRole: sent.payload?.role,
-            messageType: sent.type,
-            proofOffset: appended.offset,
-            proofType: appended.type,
-            proofViaHostOffset: appendedViaHost.offset,
-            proofViaHostsGetOffset: appendedViaHostsGet.offset,
-            hostPath: hostDescription.path,
-          };
-        })
-    ).execution;
-    await annotateE2ePhase(annotate, {
-      name: "execute pipelined worker script",
-      category: "operation",
-      startedAt: scriptStartedAt,
-      durationMs: performance.now() - scriptStartedAtPerformance,
-    });
+              return {
+                messageActor: sent.payload?.actor,
+                messageOffset: sent.offset,
+                messageRole: sent.payload?.role,
+                messageType: sent.type,
+                proofOffset: appended.offset,
+                proofType: appended.type,
+                proofViaHostOffset: appendedViaHost.offset,
+                proofViaHostsGetOffset: appendedViaHostsGet.offset,
+                hostPath: hostDescription.path,
+              };
+            })
+        ).execution,
+    );
 
     expect(run.result).toMatchObject({
       messageActor: { type: "user", origin: "web" },
