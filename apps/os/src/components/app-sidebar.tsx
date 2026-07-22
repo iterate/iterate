@@ -70,6 +70,7 @@ import { sidebarAgentRowsVisible } from "./agents/sidebar-agent-visibility.ts";
 import { SidebarAgents } from "./agents/sidebar-agents.tsx";
 import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 import { DeferredSurface } from "~/components/deferred-surface.tsx";
+import { ProjectWorkerHealthWarning } from "~/components/project-worker-health.tsx";
 import type { AppConfig } from "~/config.ts";
 import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
@@ -550,6 +551,7 @@ function ProjectSidebarGroup({
 
   return (
     <>
+      <ProjectWorkerHealthWarning projectId={projectId} />
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
