@@ -25,6 +25,17 @@ hook/body/module/import timing, Node attempts, and standalone smoke phases.
 > Its live e2e is explicitly skipped and restoration is owned by
 > [`tasks/quarantined-cloudflare-artifacts-event-delivery.md`](../tasks/quarantined-cloudflare-artifacts-event-delivery.md).
 
+> [!CAUTION]
+> **🔥 LIVE-CAPABILITY WEBSOCKET MESH E2E IS QUARANTINED.** Its boundary
+> probe caught the expected serialization failure and reported a pass, then
+> deterministically caused the Workers runtime to cancel the shared OS isolate.
+> In the fully parallel suite that severed 19 unrelated ITX sessions with
+> WebSocket code 1006. The two explicit skips cover only the known-unsupported
+> Node live-capability → internal Worker mesh WebSocket upgrade; ordinary live
+> capabilities, project-app WebSockets, and all other OS e2e coverage remain
+> active. Evidence and restoration criteria live in
+> [`tasks/quarantined-live-capability-websocket-e2e.md`](../tasks/quarantined-live-capability-websocket-e2e.md).
+
 ## Philosophy
 
 Six principles carry this system. They are conscious design — most trace

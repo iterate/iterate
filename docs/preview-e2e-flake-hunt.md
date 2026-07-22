@@ -83,6 +83,7 @@ Round-8 run ledger:
 | Pre-round normal preview | `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4` |          0/25 |       1 | Passed in 5m20s; cross-project stream retry |
 | Round-8 marathon 1       | `e301520145a6259a743a3e300366a0a53689a009` |          0/25 |       2 | Functional pass; rejected at 311s           |
 | Round-8 marathon 2       | `c2a695fac7279da1b3b9bb64512a2d08d20aa576` |          0/25 |       0 | Clean pass; rejected at 311s                |
+| Round-8 marathon 3       | `723f73067c13fa52512593f9e2952ffc91618ef2` |          0/25 |      19 | Shared-isolate cancellation; rejected       |
 
 The first round-8 attempt was [Depot run
 `3jp43c0dbg`](https://depot.dev/orgs/0p91s0lz49/workflows/vxd3v2n769?job=xjm4379s33&attempt=lp5zq2dfp4).
@@ -128,8 +129,29 @@ The uploader now packs events by encoded size, with a conservative 5 MB event
 payload budget beneath PostHog's 20 MB batch-request limit. The preceding
 5,906-event artifact packs into three requests instead of 60 while preserving
 every deterministic event UUID and the existing per-batch bounded retry. The
-next immutable head again starts at 0/25; only a canonical Depot run can prove
-the real reporting and whole-workflow reduction.
+next canonical run, [Depot run
+`h95t4wvm5n`](https://depot.dev/orgs/0p91s0lz49/workflows/vsm4b78r2d?job=gtxq2vksbg&attempt=ppp78dt78z),
+confirmed the real upload tail fell by roughly 10 seconds. The complete check
+still took 312 seconds and absorbed 19 Vitest retries, all from one synchronized
+`Peer closed WebSocket: 1006` wave; every retry passed.
+
+Cloudflare traces identified one causal test rather than 19 independent
+flakes. The live-capability WebSocket boundary probe caught its expected
+serialization error and reported a pass, then the runtime canceled that
+session's root `GET /api` because the Worker had hung and would never generate
+a response. Three isolated apparent passes reproduced the hidden runtime
+cancellation three times out of three. Because every Vitest file correctly
+runs in parallel against the same OS deployment, that isolate cancellation
+severed unrelated sessions across otherwise-independent projects.
+
+Both cases in `live-capability-websocket.e2e.test.ts` are explicitly
+quarantined under
+`tasks/quarantined-live-capability-websocket-e2e.md`. The causal boundary case
+is deterministically runtime-fatal; the second was a `test.fails` that stopped
+on an unrelated stale-template assertion and therefore provided no active
+coverage. Ordinary live capabilities, project-app WebSockets, and all other OS
+Vitest files remain enabled. This quarantine resets the immutable head and the
+accepted streak to 0/25; only a canonical Depot run can restart it.
 
 ## Round 7 (2026-07-21, post-#2226 and #2227)
 
