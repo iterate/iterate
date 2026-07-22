@@ -206,6 +206,8 @@ export type AgentUiStreamWakeItem = {
   id: string;
   text: string;
   timestampMs: number;
+  /** Adjacent wake markers represented by this final wake. */
+  count?: number;
 };
 
 export type AgentUiChildStreamItem = {

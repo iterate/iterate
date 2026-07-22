@@ -2,6 +2,8 @@ import { createPrivateKey, createSign, generateKeyPairSync } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import {
+  APPROVAL_BODY_INSPECTION_LIMIT_BYTES,
+  approvalRequestBody,
   buildApprovalMessage,
   bytesToBase64,
   canonicalJson,
@@ -12,6 +14,57 @@ import {
   type EgressRule,
   type HumanApprovalKey,
 } from "./egress-approvals.ts";
+
+test("approvalRequestBody preserves readable requests within the inspection limit", () => {
+  const text = JSON.stringify({ orderId: 1234, reason: "duplicate" });
+  expect(approvalRequestBody(new TextEncoder().encode(text))).toEqual({
+    encoding: "utf8",
+    content: text,
+    originalByteLength: text.length,
+    truncated: false,
+  });
+
+  expect(approvalRequestBody(Uint8Array.from([0, 255, 17, 128]))).toEqual({
+    encoding: "base64",
+    content: "AP8RgA==",
+    originalByteLength: 4,
+    truncated: false,
+  });
+});
+
+test("approvalRequestBody caps the durable inspection payload at 64 KiB", () => {
+  const bytes = new TextEncoder().encode("a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000));
+
+  expect(approvalRequestBody(bytes)).toEqual({
+    encoding: "utf8",
+    content: "a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
+    originalByteLength: bytes.byteLength,
+    truncated: true,
+  });
+
+  const binary = new Uint8Array(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000).fill(0xff);
+  const binaryBody = approvalRequestBody(binary);
+  expect(binaryBody).toMatchObject({
+    encoding: "base64",
+    originalByteLength: binary.byteLength,
+    truncated: true,
+  });
+  expect(binaryBody.content).toBe(
+    bytesToBase64(binary.slice(0, APPROVAL_BODY_INSPECTION_LIMIT_BYTES)),
+  );
+});
+
+test("approvalRequestBody keeps UTF-8 readable when the byte cap splits a code point", () => {
+  const completePrefix = "a".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES - 1);
+  const bytes = new TextEncoder().encode(`${completePrefix}€ after the cap`);
+
+  expect(approvalRequestBody(bytes)).toEqual({
+    encoding: "utf8",
+    content: completePrefix,
+    originalByteLength: bytes.byteLength,
+    truncated: true,
+  });
+});
 
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
   description: "",

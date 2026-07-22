@@ -196,7 +196,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
 
   async #revoke(reason: "disabled" | "permission-denied" | "sign-out") {
     const snapshot = await this.#snapshot();
-    if (snapshot.state.birthCertificate === null) throw new Error("device has not been enrolled");
+    if (snapshot.state.birthCertificate === null) return null;
     if (snapshot.state.pushTokenSecret !== null) {
       await this.#clearPushTokenSecret({
         pushTokenSecretPath: snapshot.state.pushTokenSecret.path,

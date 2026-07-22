@@ -46,10 +46,11 @@ import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
 import {
+  collapseConsecutiveStreamWakes,
   reduceFeed,
   type AgentUiFileAttachment,
-  type AgentUiItem,
   type AgentUiMessageItem,
+  type MobileFeedItem,
 } from "../../../lib/feed.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
@@ -290,7 +291,7 @@ function FeedList({
   // Inverted list keeps the newest item at the bottom and pinned on keyboard
   // open; data is reversed to match. The live activity is part of the feed,
   // so streaming updates scroll naturally.
-  const rows = [...feed.items].reverse();
+  const rows = collapseConsecutiveStreamWakes(feed.items).reverse();
   return (
     <FlatList
       inverted
@@ -319,12 +320,17 @@ function FeedList({
   );
 }
 
-function FeedItem({ item }: { item: AgentUiItem }) {
+function FeedItem({ item }: { item: MobileFeedItem }) {
   switch (item.kind) {
     case "activity":
       return <ActivityCard activity={item} />;
     case "stream-woken":
-      return <Text style={styles.wakeMarker}>— {item.text || "stream woke"} —</Text>;
+      return (
+        <Text style={styles.wakeMarker}>
+          — {item.text || "stream woke"}
+          {item.wakeCount > 1 ? ` (${item.wakeCount})` : ""} —
+        </Text>
+      );
     case "processor-revived":
       return (
         <Text style={styles.wakeMarker}>

@@ -44,7 +44,7 @@ export const RAW_GROUP_KIND = "raw.group";
  * are disposable caches and must be rebuilt, never interpreted as current
  * state (in particular, they may contain historical ephemeral activity).
  */
-export const BROWSER_FEED_SCHEMA_VERSION = 6;
+export const BROWSER_FEED_SCHEMA_VERSION = 7;
 export { isAgentActivity } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 /** Maps an event type to its specific raw renderer kind, or null to fall into the group. */
@@ -100,6 +100,8 @@ export type BrowserFeedState = {
   open: OpenGroup | null;
   /** Monotonically increasing next feed_items local_index — THE total feed order. */
   nextLocalIndex: number;
+  /** The final visible pretty row when it is a stream wake, for adjacent-run compaction. */
+  lastAgentWake: { localIndex: number; count: number } | null;
   /**
    * Stable row addresses only for activities still awaiting a durable script
    * correction. Ordinary feed items never need replacement, so retaining an
@@ -115,6 +117,7 @@ export function initialBrowserFeedState(): BrowserFeedState {
     agent: initialAgentUiState(),
     open: null,
     nextLocalIndex: 0,
+    lastAgentWake: null,
     provisionalAgentItemIndexes: {},
   };
 }
@@ -164,6 +167,7 @@ export function planBrowserFeedOps(
   let agent = start.agent;
   let open = start.open;
   let nextLocalIndex = start.nextLocalIndex;
+  let lastAgentWake = start.lastAgentWake;
   const provisionalAgentItemIndexes = { ...start.provisionalAgentItemIndexes };
   const ops: FeedOp[] = [];
   // The op for the row `open` points at, when that row is being mutated within
@@ -191,6 +195,18 @@ export function planBrowserFeedOps(
         if (!hasInferredScriptOutcome(item)) delete provisionalAgentItemIndexes[item.id];
         continue;
       }
+      if (item.kind === "stream-woken" && lastAgentWake !== null) {
+        const count = lastAgentWake.count + 1;
+        ops.push({
+          kind: "replace",
+          localIndex: lastAgentWake.localIndex,
+          itemKind: `${AGENT_KIND_PREFIX}${item.kind}`,
+          lastOffset: event.offset,
+          data: { ...item, count },
+        });
+        lastAgentWake = { ...lastAgentWake, count };
+        continue;
+      }
       ops.push({
         kind: "insert",
         localIndex: nextLocalIndex,
@@ -203,6 +219,8 @@ export function planBrowserFeedOps(
       if (hasInferredScriptOutcome(item)) {
         provisionalAgentItemIndexes[item.id] = nextLocalIndex;
       }
+      lastAgentWake =
+        item.kind === "stream-woken" ? { localIndex: nextLocalIndex, count: 1 } : null;
       nextLocalIndex += 1;
     }
 
@@ -288,6 +306,7 @@ export function planBrowserFeedOps(
       agent,
       open,
       nextLocalIndex,
+      lastAgentWake,
       provisionalAgentItemIndexes: retainCurrentProvisionalIndexes(
         provisionalAgentItemIndexes,
         agent,
@@ -303,6 +322,7 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   if (!isCurrentAgentUiState(candidate.agent)) return false;
   if (!isOpenGroup(candidate.open)) return false;
   if (!isNonNegativeSafeInteger(candidate.nextLocalIndex)) return false;
+  if (!isLastAgentWake(candidate.lastAgentWake)) return false;
   if (!isRecord(candidate.provisionalAgentItemIndexes)) return false;
   const agent = candidate.agent;
   const nextLocalIndex = candidate.nextLocalIndex;
@@ -319,7 +339,18 @@ export function isCurrentBrowserFeedState(value: unknown): value is BrowserFeedS
   }
   return (
     candidate.schemaVersion === BROWSER_FEED_SCHEMA_VERSION &&
-    (candidate.open === null || candidate.open.localIndex < nextLocalIndex)
+    (candidate.open === null || candidate.open.localIndex < nextLocalIndex) &&
+    (candidate.lastAgentWake === null || candidate.lastAgentWake.localIndex < nextLocalIndex)
+  );
+}
+
+function isLastAgentWake(value: unknown): value is BrowserFeedState["lastAgentWake"] {
+  if (value === null) return true;
+  return (
+    isRecord(value) &&
+    isNonNegativeSafeInteger(value.localIndex) &&
+    isNonNegativeSafeInteger(value.count) &&
+    value.count > 0
   );
 }
 
