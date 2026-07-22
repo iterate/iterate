@@ -24,16 +24,6 @@ const artifact: WorkerBuildArtifact = {
 };
 
 describe("WorkerBuildCoordinator", () => {
-  it("reuses its settled artifact without consulting the eventually-consistent store again", async () => {
-    const execute = vi.fn(async () => artifact);
-    const coordinator = new WorkerBuildCoordinator(execute);
-
-    await expect(coordinator.build(request)).resolves.toBe(artifact);
-    await expect(coordinator.build(request)).resolves.toBe(artifact);
-
-    expect(execute).toHaveBeenCalledOnce();
-  });
-
   it("gives concurrent followers their own answer from one build", async () => {
     const build = Promise.withResolvers<WorkerBuildArtifact>();
     const execute = vi.fn(async () => await build.promise);
@@ -51,6 +41,20 @@ describe("WorkerBuildCoordinator", () => {
       artifact,
     ]);
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("reuses a successful artifact after its flight settles", async () => {
+    const execute = vi.fn(async () => artifact);
+    const events: string[] = [];
+    const coordinator = new WorkerBuildCoordinator(execute, {
+      observe: (event) => events.push(event.kind),
+    });
+
+    await expect(coordinator.build(request)).resolves.toBe(artifact);
+    await expect(coordinator.build(request)).resolves.toBe(artifact);
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(events).toEqual(["started", "settled", "reused"]);
   });
 
   it("fans infrastructure failure out and permits a clean retry", async () => {
@@ -90,5 +94,14 @@ describe("WorkerBuildCoordinator", () => {
 
     build.resolve(artifact);
     await leader;
+  });
+
+  it("rejects a mismatched key after retaining a completed artifact", async () => {
+    const coordinator = new WorkerBuildCoordinator(async () => artifact);
+    await coordinator.build(request);
+
+    await expect(coordinator.build({ ...request, buildKey: "b".repeat(64) })).rejects.toThrow(
+      /received/,
+    );
   });
 });
