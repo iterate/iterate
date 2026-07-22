@@ -545,3 +545,34 @@ describe("open seed race", () => {
     expect(await host.readFile(PATH)).toBe("second");
   });
 });
+
+describe("open unwind windows", () => {
+  test("a delete during the post-birth reconcile read unwinds the open", async () => {
+    const { store } = fakeSessionStore();
+    const files = new Map([[PATH, "seed"]]);
+    let reads = 0;
+    const gate: { release?: () => void } = {};
+    const fs: CollabSettledFs = {
+      readFile: async (path) => {
+        reads++;
+        const snapshot = files.get(path) ?? null;
+        if (reads === 2) {
+          // Park the RECONCILE read (the seed read is first) while the
+          // destructive op lands.
+          await new Promise<void>((resolve) => {
+            gate.release = resolve;
+          });
+        }
+        return snapshot;
+      },
+      writeFile: async (path, content) => void files.set(path, content),
+    };
+    const host = new CollabHost({ fs, store });
+    const opening = host.open(PATH);
+    while (gate.release === undefined) await new Promise((r) => setTimeout(r, 1));
+    host.endSessions([PATH]);
+    gate.release();
+    await expect(opening).rejects.toThrow(/deleted while the session was opening/);
+    expect(host.isLive(PATH)).toBe(false);
+  });
+});

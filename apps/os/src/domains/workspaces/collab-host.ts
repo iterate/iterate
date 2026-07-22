@@ -203,11 +203,19 @@ export class CollabHost {
     // the live gateway, so one read closes the window; version 0 guards the
     // splice against a gateway write that beat the re-read.
     const settled = await this.#fs.readFile(path);
+    // The re-read awaited too: a destruction in ITS window must also unwind
+    // (same rule as the seed), never hand back a session that already ended.
+    if ((this.#destroyed.get(path) ?? 0) !== destroyedBefore || !this.isLive(path)) {
+      this.#engine.discard(path);
+      this.#store.endSession(path);
+      throw new Error(`${path} was deleted while the session was opening — retry to reopen`);
+    }
     if (settled !== null && settled !== opened.content && this.#engine.head(path)?.version === 0) {
       await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, settled));
-      return { content: settled, epoch: opened.epoch, version: 1 };
     }
-    return opened;
+    // Return the LIVE head — a gateway write may have advanced the session
+    // past the birth snapshot while this open was in flight.
+    return this.#engine.head(path) ?? opened;
   }
 
   async push(raw: CollabPush): Promise<CollabPushResult> {
