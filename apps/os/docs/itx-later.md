@@ -121,21 +121,22 @@ bought.
 ## Bundling without the workspace (owner decision)
 
 > Shipped initially in PR #1612 and simplified in PR #2144: KV
-> `WORKER_BUILD_CACHE` and a stateless worker-bundler sidecar.
+> `WORKER_BUILD_CACHE`, a build-key coordinator Durable Object, and a stateless
+> worker-bundler sidecar.
 
 The workspace object plays NO role in building. The repos domain already
 exposes commit-pinned snapshots on the repo DO and the bundler runs on an
-in-memory vfs, so the whole path is: repo DO `getFilesSnapshot(commit)` →
-@cloudflare/worker-bundler → esbuild-wasm → KV memo. No clone, shell,
-filesystem, or build container.
+in-memory vfs, so the whole path is: build-key coordinator → repo DO
+`getFilesSnapshot(commit)` → @cloudflare/worker-bundler → esbuild-wasm → KV
+memo. No clone, shell, filesystem, or build container.
 
 ## The "no longer special" checklist for the project worker
 
 - ProjectWorker forwarder + itxProjectWorkerCall + its mask entry: deleted
   (the dial's ordinary `source` case covers repo sources).
 - workerHost build machinery in the Project DO (build chains, checkout
-  keys, background rebuilds, ready flags): deleted — building is the
-  generic repo→KV memo, owned by no DO.
+  keys, background rebuilds, ready flags): deleted — building is the generic
+  repo→coordinator→KV memo, not project-owned state.
 - Rebuilt per CALL with worker.ts verbatim → built per COMMIT, really
   bundled (TS, multi-file, deps), pinnable.
 - `worker` = one ordinary provide:

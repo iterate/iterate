@@ -64,7 +64,10 @@ copy_dir_contents "/tmp/marathon" "$artifact_root/marathon"
 shopt -s nullglob
 os_e2e_roots=(/tmp/os-e2e-*)
 os_preview_logs=(/tmp/os-preview-*.log)
-
+# Named /tmp telemetry files exist only for the orchestrator's immediate retry
+# summary. Every reporter also writes the canonical copy under the artifact
+# root's ci-telemetry/raw directory, so copying a second hard-coded file list
+# here would create a drift-prone duplicate source of truth.
 if ((${#os_e2e_roots[@]} == 0)); then
   copy_files "$artifact_root/os-e2e"
 else

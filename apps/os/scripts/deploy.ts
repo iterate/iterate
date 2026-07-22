@@ -30,6 +30,7 @@
  */
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { z } from "zod";
 import { envs, type DeployedEnv } from "../../../envs.ts";
 import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
@@ -54,11 +55,83 @@ import {
   RETIRED_WORKER_SECRETS,
   writeWranglerConfig,
 } from "./generate-wrangler-config.ts";
-import { ensureWorkerEventsQueue } from "./event-queue-resources.ts";
 import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
+const RETIRED_QUEUE_PAGE_SIZE = 100;
+const RETIRED_WORKER_QUEUE_CONSUMERS = [
+  { label: "Artifact event", suffix: "-events" },
+  { label: "AI Search index-write", suffix: "-search-index-writes" },
+] as const;
+
+const RetiredQueue = z.object({
+  queue_id: z.string(),
+  queue_name: z.string(),
+});
+const RetiredQueueConsumer = z.object({
+  consumer_id: z.string(),
+  script: z.string().optional(),
+  script_name: z.string().optional(),
+  type: z.string().optional(),
+});
+
+/**
+ * Cloudflare refuses a handler-less Worker upload while a previous Queue
+ * consumer still targets that script. Detach only the exact consumers left
+ * behind by retired features; later deploys are read-only no-ops. The queues
+ * themselves are deliberately left for separately audited resource cleanup.
+ */
+export async function detachRetiredWorkerQueueConsumers(input: {
+  cf: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
+  workerName: string;
+}): Promise<Array<{ queueName: string; status: "absent" | "detached" }>> {
+  const retiredQueues = RETIRED_WORKER_QUEUE_CONSUMERS.map(({ label, suffix }) => ({
+    label,
+    queueName: `${input.workerName}${suffix}`,
+  }));
+  const queueNames = new Set(retiredQueues.map(({ queueName }) => queueName));
+  const queuesByName = new Map<string, z.infer<typeof RetiredQueue>>();
+  for (let page = 1; queuesByName.size < queueNames.size; page += 1) {
+    const queues = z
+      .array(RetiredQueue)
+      .parse(await input.cf(`/queues?per_page=${RETIRED_QUEUE_PAGE_SIZE}&page=${page}`));
+    for (const queue of queues) {
+      if (queueNames.has(queue.queue_name)) queuesByName.set(queue.queue_name, queue);
+    }
+    if (queues.length < RETIRED_QUEUE_PAGE_SIZE) break;
+  }
+
+  return Promise.all(
+    retiredQueues.map(async ({ label, queueName }) => {
+      const queue = queuesByName.get(queueName);
+      if (!queue) {
+        console.log(`retired ${label} Queue absent: ${queueName}`);
+        return { queueName, status: "absent" } as const;
+      }
+
+      const consumers = z
+        .array(RetiredQueueConsumer)
+        .parse(await input.cf(`/queues/${encodeURIComponent(queue.queue_id)}/consumers`));
+      const consumer = consumers.find(
+        (candidate) =>
+          candidate.type === "worker" &&
+          (candidate.script === input.workerName || candidate.script_name === input.workerName),
+      );
+      if (!consumer) {
+        console.log(`retired ${label} Queue consumer absent: ${queueName}`);
+        return { queueName, status: "absent" } as const;
+      }
+
+      await input.cf(
+        `/queues/${encodeURIComponent(queue.queue_id)}/consumers/${encodeURIComponent(consumer.consumer_id)}`,
+        { method: "DELETE" },
+      );
+      console.log(`detached retired ${label} Queue consumer: ${queueName} -> ${input.workerName}`);
+      return { queueName, status: "detached" } as const;
+    }),
+  );
+}
 
 /** Preview OS always runs its first-party integration proof against the
  * sibling dummy Petshop. Keep the formerly optional deployment setting from
@@ -123,6 +196,32 @@ export async function isExactOsProjectMiss(response: Response): Promise<boolean>
   return typeof body === "object" && body !== null && "error" in body && body.error === "not found";
 }
 
+/**
+ * Preview orchestration may explicitly skip an unchanged container rollout.
+ * Direct and production deploys stay on Wrangler's full-rollout default, and
+ * a first-time class bootstrap always overrides the optimization.
+ */
+export function resolveOsContainerDeployArgs(input: {
+  bootstrapAction: "bootstrapped" | "skipped";
+  requestedRollout: string | undefined;
+}): string[] | undefined {
+  const requestedRollout = input.requestedRollout?.trim();
+  if (
+    requestedRollout !== undefined &&
+    requestedRollout !== "" &&
+    requestedRollout !== "immediate" &&
+    requestedRollout !== "none"
+  ) {
+    throw new Error(
+      `OS_CONTAINERS_ROLLOUT must be "immediate" or "none", got ${JSON.stringify(requestedRollout)}.`,
+    );
+  }
+
+  return requestedRollout === "none" && input.bootstrapAction === "skipped"
+    ? ["--containers-rollout", "none"]
+    : undefined;
+}
+
 async function smokeAuthRpc(env: DeployedEnv, label: string) {
   const projectHostnameBase = env.projectHostnameBases[0];
   if (!projectHostnameBase) {
@@ -141,6 +240,12 @@ export default async function deploy(
     env?: string;
   } = {},
 ) {
+  // The preview orchestrator asks to skip Wrangler's six serial stock-image
+  // builds only after proving their inputs unchanged from this slot's exact
+  // prior deployment. Direct/prod deploys and first-time bootstraps retain the
+  // full rollout. See resolvePreviewOsContainerRollout in preview.ts.
+  let containerDeployArgs: string[] | undefined;
+
   await deployApp({
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
@@ -198,11 +303,14 @@ export default async function deploy(
       // the worker's own schema — the strongest possible pre-flight.
       parseConfig({ ...secretValues, ...envShapedVars(ctx.env) });
 
-      // Wrangler validates queue consumers during deploy, so the queue itself
-      // has to exist before uploading a version that binds it. Artifact event
-      // subscriptions are reconciled by ensure-resources because they are
-      // account-level producer wiring, not a code deploy prerequisite.
-      await ensureWorkerEventsQueue(ctx, ctx.env.osWorkerName);
+      // Removing the queue binding and handler from source is insufficient for
+      // an existing deployment: Cloudflare retains its consumer and rejects
+      // the handler-less upload. This exact, idempotent detach is the rollout
+      // migration; it never creates or reconciles subscriptions.
+      await detachRetiredWorkerQueueConsumers({
+        cf: ctx.cf,
+        workerName: ctx.env.osWorkerName,
+      });
 
       // Same rationale for R2: wrangler validates bucket bindings at upload,
       // and the files bucket is new — existing envs (previews, prd) get it
@@ -214,7 +322,7 @@ export default async function deploy(
       // it creates (upstream gap; see ensureContainerClasses). Makes
       // brand-new environments deployable from scratch; no-op everywhere
       // else.
-      await ensureContainerClasses({
+      const containerBootstrap = await ensureContainerClasses({
         ctx,
         workerName: ctx.env.osWorkerName,
         containerClassNames: SANDBOX_INSTANCE_TYPES.map(
@@ -222,25 +330,43 @@ export default async function deploy(
         ),
         compatibilityDate: COMPATIBILITY_DATE,
       });
+      containerDeployArgs = resolveOsContainerDeployArgs({
+        bootstrapAction: containerBootstrap.action,
+        requestedRollout: process.env.OS_CONTAINERS_ROLLOUT,
+      });
+      if (
+        process.env.OS_CONTAINERS_ROLLOUT?.trim() === "none" &&
+        containerBootstrap.action === "bootstrapped"
+      ) {
+        console.log(
+          "container-class bootstrap created missing classes — running Wrangler's full container rollout",
+        );
+      }
 
       // Materialize the sidecar config before the independent build lane
       // starts. The main Vite build also regenerates this file, but doing it
       // here avoids racing that write with the sidecar's Wrangler process.
       writeWranglerConfig();
     },
-    // Deploy both compiler sidecars while the OS Vite build runs. deployApp
-    // joins this lane before uploading the main Worker, so neither service
-    // binding can target a missing script.
+    extraDeployArgs: () => containerDeployArgs,
+    // Deploy the compiler sidecars while the OS Vite build runs. Keep their
+    // Cloudflare uploads sequential within this lane: Wrangler makes several
+    // API calls per upload, and running both together on top of the parallel
+    // preview fleet has produced account-level 429s. Both still fit beneath
+    // the main build, and deployApp joins this lane before uploading the main
+    // Worker so neither service binding can target a missing script.
     concurrentBuildWork: async (ctx, _secretValues, credentials) => {
       const cwd = fileURLToPath(new URL("..", import.meta.url));
-      await Promise.all(
-        ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"].map((config) =>
-          runAsync("pnpm", ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name], {
+      for (const config of ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"]) {
+        await runAsync(
+          "pnpm",
+          ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name],
+          {
             cwd,
             env: credentials,
-          }),
-        ),
-      );
+          },
+        );
+      }
     },
     smokes: osSmokes,
     afterDeploy: async (ctx) => {

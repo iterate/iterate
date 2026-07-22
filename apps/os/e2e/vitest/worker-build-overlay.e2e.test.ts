@@ -42,9 +42,10 @@ test(
       "a successful worker build",
     );
     const homepage = await healthy.response.text();
+    const overlayMarker = "data-iterate-worker-overlay";
     expect(homepage).toContain("Hello from your iterate project worker");
-    expect(homepage).toContain("__iterateWorkerOverlay");
-    expect(homepage.indexOf("__iterateWorkerOverlay")).toBeGreaterThan(homepage.indexOf("<body"));
+    expect(homepage).toContain(overlayMarker);
+    expect(homepage.indexOf(overlayMarker)).toBeGreaterThan(homepage.indexOf("<body"));
 
     const original = await project.repo.readFile({ path: "worker.ts" });
     expect(original?.content).toContain("export default class ProjectWorker");

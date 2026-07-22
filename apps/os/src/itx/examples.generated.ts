@@ -130,14 +130,14 @@ return { appended, count: events.length };
 const devices = await itx.devices.list();
 const deviceId = vars.deviceId || devices[0]?.deviceId;
 if (!deviceId) {
-  throw new Error("Open this project in the Iterate development build to enroll a phone.");
+  throw new Error("Open this project in the iterate development build to enroll a phone.");
 }
 const operationId = vars.operationId || crypto.randomUUID();
 const [requested] = await itx.devices.get(deviceId).append({
   type: "events.iterate.com/device/notification-requested",
   idempotencyKey: \`device-notification-requested:\${operationId}\`,
   payload: {
-    title: vars.title || "Reminder from Iterate",
+    title: vars.title || "Reminder from iterate",
     body: vars.body || "This notification was sent by an itx script.",
     destination: { kind: "project" },
     expiresAt: Date.now() + 5 * 60_000,
@@ -150,7 +150,7 @@ return { deviceId, requestOffset: requested.offset };
     id: "ephemeral-events",
     title: "Ephemeral events: transient signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; Iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
+      "append({ ephemeral: true }) commits a second-class product event: live subscribe() connections see it (streaming UI), default getEvents reads skip it unless includeEphemeral: true, and ordinary durable subscribers exclude it by default. A push/webhook can explicitly opt in; iterate's ordinary PostHog feed does not. Use ephemeral events for high-volume transient signals (LLM streaming chunks, progress ticks); append the durable product fact as its own ordinary event.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -1128,7 +1128,7 @@ return {
     e2eProven: false,
     title: "List repositories through the built-in GitHub integration",
     description:
-      'itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with Iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. get() selects the first connected installation; pass a slug only when a specific installation matters. Do not use repo.data.permissions to decide whether an installation is read-only: that user-style field can contain all false even when installation writes work. Attempt the requested operation and use GitHub\'s real error if denied. Needs a connected GitHub installation — interactive-only.',
+      'itx.integrations.github.get().octokit is the all-in-one Octokit from the `octokit` package, with iterate supplying GitHub App installation auth and transport. Its normal `.rest.*`, `.graphql(...)`, and `.request(...)` calls work; pagination uses `.paginate("GET /...", params)` because RPC arguments must be serializable. See https://github.com/octokit/octokit.js/. The `.octokit` segment is mandatory. get() selects the first connected installation; pass a slug only when a specific installation matters. Do not use repo.data.permissions to decide whether an installation is read-only: that user-style field can contain all false even when installation writes work. Attempt the requested operation and use GitHub\'s real error if denied. Needs a connected GitHub installation — interactive-only.',
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `

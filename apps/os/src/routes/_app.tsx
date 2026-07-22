@@ -43,13 +43,15 @@ function AppLayout() {
     matches.some(
       (match) => (match.staticData as RouteBreadcrumbStaticData | undefined)?.streamPage === true,
     ) || activeStreamBreadcrumb(matches) != null;
+  // Deepest DEFINED breadcrumb wins; an explicit "" suppresses the label
+  // (the project home blanks the layout's slug fallback this way).
   const label = matches
     .map(
       (match) =>
         (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.breadcrumb ??
         (match.staticData as RouteBreadcrumbStaticData | undefined)?.breadcrumb,
     )
-    .filter(Boolean)
+    .filter((value) => value !== undefined)
     .at(-1);
 
   return (

@@ -21,6 +21,7 @@ const app = createSemaphoreAppFixture({
 const semaphore = createSemaphoreClient({
   apiKey: app.apiKey,
   baseURL: app.baseURL,
+  fetch: app.networkFetch,
 });
 
 describe.sequential("live semaphore E2E", () => {

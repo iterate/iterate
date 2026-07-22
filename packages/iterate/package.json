@@ -106,7 +106,7 @@
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.sdk.json",
     "typecheck": "tsgo --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
   },
   "dependencies": {

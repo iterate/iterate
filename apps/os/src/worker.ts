@@ -32,10 +32,6 @@ import { handleOperatorSessionRequest } from "./auth/operator-session.ts";
 import { rewriteMcpHostRequest } from "./ingress/mcp-host-rewrite.ts";
 import { AppConfig, parseConfig } from "./config.ts";
 import type { RequestContext } from "./request-context.ts";
-import {
-  handleEventQueueBatch,
-  isWorkerEventsQueue,
-} from "./domains/events/event-queue-entrypoint.ts";
 import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
@@ -60,6 +56,7 @@ export { ProjectDurableObject } from "./domains/projects/project-durable-object.
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";
+export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-build-coordinator-durable-object.ts";
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
@@ -85,21 +82,6 @@ export default {
     return await withPosthogExceptionCapture(
       { config, operation: ctx, request, waitUntil: (promise) => ctx.waitUntil(promise) },
       () => runHttpWideLog(() => fetchWithoutWideLog(request, env, ctx, config)),
-    );
-  },
-
-  async queue(batch: MessageBatch, env: Env, ctx: ExecutionContext) {
-    const config = parseConfig(env);
-    await withPosthogExceptionCapture(
-      { config, operation: ctx, waitUntil: (promise) => ctx.waitUntil(promise) },
-      async () => {
-        if (isWorkerEventsQueue(batch.queue, env)) {
-          await handleEventQueueBatch(batch, env);
-          return;
-        }
-
-        console.warn(`[os] received queue batch from unhandled queue ${batch.queue}`);
-      },
     );
   },
 

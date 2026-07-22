@@ -176,13 +176,15 @@ test("Authenticated internal auth itx can create project and append to stream", 
     `repo ${description.projectId}:/repos/config`,
   );
 
-  // The seeded root worker serves a static homepage for un-routed requests;
-  // the hello app (selected via the trusted x-iterate-app header) echoes the
-  // path, which is what this probe is really asserting.
+  // The seeded root worker serves a static homepage for un-routed requests
+  // and echoes an unknown x-iterate-app selection in its 404 body — a
+  // request-specific echo through the fetch lane with no app cold build.
+  const probeApp = `probe-${crypto.randomUUID().slice(0, 8)}`;
   const workerResponse = await project.worker.fetch(
-    new Request("https://example.com/probe", { headers: { "x-iterate-app": "hello" } }),
+    new Request("https://example.com/probe", { headers: { "x-iterate-app": probeApp } }),
   );
-  expect(await workerResponse.json()).toMatchObject({ app: "hello", path: "/probe" });
+  expect(workerResponse).toMatchObject({ status: 404 });
+  expect(await workerResponse.text()).toContain(`unknown app: ${probeApp}`);
 
   const [committedEvent] = await project.streams.get("/some/path").append({
     type: "hello-world",

@@ -1,4 +1,4 @@
-import { itxEnv as env } from "../../env.ts";
+import { itxEnv as env, workerVersion } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
@@ -7,11 +7,8 @@ import {
   type WorkerBuildModule,
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
-import {
-  WORKER_COMPATIBILITY_DATE,
-  WORKER_COMPATIBILITY_FLAGS,
-  executeWorkerBuild,
-} from "./build-backend.ts";
+import { WORKER_COMPATIBILITY_DATE, WORKER_COMPATIBILITY_FLAGS } from "./build-backend.ts";
+import { coordinateWorkerBuild } from "./worker-build-capability.ts";
 
 class WorkerBuildInProgressError extends Error {
   override readonly name = "WorkerBuildInProgressError";
@@ -120,46 +117,13 @@ async function resolveArtifact(
 ): Promise<ResolvedWorkerSource> {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const artifact = await store.get(buildKey);
-  return artifact === null ? await runBuild(store, context, buildKey) : memoizeArtifact(artifact);
-}
-
-/** Build one immutable source snapshot. */
-async function runBuild(
-  store: KvWorkerBuildArtifactStore,
-  context: {
-    projectId: string;
-    resolved: ResolvedWorkerFileSource;
-    iteratePackageSpec?: string;
-    source: DynamicWorkerSource;
-  },
-  buildKey: string,
-): Promise<ResolvedWorkerSource> {
-  const files = await resolvedSourceFiles(context.projectId, context.resolved);
-  const built = await executeWorkerBuild({
-    files,
-    iteratePackageSpec: context.iteratePackageSpec,
-    source: context.source,
-    workerBundler: env.WORKER_BUNDLER,
-  });
-  if (built.warnings.length > 0) {
-    console.warn("dynamic worker build completed with warnings", {
-      buildKey,
-      warnings: built.warnings,
-    });
-  }
-  const artifact: WorkerBuildArtifact = {
-    ...(built.assetConfig === undefined ? {} : { assetConfig: built.assetConfig }),
-    assetManifest: built.assetManifest,
-    assets: built.assets,
-    buildKey,
-    createdAt: new Date().toISOString(),
-    mainModule: built.mainModule,
-    modules: built.modules,
-    ...(built.warnings.length === 0 ? {} : { warnings: built.warnings }),
-    ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
-  };
-  await store.put(artifact);
-  return memoizeArtifact(artifact);
+  return memoizeArtifact(
+    artifact ??
+      (await coordinateWorkerBuild({
+        buildKey,
+        ...context,
+      })),
+  );
 }
 
 function memoizeArtifact(artifact: WorkerBuildArtifact): ResolvedWorkerSource {
@@ -217,24 +181,6 @@ async function resolveFileSource({
   };
 }
 
-/** Read source files only on an artifact-cache miss. */
-async function resolvedSourceFiles(
-  projectId: string,
-  resolved: ResolvedWorkerFileSource,
-): Promise<Record<string, string>> {
-  if (resolved.type === "inline") return resolved.files;
-  const repo = env.REPO.getByName(
-    DurableObjectNameCodec.stringify({ path: resolved.repoPath, projectId }),
-  );
-  const snapshot = await repo.getFilesSnapshot({
-    branch: resolved.branch,
-    commitOid: resolved.commitOid,
-    exclude: resolved.exclude,
-    include: resolved.include,
-  });
-  return snapshot.files;
-}
-
 export function loadResolvedWorker({
   bindings,
   globalOutbound,
@@ -248,9 +194,21 @@ export function loadResolvedWorker({
   resolved: ResolvedWorkerSource;
   scopePath: string;
 }): WorkerStub {
-  const cacheKey = ["worker-loader", env.WORKER_SELF, projectId, scopePath, resolved.cacheKey].join(
-    ":",
-  );
+  // Loader isolates capture the parent deployment's loopback RPC bindings.
+  // They must not survive an OS rollout: a hit created by the previous
+  // version can only speak that version of workerd's cloned-data protocol,
+  // and crossing it from the new parent fails with
+  // "Unable to deserialize cloned data due to invalid or unsupported version".
+  // Build artifacts remain content-addressed and shared; only the cheap
+  // loaded isolate is deployment-scoped.
+  const cacheKey = [
+    "worker-loader",
+    env.WORKER_SELF,
+    workerVersion(env),
+    projectId,
+    scopePath,
+    resolved.cacheKey,
+  ].join(":");
   return env.LOADER.get(cacheKey, () => ({
     compatibilityDate: resolved.wranglerConfig?.compatibilityDate ?? WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: resolved.wranglerConfig?.compatibilityFlags ?? WORKER_COMPATIBILITY_FLAGS,

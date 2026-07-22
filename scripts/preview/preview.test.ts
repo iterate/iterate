@@ -54,8 +54,12 @@ const {
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
+  resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestTargetPlan,
+  resolvePreviewTestTelemetryEnvironment,
+  resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
   selectPreviewAppsNeedingRetry,
@@ -294,15 +298,69 @@ describe("preview workflow scope", () => {
         ]),
       ),
     ).toEqual({
-      auth: { baseUrl: "https://auth.iterate-preview-3.com" },
-      "dummy-petshop": { baseUrl: "https://dummy-petshop.iterate-preview-3.com" },
+      auth: {
+        baseUrl: "https://auth.iterate-preview-3.com",
+        workerName: "auth-preview-3",
+      },
+      "dummy-petshop": {
+        baseUrl: "https://dummy-petshop.iterate-preview-3.com",
+        workerName: "dummy-petshop-preview-3",
+      },
       os: {
         baseUrl: "https://os.iterate-preview-3.com",
         projectHostnameBases: ["iterate-preview-3.app"],
+        workerName: "os-preview-3",
       },
-      semaphore: { baseUrl: "https://semaphore.iterate-preview-3.com" },
-      "streams-example-app": { baseUrl: "https://streams.iterate-preview-3.com" },
+      semaphore: {
+        baseUrl: "https://semaphore.iterate-preview-3.com",
+        workerName: "semaphore-preview-3",
+      },
+      "streams-example-app": {
+        baseUrl: "https://streams.iterate-preview-3.com",
+        workerName: "streams-example-app-preview-3",
+      },
     });
+  });
+
+  test("declares and pins every runner artifact source started by preview e2e", () => {
+    expect(
+      Object.fromEntries(
+        Object.entries(cloudflarePreviewApps).map(([slug, app]) => [
+          slug,
+          app.previewTestArtifactSources.map(
+            ({ producer, framework, testKind, lane, workspace }) =>
+              `${producer}:${framework}/${testKind}/${lane}@${workspace}`,
+          ),
+        ]),
+      ),
+    ).toEqual({
+      auth: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/auth"],
+      "dummy-petshop": [
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
+      ],
+      os: [
+        "onboarding-smoke:script/e2e/onboarding-smoke@iterate-root",
+        "tui-quarantine:script/e2e/tui@iterate-root",
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/os",
+        "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root",
+      ],
+      semaphore: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/semaphore"],
+      "streams-example-app": [
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/streams-example-app",
+        "playwright-telemetry-reporter:playwright/e2e/playwright@@iterate-com/streams-example-app",
+      ],
+    });
+
+    for (const app of Object.values(cloudflarePreviewApps)) {
+      const command = app.previewTestCommandArgs.join(" ");
+      for (const workspace of new Set(
+        app.previewTestArtifactSources.map(({ workspace }) => workspace),
+      )) {
+        expect(command, `${app.slug} must pin ${workspace}`).toContain(
+          `TEST_TELEMETRY_WORKSPACE=${workspace}`,
+        );
+      }
+    }
   });
 
   test("runs the auth OAuth provider e2e against its deployed preview", () => {
@@ -314,7 +372,11 @@ describe("preview workflow scope", () => {
       appPath: "apps/auth",
       previewReadyUrlPath: "/api/auth/ok",
       previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-      previewTestCommandArgs: ["pnpm", "test:e2e"],
+      previewTestCommandArgs: [
+        "bash",
+        "-c",
+        expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
+      ],
     });
   });
 
@@ -326,7 +388,11 @@ describe("preview workflow scope", () => {
       paths: ["apps/dummy-petshop/**"],
       previewReadyUrlPath: "/",
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
-      previewTestCommandArgs: ["pnpm", "test:e2e"],
+      previewTestCommandArgs: [
+        "bash",
+        "-c",
+        expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
+      ],
     });
     await expect(
       readPreviewAppConfig({
@@ -338,6 +404,7 @@ describe("preview workflow scope", () => {
     ).resolves.toEqual({
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       projectHostnameBases: [],
+      workerName: "dummy-petshop-preview-3",
     });
     // Only the deploy workflow is path-filtered; cleanup deliberately has no
     // paths list (it must run for every closed PR — see the cleanup-trigger
@@ -358,11 +425,13 @@ describe("preview workflow scope", () => {
     ).resolves.toEqual({
       baseUrl: "https://semaphore.iterate-preview-14.com",
       projectHostnameBases: [],
+      workerName: "semaphore-preview-14",
     });
 
     expect(cloudflarePreviewApps.os.resolvePreviewAppConfig?.("preview_14")).toEqual({
       baseUrl: "https://os.iterate-preview-14.com",
       projectHostnameBases: ["iterate-preview-14.app"],
+      workerName: "os-preview-14",
     });
   });
 
@@ -392,7 +461,6 @@ describe("preview workflow scope", () => {
 
     expect(os).toMatchObject({
       paths: expect.arrayContaining([
-        ".bun-version",
         "apps/dummy-petshop/**",
         "apps/mobile/**",
         "playwright.config.ts",
@@ -410,9 +478,6 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- specs/**");
-    expect(
-      readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
-    ).toContain("bun-version-file: .bun-version");
     expect(
       resolvePreviewTestBaseUrlEnvironment({
         app: os,
@@ -454,6 +519,50 @@ describe("preview workflow scope", () => {
     });
 
     expect(apps.map((app) => app.slug)).toEqual(["os", "auth", "dummy-petshop"]);
+  });
+
+  test("pins tests to every current-head deployment's exact Worker version", () => {
+    const headSha = "current-head";
+    const osVersion = "11111111-1111-4111-8111-111111111111";
+    const authVersion = "22222222-2222-4222-8222-222222222222";
+    const entry = (
+      appSlug: "auth" | "os",
+      appDisplayName: string,
+      deployedWorkerName: string,
+      deployedWorkerVersion: string,
+    ) =>
+      CloudflarePreviewAppEntry.parse({
+        appDisplayName,
+        appSlug,
+        deployedWorkerName,
+        deployedWorkerVersion,
+        headSha,
+        publicUrl: `https://${appSlug}.iterate-preview-7.com`,
+        status: "awaiting-tests",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+      });
+    const apps = {
+      auth: entry("auth", "Auth", "auth-preview-7", authVersion),
+      os: entry("os", "OS", "os-preview-7", osVersion),
+    };
+
+    expect(
+      resolvePreviewTestWorkerVersionOverrides({
+        apps,
+        appSlugs: ["os", "auth"],
+        dopplerConfig: "preview_7",
+        headSha,
+      }),
+    ).toBe(`auth-preview-7="${authVersion}",os-preview-7="${osVersion}"`);
+
+    expect(() =>
+      resolvePreviewTestWorkerVersionOverrides({
+        apps: { ...apps, os: { ...apps.os, deployedWorkerVersion: null } },
+        appSlugs: ["os", "auth"],
+        dopplerConfig: "preview_7",
+        headSha,
+      }),
+    ).toThrow(/exact os-preview-7 deployment identity is missing or stale/);
   });
 
   test("refuses to run OS e2e against a missing or stale Petshop deployment", () => {
@@ -649,6 +758,82 @@ describe("auth preview root secrets", () => {
 });
 
 describe("preview test commands", () => {
+  test("uses the canonical artifact file variable for targeted test telemetry", () => {
+    const source = readFileSync(resolve(repoRoot, "scripts/preview/preview.ts"), "utf8");
+
+    expect(source).not.toContain("E2E_RETRY_TELEMETRY_FILE");
+  });
+
+  test("builds a focused Vitest invocation from the OS app", () => {
+    expect(
+      resolvePreviewTestTargetPlan({
+        grep: "Agent scripts can send web-chat messages",
+        repositoryRoot: repoRoot,
+        runner: "vitest",
+        target: "e2e/vitest/itx-agents.e2e.test.ts",
+      }),
+    ).toEqual({
+      args: [
+        "e2e",
+        "--project",
+        "node",
+        "e2e/vitest/itx-agents.e2e.test.ts",
+        "--testNamePattern",
+        "Agent scripts can send web-chat messages",
+      ],
+      command: "pnpm",
+      runnerResultFiles: [],
+      telemetryFile: resolve(repoRoot, "test-results/preview-target-vitest.json"),
+      workingDirectory: resolve(repoRoot, "apps/os"),
+    });
+  });
+
+  test("builds a focused Playwright invocation from the repository root", () => {
+    const plan = resolvePreviewTestTargetPlan({
+      grep: "discarding a new file",
+      repositoryRoot: repoRoot,
+      runner: "playwright",
+      target: "specs/repo-ide.spec.ts",
+    });
+
+    expect(plan).toEqual({
+      args: ["spec", "specs/repo-ide.spec.ts", "--grep", "discarding a new file"],
+      command: "pnpm",
+      runnerResultFiles: [resolve(repoRoot, "test-results/playwright-results.json")],
+      telemetryFile: resolve(repoRoot, "test-results/preview-target-playwright-telemetry.json"),
+      workingDirectory: repoRoot,
+    });
+    expect(plan.runnerResultFiles).not.toContain(plan.telemetryFile);
+  });
+
+  test("gives targeted and full preview tests the same exact PR identity", () => {
+    expect(
+      resolvePreviewTestTelemetryEnvironment({
+        app: "os",
+        context: {
+          githubToken: "token",
+          pullRequestBaseSha: "base-sha",
+          pullRequestBody: "",
+          pullRequestHeadSha: "head-sha",
+          pullRequestHeadRef: "telemetry-branch",
+          pullRequestIsDraft: false,
+          pullRequestLabels: [],
+          pullRequestNumber: 2237,
+          repositoryFullName: "iterate/iterate",
+          workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
+        },
+        previewSlot: "preview-19",
+      }),
+    ).toEqual({
+      TEST_TELEMETRY_APP: "os",
+      TEST_TELEMETRY_BRANCH: "telemetry-branch",
+      TEST_TELEMETRY_HEAD_SHA: "head-sha",
+      TEST_TELEMETRY_KIND: "e2e",
+      TEST_TELEMETRY_PREVIEW_SLOT: "preview-19",
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: "2237",
+    });
+  });
+
   test("normalizes OS preview artifacts before Depot upload", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
@@ -665,6 +850,8 @@ describe("preview test commands", () => {
       "utf8",
     );
     expect(collector).toContain('copy_dir_contents "apps/os/e2e/tui-test/tui-traces"');
+    expect(collector).not.toContain("preview_telemetry_candidates");
+    expect(collector).not.toContain("runner-telemetry");
   });
 
   test("normalizes marathon artifacts before Depot upload", () => {
@@ -693,7 +880,9 @@ describe("preview test commands", () => {
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain("env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
+    expect(script).toContain(
+      "env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1",
+    );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
     expect(script).toContain("TUI_PID");
@@ -1132,6 +1321,91 @@ describe("preview compare base", () => {
   });
 });
 
+describe("preview OS container rollout", () => {
+  const previousHead = "previous-preview-sha";
+  const currentHead = "current-preview-sha";
+  const previousState = {
+    apps: {
+      os: CloudflarePreviewAppEntry.parse({
+        appDisplayName: "OS",
+        appSlug: "os",
+        deployedWorkerName: "os-preview-7",
+        deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
+        headSha: previousHead,
+        status: "deployed",
+        updatedAt: "2026-07-21T00:00:00.000Z",
+      }),
+    },
+    environmentConfigLease: { dopplerConfig: "preview_7", slug: "preview-7" },
+    notice: null,
+  };
+
+  test("skips serial stock-image builds when exact same-slot inputs are unchanged", async () => {
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-7",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare: async (basehead) => {
+          expect(basehead).toBe(`${previousHead}...${currentHead}`);
+          return {
+            status: "ahead",
+            changedFilenames: ["scripts/preview/preview.ts", "apps/os/scripts/deploy.ts"],
+          };
+        },
+      }),
+    ).resolves.toEqual({
+      mode: "none",
+      reason: `no container input changed since ${previousHead.slice(0, 7)}`,
+    });
+  });
+
+  test("keeps the full rollout when a container input changed", async () => {
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-7",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare: async () => ({
+          status: "ahead",
+          changedFilenames: ["apps/os/sandbox/Dockerfile"],
+        }),
+      }),
+    ).resolves.toEqual({
+      mode: "immediate",
+      reason: "container input apps/os/sandbox/Dockerfile changed",
+    });
+  });
+
+  test("keeps the full rollout for a different slot without trusting a diff", async () => {
+    const fetchCompare = vi.fn();
+    await expect(
+      resolvePreviewOsContainerRollout({
+        dopplerConfig: "preview_7",
+        githubToken: "test-token",
+        nextSlotSlug: "preview-7",
+        previousSlotSlug: "preview-6",
+        previousState,
+        pullRequestHeadSha: currentHead,
+        repositoryFullName: "iterate/iterate",
+        fetchCompare,
+      }),
+    ).resolves.toEqual({
+      mode: "immediate",
+      reason: "the preview slot is new or changed",
+    });
+    expect(fetchCompare).not.toHaveBeenCalled();
+  });
+});
+
 describe("preview retry selection", () => {
   test.for([
     {
@@ -1247,7 +1521,7 @@ describe("preview deploy selection", () => {
     expect(apps).toEqual([]);
   });
 
-  test("selects OS and its dependencies for an iterate TUI-only change", async () => {
+  test("selects OS and its dependencies for an iterate package-only change", async () => {
     const apps = await selectPreviewAppsForPullRequest({
       ...selectionInput,
       previousState: {
@@ -1458,6 +1732,8 @@ describe("cloudflare preview state helpers", () => {
       runUrl: "https://github.com/iterate/iterate/actions/runs/123",
       shortSha: "abcdef0",
       deployDurationMs: 12_345,
+      deployedWorkerName: "os-preview-2",
+      deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
       testDurationMs: 678,
       status: "deployed",
       updatedAt: "2026-04-02T10:00:00.000Z",

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useMatches, useMatchRoute, useSearch } from "@tanstack/react-router";
+import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Box,
@@ -13,7 +13,6 @@ import {
   ExternalLink,
   GitBranch,
   KeyRound,
-  ListTodo,
   LogOut,
   Plug,
   Plus,
@@ -169,8 +168,9 @@ function AppSidebarHeader({ projects }: { projects: ProjectListEntry[] }) {
                     className="gap-2 p-2"
                     render={
                       <Link
-                        to="/projects/$projectSlug/agents/new"
+                        to="/projects/$projectSlug"
                         params={{ projectSlug: project.slug }}
+                        search={{}}
                       />
                     }
                   >
@@ -516,7 +516,6 @@ function ProjectSidebarGroup({
 }) {
   const matchRoute = useMatchRoute();
   const { isMobile, openMobile, state: sidebarState } = useSidebar();
-  const routeSearch = useSearch({ strict: false }) as { tasks?: boolean };
   const agents =
     useLiveState(
       (itx) => itx.agents.liveState,
@@ -527,20 +526,6 @@ function ProjectSidebarGroup({
   const agentAttentionCount = Object.values(agents).filter(
     (agent) => deriveAgentDisplayState(undefined, agent.summary.waitingFor) !== "idle",
   ).length;
-  const isNewAgentActive = Boolean(
-    matchRoute({
-      to: "/projects/$projectSlug/agents/new",
-      params: { projectSlug },
-      fuzzy: false,
-    }),
-  );
-  const isConfigTasksActive = Boolean(
-    matchRoute({
-      to: "/projects/$projectSlug/repos/$",
-      params: { projectSlug, _splat: "config" },
-      fuzzy: false,
-    }) && routeSearch.tasks === true,
-  );
   // A registered custom domain (garple.com) is the project's real address —
   // the Homepage link prefers it over the platform host (<slug>.<base>).
   const customHostnames = useQuery({
@@ -571,14 +556,6 @@ function ProjectSidebarGroup({
             <ProjectSidebarMenuItem
               icon={SquarePen}
               label="New agent"
-              render={
-                <Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} search={{}} />
-              }
-              isActive={isNewAgentActive}
-            />
-            <ProjectSidebarMenuItem
-              icon={Settings2}
-              label="Settings"
               render={<Link to="/projects/$projectSlug" params={{ projectSlug }} search={{}} />}
               isActive={Boolean(
                 matchRoute({
@@ -589,16 +566,18 @@ function ProjectSidebarGroup({
               )}
             />
             <ProjectSidebarMenuItem
-              icon={ListTodo}
-              label="Tasks"
+              icon={Settings2}
+              label="Settings"
               render={
-                <Link
-                  to="/projects/$projectSlug/repos/$"
-                  params={{ projectSlug, _splat: "config" }}
-                  search={{ tasks: true }}
-                />
+                <Link to="/projects/$projectSlug/settings" params={{ projectSlug }} search={{}} />
               }
-              isActive={isConfigTasksActive}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/settings",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }),
+              )}
             />
             <ProjectSidebarMenuItem
               icon={SquareTerminal}
@@ -651,11 +630,7 @@ function ProjectSidebarGroup({
                 <ProjectStreamNavItem
                   key={item.label}
                   icon={item.icon}
-                  isActive={
-                    item.to === "/projects/$projectSlug/agents" && isNewAgentActive
-                      ? false
-                      : itemActive
-                  }
+                  isActive={itemActive}
                   label={item.label}
                   badge={item.to === "/projects/$projectSlug/agents" ? agentAttentionCount : 0}
                   projectSlug={projectSlug}

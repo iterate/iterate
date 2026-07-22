@@ -21,7 +21,7 @@ import {
 
 describe("emailDomainForDeployment", () => {
   test("normalizes the first hostname base the way host routing does", () => {
-    expect(emailDomainForDeployment(["*.Iterate-Preview-3.App", "iterate.app"])).toBe(
+    expect(emailDomainForDeployment(["*.iterate-Preview-3.App", "iterate.app"])).toBe(
       "iterate-preview-3.app",
     );
     expect(emailDomainForDeployment(["iterate.app"])).toBe("iterate.app");

@@ -584,3 +584,8 @@ the recorded projection.
   canonical live actor. Fresh `auth.test` calls also found the preview 3 and 6
   product-bot fallback tokens healthy. Updated the smoke preflight to fail
   clearly on a missing variable and verify the canonical actor before posting.
+- 2026-07-22: Merged current `main` normally. Main deliberately retired the
+  Cloudflare Artifacts subscription-delivery path, so the merge drops this
+  branch's obsolete exact-subscription retry and regression while retaining the
+  preview-origin and shared-session-secret work. The scripts suite (266 tests),
+  scripts typecheck, focused formatting, and diff checks pass.

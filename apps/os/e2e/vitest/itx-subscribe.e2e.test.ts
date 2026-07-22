@@ -48,7 +48,7 @@ test("Project stream subscribe can observe project worker processEventBatch forw
                 if (event.type !== "events.iterate.com/stream/child-stream-created") return;
                 if (event.payload.childPath !== TRIGGER_PATH) return;
 
-                const project = await this.env.ITX.get();
+                using project = await this.env.ITX.get();
                 await project.streams.get(OUTPUT_PATH).append({
                   type: FORWARDED_EVENT_TYPE,
                   payload: {

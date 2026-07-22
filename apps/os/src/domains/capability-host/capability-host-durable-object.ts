@@ -11,7 +11,6 @@ import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/v
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
-  type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
@@ -63,10 +62,9 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   // Registered WITH recovery: script executions are consequential
   // `runInBackground` work (stream-committed requested/started obligations
   // whose OUTCOME matters), so an incarnation that dies owing one must be
-  // revived — the keepalive alarm appends the `stream/processor-revived`
-  // fact, whose ordinary delivery lands at head and `processEvent`'s at-head
-  // pass (`delivery.caughtUp`) re-drives the obligations (see the registry
-  // module doc's recovery rule).
+  // revived — the keepalive alarm appends the `stream/processor-revived` fact,
+  // whose wake produces the eventless at-head pass (`delivery.caughtUp`) that
+  // re-drives the obligations (see the registry module doc's recovery rule).
   readonly #capabilityHostProcessor = this.#registry.register(
     new CapabilityHostProcessor({
       stream: this.#stream,
@@ -153,10 +151,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
     return this.#capabilityHostProcessor.revokeCapability(input);
-  }
-
-  runScript(code: string): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(code);
   }
 
   describeCapabilities(): Promise<CapabilityDescription[]> {

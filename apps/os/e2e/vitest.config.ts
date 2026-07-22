@@ -1,7 +1,6 @@
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import { BaseSequencer, type TestSpecification } from "vitest/node";
 import {
   appendConsoleLineSync,
   createVitestRunRoot,
@@ -30,62 +29,6 @@ console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 const ci = process.env.CI === "true";
 
-// Observed wall-clock seconds per file on a complete OS preview lane
-// (2026-07-20). Used for longest-first scheduling below — vitest
-// hands files to workers in sort order, so a slow file starting LAST becomes
-// the whole lane's tail (the itx catalogue at ~100s used to routinely start
-// mid-run and stretch the lane past 3 minutes). Unlisted files default to 15s
-// (roughly the observed median); exact numbers matter much less than the
-// slow/fast partition, so refresh only when the ranking visibly drifts.
-const observedFileSeconds: Record<string, number> = {
-  // Per-runtime project pools let each case overlap its four runtimes; only
-  // cases that deliberately exercise one warm sandbox opt into serial order.
-  "examples-matrix.e2e.test.ts": 132,
-  "workspace.itx.e2e.test.ts": 67,
-  "itx-workers.e2e.test.ts": 51,
-  "worker-build.e2e.test.ts": 45,
-  "sandbox-timeout.e2e.test.ts": 43,
-  "script-execution-concurrency.e2e.test.ts": 42,
-  "repo-history.itx.e2e.test.ts": 41,
-  "agent-tools.itx.e2e.test.ts": 38,
-  "agent-response-cache.e2e.test.ts": 37,
-  "streams.e2e.test.ts": 34,
-  "sandbox-egress.e2e.test.ts": 33,
-  "stream-lifecycle.e2e.test.ts": 33,
-  "stateful-worker-alarm.e2e.test.ts": 32,
-  "live-capability-websocket.e2e.test.ts": 31,
-  "integrations-userspace.e2e.test.ts": 30,
-  // The itx-*.e2e.test.ts entries are the old itx.e2e.test.ts catalogue
-  // (104s as one file) split for file-level parallelism; per-file numbers
-  // are estimates proportional to test counts, not yet observed.
-  "itx-agents.e2e.test.ts": 25,
-  "agent-codemode-fence.itx.e2e.test.ts": 19,
-  "itx-connect.e2e.test.ts": 18,
-  "slack-agent.e2e.test.ts": 18,
-  "project-ingress.e2e.test.ts": 18,
-  "scheduler.e2e.test.ts": 16,
-  "agent-script-result-spill.itx.e2e.test.ts": 16,
-  "itx-live-capabilities.e2e.test.ts": 15,
-  "stream-security.e2e.test.ts": 15,
-  "github-backed-repo.e2e.test.ts": 12,
-  "itx-core.e2e.test.ts": 10,
-  "itx-subscribe.e2e.test.ts": 10,
-  "stream-wire.e2e.test.ts": 10,
-  "itx-egress.e2e.test.ts": 8,
-  "admin-project.itx.e2e.test.ts": 8,
-  "repo-binary.itx.e2e.test.ts": 8,
-  "preview-smoke.e2e.test.ts": 8,
-  "mcp-oauth.e2e.test.ts": 2,
-};
-
-/** Longest-processing-time-first: start the slow files so they never tail the lane. */
-class SlowestFirstSequencer extends BaseSequencer {
-  override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
-    const seconds = (spec: TestSpecification) => observedFileSeconds[basename(spec.moduleId)] ?? 15;
-    return [...files].sort((left, right) => seconds(right) - seconds(left));
-  }
-}
-
 const sharedProvide = {
   [E2E_RUN_ROOT_KEY]: vitestRunRoot,
   [E2E_PROJECT_ROOT_KEY]: e2eRoot,
@@ -111,19 +54,19 @@ export default defineConfig({
     // runtime-specific pools.
     // Sequential locally so a single dev server isn't hammered.
     fileParallelism: ci,
-    // Seven files × two cases keeps the catalogue near its measured floor while
-    // leaving enough shared Durable Object/RPC capacity for the eight-worker
-    // Playwright lane. Each lane is healthy at eight workers in isolation, but
-    // their combined start burst produced canceled 0ms RPCs and slower tails.
-    maxWorkers: 7,
-    sequence: { concurrent: ci, sequencer: SlowestFirstSequencer },
+    // These tests spend almost all their wall time waiting on isolated remote
+    // projects. Give every current file a worker immediately instead of
+    // creating scheduling waves on the Depot host. 64 is only a ceiling:
+    // Vitest starts at most one worker per runnable file (currently 48).
+    maxWorkers: 64,
+    sequence: { concurrent: ci },
     maxConcurrency: E2E_FILE_TEST_CONCURRENCY,
     passWithNoTests: true,
     // Retry telemetry (policy rule 5 — see @iterate-com/shared
     // test-support/e2e-policy/budgets.ts): reporters DO belong at the root
     // test level and apply across projects — unlike `retry`, which vitest
     // only reads from each project config (see the note on the node project).
-    reporters: ["default", new RetryTelemetryReporter()],
+    reporters: ["default", new RetryTelemetryReporter({ testKind: "e2e", lane: "vitest" })],
     projects: [
       {
         resolve: sharedResolve,

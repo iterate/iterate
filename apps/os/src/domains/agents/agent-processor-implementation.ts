@@ -61,11 +61,11 @@ import {
  * streamed chunks are emitted as forcibly-ephemeral `llm-response-chunk`
  * events carrying the provider's raw chunk objects. Because the intent lives
  * in the stream and not in a closure, recovery is the same code path: after
- * an eviction the platform appends `stream/processor-revived`, the fresh
- * incarnation reduces the stream, sees the open request, and adopts it — same
- * offset, same idempotency keys, so a zombie incarnation racing the
- * successor collapses to one stream story on the shared `settle/<offset>`
- * key.
+ * an eviction the platform appends `stream/processor-revived`, whose wake
+ * produces an eventless at-head pass; the fresh incarnation sees the open
+ * request and adopts it — same offset, same idempotency keys, so a zombie
+ * incarnation racing the successor collapses to one stream story on the
+ * shared `settle/<offset>` key.
  *
  * Success lands as ONE atomic append: the assistant context item, the
  * `agent/llm-request-settled` fact, and (when the vendor reported parseable
@@ -1298,8 +1298,8 @@ function reduceAgentEventCore(input: {
       };
     default:
       // web-message-sent (matters through its per-event mirror),
-      // stream/processor-revived, stream/error-occurred, and anything else
-      // consumed only for its delivery turn: no reduced-state change.
+      // stream/error-occurred, and anything else consumed only for its
+      // delivery turn: no reduced-state change.
       return state;
   }
 }

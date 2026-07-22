@@ -3,7 +3,7 @@ import type { ProcessEventArgs, ProcessorState, ReduceArgs, StreamEvent } from "
 import type { ItxExpression } from "../../itx/expression.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
+import type { Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type {
   CapabilityProvidedPayload,
@@ -12,13 +12,9 @@ import type {
   RevokeCapabilityInput,
 } from "./types.ts";
 import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
-import {
-  CapabilityHostProcessorContract,
-  DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS,
-} from "./capability-host-processor-contract.ts";
+import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
-  SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
   ScriptExecutionSettlement,
   scriptCompletionInput,
@@ -45,7 +41,7 @@ import {
  * row, and a mount's identity is `providedAtOffset` — the stream offset of the
  * event that created it, no synthetic mount ids anywhere. The itx-facing verbs
  * on this class (`provideCapability`, `revokeCapability`, `invokeCapability`,
- * `describeCapabilities`, `runScript`) are the scope's public surface:
+ * `describeCapabilities`) are the scope's public capability surface:
  * mounting appends the fact and then waits for its own delivery
  * (read-your-writes), reads resolve the longest matching prefix over the
  * reduced table, and a local miss follows the birth certificate's `fallback`
@@ -77,10 +73,10 @@ import {
  *
  * RECOVERY rides that same at-head pass. When an incarnation dies owing script
  * work, the keepalive alarm revives the processor and appends
- * `events.iterate.com/stream/processor-revived`; that event's ordinary
- * delivery lands at head and the pass above re-drives the open obligations —
- * fresh requested scripts start, orphaned started scripts settle. Starting
- * fresh and recovering after an eviction are the same code path. The pass is
+ * `events.iterate.com/stream/processor-revived`; its wake produces the
+ * eventless at-head pass that re-drives the open obligations — fresh requested
+ * scripts start, orphaned started scripts settle. Starting fresh and
+ * recovering after an eviction are the same code path. The pass is
  * BLOCKED (one outer `blockProcessorWhile` per at-head pass): a settle append
  * that fails keeps the frame retryable, so the transport's redelivery — not a
  * timer — is what retries a transiently failed settlement. Settle appends are
@@ -130,9 +126,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
         this.#pendingSettlements.delete(event.payload.executionId);
         break;
       // created / capability-provided / capability-revoked /
-      // script-run-requested / script-run-started / stream/processor-revived:
-      // no per-event side effect — they matter through the reduced state below
-      // (the revived fact's whole job is the guaranteed at-head turn).
+      // script-run-requested / script-run-started: no per-event side effect —
+      // they matter through the reduced state below.
     }
 
     // ---------------------------------------- state-derived side effects
@@ -309,7 +304,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return { ...state, scriptExecutions };
       }
       default:
-        // stream/processor-revived: consumed only for its delivery turn.
         return state;
     }
   }
@@ -497,53 +491,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
     );
   }
 
-  async runScript(code: string): Promise<RunScriptResult> {
-    await this.#assertCreated();
-    const executionId = crypto.randomUUID();
-    const expiresAt = this.#now() + DEFAULT_SCRIPT_EXECUTION_EXPIRY_MS;
-    const settlementAbort = new AbortController();
-    // Register before the request append so a very fast settlement cannot
-    // pass the waiter. Observe the rejection immediately: if the request
-    // append itself fails, the bounded waiter may still time out later and
-    // must not become an unhandled rejection.
-    const settled = this.#waitForScriptSettlement(
-      executionId,
-      Math.max(1, expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - this.#now()),
-      settlementAbort.signal,
-    );
-    const observedSettlement = settled.then(
-      (event) => ({ status: "fulfilled" as const, event }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
-    try {
-      await this.#awaitAppendWithin(
-        this.append({
-          type: "events.iterate.com/capability-host/script-run-requested",
-          payload: { code, executionId, expiresAt },
-        }),
-        expiresAt,
-        `record the request for script execution "${executionId}"`,
-      );
-    } catch (error) {
-      settlementAbort.abort(error);
-      throw error;
-    }
-    const settlement = await observedSettlement;
-    if (settlement.status === "rejected") {
-      throw new Error(
-        `Script execution "${executionId}" did not settle before its absolute deadline.`,
-        { cause: settlement.error },
-      );
-    }
-    const { event, settlement: outcome } = settlement.event;
-    if (outcome.status === "failed") throw new Error(outcome.error);
-    return {
-      completedEvent: event,
-      executionId,
-      result: outcome.result ?? null,
-    };
-  }
-
   // ------------------------------------------------------- private machinery
 
   async #assertCreated(): Promise<void> {
@@ -682,23 +629,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
     const { capabilities: inherited } = await fallback.__describe();
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
-  }
-
-  async #waitForScriptSettlement(executionId: string, timeoutMs: number, signal: AbortSignal) {
-    const idempotencyKey = this.idempotencyKey(`script-run-settled@${executionId}`);
-    await this.deps.reads.waitUntilEvent({
-      predicate: (event) =>
-        event.idempotencyKey === idempotencyKey &&
-        settlementFromSettledEvent(event, executionId) !== undefined,
-      timeoutMs,
-      signal,
-    });
-    const event = await this.stream.getEvent({ idempotencyKey });
-    const settlement = settlementFromSettledEvent(event, executionId);
-    if (event === undefined || settlement === undefined) {
-      throw new Error(`script execution "${executionId}" completed without an event`);
-    }
-    return { event, settlement };
   }
 
   /**
@@ -840,7 +770,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // The entrypoint owns a timer around the dynamic-worker invocation, but
       // the RPC carrying that result back to this host is a second failure
       // boundary. Bound it independently: a half-open worker stub must not
-      // keep the obligation (and the public runScript call) alive forever
+      // keep the obligation (and its stream-native public waiter) alive forever
       // even if the remote timer fired correctly.
       const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
         emittedJs: checked.emittedJs,
@@ -993,8 +923,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
 // Injected dependencies.
 // -----------------------------------------------------------------------------
 
-export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
-
 type ScriptExecutionEntrypoint = {
   run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
 };
@@ -1003,9 +931,9 @@ type ScriptExecutionEntrypoint = {
  * RUNNER-backed reads of the committed reduction. Under registry drive the
  * runner owns both cursors and the processor instance's internal checkpoint
  * never advances, so every state read this processor makes OUTSIDE a hook's
- * own args — capability resolution, the revoke guard, the provide/revoke
- * read-your-writes barriers, the script-settlement wait — must go through the
- * runner's committed progress. The hosting DO wires this to
+ * own args — capability resolution, the revoke guard, and the provide/revoke
+ * read-your-writes barriers — must go through the runner's committed progress.
+ * The hosting DO wires this to
  * `registry.reads(processor)` (lazily — `reads()` needs the registered
  * processor); test harnesses wire it to the driving StreamProcessorRunner.
  * `waitUntilEvent` takes BOTH forms as one union parameter (the registry's

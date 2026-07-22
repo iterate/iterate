@@ -191,6 +191,14 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     predicate: (event) => event.payload?.message === "string form with files",
     timeoutMs: 30_000,
   });
+  const reflectedFilesReply = agent.stream.waitForEvent({
+    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
+    predicate: (event) =>
+      event.payload?.role === "assistant" &&
+      event.payload.content ===
+        "The assistant sent this visible web-chat message: string form with files",
+    timeoutMs: 30_000,
+  });
   const scriptSettled = agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
     timeoutMs: 30_000,
@@ -225,6 +233,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     },
   });
   await scriptSettled;
+  const reflectedFilesEvent = await reflectedFilesReply;
 
   const events = await agent.stream.getEvents();
   expect(events).toEqual(
@@ -246,15 +255,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     ]),
   );
 
-  const reflectedFilesReply = events.find(
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      event.payload?.role === "assistant" &&
-      event.payload.content ===
-        "The assistant sent this visible web-chat message: string form with files",
-  );
-  expect(reflectedFilesReply?.payload).toMatchObject({ role: "assistant" });
-  expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
+  expect(reflectedFilesEvent.payload).toMatchObject({ role: "assistant" });
+  expect(reflectedFilesEvent.payload).not.toHaveProperty("llmRequestOffset");
 });
 
 test("Agent create replays its earlier birth and setup events through its subscriptions", async () => {
@@ -415,17 +417,27 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       [
         "get",
         {
-          // The seeded stateful app: CounterApp is a named export of the
-          // one-file seeded worker.ts.
-          className: "CounterApp",
+          // A test-authored stateful worker: the proof is about agent-scope
+          // capability provisioning, not any seeded app.
+          className: "CounterDo",
           durableWorkerKey,
           path: agentPath,
-          source: {
-            createWorker: {
-              entryPoint: "worker.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
-            },
-          },
+          source: inlineJsSource("counter-do.js", {
+            "counter-do.js": `
+                import { DurableObject } from "cloudflare:workers";
+
+                export class CounterDo extends DurableObject {
+                  async increment() {
+                    const next = ((await this.ctx.storage.get("n")) ?? 0) + 1;
+                    await this.ctx.storage.put("n", next);
+                    return next;
+                  }
+                  async current() {
+                    return (await this.ctx.storage.get("n")) ?? 0;
+                  }
+                }
+              `,
+          }),
           type: "stateful",
         },
       ],
@@ -631,24 +643,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   // offset, not merely the last returned item.
   await project.capabilityHosts.get(agentPath).create();
 
-  const birth = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/created"],
-    timeoutMs: 60_000,
-  });
-  const workspaceMount = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/capability-host/capability-provided"],
-    timeoutMs: 60_000,
-  });
-  const configured = agentStream.waitForEvent({
-    eventTypes: ["events.iterate.com/agent/configured"],
-    timeoutMs: 60_000,
-  });
-  const basePrompt = agentStream.waitForEvent({
-    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
-    predicate: (event) =>
-      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
-    timeoutMs: 60_000,
-  });
   await project.agents.get(agentPath).create();
 
   // create() is a read-after-create barrier for the collection processor, not
@@ -658,17 +652,33 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     expect.arrayContaining([expect.objectContaining({ path: agentPath })]),
   );
 
-  const birthEvent = await birth;
+  // This test proves the durable birth batch and create()'s read-after-create
+  // barrier, not the live waitForEvent transport. Read the committed facts
+  // after create returns so a deployment replacing a waiter incarnation does
+  // not turn durable product truth into a test-only transient failure.
+  const birthEvents = await agentStream.getEvents({ afterOffset: 0 });
+  const birthEvent = birthEvents.find((event) => event.type === "events.iterate.com/agent/created");
+  const configured = birthEvents.find(
+    (event) => event.type === "events.iterate.com/agent/configured",
+  );
+  const basePrompt = birthEvents.find(
+    (event) =>
+      event.type === AGENT_CONTEXT_ADDED_TYPE &&
+      (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
+  );
+  const workspaceMount = birthEvents.find(
+    (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+  );
   expect(birthEvent).toMatchObject({ payload: {} });
-  expect((await configured).payload).toMatchObject({
+  expect(configured?.payload).toMatchObject({
     config: { llm: { model: expect.any(String) } },
   });
-  expect((await basePrompt).payload).toMatchObject({
+  expect(basePrompt?.payload).toMatchObject({
     role: "system",
     key: "agent/system-prompt",
     content: expect.stringContaining("async (itx)"),
   });
-  expect((await workspaceMount).payload).toMatchObject({ path: ["workspace"] });
+  expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the

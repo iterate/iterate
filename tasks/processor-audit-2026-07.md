@@ -391,7 +391,7 @@ Doc rule shipped in the docs PR; code half still open.
 
 ### D2. slack-agent blocks a cosmetic repaint that telegram-agent backgrounds
 
-**Status:** in-pr #2201 (spike/proposal).
+**Status:** done #2201 (merged by Jonas).
 
 `slack-agent-processor-implementation.ts:341-350` blocks the frame on
 `#repaintPresence` — Slack `setTitle`/`setStatus` vendor calls hold the
@@ -634,7 +634,8 @@ section; no code.
 
 ### F1. Recovery suites hand-roll ~120 lines of registry simulation each
 
-**Status:** needs decision (mode vs exported substrate).
+**Status:** done #2202 (Jonas decision: one harness mode; revival-consumption throw dropped).
+**Follow-up:** in-pr #2215 — six contracts shed `processor-revived`; slack-agent kept it; wake delivery was already watermark-gated, so the selector was unchanged.
 
 `telegram-agent-recovery.test.ts:35-156` (harness) vs `:158-236` (the one
 test); the same fake `DurableObjectState` + alarm cell + `boot`/`wake`/
@@ -644,15 +645,13 @@ already drifting (fixed 5 settle rounds vs fixpoint). `testing.ts:5-7`
 declares registry harnesses out of scope by policy, while the doc checklist
 tells every author to write these tests.
 
-**Proposals:** (a) export a registry substrate (fake DO state + alarm cell +
-advance-fires-alarm + deliverPending) from `processors/testing` (or
-`processors/cloudflare/testing`); suites keep their scenarios. (b) opt-in
-registry mode on `makeProcessorHarness` (`recovery: true`) booting the real
-registry so `["crash"]` + `["advanceTime", …]` fires real revival and
-recovery scenarios become ordinary step scenarios. (c) status quo.
-
-**Recommendation:** (b); (a) as fallback if one-harness-two-modes feels like
-creep.
+**Decision:** `makeProcessorHarness` has one production-shaped substrate for
+every suite: real keepalive and recovery adapters, Durable Object KV-backed
+progress, an alarm cell, virtual time, and `MemoryStream`. `crash()` always
+means eviction; only a due alarm or append wakes the successor. The four
+domain recovery suites use this harness rather than local registry
+simulations. Consuming the revival fact remains optional because the runner's
+eventless at-head pass guarantees the recovery turn.
 
 ### F2. `settle()`'s fixpoint under-waits; failure output is thin
 

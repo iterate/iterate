@@ -1,8 +1,9 @@
-// Userspace stream processor: reduces guestbook signatures on the project stream
-// at /guestbook. Style matches the agent processor — inline contract schemas,
-// long switch reduce/processEvent, no event-type constants.
+// The guestbook's stream processor: it folds the signatures on the project
+// stream at /guestbook into a birth certificate plus an append-only list of
+// entries. The reduce is the whole processor — pure fold, no side effects.
 import { z } from "zod";
-import { defineProcessorContract, StreamProcessor, type ProcessorState } from "iterate/processors";
+import { defineProcessorContract, StreamProcessor } from "iterate/processors";
+import type { ProcessorState, ReduceArgs } from "iterate/processors";
 
 export const GuestbookProcessorContract = defineProcessorContract({
   slug: "guestbook",
@@ -63,42 +64,31 @@ export const GuestbookProcessorContract = defineProcessorContract({
           description: "A visitor left a note.",
           payload: { name: "Ada", message: "Lovely worker you have here." },
         },
-        {
-          description: "A short thank-you.",
-          payload: { name: "Grace", message: "Thanks for the demo." },
-        },
       ],
     },
   },
   consumes: ["events.iterate.com/guestbook/created", "events.iterate.com/guestbook/entry-signed"],
   emits: [],
 });
+export type GuestbookProcessorContract = typeof GuestbookProcessorContract;
 
-export type GuestbookState = ProcessorState<typeof GuestbookProcessorContract>;
+export type GuestbookState = ProcessorState<GuestbookProcessorContract>;
 
-export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {
+export class GuestbookProcessor extends StreamProcessor<GuestbookProcessorContract> {
   readonly contract = GuestbookProcessorContract;
 
-  protected override reduce({
-    event,
-    state,
-  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>["reduce"]>[0]): GuestbookState {
+  protected override reduce({ event, state }: ReduceArgs<GuestbookProcessorContract>) {
     switch (event.type) {
-      case "events.iterate.com/guestbook/created": {
-        if (state.birthCertificate !== null) {
-          throw new Error("guestbook received more than one created event");
-        }
+      case "events.iterate.com/guestbook/created":
+        // Idempotency-keyed at the source, but a duplicate that slips through
+        // folds to a no-op rather than wedging the frame.
+        if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
-      }
-      case "events.iterate.com/guestbook/entry-signed": {
-        if (state.birthCertificate === null) {
-          throw new Error("guestbook received an entry before its created event");
-        }
+      case "events.iterate.com/guestbook/entry-signed":
         return {
           ...state,
           entries: [...state.entries, { ...event.payload, signedAt: event.createdAt }],
         };
-      }
       default:
         return state;
     }
