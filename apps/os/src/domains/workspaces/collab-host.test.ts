@@ -576,3 +576,23 @@ describe("open unwind windows", () => {
     expect(host.isLive(PATH)).toBe(false);
   });
 });
+
+describe("retention quota on the agent gateway", () => {
+  test("writeFile and edit refuse past the uncommitted-ops quota, exactly like push", async () => {
+    const { store } = fakeSessionStore();
+    const { fs } = fakeFs({ [PATH]: SEED });
+    const host = new CollabHost({ fs, store });
+    const opened = await host.open(PATH);
+    await pushOne(host, opened, "hi ", SEED.length);
+    // Rewind the baseline so the head sits exactly at the quota — the same
+    // arithmetic a 10k-op session reaches, without pushing 10k ops.
+    store.setBase(PATH, { content: SEED, version: 1 - 10_000 });
+    await expect(host.writeFile(PATH, "agent text")).rejects.toThrow(/retention quota/);
+    await expect(host.edit({ newString: "x", oldString: "hi", path: PATH })).rejects.toThrow(
+      /retention quota/,
+    );
+    await expect(
+      pushOne(host, { epoch: opened.epoch, version: 1 }, "y", `hi ${SEED}`.length, 1),
+    ).rejects.toThrow(/retention quota/);
+  });
+});

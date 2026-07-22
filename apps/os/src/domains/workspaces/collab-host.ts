@@ -223,15 +223,7 @@ export class CollabHost {
     this.#touch(input.path);
     this.#assertLive(input.path);
     const head = await this.#opened(input.path);
-    // "Bounded by commit cadence" needs an actual bound: past the quota the
-    // session refuses new ops until a commit advances the baseline (which
-    // prunes). Typed and loud — never silent unbounded growth.
-    const base = this.#store.getBase(input.path);
-    if (base !== null && head.version - base.version >= MAX_UNCOMMITTED_OPS) {
-      throw new Error(
-        `retention quota: ${input.path} has ${head.version - base.version} uncommitted ops — commit to continue`,
-      );
-    }
+    this.#assertQuota(input.path, head.version);
     return this.#engine.push(input);
   }
 
@@ -299,7 +291,8 @@ export class CollabHost {
   async writeFile(rawPath: string, content: string, author?: string): Promise<boolean> {
     const path = CollabHost.canonical(rawPath);
     if (!this.isLive(path)) return false;
-    await this.#opened(path);
+    const head = await this.#opened(path);
+    this.#assertQuota(path, head.version);
     await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, content), author);
     return true;
   }
@@ -311,7 +304,8 @@ export class CollabHost {
     if (typeof input.oldString !== "string" || input.oldString === "") {
       throw new Error("edit oldString must be a non-empty string.");
     }
-    await this.#opened(input.path);
+    const head = await this.#opened(input.path);
+    this.#assertQuota(input.path, head.version);
     let occurrenceCount = 0;
     await this.#engine.applyExternal(input.path, (doc) => {
       const content = doc.toString();
@@ -494,9 +488,10 @@ export class CollabHost {
       if ((this.#waiters.get(path)?.size ?? 0) > 0) continue;
       await this.#flush(path).catch(() => {});
       if (this.#store.dirtySessions().includes(path)) continue; // flush failed
-      this.#destroyed.set(path, (this.#destroyed.get(path) ?? 0) + 1);
-      this.#engine.discard(path);
-      this.#store.endSession(path);
+      // The ONE end path: a wait that parked during the awaited flush must
+      // wake into `ended` now, not sit out its whole timeout — and pending
+      // flush timers die with the session.
+      this.endSessions([path]);
     }
   }
 
@@ -554,5 +549,18 @@ export class CollabHost {
 
   #assertLive(path: string): void {
     if (!this.isLive(path)) throw new Error(`no live session for ${path} — open first`);
+  }
+
+  /** "Bounded by commit cadence" needs an actual bound on EVERY acceptance
+   * lane (browser pushes AND the agent gateway): past the quota the session
+   * refuses new ops until a commit advances the baseline (which prunes).
+   * Typed and loud — never silent unbounded growth. */
+  #assertQuota(path: string, headVersion: number): void {
+    const base = this.#store.getBase(path);
+    if (base !== null && headVersion - base.version >= MAX_UNCOMMITTED_OPS) {
+      throw new Error(
+        `retention quota: ${path} has ${headVersion - base.version} uncommitted ops — commit to continue`,
+      );
+    }
   }
 }
