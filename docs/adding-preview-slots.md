@@ -1,8 +1,7 @@
 # Adding preview slots
 
-This runbook expands the PR-preview fleet from nine slots to nineteen. It is
-specific enough to run for `preview_10`–`preview_19`, but the safety model is
-the same for later batches.
+This runbook adds one or more PR-preview slots. It was exercised while adding
+`preview_10`–`preview_19`; examples for the next rehearsal use `SLOT=20`.
 
 The important rule is simple: do not add a Semaphore lease until the slot has
 been provisioned, deployed, and tested. A lease makes the slot available to CI;
@@ -56,6 +55,13 @@ personal Chrome tab, so use it only when the human explicitly permits that for
 this task. The dedicated automation profile is the default because its cookies
 and permissions are isolated and disposable.
 
+When personal Chrome is explicitly approved, the human only needs to enable
+Playwriter on one harmless anchor tab. The agent can create and retain its own
+working tab from that browser context; do not make the human create a new tab
+for every provider. Record which tabs are user-owned, leave the anchor and
+unrelated tabs untouched, and re-identify the working tab by exact URL after an
+OAuth redirect.
+
 Browser automation does not weaken the approval boundary. The agent stops on
 2FA, CAPTCHA, a changed price, a different workspace or organization, a name
 collision, or any page whose final action is outside the approved batch.
@@ -84,6 +90,34 @@ The command should call the existing provisioners rather than reimplement
 them. Its value is durable state, precondition checks, direct secret piping,
 and safe resumption after browser authorization or a provider outage. It
 should never gain generic `--force`, `--rotate`, or deletion flags.
+
+### Single-slot rehearsal
+
+For `preview_20`, keep one ledger row and use `SLOT=20` throughout. Do not turn
+a single-slot rehearsal into another range expansion.
+
+The order is:
+
+1. Add `preview_20` to `envs.ts` with `UNPROVISIONED` IDs.
+2. Confirm both zones, provider names, capacity, prices, and the exact writes.
+3. Create the five Doppler configs and provision Auth without `--rotate`.
+4. Create the dedicated GitHub App and Slack bootstrap app.
+5. Run every create-only Cloudflare ensure, record the returned IDs, then run
+   every ensure again and require no changes.
+6. Test and merge the repository change. A merge deploys production; it does
+   not deploy the new preview slot.
+7. Deploy the five preview apps from current `main`.
+8. Upgrade Slack to the full manifest and verify its URLs. Add the two Google
+   OAuth redirect URIs. Verify the GitHub App through its API.
+9. Present the ledger and obtain separate approval for the production
+   Semaphore lease write.
+10. Add the `preview` label to a draft canary whose body contains exactly
+    `preview_environment=preview-20`, then prove deploy, e2e, one real
+    Google/GitHub/Slack round trip, and cleanup. Remove the label after cleanup
+    so the still-open draft cannot immediately reacquire a slot.
+
+Each failed checkpoint stops the rehearsal. Fix the runbook or automation at
+the point of failure before retrying the slot.
 
 ## What one slot contains
 
@@ -229,7 +263,35 @@ Doppler state, so its exact config list belongs in the approved plan.
 Verify names, inheritance, and required-secret presence without printing
 values. Auth must have its OAuth seed and runtime secrets; OS, Semaphore, and
 Streams must have matching per-slot Auth client IDs and secrets; Semaphore and
-Streams must have `AUTH_FORGE_PRIVATE_JWK`.
+Streams must have `AUTH_FORGE_PRIVATE_JWK`. OS must also have
+`APP_CONFIG_INTEGRATIONS__PETSHOP`; an OS deploy cannot infer the Dummy Petshop
+client.
+
+`APP_CONFIG_PROJECT_APP_SESSION_SECRET` is one non-production value. Auth and
+OS `dev` must contain the same value; `_shared/preview` contains that value once
+for every preview child to inherit. Do not copy it into `auth/preview`,
+`os/preview`, or a `preview_N` child. Doppler does not allow an inheritable
+config to inherit another config, so an app-level preview root cannot sit
+between `_shared/preview` and the children without breaking the existing shared
+secret chain. The provisioner verifies the dev pair and shared preview value,
+then fails if a child does not resolve the common value.
+
+If an older fleet has per-slot overrides, migrate it as a separately approved
+operation:
+
+1. Verify `auth/dev` and `os/dev` match without printing either value.
+2. Set that value on `_shared/preview` and verify every Auth/OS child inherits
+   `_shared.preview` in its config metadata.
+3. Remove only the named child overrides, one slot at a time, and verify both
+   effective values still match `_shared/preview` before touching Workers.
+4. Update the deployed Auth and OS secret bindings together. For a leased slot,
+   use `wrangler secret put` against the existing Workers so another PR's code
+   is not replaced; require both health probes afterward. An unleased OS Worker
+   is deliberately parked at HTTP 503, so verify the paired secret uploads and
+   leave that modeled state intact.
+
+This invalidates existing preview project-app sessions. Never remove a child
+override before `_shared/preview` is present and inherited by that child.
 
 Do not run `pnpm auth:sync-clients`. That older command can point every target
 at the Auth config wrapping the command; it is not the isolated preview-stack
@@ -259,9 +321,17 @@ The preferred path is Slack's App Manifest API, not ten rounds of form entry:
    workspace in OS; installing only from Slack's dashboard is insufficient.
 
 Use the bootstrap manifest until OS can answer Slack's URL verification. Then
-apply the full manifest with `apps.manifest.update` and verify request URLs.
+apply the full manifest with `apps.manifest.update`. Slack's editor may save the
+manifest while still showing **URL isn't verified**; click **Click here to
+verify** and wait until that state disappears. Read back the Events API URL,
+five bot events, Interactivity URL, Agent View, OAuth callback, and scopes.
 Never store the configuration token in git or a long-lived shared preview
 config.
+
+Do not install every preview bot into a shared workspace at once. Broad
+`message.*` subscriptions make duplicate delivery and duplicate replies likely.
+For fleet verification, claim one slot through an OS test project, run the real
+Slack round trip, then disconnect it before moving to the next slot.
 
 ### GitHub: manifest flow with one approved browser batch
 
@@ -282,6 +352,37 @@ screen. That does not require ten manual handoffs:
 
 Stop on an existing app name. Inspect and reconcile it; never create a
 near-duplicate or overwrite its settings by guesswork.
+
+Authenticate as each created App and require:
+
+- `GET /app` returns the exact `iterate-preview-N` slug;
+- `GET /app/hook/config` returns
+  `https://os.iterate-preview-N.com/api/integrations/github/webhook`.
+
+Creation output is not verification. The final smoke still installs the App
+through OS and delivers a signed webhook.
+
+### Google: update the shared preview OAuth client
+
+The Auth sign-in flow and OS Google integration use the same non-production
+Google OAuth client across preview slots. Add both redirect URIs for every new
+slot:
+
+```text
+https://auth.iterate-preview-N.com/api/auth/callback/google
+https://os.iterate-preview-N.com/api/integrations/google/callback
+```
+
+This is a Google Cloud Console write and may require a different signed-in
+account from GitHub or Slack. Record the owning project/client in the plan and
+stop if the selected account cannot see it. Do not modify the separate
+production client.
+
+The Google Console can display rapidly bulk-filled rows that its form model has
+not registered. A save then returns HTTP 400 and restores the previous list.
+Add redirects in small batches with normal typed input. After every save,
+reload the client and require the new values to persist. The slots 10–19
+rehearsal succeeded in batches of six after one nineteen-row bulk fill failed.
 
 ## 5. Create Cloudflare resources and record IDs
 
@@ -341,6 +442,9 @@ D1/KV IDs, and container caps must be slot-specific.
 Merge this branch before deployment or leasing. Never seed production
 Semaphore from an unmerged expansion branch.
 
+The normal merge-to-`main` workflows deploy production Auth/OS, Semaphore,
+Streams, and Tunnels. They do not deploy newly added preview environments.
+
 ## 7. Deploy from current `main`
 
 Pull current `main` after the expansion merges. Deploy while the slots are
@@ -363,8 +467,52 @@ Petshop must precede OS e2e. Do not replace a failed deploy with a curl-only
 health check; the deploy command validates secrets, resources, migrations,
 routes, and smoke probes.
 
+Fresh hostnames can return Cloudflare 522 while edge certificates propagate.
+The deploy smoke owns that bounded retry. Auth's post-deploy OAuth-client seed
+retries only Cloudflare 522–526 on a bounded 78-second schedule; an
+unclassified status such as 500 remains an immediate failure.
+
+Preview orchestration resolves every public app origin from `envs.ts`, the
+same source that generates Worker routes. It reads Doppler only for readiness
+bearer secrets, merges those with the repository-owned origin, and injects
+that origin as `APP_CONFIG_BASE_URL` into each app's e2e process. Do not add
+`APP_CONFIG_BASE_URL` duplicates to each Doppler child: OS and Semaphore
+intentionally never had them, and requiring them made a correctly provisioned
+slot fail before its deploy command started.
+
+Exact-repository subscription lookup is part of config-repo creation, so a
+transient Cloudflare listing failure must not poison the repository's terminal
+state. Idempotent Cloudflare API reads retry 408, 429, and 5xx responses twice
+with bounded delay and a warning for each absorbed attempt. Mutations are never
+replayed. If project creation still records `repos/create-failed`, inspect that
+fact instead of rerunning the same deterministic smoke project: the failure is
+durable and the project will correctly remain unready.
+
 Now update Slack from bootstrap to full manifests, complete Slack installation
 through OS, and verify each GitHub App's `/app` identity and webhook URL.
+
+The lifecycle canary in step 9 must exercise one claimed slot through a
+disposable OS project. Provider dashboard state is insufficient:
+
+- Connect Google through OS, then call a metadata-only endpoint such as Gmail
+  `/users/me/profile`. The Auth callback and OS integration callback prove two
+  different Google redirect URIs. A historical connection row can remain after
+  disconnect; require `getConnection()` or a real API call, not the row.
+- Install the slot's GitHub App on the dedicated private smoke repository, then
+  read that exact repository through
+  `itx.integrations.github.get(connection).octokit`. This proves the App
+  installation credential, not only its manifest and callback.
+- Connect Slack through OS, require `auth.test`, join
+  `#slack-agent-e2e-test`, and post a uniquely marked mention from the separate
+  `SLACK_CI_BOT_TOKEN` actor. Require `slack/webhook-received`,
+  `slack/thread-route-configured`, a Slack-thread agent, and a reply by the
+  preview bot in the same thread. See [Slack testing](slack-testing.md).
+
+Use project-scoped admin claims when minting the browser session for a
+disposable project. Strip terminal colour codes before copying a printed mint
+URL; ANSI bytes inside the query string corrupt it. Do not print provider
+tokens. Disconnect or let normal preview cleanup erase the project connections
+after retaining only non-secret evidence.
 
 ## 8. Approve and add Semaphore leases
 
@@ -382,10 +530,28 @@ doppler run --project _shared --config prd -- pnpm preview reconcile
 Stop unless `status` reports nineteen slots and `reconcile` reports zero
 issues.
 
+Slot handover attempts its atomic Durable Object retirement before looking at
+other Workers. Cloudflare rejects the retirement and names every Worker whose
+external binding blocks it; cleanup then inspects and detaches only those named
+Workers, verifies their settings, and retries. Do not restore an eager account-
+wide settings scan: concurrent preview handovers multiplied that scan across
+roughly 183 Workers, made every chunk receive a 120-second `Retry-After`, and
+could not fit inside CI even after a five-minute cooldown. An unclassified
+retirement failure remains fatal, so this optimisation does not bypass the
+handover erase.
+
 ## 9. Prove the normal lifecycle
 
-Use a small draft canary PR that touches a preview-shared path. Pin, run, and
-clean one new slot at a time:
+Use a small draft canary PR that touches a preview-shared path. The normal CI
+path is a standalone body directive plus the `preview` label:
+
+```text
+preview_environment=preview-20
+```
+
+Markdown examples and comments do not count. The directive selects a slot but
+does not make a draft eligible; the label does that. For a fleet sweep, pin,
+run, and clean one new slot at a time:
 
 ```bash
 PR=<canary-pr-number>
@@ -408,8 +574,17 @@ storage shard, unreleased lease, or mismatched final state fails the slot. Do
 not keep feeding work to a sick slot; leave it unavailable and record the
 reason until automatic health quarantine exists.
 
+Classify error-level telemetry rather than treating green checks as the final
+barrier. Intentional failure-path tests must be identifiable as such. Durable
+Object storage resets, network loss, Worker hangs/cancellations, and default
+project-worker readiness failures are not normal background noise; retain the
+event window and investigate or explicitly track them before declaring the
+expansion complete.
+
 Close the canary only after all ten slots have passed. Run `status` and
-`reconcile` once more.
+`reconcile` once more. If the canary is a real work PR rather than a disposable
+one, remove its `preview` label after cleanup instead of closing it; otherwise
+the next preview dispatch can claim another slot for the still-eligible draft.
 
 ## Resuming safely
 
@@ -440,8 +615,22 @@ explicitly approved.
   template.
 - Existing OS preview configs inherited one preview-1 GitHub credential even
   though a GitHub App has only one webhook URL.
-- Stored Slack bot tokens for preview 3 and preview 6 returned `invalid_auth`;
-  secret presence is not credential verification.
+- A 2026-07-22 `auth.test` recheck found the preview 3 and preview 6 product-bot
+  fallback tokens healthy. The preview-14 config has no `SLACK_CI_BOT_TOKEN`,
+  which is correct: `_shared/prd` owns the live CI trigger actor. An earlier
+  ad-hoc smoke sent `Bearer undefined` and misclassified Slack's `invalid_auth`
+  response as a stale preview token.
+- Slots 10–19 initially had matching Auth/OS session secrets per slot, but the
+  values differed across slots and shadowed `_shared/preview`. The app-level
+  preview roots cannot own this value because Doppler forbids an inheritable
+  config from also inheriting the existing shared preview config.
+- New OS configs lacked `APP_CONFIG_INTEGRATIONS__PETSHOP`; provisioning now
+  writes the fixed Dummy Petshop client before deployment.
+- Slack bootstrap manifests preserve OAuth callbacks and scopes but omit Event
+  subscriptions, Interactivity, Agent View, and App Home until OS can pass URL
+  verification.
+- A green merge-to-main production rollout does not deploy preview workers or
+  publish new Semaphore leases.
 - The old GitHub runbook used `.app` OS URLs, the wrong webhook key, and a
   broken callback-capture script.
 - The old Slack bulk guide duplicated manifests and asked humans to paste

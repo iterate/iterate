@@ -1,7 +1,7 @@
 ---
-status: applying-approved-batch
+status: complete
 size: large
-branch: ops/create-preview-slots-10-19
+branch: ops/finish-preview-slots-10-19
 started: 2026-07-20
 base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 ---
@@ -10,30 +10,13 @@ base: af4d2ae48afc3ff66579cf9e5da5e3859c434949
 
 ## Status
 
-Read-only planning is complete and the exact non-production batch was approved
-on 2026-07-20. The repository map, all fifty Doppler configs, and all ten
-GitHub/Slack app credentials are complete and verified. Cloudflare provisioning
-is complete for all ten slots, including clean second ensures and every returned
-ID recorded in `envs.ts`. Two fresh-slot ordering defects discovered during
-preview-10 provisioning are fixed, tested, and confirmed live. Focused repo
-verification is green. Semaphore compatibility PR #2163 is merged; PR #2161 is
-ready for review against `main`. Ten valid Bugbot findings now have regression
-coverage: requested-slot adoption erases unknown-provenance data, seeded
-repository lookup no longer depends on Cloudflare subscription setup, and a
-server-side GitHub import records its initial commit even though the exact-repo
-subscription can only be installed after the atomic import. Intentional
-PR-body-directed slot moves are also reported as requested moves, not expired
-lease takeovers. Pre-deploy Email Routing reports a missing zone as deferred so
-resource-ID reconciliation can finish, while post-deploy reconciliation still
-fails hard. Interrupted exact-slot moves also resume from the requested lease
-and release the old recorded slot instead of self-blocking; a failed exact-slot
-request releases any unrelated adopted lease. Markdown examples and comments
-cannot activate the PR-body selector. Local OS tests and typecheck are green;
-the latest preview run exposed and now has a regression for an unbounded
-cross-slot subscription scan. Fresh CI and Bugbot review remain before merge.
-Production deployment and Semaphore lease publication remain later, separate
-approval boundaries. The strict PR-body slot selector makes it possible to
-canary one expanded slot without exposing all ten to old clients.
+Slots 10–19 are provisioned, integrated, deployed, and published in Semaphore's
+nineteen-slot pool. Preview-14 proved the full deploy/e2e lifecycle plus real
+Google, GitHub, and Slack connections through OS. All preview Auth/OS stacks now
+inherit one project-app session secret from `_shared/preview`; their deployed
+bindings were updated without replacing code owned by other PRs. The remaining
+provisioner and runbook encode the proven topology; final PR CI and Bugbot are
+green with no unresolved review threads.
 
 ## Goal
 
@@ -140,13 +123,41 @@ production Semaphore lease, and one proven assign/run/cleanup lifecycle.
   _Stacked PR #2163 keeps old clients on preview-1 through preview-9; this PR
   requires all configured slugs and accepts one standalone directive such as
   `preview_environment=preview-17` without bypassing preview eligibility._
-- [ ] Merge the repository change before deploying or leasing the slots.
-- [ ] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
+- [x] Merge the repository change before deploying or leasing the slots.
+  _PR #2161 squash-merged as `fe1f3d4a`; the production Auth/OS, Semaphore,
+  Streams, tunnels, test, lint, and publish checks all passed._
+- [x] Deploy Auth, Dummy Petshop, Semaphore, Streams, and OS sequentially for
   each slot from current `main`; verify integrations and operational telemetry.
-- [ ] Present the completed provisioning ledger and obtain separate approval
+  _All fifty deployments passed. Fresh-host 522s recovered within bounded
+  smoke checks. GitHub identity/webhook checks and all ten Slack full-manifest
+  URL verifications passed._
+- [x] Migrate the project-app session secret to one inherited preview root,
+  remove child overrides, and update Auth/OS together after explicit approval.
+  _All 19 Auth/OS children inherit the matching dev value from
+  `_shared/preview`; paired Worker secret-version updates passed, and all five
+  leased stacks passed Auth/OS health probes. Preview-14's real project-member
+  sign-in canary then passed in 25 seconds._
+- [x] Add the two Google OAuth redirect URIs for every new slot.
+  _The shared non-production `dev` client now persists both Auth and OS
+  callbacks for previews 1–19, with no missing or duplicate preview URI._
+- [x] Prove the preview-14 OS-side Slack/GitHub/Google connections.
+  _A disposable project connected all three providers. Gmail profile and the
+  dedicated private GitHub smoke repository returned HTTP 200 through itx.
+  Slack authenticated `iteratepreview14`, received and routed a signed mention,
+  created the thread agent, and replied `preview-14 canary ok`._
+- [x] Present the completed provisioning ledger and obtain separate approval
   to add the production Semaphore leases.
-- [ ] Seed leases, require nineteen-slot status and zero reconciliation issues,
-  and prove assign/run/cleanup for each slot with a draft canary PR.
+  _The user approved publication after reviewing the deployed provider and
+  Worker state._
+- [x] Seed leases and require nineteen-slot status with zero config drift.
+  _Semaphore reports nineteen resources; slots 10–19 were available after
+  seeding and reconciliation returned no issues. Preview-14 is now held by
+  PR #2182 as explicitly requested._
+- [x] Prove the assign/run/cleanup lifecycle with the draft canary PR.
+  _PR #2182 claimed preview-14 from its standalone body directive, deployed and
+  tested all five apps, then normal cleanup erased OS/Auth/Streams state in 18
+  seconds and released the lease. Status reports preview-14 available and
+  reconciliation returns `{}`; the `preview` label was removed afterwards._
 - [ ] Move this task to `tasks/complete/` with a date prefix after all ten slots
   pass the normal lifecycle.
 
@@ -157,16 +168,16 @@ read back from the owning system.
 
 | Slot | Domains | Doppler | Cloudflare + second ensure | GitHub | Slack | Five apps | Lease | Lifecycle |
 | ---- | ------- | ------- | -------------------------- | ------ | ----- | --------- | ----- | --------- |
-| 10   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 11   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 12   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 13   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 15   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 16   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 17   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 18   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
-| 19   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☐         | ☐     | ☐         |
+| 10   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 11   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 12   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 13   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 14   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☑         |
+| 15   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 16   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 17   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 18   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
+| 19   | ☑       | ☑       | ☑                          | ☑      | ☑     | ☑         | ☑     | ☐         |
 
 ## Read-only inventory
 
@@ -456,3 +467,149 @@ the recorded projection.
   and attempting a duplicate POST. The regression places the existing item on
   page 3 and later names on page 4. All 2,116 OS unit tests, OS typecheck, lint,
   and changed-file format checks pass locally.
+- 2026-07-21: Post-merge deployment stopped before its first write because
+  Auth preview-10 lacked `APP_CONFIG_PROJECT_APP_SESSION_SECRET`. The remote-app
+  auth change made that secret required, but preview provisioning did not copy
+  one shared value into both Auth and OS. The provisioner now creates or
+  preserves one per-slot value and rejects divergent existing values. The live
+  command will run without `--rotate`, so existing OAuth and app credentials
+  remain unchanged.
+- 2026-07-21: Provisioned the missing session and Dummy Petshop config, then
+  deployed all five apps for slots 10–19. Every final smoke passed. Fresh
+  hostname 522s remained inside bounded readiness checks; two Auth OAuth-client
+  seeds exposed a missing post-smoke retry, now covered by a bounded 522–526
+  regression test while unclassified 500s still fail immediately.
+- 2026-07-21: Authenticated as every preview GitHub App and verified the exact
+  slug and `.com` webhook URL through `GET /app` and `GET /app/hook/config`.
+  Upgraded Slack apps 10–19 from bootstrap to full manifests in the logged-in
+  browser and explicitly verified every Events API URL.
+- 2026-07-21: Audited session-secret inheritance. Auth and OS match within each
+  preview slot but slots differ and both preview roots are empty; Auth/OS dev
+  roots already match. The follow-up provisioner now models one non-production
+  root value and rejects child overrides. Live migration remains separately
+  approved because it invalidates existing preview sessions.
+- 2026-07-21: Added and persisted Google Auth and OS integration callbacks for
+  previews 10–19 on the shared non-production OAuth client. A rapid nineteen-
+  row bulk fill returned HTTP 400 and rolled back; normal typed batches of six
+  persisted, and a final reload found all 38 preview callbacks exactly once.
+- 2026-07-21: Published the approved Semaphore resources. Production reports
+  nineteen total slots and zero config drift. Adding the `preview` label to
+  draft PR #2182 caused its standalone selector to claim preview-14 exactly.
+- 2026-07-21: Cancelled the first preview-14 lifecycle run while it was safely
+  parked at 503. The preceding fifty-app deployment had exhausted Cloudflare's
+  five-minute API budget, so each ten-Worker chunk of the required external DO-
+  binding scan received a 120-second `Retry-After` and could not fit inside the
+  CI budget.
+- 2026-07-21: Cancelled a second attempt after a five-minute quiet period when
+  four concurrent preview jobs kept the shared Cloudflare budget saturated.
+  Reproduced the fleet-scaling defect and changed DO cleanup to try the atomic
+  retirement first, inspect only binding-owner Workers named by Cloudflare,
+  verify each detach, and retry. Normal cleanup now makes zero Worker-settings
+  reads; named-reference and unclassified-failure tests keep the path fail-
+  closed. The runbook records the new invariant and removes the ineffective
+  cooldown advice.
+- 2026-07-21: The next run erased preview-14 in 14 seconds, proving the targeted
+  cleanup under production-shaped load. OS and Semaphore then failed before
+  their deploy commands because preview orchestration required a Doppler
+  `APP_CONFIG_BASE_URL` even though their routes and public origins live only
+  in `envs.ts`. Auth, Streams, and Dummy Petshop deployed successfully. Merged
+  current `main`; orchestration now resolves every public origin from `envs.ts`
+  and merges only readiness bearer secrets from Doppler. Regression tests cover
+  an origin absent from Doppler and the origin-plus-bearer combination.
+- 2026-07-21: The corrected run deployed all five preview-14 apps. Auth, Dummy
+  Petshop, and Streams e2e passed. OS e2e then showed that the repo-owned origin
+  also has to enter its test process as `APP_CONFIG_BASE_URL`; orchestration now
+  injects the recorded origin without duplicating it in Doppler. Semaphore's
+  twelve assertions passed, but a failed first attempt left its concurrent
+  sibling waiter unobserved long enough for Vitest to report a rejection; both
+  waiters now receive rejection handlers immediately and settle in `finally`.
+  The complete live Semaphore suite passes against preview-14.
+- 2026-07-21: That run passed all non-OS apps but surfaced eleven OS retries
+  during a burst of stream timeouts and one Cloudflare subscriptions API 500.
+  The only surviving failure reached the project-app sign-in page, whose
+  accessible snapshot exposed `Continue with iterate` as a link while the test
+  selected a button. Both project-app sign-ins now select the rendered link.
+  After merging current `main` (including its project-create fast path), the
+  complete real-member/project-app authentication scenario passed against
+  preview-14 in 37 seconds with retries disabled.
+- 2026-07-21: The first full rerun failed during Cloudflare's deployment
+  handover: an internal Durable Object storage reset was followed by
+  machine-move and network-loss errors. A stable-deployment rerun passed every
+  completed scenario but hit the local eight-minute orchestration ceiling
+  after Watchman spent sixty seconds falling back to its node crawler.
+- 2026-07-21: Depot attempt 2 passed all 59 browser tests and 161 of 162 OS
+  Vitest assertions. The one failure reused smoke project
+  `preview-mcp-smoke-9ae15adc`; its config repo had durably recorded
+  `repos/create-failed` after Cloudflare returned HTTP 500/code 15000 while
+  reading exact-subscription page 8. That terminal fact correctly kept the
+  project unready, but retrying the preview could never heal it. Cloudflare API
+  reads now retry transient 408/429/5xx responses at most twice, log every
+  absorbed attempt, and never replay mutations. The new regression is green
+  alongside 47 event/repo processor tests.
+- 2026-07-21: Merged current `main` normally and reran preview-14 at
+  `4d8693cd2`. Every required check passed. The five-app preview run deployed
+  exact-head revisions; Auth passed 5 scenarios, Semaphore 12, Streams 21 API
+  plus 31 browser scenarios, Dummy Petshop 6, and OS passed with one bounded
+  retry of the live-stream delivery control.
+- 2026-07-21: Used a disposable preview-14 project to prove external providers
+  through the product surface. Google Auth and OS callback redirects completed;
+  Gmail `/users/me/profile` returned HTTP 200. GitHub installation `148103582`
+  read `iterate/iterate-os-linked-repo-smoke` through Octokit with HTTP 200.
+  Slack connection `t0675psn873` authenticated as `iteratepreview14`, joined
+  `#slack-agent-e2e-test`, received the CI actor's signed mention, configured
+  the route, created its thread agent, and replied `preview-14 canary ok` in
+  thread <https://iterate-com.slack.com/archives/C096Q1M4Y86/p1784660547967219>.
+- 2026-07-21: The first Gmail read correctly failed after an accidental UI
+  disconnect: the journal contained `google/disconnected`, and the connection
+  secret had been made unusable by clearing its egress pin and material.
+  Reconnecting restored both Google origins and material, after which the read
+  passed. A visible historical connection row is therefore not proof that the
+  connection is live; verify its status or perform the provider call.
+- 2026-07-21: The ad-hoc Slack smoke reported `invalid_auth` for
+  `os/preview_14`'s CI trigger actor, then succeeded with the canonical
+  `_shared/prd` actor. The product connection token itself passed `auth.test`.
+- 2026-07-21: A 30-minute `os-preview-14` telemetry audit after CI found 28
+  error-level events. Intentional test events (`kill requested` and the explicit
+  retry-path failure) are understood, but Durable Object storage resets,
+  network loss, Worker cancellation/hangs, and default-project-worker readiness
+  failures remain operational follow-up. The canary is functionally green, but
+  the task stays open under the repository's no-unexplained-errors rule.
+- 2026-07-21: Ran the ordinary PR cleanup after the provider canaries. It
+  reacquired the lapsed-but-free preview-14 lease, erased Auth/OS/Streams state,
+  parked OS and Streams at 503, and released the lease in 18 seconds. Production
+  status then reported 19 total / 17 available / 2 active / 0 orphaned, and
+  reconciliation returned `{}`. Removed #2182's `preview` label so the draft
+  cannot immediately reacquire another slot.
+- 2026-07-22: Corrected the CI-trigger diagnosis. `os/preview_14` does not have
+  `SLACK_CI_BOT_TOKEN`; the ad-hoc command sent `Bearer undefined`, so its
+  `invalid_auth` response did not identify a stale secret. `_shared/prd` is the
+  canonical live actor. Fresh `auth.test` calls also found the preview 3 and 6
+  product-bot fallback tokens healthy. Updated the smoke preflight to fail
+  clearly on a missing variable and verify the canonical actor before posting.
+- 2026-07-22: Merged current `main` normally. Main deliberately retired the
+  Cloudflare Artifacts subscription-delivery path, so the merge drops this
+  branch's obsolete exact-subscription retry and regression while retaining the
+  preview-origin and shared-session-secret work. The scripts suite (266 tests),
+  scripts typecheck, focused formatting, and diff checks pass.
+- 2026-07-22: The first post-merge preview run exposed a merge-resolution bug:
+  repository-owned `workerName` was dropped when Doppler contributed readiness
+  secrets, so OS and Streams failed config validation before deploy. A red/green
+  regression now requires deployment identity to survive config composition.
+- 2026-07-22: Review found that bounded `CloudflareApiError` messages could hide
+  later binding-owner names from targeted Durable Object handover. The error now
+  retains its full structured details for recovery logic while keeping the
+  displayed message bounded; a regression puts the owner beyond that boundary.
+- 2026-07-22: Migrated the project-app session secret after explicit approval.
+  Preflight proved matching Auth/OS dev values and matching per-slot legacy
+  pairs. A preview-2 tracer exposed that app children inherit
+  `_shared/preview`, not their app-level preview roots; Doppler also rejects an
+  inheritable config that itself inherits another config. The common dev value
+  therefore lives once in `_shared/preview`. Removed all 38 child overrides and
+  updated every deployed Auth/OS secret binding as a pair; in-place Wrangler
+  updates preserved code owned by leased PRs. All updates passed first try and
+  the five leased stacks passed both health probes. A red/green provisioner
+  regression and the runbook now encode the proven topology.
+- 2026-07-22: The first final-head preview run deployed all five apps correctly
+  but OS exhausted its bounded retry on one stream-backed Waitrose scenario.
+  A same-commit retry passed in 6m04s. Every required check and Bugbot is green,
+  with no unresolved review threads; the PR is ready to merge.
