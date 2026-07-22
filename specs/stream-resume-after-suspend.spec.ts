@@ -164,9 +164,6 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
   await test.step("suspend page script, drop network, and resume", async () => {
-    // Block the replacement dial as soon as the original close is observed.
-    // A WebSocket started while already offline keeps timing out in Chromium
-    // after connectivity returns, so the order here is deliberate.
     await page.context().setOffline(true);
     await page.evaluate(() =>
       (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
@@ -181,10 +178,22 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
         timeout: 5_000,
       })
       .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
+    const retiredTransitionDials = await page.evaluate(() => {
+      const closed = (
+        window as unknown as { __closeAllApiSockets: () => string[] }
+      ).__closeAllApiSockets();
+      // Chromium does not reliably revive a WebSocket whose constructor ran
+      // while offline. Retire every transition dial after connectivity is
+      // restored, then give the runtime the real returning-browser signal so
+      // its next constructor starts online.
+      window.dispatchEvent(new Event("online"));
+      return closed;
+    });
+    console.log(`retired transition sockets: ${JSON.stringify(retiredTransitionDials)}`);
   });
 
-  // Going back online lets the runtime's resume check fire if the browser
-  // delivers that signal after thaw; its periodic probe remains the fallback.
+  // Going back online lets the runtime's resume check fire; its periodic probe
+  // remains the fallback.
   // Append immediately and wait on durable delivery so
   // a healthy runtime finishes when it heals, while the historical permanent
   // wedge still consumes the full bounded recovery window and fails.
@@ -468,7 +477,7 @@ function installSuspendTimerProbe(page: Page) {
  * exactly the recovery the bug report says users are forced into.
  *
  *   __closeAllApiSockets — clean close, the "close event delivered" lane.
- *   __closeAllApiSocketsAndWait — same close, but resolves only after every
+ *   __closeAllApiSocketsAndWait — clean close, resolving only after every
  *     original socket emitted close; a replacement socket does not hold it up.
  *   __muteAllApiSockets  — half-open simulation: sends are swallowed and
  *     message events suppressed, but no close ever fires. This is what a

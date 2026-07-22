@@ -713,14 +713,54 @@ disabled page script before the browser delivered the socket's close event;
 the case had accidentally become a second half-open test and paid two guarded
 timeout windows plus redial. The suite already has a dedicated no-close-frame
 case for that path. The suspend case now waits for every original socket's
-close event, takes the network offline to stop the replacement dial from
-completing, freezes script for two seconds, and restores connectivity before
-thaw. Three zero-retry headed runs against that same preview completed in 29.4,
-28.3, and 30.4 seconds, with the recovered runtime subscribed, zero timeout
+close event, takes the network offline, freezes script for two seconds, then
+retires any replacement dial created synchronously by the close handler before
+emitting the returning browser's online signal. This prevents either a
+race-to-open dial or Chromium's offline-started dial from bypassing the intended
+transition. Three zero-retry headed runs against that same preview completed in
+29.4, 28.3, and 30.4 seconds, with the recovered runtime subscribed, zero timeout
 strikes, and no reconnect warning. This is the kind of distinction the phase
 model is meant to force: a shorter stimulus did not remove the slow path until
 the evidence proved which production recovery lane the test was actually
-exercising.
+exercising. A later review caught the remaining close-handler race. The
+hardened version retired exactly one transition socket in each of two headed,
+zero-retry runs, passed in 35.9 and 17.9 seconds, returned subscribed with zero
+connect failures and timeout strikes, and emitted no reconnect warnings. A
+constructor-throw gate was explicitly rejected: its trial reproduced the
+permanent reconnect wedge for 1.8 minutes because it poisoned the shared dial
+path instead of preserving real WebSocket close semantics.
+
+The next exact-head artifact made the Vitest sandbox-deadline proof the longest
+zero-retry E2E at 65.1 seconds. Aggregate runner telemetry could localize all of
+that time to the test body, but could not explain the body because the test had
+no named phases. An instrumented zero-retry baseline against `preview_1` took
+48.5 seconds: 7.6 seconds creating the project, 3.8 seconds creating the agent,
+3.6 seconds creating the sandbox, 1.6 seconds warming its container, and 30.8
+seconds waiting for script settlement. Vitest setup, collection, and scheduling
+were negligible. The actual cause was therefore the test's own 60-second
+absolute horizon. Production reserves 15 seconds for durable settlement and
+another 15 seconds for sandbox process-tree cleanup; the generated worker then
+capped the requested 20-minute command timeout to the remainder.
+
+The minimum safe horizon was established experimentally rather than guessed. A
+35-second trial left a nominal five-second command ceiling, but failed in 22.6
+seconds because dynamic-worker startup consumed that remainder before the
+sandbox command began. A 45-second horizon leaves a 15-second command ceiling
+before startup overhead. Two deployment-shaped, zero-retry validations passed
+in 35.2 and 34.1 seconds; the latter split into 16.6 seconds of fixtures, 16.5
+seconds waiting for the deliberately bounded script, 0.5 seconds verifying the
+process group, and 0.3 seconds of cleanup. The test now records every one of
+those phases plus the configured horizon, derived command ceiling, actual
+timeout forwarded to the sandbox, and pre-command budget consumption. Deadline
+and budget configuration use distinct categories from elapsed
+`configured-delay` phases so attribution queries cannot mistake them for wall
+time. This preserves the production contract and makes future regressions
+distinguish fixture provisioning, pre-command startup, sandbox execution,
+verification, and cleanup. The amended artifact passed in 33.5 seconds and
+reported a 12.1-second timeout actually forwarded to the sandbox plus 2.9
+seconds of pre-command budget consumption; a future margin regression is now
+visible before it becomes the failed "no time to start" settlement seen in the
+35-second experiment.
 
 ## Adding Or Changing A Reporter
 
