@@ -39,20 +39,46 @@ export function safeHost(url: string): string {
 
 export function approvalBodyForDisplay(payload: RequestedPayload): {
   language: "json" | "text";
+  originalByteLength: number | null;
   text: string;
+  truncated: boolean;
 } | null {
   if (payload.body === null) return null;
   if (payload.body === undefined) {
-    return payload.bodyPreview === null ? null : { language: "text", text: payload.bodyPreview };
+    return payload.bodyPreview === null
+      ? null
+      : {
+          language: "text",
+          originalByteLength: null,
+          text: payload.bodyPreview,
+          truncated: true,
+        };
   }
+  const originalByteLength =
+    payload.body.originalByteLength === undefined ? null : payload.body.originalByteLength;
   if (payload.body.encoding === "base64") {
-    return { language: "text", text: payload.body.content };
+    return {
+      language: "text",
+      originalByteLength,
+      text: payload.body.content,
+      truncated: payload.body.truncated,
+    };
   }
   try {
     JSON.parse(payload.body.content);
-    return { language: "json", text: payload.body.content };
+    return {
+      language: "json",
+      originalByteLength,
+      text: payload.body.content,
+      truncated: payload.body.truncated,
+    };
   } catch {
-    return { language: "text", text: payload.body.content };
+    return {
+      language: "text",
+      originalByteLength,
+      text: payload.body.content,
+      truncated: payload.body.truncated,
+    };
   }
 }
 

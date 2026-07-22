@@ -345,10 +345,21 @@ function ApprovalCard({
                 <Text style={styles.detailTitle}>
                   {request.payload.body === undefined
                     ? "Request body preview"
-                    : "Full request body"}
+                    : body.truncated
+                      ? "Request body prefix"
+                      : "Request body"}
                 </Text>
-                {request.payload.body?.encoding === "base64" ? (
-                  <Text style={styles.detailHint}>base64</Text>
+                {request.payload.body?.encoding === "base64" || body.truncated ? (
+                  <Text style={styles.detailHint}>
+                    {[
+                      request.payload.body?.encoding === "base64" ? "base64" : "",
+                      body.truncated
+                        ? `64 KiB cap · ${body.originalByteLength?.toLocaleString() || "unknown"} bytes total`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
                 ) : null}
               </Pressable>
               {details.data.body ? (

@@ -96,7 +96,12 @@ test("a notification-targeted approval is focused at the front of the queue", ()
 
 test("the approval view resolves the exact script event and complete request body", () => {
   const request = requested(10, "refund", {
-    body: { encoding: "utf8", content: '{"orderId":1234}' },
+    body: {
+      encoding: "utf8",
+      content: '{"orderId":1234}',
+      originalByteLength: 16,
+      truncated: false,
+    },
     streamContext: {
       kind: "script-execution",
       executionId: "agent-output:8",
@@ -120,7 +125,27 @@ test("the approval view resolves the exact script event and complete request bod
   expect(scriptCodeForApproval(payload, scriptEvent)).toBe("async () => fetch('/refund')");
   expect(approvalBodyForDisplay(payload)).toEqual({
     language: "json",
+    originalByteLength: 16,
     text: '{"orderId":1234}',
+    truncated: false,
+  });
+});
+
+test("the approval view labels a capped request body as truncated", () => {
+  const payload = requested(10, "upload", {
+    body: {
+      encoding: "utf8",
+      content: "readable prefix",
+      originalByteLength: 100_000,
+      truncated: true,
+    },
+  }).payload as RequestedPayload;
+
+  expect(approvalBodyForDisplay(payload)).toEqual({
+    language: "text",
+    originalByteLength: 100_000,
+    text: "readable prefix",
+    truncated: true,
   });
 });
 

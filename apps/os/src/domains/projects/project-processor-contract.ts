@@ -284,14 +284,24 @@ export const ProjectProcessorContract = defineProcessorContract({
         }),
         body: z
           .discriminatedUnion("encoding", [
-            z.strictObject({ encoding: z.literal("utf8"), content: z.string() }),
-            z.strictObject({ encoding: z.literal("base64"), content: z.string() }),
+            z.strictObject({
+              encoding: z.literal("utf8"),
+              content: z.string(),
+              originalByteLength: z.number().int().nonnegative().optional(),
+              truncated: z.boolean().default(false),
+            }),
+            z.strictObject({
+              encoding: z.literal("base64"),
+              content: z.string(),
+              originalByteLength: z.number().int().nonnegative().optional(),
+              truncated: z.boolean().default(false),
+            }),
           ])
           .nullable()
           .optional()
           .meta({
             description:
-              "The complete held body in placeholder form. The signature binds these bytes by bodySha256.",
+              "A bounded inspection prefix of the held body in placeholder form. The signature binds the complete bytes by bodySha256.",
           }),
         secretPaths: z.array(z.string()).default([]).meta({
           description: 'Secret paths the request references — the "spends this secret" headline.',

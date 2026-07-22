@@ -88,6 +88,12 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     expect(requestedPayload).toMatchObject({
       method: "POST",
       ruleKey: "post-echo",
+      body: {
+        encoding: "utf8",
+        content: "please approve",
+        originalByteLength: 14,
+        truncated: false,
+      },
       bodyPreview: "please approve",
       secretPaths: [],
     });
