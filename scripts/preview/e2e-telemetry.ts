@@ -5,6 +5,7 @@ import {
   writeTestTelemetryArtifact,
   writeTestTelemetryFailureSentinel,
   type TestTelemetryArtifact,
+  type TestTelemetryArtifactSource,
   type TestTelemetryLane,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 
@@ -30,6 +31,7 @@ export class PreviewE2eTelemetryArtifact {
     lane: "preview",
   };
   private readonly environment: NodeJS.ProcessEnv;
+  private readonly expectedArtifactSources: TestTelemetryArtifactSource[] = [];
   private readonly lanes: TestTelemetryLane[] = [];
   private runResult: TestTelemetryArtifact["run"] | null = null;
   private startedAtMs = Date.now();
@@ -55,16 +57,15 @@ export class PreviewE2eTelemetryArtifact {
       process.pid,
       this.startedAtMs,
     );
-    writeTestTelemetryFailureSentinel(
-      {
-        artifactId: this.artifactId,
-        producer: "preview-e2e-orchestrator",
-        startedAt: new Date(this.startedAtMs).toISOString(),
-        ci: this.ci,
-        context: this.context,
-      },
-      this.environment,
-    );
+    this.writeFailureSentinel();
+  }
+
+  appStarted(expectedArtifactSources: readonly TestTelemetryArtifactSource[]) {
+    this.expectedArtifactSources.push(...expectedArtifactSources);
+    // Keep the pessimistic artifact current before the child process starts.
+    // If the orchestrator is killed, the finalizer can still prove which
+    // runner artifacts should have appeared instead of accepting their silence.
+    this.writeFailureSentinel();
   }
 
   appFinished(input: {
@@ -118,6 +119,20 @@ export class PreviewE2eTelemetryArtifact {
     return this.artifact();
   }
 
+  private writeFailureSentinel() {
+    writeTestTelemetryFailureSentinel(
+      {
+        artifactId: this.artifactId,
+        producer: "preview-e2e-orchestrator",
+        startedAt: new Date(this.startedAtMs).toISOString(),
+        ci: this.ci,
+        context: this.context,
+        expectedArtifactSources: this.expectedArtifactSources,
+      },
+      this.environment,
+    );
+  }
+
   private artifact(): TestTelemetryArtifact {
     if (!this.runResult) throw new Error("Preview telemetry run finished without a result");
     return {
@@ -127,6 +142,7 @@ export class PreviewE2eTelemetryArtifact {
       createdAt: this.runResult.finishedAt,
       ci: this.ci,
       context: this.context,
+      expectedArtifactSources: this.expectedArtifactSources,
       run: this.runResult,
       lanes: this.lanes,
       tests: [],

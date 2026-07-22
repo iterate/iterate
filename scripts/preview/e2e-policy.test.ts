@@ -158,7 +158,7 @@ describe("retries live in exactly one layer", () => {
   it("bounds the onboarding smoke as a joined background lane", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
-      `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_ARTIFACT_FILE=/tmp/os-preview-onboarding-smoke.json timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+      `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=/tmp/os-preview-onboarding-smoke.json timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
     );
     expect(script).toContain('wait "$SMOKE_PID"');
   });

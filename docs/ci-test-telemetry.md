@@ -18,7 +18,7 @@ Vitest / Playwright / node:test / smoke script
                     │
                     ▼  if: always()
  scripts/ci/upload-test-telemetry.ts
-        validate every artifact + reject duplicate IDs
+     validate schema, IDs, and expected runner cardinality
                     │
           ┌─────────┴──────────┐
           ▼                    ▼
@@ -137,16 +137,29 @@ deterministic top-level `uuid`; PostHog deduplicates retries and replays by the
 UUID. A repeated normalized batch is therefore idempotent.
 
 The unit job also sets `TEST_TELEMETRY_EXPECTED_WORKSPACES` to all ten test
-workspaces. The finalizer writes the normalized evidence and manifest, delivers
-every valid artifact, then fails if a workspace is absent or a pessimistic
-sentinel was never replaced. One crashed runner therefore cannot suppress the
-other runners' queryable evidence, while incomplete telemetry can never leave
-a green job. Preview's orchestration artifact performs the equivalent dynamic
-lane check. A superseded/cancelled CI run uses `--cancelled`: any partial
-evidence (or an explicit empty manifest when cancellation preceded runner
-startup) is normalized and retained but not sent as a test failure;
-`ci workflow finished` owns that cancelled outcome. `--dry-run` remains the
-strict no-delivery mode for local inspection and replay validation.
+workspaces. Preview cannot use a static workspace list because its selected app
+set varies. Before it starts an app command, its orchestration artifact instead
+records one exact expected source per sub-runner: producer, framework, test
+kind, lane, and workspace. The finalizer compares source **cardinality** across
+all artifacts, so two expected marathon invocations require two artifacts and
+a lookalike producer or stale artifact from another run/attempt/job cannot
+satisfy the contract. Foreign artifacts are retained and fail the finalizer.
+Commands pin
+`TEST_TELEMETRY_WORKSPACE` rather than relying on pnpm's ambient package name.
+
+The finalizer writes the normalized evidence and manifest, delivers every valid
+artifact plus one `ci test telemetry finalized` completeness event, then fails
+if a workspace/source is absent or a pessimistic sentinel was never replaced.
+One crashed runner therefore cannot suppress the other runners' queryable
+evidence, while incomplete telemetry can never leave a green job. The retained
+manifest keeps exhaustive expected, observed, and missing workspaces and
+sources; the PostHog event keeps counts and compact source labels. A
+superseded/cancelled CI run uses
+`--cancelled`: any partial evidence (or an explicit empty manifest when
+cancellation preceded runner startup) is normalized and retained but not sent
+as a test failure; `ci workflow finished` owns that cancelled outcome.
+`--dry-run` remains the strict no-delivery mode for local inspection and replay
+validation.
 
 ## One Test Model
 
@@ -172,6 +185,7 @@ dimensions, never separate event families.
 | `ci test phase finished`       | explicit operation or Playwright step  | nested title, category, start/duration, source, attachments, error                                                                   |
 | `ci test module finished`      | Vitest module                          | environment, prepare, collect, setup, import, queue, and execution timing                                                            |
 | `ci test import finished`      | imported module within a Vitest module | self and total import duration                                                                                                       |
+| `ci test telemetry finalized`  | one finalizer job                      | expected/observed/missing workspaces and runner sources, incomplete artifacts, runner-event count, final status                      |
 
 `attempt_detail` is `complete` when all attempts are present and
 `aggregate-only` when only the runner's aggregate retry count/duration exists.
@@ -313,31 +327,35 @@ GROUP BY framework, kind
 ORDER BY failure_rate_pct DESC, retry_rate_pct DESC
 ```
 
-Find interrupted runners or collection failures before trusting an apparently
-green/fast sample:
+Find missing/interrupted runner evidence before trusting an apparently
+green/fast sample. This job-grain event still exists when one expected runner
+artifact is wholly absent:
 
 ```sql
-SELECT properties.framework AS framework,
-  properties.test_kind AS kind,
-  properties.lane AS lane,
-  count() AS run_count,
+SELECT properties.workflow_name AS workflow,
+  properties.job_name AS job,
+  count() AS finalizer_count,
   countIf(properties.telemetry_incomplete = true) AS incomplete_count,
-  sum(toInt(properties.collection_error_count)) AS collection_error_count
+  sum(toInt(properties.missing_artifact_source_count)) AS missing_source_count,
+  sum(toInt(properties.incomplete_artifact_count)) AS incomplete_artifact_count,
+  sum(toInt(properties.foreign_artifact_count)) AS foreign_artifact_count
 FROM events
-WHERE event = 'ci test run finished'
+WHERE event = 'ci test telemetry finalized'
   AND timestamp >= now() - INTERVAL 30 DAY
   AND toInt(properties.schema_version) = 2
   AND properties.execution_context = 'ci'
-GROUP BY framework, kind, lane
-ORDER BY incomplete_count DESC, collection_error_count DESC, run_count DESC
+GROUP BY workflow, job
+ORDER BY incomplete_count DESC, missing_source_count DESC, finalizer_count DESC
 ```
 
 `telemetry_incomplete = true` means reporter shutdown did not finish and the
-dataset may omit test details; inspect the retained raw artifact and its
-`TestTelemetryIncompleteError` before drawing a performance conclusion.
-`collection_error_count` separately records completed runner/global failures
-that could not be attributed to one test. Those errors can fail a lane, but do
-not by themselves mean its telemetry evidence is incomplete.
+dataset may omit test details, or an expected runner artifact is wholly absent.
+Inspect `normalized/manifest.json`, then the retained raw artifact and any
+`TestTelemetryIncompleteError`, before drawing a performance conclusion.
+`collection_error_count` on `ci test run finished` separately records completed
+runner/global failures that could not be attributed to one test. Those errors
+can fail a lane, but do not by themselves mean its telemetry evidence is
+incomplete.
 
 Explain one slow execution by joining its phases and attempts via
 `test_execution_id`:
@@ -526,8 +544,11 @@ readiness, the example operation, and cleanup instead of leaving an opaque gap.
 4. Add a unit test that validates the artifact, its timestamps/quality labels,
    and absence of network calls.
 5. Add/retain the reporter alongside the human console reporter.
-6. Keep the CI finalizer and artifact upload as strict `if: always()` steps.
-7. Add a finalizer test proving the new raw field reaches the common PostHog
+6. If a dynamic orchestrator starts it, declare its exact
+   `expectedArtifactSources` entry before process startup and pin the matching
+   workspace in the command environment.
+7. Keep the CI finalizer and artifact upload as strict `if: always()` steps.
+8. Add a finalizer test proving the new raw field reaches the common PostHog
    event, then update this capability matrix and event table.
 
 A green test with missing telemetry, an invalid artifact, duplicate artifact

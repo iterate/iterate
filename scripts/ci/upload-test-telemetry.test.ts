@@ -170,13 +170,20 @@ it("keeps raw and normalized JSON for replay while dry-run skips delivery", asyn
     readFileSync(join(root, "normalized", "posthog-events.json"), "utf8"),
   ) as { schemaVersion: number; events: unknown[] };
   expect(normalized.schemaVersion).toBe(2);
-  expect(normalized.events).toHaveLength(9);
+  expect(normalized.events).toHaveLength(10);
+  expect(normalized.events.at(-1)).toMatchObject({
+    event: "ci test telemetry finalized",
+    properties: { status: "passed", telemetry_incomplete: false, runner_event_count: 9 },
+  });
   rmSync(root, { recursive: true });
 });
 
 it("delivers complete evidence before rejecting a missing expected workspace", async () => {
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-completeness-"));
-  writeTestTelemetryArtifact(artifact, { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") });
+  writeTestTelemetryArtifact(
+    { ...artifact, context: { ...artifact.context, workspace: "iterate-root" } },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
 
   await expect(
     finalizeTestTelemetry({
@@ -187,8 +194,131 @@ it("delivers complete evidence before rejecting a missing expected workspace", a
   expect(sendPostHogEventsMock).toHaveBeenCalledOnce();
   const manifest = JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8")) as {
     missingWorkspaces: string[];
+    observedWorkspaces: string[];
   };
   expect(manifest.missingWorkspaces).toEqual(["@iterate-com/os"]);
+  expect(manifest.observedWorkspaces).toEqual(["iterate-root"]);
+  const deliveredEvents = sendPostHogEventsMock.mock.calls[0]![0] as Array<{
+    event: string;
+    properties: Record<string, unknown>;
+  }>;
+  expect(deliveredEvents.at(-1)).toMatchObject({
+    event: "ci test telemetry finalized",
+    properties: {
+      failed: true,
+      telemetry_incomplete: true,
+      missing_workspace_count: 1,
+      missing_workspaces: ["@iterate-com/os"],
+    },
+  });
+  rmSync(root, { recursive: true });
+});
+
+it("requires exact expected runner sources with cardinality before passing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "test-telemetry-runner-completeness-"));
+  const expectedSource = {
+    producer: "playwright-telemetry-reporter",
+    framework: "playwright" as const,
+    testKind: "e2e" as const,
+    lane: "playwright",
+    workspace: "iterate-root",
+  };
+  writeTestTelemetryArtifact(
+    { ...artifact, expectedArtifactSources: [expectedSource, expectedSource] },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
+  writeTestTelemetryArtifact(
+    {
+      ...artifact,
+      artifactId: "preview:123:playwright",
+      producer: expectedSource.producer,
+      context: {
+        framework: expectedSource.framework,
+        testKind: expectedSource.testKind,
+        lane: expectedSource.lane,
+        workspace: expectedSource.workspace,
+      },
+    },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
+  writeTestTelemetryArtifact(
+    {
+      ...artifact,
+      artifactId: "preview:123:wrong-producer",
+      producer: "lookalike-playwright-reporter",
+      context: {
+        framework: expectedSource.framework,
+        testKind: expectedSource.testKind,
+        lane: expectedSource.lane,
+        workspace: expectedSource.workspace,
+      },
+    },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
+  writeTestTelemetryArtifact(
+    {
+      ...artifact,
+      artifactId: "preview:122:stale-playwright",
+      producer: expectedSource.producer,
+      ci: { ...artifact.ci, workflowRunId: "122" },
+      context: {
+        framework: expectedSource.framework,
+        testKind: expectedSource.testKind,
+        lane: expectedSource.lane,
+        workspace: expectedSource.workspace,
+      },
+    },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
+
+  await expect(finalizeTestTelemetry({ artifactRoot: root })).rejects.toThrow(
+    "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root (expected 2, observed 1)",
+  );
+  expect(sendPostHogEventsMock).toHaveBeenCalledOnce();
+  const manifest = JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8")) as {
+    expectedArtifactSources: unknown[];
+    foreignArtifactIds: string[];
+    missingArtifactSources: unknown[];
+  };
+  expect(manifest.expectedArtifactSources).toEqual([expectedSource, expectedSource]);
+  expect(manifest.foreignArtifactIds).toEqual(["preview:122:stale-playwright"]);
+  expect(manifest.missingArtifactSources).toEqual([
+    {
+      source: expectedSource,
+      expectedCount: 2,
+      observedCount: 1,
+      missingCount: 1,
+      ciScope: {
+        repository: "iterate/iterate",
+        workflowRunId: "123",
+        workflowRunAttempt: "1",
+        jobName: "preview",
+      },
+    },
+  ]);
+  const deliveredEvents = sendPostHogEventsMock.mock.calls[0]![0] as Array<{
+    event: string;
+    properties: Record<string, unknown>;
+  }>;
+  expect(deliveredEvents.at(-1)).toMatchObject({
+    event: "ci test telemetry finalized",
+    properties: {
+      status: "failed",
+      failed: true,
+      expected_artifact_source_count: 2,
+      observed_artifact_source_count: 2,
+      matched_expected_artifact_source_count: 1,
+      missing_artifact_source_count: 1,
+      expected_artifact_sources: [
+        "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root x2",
+      ],
+      missing_artifact_sources: [
+        "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root [run 123/1 job preview] (expected 2, observed 1, missing 1)",
+      ],
+      foreign_artifact_count: 1,
+      foreign_artifact_ids: ["preview:122:stale-playwright"],
+    },
+  });
   rmSync(root, { recursive: true });
 });
 
@@ -219,6 +349,13 @@ it("fails on an incomplete runner artifact after retaining its normalized eviden
     incompleteArtifactIds: string[];
   };
   expect(manifest.incompleteArtifactIds).toEqual([artifact.artifactId]);
+  const normalized = JSON.parse(
+    readFileSync(join(root, "normalized", "posthog-events.json"), "utf8"),
+  ) as { events: Array<{ event: string; properties: Record<string, unknown> }> };
+  expect(normalized.events.at(-1)).toMatchObject({
+    event: "ci test telemetry finalized",
+    properties: { telemetry_incomplete: true, incomplete_artifact_count: 1 },
+  });
   rmSync(root, { recursive: true });
 });
 
@@ -249,9 +386,15 @@ it("delivers completed runner errors without misclassifying their evidence as in
   expect(
     result.events.find((event) => event.event === "ci test lane finished")?.properties,
   ).toMatchObject({ telemetry_incomplete: false, collection_error_count: 1 });
-  expect(result.events.at(-1)?.properties).toMatchObject({
+  expect(
+    result.events.find((event) => event.event === "ci test run finished")?.properties,
+  ).toMatchObject({
     telemetry_incomplete: false,
     collection_error_count: 1,
+  });
+  expect(result.events.at(-1)).toMatchObject({
+    event: "ci test telemetry finalized",
+    properties: { status: "passed", telemetry_incomplete: false },
   });
   const manifest = JSON.parse(readFileSync(join(root, "normalized", "manifest.json"), "utf8")) as {
     incompleteArtifactIds: string[];

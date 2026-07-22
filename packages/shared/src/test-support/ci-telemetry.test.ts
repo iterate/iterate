@@ -81,6 +81,15 @@ it("leaves an explicit failure artifact when a runner never reaches its end hook
         executionContext: "local",
       },
       context: { framework: "vitest", testKind: "unit", lane: "unit" },
+      expectedArtifactSources: [
+        {
+          producer: "vitest-test",
+          framework: "vitest",
+          testKind: "unit",
+          lane: "unit",
+          workspace: "@iterate/example",
+        },
+      ],
     },
     { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory },
   );
@@ -93,6 +102,15 @@ it("leaves an explicit failure artifact when a runner never reaches its end hook
     status: "failed",
     error: { name: "TestTelemetryIncompleteError" },
   });
+  expect(written.expectedArtifactSources).toEqual([
+    {
+      producer: "vitest-test",
+      framework: "vitest",
+      testKind: "unit",
+      lane: "unit",
+      workspace: "@iterate/example",
+    },
+  ]);
   expect(written.lanes[0]?.collectionErrors[0]).toContain("did not write its completed telemetry");
   rmSync(artifactDirectory, { recursive: true });
 });

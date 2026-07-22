@@ -41,6 +41,15 @@ const TestTelemetryContext = z.object({
   testProject: z.string().optional(),
 });
 
+/** A runner artifact that an orchestrator expects the finalizer to receive. */
+const TestTelemetryArtifactSource = z.object({
+  producer: z.string().min(1),
+  framework: TestTelemetryContext.shape.framework,
+  testKind: TestTelemetryContext.shape.testKind,
+  lane: z.string().min(1),
+  workspace: z.string().min(1),
+});
+
 const TestTelemetryAttempt = z.object({
   attemptIndex: z.number().int().nonnegative(),
   state: z.string().min(1),
@@ -153,6 +162,12 @@ export const TestTelemetryArtifact = z.object({
     executionContext: z.enum(["ci", "local"]),
   }),
   context: TestTelemetryContext,
+  /**
+   * Dynamic suites publish one entry per runner they start. The finalizer
+   * compares source cardinality across every artifact, so a process that never
+   * wrote even its pessimistic sentinel cannot silently disappear.
+   */
+  expectedArtifactSources: z.array(TestTelemetryArtifactSource).optional(),
   run: z.object({
     status: RunStatus,
     startedAt: Timestamp,
@@ -167,6 +182,7 @@ export const TestTelemetryArtifact = z.object({
 
 export type TestTelemetryArtifact = z.infer<typeof TestTelemetryArtifact>;
 export type TestTelemetryContext = z.infer<typeof TestTelemetryContext>;
+export type TestTelemetryArtifactSource = z.infer<typeof TestTelemetryArtifactSource>;
 export type TestTelemetryError = z.infer<typeof TestTelemetryError>;
 export type TestTelemetryPhase = z.infer<typeof TestTelemetryPhase>;
 export type TestTelemetryAttempt = z.infer<typeof TestTelemetryAttempt>;
@@ -219,6 +235,7 @@ export function writeTestTelemetryFailureSentinel(
     startedAt: string;
     ci: TestTelemetryArtifact["ci"];
     context: TestTelemetryContext;
+    expectedArtifactSources?: readonly TestTelemetryArtifactSource[];
   },
   environment: NodeJS.ProcessEnv = process.env,
 ) {
@@ -231,6 +248,9 @@ export function writeTestTelemetryFailureSentinel(
       createdAt: input.startedAt,
       ci: input.ci,
       context: input.context,
+      ...(input.expectedArtifactSources === undefined
+        ? {}
+        : { expectedArtifactSources: [...input.expectedArtifactSources] }),
       run: {
         status: "failed",
         startedAt: input.startedAt,

@@ -25,7 +25,10 @@ import { createSemaphoreTokenProvider } from "../auth/semaphore-token.ts";
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
-import { TestTelemetryArtifact } from "../../packages/shared/src/test-support/ci-telemetry.ts";
+import {
+  TestTelemetryArtifact,
+  type TestTelemetryArtifactSource,
+} from "../../packages/shared/src/test-support/ci-telemetry.ts";
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
   compactRetryFailure,
@@ -911,6 +914,7 @@ async function testPreviewApps({
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
     );
+    telemetry.appStarted(app.previewTestArtifactSources);
     // One attempt, deliberately: retries live in the individual test
     // (docs/testing.md#retries-and-timeouts) — everything above only
     // watches and fails.
@@ -1722,6 +1726,8 @@ export type CloudflarePreviewApp = {
    */
   previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
   previewTestBaseUrlEnvVar: string;
+  /** Every canonical artifact the app-level test command must produce once. */
+  previewTestArtifactSources: readonly TestTelemetryArtifactSource[];
   previewTestCommandArgs: readonly [string, ...string[]];
   /**
    * Soft wall-clock budgets. When a phase runs slower than its budget we emit
@@ -2018,6 +2024,34 @@ function requirePreviewEnvironment<T>(
   return environment;
 }
 
+function previewScriptArtifactSource(
+  producer: string,
+  lane: string,
+  workspace: string,
+): TestTelemetryArtifactSource {
+  return { producer, framework: "script", testKind: "e2e", lane, workspace };
+}
+
+function previewVitestArtifactSource(workspace: string): TestTelemetryArtifactSource {
+  return {
+    producer: "vitest-retry-telemetry-reporter",
+    framework: "vitest",
+    testKind: "e2e",
+    lane: "vitest",
+    workspace,
+  };
+}
+
+function previewPlaywrightArtifactSource(workspace: string): TestTelemetryArtifactSource {
+  return {
+    producer: "playwright-telemetry-reporter",
+    framework: "playwright",
+    testKind: "e2e",
+    lane: "playwright",
+    workspace,
+  };
+}
+
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   os: {
     slug: "os",
@@ -2076,6 +2110,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestDependencyBaseUrlEnvVars: {
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
+    previewTestArtifactSources: [
+      previewScriptArtifactSource("onboarding-smoke", "onboarding-smoke", "iterate-root"),
+      previewScriptArtifactSource("tui-quarantine", "tui", "iterate-root"),
+      previewVitestArtifactSource("@iterate-com/os"),
+      previewPlaywrightArtifactSource("iterate-root"),
+    ],
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
@@ -2115,11 +2155,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // preview.ts to fold into the PR body alongside Playwright's report.
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
-        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
-        `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
-        `run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
+        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
+        `run_logged_lane vitest /tmp/os-preview-vitest.log env TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/os TEST_TELEMETRY_ARTIFACT_FILE=${osVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e --project node & E2E_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
-        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
+        `if [ "$PW_INSTALL_OK" -eq 0 ]; then SPEC_OK=0; run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec || SPEC_OK=$?; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
         'E2E_OK=0; wait "$E2E_PID" || E2E_OK=$?',
         'TUI_OK=0; wait "$TUI_PID" || TUI_OK=$?',
         'SMOKE_OK=0; wait "$SMOKE_PID" || SMOKE_OK=$?',
@@ -2165,6 +2205,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/semaphore")],
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
     // `doppler run --project _shared --config prd` whose SEMAPHORE_API_TOKEN
     // targets prd and leaks through into this nested env — never the right
@@ -2180,7 +2221,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestCommandArgs: [
       "bash",
       "-c",
-      `rm -f ${semaphoreVitestTelemetryFile}; env -u SEMAPHORE_API_TOKEN TEST_TELEMETRY_ARTIFACT_FILE=${semaphoreVitestTelemetryFile} pnpm test:e2e`,
+      `rm -f ${semaphoreVitestTelemetryFile}; env -u SEMAPHORE_API_TOKEN TEST_TELEMETRY_WORKSPACE=@iterate-com/semaphore TEST_TELEMETRY_ARTIFACT_FILE=${semaphoreVitestTelemetryFile} pnpm test:e2e`,
     ],
     collectTestTelemetry: async () =>
       readTestTelemetryLane("semaphore vitest lane", () =>
@@ -2207,6 +2248,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // better-auth's liveness endpoint; auth has no /api/__internal/health.
     previewReadyUrlPath: "/api/auth/ok",
     previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/auth")],
     // The OAuth2/OIDC provider e2e (apps/auth/e2e): discovery-vs-origin,
     // dynamic registration, authorize → consent → code → token exchange with
     // RFC 8707 resource validation, against the live worker — the lane that
@@ -2218,7 +2260,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestCommandArgs: [
       "bash",
       "-c",
-      `rm -f ${authVitestTelemetryFile}; TEST_TELEMETRY_ARTIFACT_FILE=${authVitestTelemetryFile} pnpm test:e2e`,
+      `rm -f ${authVitestTelemetryFile}; TEST_TELEMETRY_WORKSPACE=@iterate-com/auth TEST_TELEMETRY_ARTIFACT_FILE=${authVitestTelemetryFile} pnpm test:e2e`,
     ],
     collectTestTelemetry: async () =>
       readTestTelemetryLane("auth vitest lane", () =>
@@ -2250,6 +2292,10 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       stableForMs: 10_000,
     },
     previewTestBaseUrlEnvVar: "WORKER_URL",
+    previewTestArtifactSources: [
+      previewVitestArtifactSource("@iterate-com/streams-example-app"),
+      previewPlaywrightArtifactSource("@iterate-com/streams-example-app"),
+    ],
     // The FULL e2e suite (all vitest e2e + all Playwright browser tests), not
     // a tagged subset: a title-tag filter here once silently reduced CI to 3
     // of ~37 tests while the rest rotted (docs/testing.md#lanes). Two
@@ -2270,11 +2316,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // via its global setup.
         'export STREAMS_PLAYGROUND_TOKEN="$(pnpm exec tsx e2e/auth.ts)"',
         "pnpm exec playwright install chromium > /tmp/os-preview-streams-example-pw-install.log 2>&1 & install_pid=$!",
-        `TEST_TELEMETRY_ARTIFACT_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
+        `TEST_TELEMETRY_WORKSPACE=@iterate-com/streams-example-app TEST_TELEMETRY_ARTIFACT_FILE=${streamsExampleVitestRetryTelemetryFile} timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm vitest > /tmp/os-preview-streams-example-vitest.log 2>&1 & vitest_pid=$!`,
         'wait "$install_pid" || { cat /tmp/os-preview-streams-example-pw-install.log; exit 1; }',
         // Capture Playwright's exit without aborting (set -e) so the vitest
         // sub-lane always finishes and its log is replayed.
-        `PW_OK=0; timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
+        `PW_OK=0; TEST_TELEMETRY_WORKSPACE=@iterate-com/streams-example-app timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm playwright || PW_OK=$?`,
         'VITEST_OK=0; wait "$vitest_pid" || VITEST_OK=$?',
         "cat /tmp/os-preview-streams-example-vitest.log",
         '[ "$VITEST_OK" -eq 0 ] && [ "$PW_OK" -eq 0 ]',
@@ -2321,10 +2367,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
+    previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/dummy-petshop")],
     previewTestCommandArgs: [
       "bash",
       "-c",
-      `rm -f ${dummyPetshopVitestTelemetryFile}; TEST_TELEMETRY_ARTIFACT_FILE=${dummyPetshopVitestTelemetryFile} pnpm test:e2e`,
+      `rm -f ${dummyPetshopVitestTelemetryFile}; TEST_TELEMETRY_WORKSPACE=@iterate-com/dummy-petshop TEST_TELEMETRY_ARTIFACT_FILE=${dummyPetshopVitestTelemetryFile} pnpm test:e2e`,
     ],
     collectTestTelemetry: async () =>
       readTestTelemetryLane("dummy-petshop vitest lane", () =>

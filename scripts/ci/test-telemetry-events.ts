@@ -1,10 +1,16 @@
 import { isAbsolute, relative, sep as pathSeparator } from "node:path";
 import {
-  TEST_TELEMETRY_INCOMPLETE_ERROR_NAME,
   type TestTelemetryArtifact,
+  type TestTelemetryArtifactSource,
   type TestTelemetryContext,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { systemEvent, type PostHogEvent } from "./posthog-events.ts";
+import {
+  countTestTelemetryArtifactSources,
+  testTelemetryArtifactIncomplete,
+  testTelemetryArtifactSourceLabel,
+  type MissingArtifactSource,
+} from "./test-telemetry-completeness.ts";
 
 const MAX_DETAIL_EVENTS_PER_PARENT = 100;
 
@@ -16,18 +22,7 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
     artifact_id: artifact.artifactId,
     artifact_producer: artifact.producer,
     test_run_id: artifact.artifactId,
-    repository: artifact.ci.repository,
-    head_sha: artifact.ci.headSha,
-    branch: artifact.ci.branch,
-    pull_request_number: artifact.ci.pullRequestNumber,
-    workflow_name: artifact.ci.workflowName,
-    workflow_run_id: artifact.ci.workflowRunId,
-    workflow_run_attempt: artifact.ci.workflowRunAttempt,
-    workflow_run_url: artifact.ci.workflowRunUrl,
-    job_name: artifact.ci.jobName,
-    runner_provider: artifact.ci.runnerProvider,
-    depot_job_url: artifact.ci.depotJobUrl,
-    execution_context: artifact.ci.executionContext,
+    ...ciProperties(artifact),
   };
   const event = (
     name: string,
@@ -286,8 +281,107 @@ export function testTelemetryEvents(artifact: TestTelemetryArtifact): PostHogEve
   return events;
 }
 
-export function testTelemetryArtifactIncomplete(artifact: TestTelemetryArtifact) {
-  return artifact.run.error?.name === TEST_TELEMETRY_INCOMPLETE_ERROR_NAME;
+/** One job-grain event makes wholly missing runner evidence queryable. */
+export function testTelemetryFinalizerEvent(input: {
+  artifactCount: number;
+  cancelled: boolean;
+  expectedArtifactSources: readonly TestTelemetryArtifactSource[];
+  expectedWorkspaces: readonly string[];
+  foreignArtifactIds: readonly string[];
+  incompleteArtifactIds: readonly string[];
+  missingArtifactSources: readonly MissingArtifactSource[];
+  missingWorkspaces: readonly string[];
+  observedArtifactSourceCount: number;
+  observedWorkspaceCount: number;
+  primaryArtifact: TestTelemetryArtifact;
+  runnerEventCount: number;
+}): PostHogEvent {
+  const { ci } = input.primaryArtifact;
+  const identity = [
+    "ci-test-finalizer",
+    ci.repository,
+    ci.workflowRunId,
+    ci.workflowRunAttempt,
+    ci.jobName ?? "job",
+  ].join(":");
+  const incomplete =
+    input.incompleteArtifactIds.length > 0 ||
+    input.foreignArtifactIds.length > 0 ||
+    input.missingArtifactSources.length > 0 ||
+    input.missingWorkspaces.length > 0;
+  const status = input.cancelled ? "cancelled" : incomplete ? "failed" : "passed";
+  const testKinds = new Set(
+    input.expectedArtifactSources.length > 0
+      ? input.expectedArtifactSources.map(({ testKind }) => testKind)
+      : [input.primaryArtifact.context.testKind],
+  );
+  const timestamp = input.primaryArtifact.run.finishedAt;
+  const missingArtifactSourceCount = input.missingArtifactSources.reduce(
+    (total, { missingCount }) => total + missingCount,
+    0,
+  );
+
+  return systemEvent(
+    "ci test telemetry finalized",
+    identity,
+    identity,
+    {
+      ...ciProperties(input.primaryArtifact),
+      framework: "mixed",
+      test_kind: testKinds.size === 1 ? [...testKinds][0] : "mixed",
+      lane: "telemetry-finalizer",
+      status,
+      failed: !input.cancelled && incomplete,
+      telemetry_incomplete: incomplete,
+      artifact_count: input.artifactCount,
+      runner_event_count: input.runnerEventCount,
+      expected_workspace_count: input.expectedWorkspaces.length,
+      observed_workspace_count: input.observedWorkspaceCount,
+      missing_workspace_count: input.missingWorkspaces.length,
+      missing_workspaces: input.missingWorkspaces,
+      expected_artifact_source_count: input.expectedArtifactSources.length,
+      observed_artifact_source_count: input.observedArtifactSourceCount,
+      matched_expected_artifact_source_count:
+        input.expectedArtifactSources.length - missingArtifactSourceCount,
+      missing_artifact_source_count: missingArtifactSourceCount,
+      expected_artifact_sources: countedArtifactSourceLabels(input.expectedArtifactSources),
+      missing_artifact_sources: input.missingArtifactSources.map(
+        ({ source, expectedCount, observedCount, missingCount, ciScope }) =>
+          `${testTelemetryArtifactSourceLabel(source)} [run ${ciScope.workflowRunId}/${ciScope.workflowRunAttempt}${ciScope.jobName ? ` job ${ciScope.jobName}` : ""}] (expected ${expectedCount}, observed ${observedCount}, missing ${missingCount})`,
+      ),
+      incomplete_artifact_count: input.incompleteArtifactIds.length,
+      incomplete_artifact_ids: input.incompleteArtifactIds,
+      foreign_artifact_count: input.foreignArtifactIds.length,
+      foreign_artifact_ids: input.foreignArtifactIds,
+    },
+    timestamp,
+  );
+}
+
+function countedArtifactSourceLabels(sources: readonly TestTelemetryArtifactSource[]) {
+  return [...countTestTelemetryArtifactSources(sources).values()].map(({ count, source }) =>
+    count === 1
+      ? testTelemetryArtifactSourceLabel(source)
+      : `${testTelemetryArtifactSourceLabel(source)} x${count}`,
+  );
+}
+
+function ciProperties(artifact: TestTelemetryArtifact) {
+  const { ci } = artifact;
+  return {
+    repository: ci.repository,
+    head_sha: ci.headSha,
+    branch: ci.branch,
+    pull_request_number: ci.pullRequestNumber,
+    workflow_name: ci.workflowName,
+    workflow_run_id: ci.workflowRunId,
+    workflow_run_attempt: ci.workflowRunAttempt,
+    workflow_run_url: ci.workflowRunUrl,
+    job_name: ci.jobName,
+    runner_provider: ci.runnerProvider,
+    depot_job_url: ci.depotJobUrl,
+    execution_context: ci.executionContext,
+  };
 }
 
 function testFailed(test: TestTelemetryArtifact["tests"][number]) {

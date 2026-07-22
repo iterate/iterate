@@ -3,7 +3,13 @@ import { join, relative, resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { sendPostHogEvents } from "./posthog-events.ts";
-import { testTelemetryArtifactIncomplete, testTelemetryEvents } from "./test-telemetry-events.ts";
+import {
+  analyzeTestTelemetryCompleteness,
+  testTelemetryArtifactSourceLabel,
+  type MissingArtifactSource,
+  type TestTelemetryCompleteness,
+} from "./test-telemetry-completeness.ts";
+import { testTelemetryEvents, testTelemetryFinalizerEvent } from "./test-telemetry-events.ts";
 
 const DEFAULT_ARTIFACT_ROOT = "test-results/ci-telemetry";
 
@@ -36,29 +42,58 @@ export async function finalizeTestTelemetry(options: {
   if (loaded.length === 0 && !options.cancelled) {
     throw new Error(`No test telemetry artifacts found below ${rawDirectory}`);
   }
-  const events = loaded.flatMap(({ artifact }) => testTelemetryEvents(artifact));
-  const incompleteArtifactIds = loaded
-    .filter(({ artifact }) => testTelemetryArtifactIncomplete(artifact))
-    .map(({ artifact }) => artifact.artifactId);
-  const observedWorkspaces = new Set(
-    loaded.flatMap(({ artifact }) =>
-      artifact.context.workspace === undefined ? [] : [artifact.context.workspace],
-    ),
+  const runnerEvents = loaded.flatMap(({ artifact }) => testTelemetryEvents(artifact));
+  const completeness = analyzeTestTelemetryCompleteness(
+    loaded.map(({ artifact }) => artifact),
+    options.expectedWorkspaces ?? [],
   );
-  const missingWorkspaces = (options.expectedWorkspaces ?? []).filter(
-    (workspace) => !observedWorkspaces.has(workspace),
-  );
+  const {
+    expectedArtifactSources,
+    foreignArtifactIds,
+    incompleteArtifactIds,
+    missingArtifactSources,
+    missingWorkspaces,
+    observedArtifactSources,
+    observedWorkspaces,
+    primaryArtifact,
+  } = completeness;
+  const events = [
+    ...runnerEvents,
+    ...(primaryArtifact
+      ? [
+          testTelemetryFinalizerEvent({
+            artifactCount: loaded.length,
+            cancelled: options.cancelled ?? false,
+            expectedArtifactSources,
+            expectedWorkspaces: options.expectedWorkspaces ?? [],
+            foreignArtifactIds,
+            incompleteArtifactIds,
+            missingArtifactSources,
+            missingWorkspaces,
+            observedArtifactSourceCount: observedArtifactSources.length,
+            observedWorkspaceCount: observedWorkspaces.length,
+            primaryArtifact,
+            runnerEventCount: runnerEvents.length,
+          }),
+        ]
+      : []),
+  ];
   const normalizedDirectory = join(artifactRoot, "normalized");
   await mkdir(normalizedDirectory, { recursive: true });
   await writeNormalizedOutput({
     artifactRoot,
     cancelled: options.cancelled ?? false,
     events,
+    expectedArtifactSources,
     expectedWorkspaces: options.expectedWorkspaces ?? [],
+    foreignArtifactIds,
     incompleteArtifactIds,
     loaded,
+    missingArtifactSources,
     missingWorkspaces,
     normalizedDirectory,
+    observedArtifactSources,
+    observedWorkspaces,
   });
   console.log(
     `[test-telemetry] normalized ${loaded.length} artifact(s) into ${events.length} event(s)`,
@@ -69,8 +104,21 @@ export async function finalizeTestTelemetry(options: {
       ...(missingWorkspaces.length > 0
         ? [`Missing expected test telemetry workspaces: ${missingWorkspaces.join(", ")}`]
         : []),
+      ...(missingArtifactSources.length > 0
+        ? [
+            `Missing expected test telemetry artifact sources: ${missingArtifactSources
+              .map(
+                ({ source, expectedCount, observedCount }) =>
+                  `${testTelemetryArtifactSourceLabel(source)} (expected ${expectedCount}, observed ${observedCount})`,
+              )
+              .join(", ")}`,
+          ]
+        : []),
       ...(incompleteArtifactIds.length > 0
         ? [`Incomplete test telemetry artifacts: ${incompleteArtifactIds.join(", ")}`]
+        : []),
+      ...(foreignArtifactIds.length > 0
+        ? [`Foreign test telemetry artifacts: ${foreignArtifactIds.join(", ")}`]
         : []),
     ];
     if (failures.length > 0) throw new Error(failures.join("; "));
@@ -82,11 +130,16 @@ async function writeNormalizedOutput(input: {
   artifactRoot: string;
   cancelled: boolean;
   events: ReturnType<typeof testTelemetryEvents>;
+  expectedArtifactSources: TestTelemetryCompleteness["expectedArtifactSources"];
   expectedWorkspaces: readonly string[];
+  foreignArtifactIds: readonly string[];
   incompleteArtifactIds: readonly string[];
   loaded: Array<{ artifact: TestTelemetryArtifact; file: string }>;
+  missingArtifactSources: readonly MissingArtifactSource[];
   missingWorkspaces: readonly string[];
   normalizedDirectory: string;
+  observedArtifactSources: TestTelemetryCompleteness["observedArtifactSources"];
+  observedWorkspaces: readonly string[];
 }) {
   await writeFile(
     join(input.normalizedDirectory, "posthog-events.json"),
@@ -99,9 +152,14 @@ async function writeNormalizedOutput(input: {
         artifactCount: input.loaded.length,
         cancelled: input.cancelled,
         eventCount: input.events.length,
+        expectedArtifactSources: input.expectedArtifactSources,
         expectedWorkspaces: input.expectedWorkspaces,
+        foreignArtifactIds: input.foreignArtifactIds,
         incompleteArtifactIds: input.incompleteArtifactIds,
+        missingArtifactSources: input.missingArtifactSources,
         missingWorkspaces: input.missingWorkspaces,
+        observedArtifactSources: input.observedArtifactSources,
+        observedWorkspaces: input.observedWorkspaces,
         artifacts: input.loaded.map(({ artifact, file }) => ({
           artifactId: artifact.artifactId,
           producer: artifact.producer,

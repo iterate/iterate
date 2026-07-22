@@ -259,6 +259,47 @@ describe("preview workflow scope", () => {
     });
   });
 
+  test("declares and pins every runner artifact source started by preview e2e", () => {
+    expect(
+      Object.fromEntries(
+        Object.entries(cloudflarePreviewApps).map(([slug, app]) => [
+          slug,
+          app.previewTestArtifactSources.map(
+            ({ producer, framework, testKind, lane, workspace }) =>
+              `${producer}:${framework}/${testKind}/${lane}@${workspace}`,
+          ),
+        ]),
+      ),
+    ).toEqual({
+      auth: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/auth"],
+      "dummy-petshop": [
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
+      ],
+      os: [
+        "onboarding-smoke:script/e2e/onboarding-smoke@iterate-root",
+        "tui-quarantine:script/e2e/tui@iterate-root",
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/os",
+        "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root",
+      ],
+      semaphore: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/semaphore"],
+      "streams-example-app": [
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/streams-example-app",
+        "playwright-telemetry-reporter:playwright/e2e/playwright@@iterate-com/streams-example-app",
+      ],
+    });
+
+    for (const app of Object.values(cloudflarePreviewApps)) {
+      const command = app.previewTestCommandArgs.join(" ");
+      for (const workspace of new Set(
+        app.previewTestArtifactSources.map(({ workspace }) => workspace),
+      )) {
+        expect(command, `${app.slug} must pin ${workspace}`).toContain(
+          `TEST_TELEMETRY_WORKSPACE=${workspace}`,
+        );
+      }
+    }
+  });
+
   test("runs the auth OAuth provider e2e against its deployed preview", () => {
     // The auth lane runs the full apps/auth/e2e suite (authorize → code →
     // token exchange), not a discovery curl: a bare metadata probe is what
@@ -735,7 +776,9 @@ describe("preview test commands", () => {
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain("env TEST_TELEMETRY_LANE=playwright PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
+    expect(script).toContain(
+      "env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1",
+    );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
     expect(script).toContain("TUI_PID");
