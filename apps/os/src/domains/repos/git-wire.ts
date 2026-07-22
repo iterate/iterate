@@ -254,6 +254,11 @@ function applyDelta(base: Uint8Array, program: Uint8Array): Uint8Array {
         }
       }
       if (copySize === 0) copySize = 0x10000;
+      if (copyOffset + copySize > base.length || written + copySize > resultSize) {
+        throw new Error(
+          `delta copy outside its base (offset ${copyOffset}, size ${copySize}, base ${base.length})`,
+        );
+      }
       out.set(base.subarray(copyOffset, copyOffset + copySize), written);
       written += copySize;
     } else if (op > 0) {
@@ -286,23 +291,39 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
     throw new Error("pack checksum mismatch");
   }
   const view = new DataView(pack.buffer, pack.byteOffset, pack.byteLength);
+  const version = view.getUint32(4);
+  if (version !== 2) throw new Error(`unsupported pack version ${version}`);
   const count = view.getUint32(8);
-  const byOffset = new Map<number, { payload: Uint8Array; type: GitObjectType }>();
-  const pendingRef: { baseOid: string; offset: number; program: Uint8Array }[] = [];
+
+  // Phase 1: walk every entry into a descriptor — no delta resolution yet, so
+  // legal packs whose deltas reference entries in ANY order (ofs-on-ref
+  // included) parse the same way.
+  type Entry = {
+    baseOffset?: number;
+    baseOid?: string;
+    offset: number;
+    payload: Uint8Array;
+    type?: GitObjectType;
+  };
+  const entries: Entry[] = [];
+  const byEntryOffset = new Map<number, Entry>();
   let cursor = 12;
   for (let index = 0; index < count; index++) {
     const entryOffset = cursor;
     let byte = pack[cursor]!;
     cursor += 1;
     const typeCode = (byte >> 4) & 0b111;
-    // The header's size varint is advisory — the zlib stream finds its own
-    // end — so its continuation bytes are consumed and the value dropped.
+    let declaredSize = byte & 0b1111;
+    let shift = 4;
     while (byte & 0x80) {
       byte = pack[cursor]!;
       cursor += 1;
+      declaredSize |= (byte & 0x7f) << shift;
+      shift += 7;
     }
     const kind = OBJECT_TYPE_CODES[typeCode];
     if (kind === undefined) throw new Error(`unknown pack object type ${typeCode}`);
+    const entry: Entry = { offset: entryOffset, payload: new Uint8Array(0) };
     if (kind === "ofs-delta") {
       let distanceByte = pack[cursor]!;
       cursor += 1;
@@ -312,57 +333,82 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
         cursor += 1;
         distance = ((distance + 1) << 7) | (distanceByte & 0x7f);
       }
-      const inflated = inflateAt(pack, cursor);
-      cursor += inflated.consumed;
-      const base = byOffset.get(entryOffset - distance);
-      if (base === undefined)
-        throw new Error(`ofs-delta base at ${entryOffset - distance} not seen`);
-      byOffset.set(entryOffset, {
-        payload: applyDelta(base.payload, inflated.out),
-        type: base.type,
-      });
+      entry.baseOffset = entryOffset - distance;
     } else if (kind === "ref-delta") {
-      const baseOid = toHex(pack.subarray(cursor, cursor + 20));
+      entry.baseOid = toHex(pack.subarray(cursor, cursor + 20));
       cursor += 20;
-      const inflated = inflateAt(pack, cursor);
-      cursor += inflated.consumed;
-      pendingRef.push({ baseOid, offset: entryOffset, program: inflated.out });
     } else {
-      const inflated = inflateAt(pack, cursor);
-      cursor += inflated.consumed;
-      byOffset.set(entryOffset, { payload: inflated.out, type: kind });
+      entry.type = kind;
     }
-  }
-  // Ref-deltas may point at any in-pack object (including other ref-deltas);
-  // resolve in passes against an oid index — linear per pass, and delta
-  // chains are shallow in practice.
-  const objects: RawGitObject[] = [];
-  const byOid = new Map<string, RawGitObject>();
-  for (const object of byOffset.values()) {
-    const resolved = { oid: await hashObject(object.type, object.payload), ...object };
-    objects.push(resolved);
-    byOid.set(resolved.oid, resolved);
-  }
-  let remaining = pendingRef;
-  while (remaining.length > 0) {
-    const next: typeof remaining = [];
-    for (const entry of remaining) {
-      const base = byOid.get(entry.baseOid);
-      if (base === undefined) {
-        next.push(entry);
-        continue;
-      }
-      const payload = applyDelta(base.payload, entry.program);
-      const resolved = { oid: await hashObject(base.type, payload), payload, type: base.type };
-      objects.push(resolved);
-      byOid.set(resolved.oid, resolved);
-    }
-    if (next.length === remaining.length) {
+    const inflated = inflateAt(pack, cursor);
+    cursor += inflated.consumed;
+    if (inflated.out.length !== declaredSize) {
       throw new Error(
-        `thin pack: ${next.length} ref-delta(s) reference bases outside the pack (first: ${next[0]!.baseOid})`,
+        `pack entry at ${entryOffset} inflated to ${inflated.out.length} bytes, header declared ${declaredSize}`,
       );
     }
-    remaining = next;
+    entry.payload = inflated.out;
+    entries.push(entry);
+    byEntryOffset.set(entryOffset, entry);
+  }
+  if (cursor !== pack.length - 20) {
+    throw new Error(`pack has trailing bytes: parsed to ${cursor}, trailer at ${pack.length - 20}`);
+  }
+
+  // Phase 2: resolve each entry through a memoized dependency walk. Delta
+  // chains are finite; a cycle or missing base throws.
+  const resolved = new Map<Entry, { payload: Uint8Array; type: GitObjectType }>();
+  const byOid = new Map<string, { payload: Uint8Array; type: GitObjectType }>();
+  const resolving = new Set<Entry>();
+  const resolve = (entry: Entry): { payload: Uint8Array; type: GitObjectType } => {
+    const done = resolved.get(entry);
+    if (done !== undefined) return done;
+    if (resolving.has(entry)) throw new Error("delta cycle in pack");
+    resolving.add(entry);
+    let out: { payload: Uint8Array; type: GitObjectType };
+    if (entry.type !== undefined) {
+      out = { payload: entry.payload, type: entry.type };
+    } else if (entry.baseOffset !== undefined) {
+      const base = byEntryOffset.get(entry.baseOffset);
+      if (base === undefined) throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
+      const baseResolved = resolve(base);
+      out = { payload: applyDelta(baseResolved.payload, entry.payload), type: baseResolved.type };
+    } else {
+      const base = byOid.get(entry.baseOid!);
+      if (base === undefined) {
+        throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
+      }
+      out = { payload: applyDelta(base.payload, entry.payload), type: base.type };
+    }
+    resolving.delete(entry);
+    resolved.set(entry, out);
+    return out;
+  };
+  // Ref-delta bases are found by oid, so hash non-delta entries first, then
+  // sweep deltas in passes (a ref-delta may target another delta's RESULT).
+  const objects: RawGitObject[] = [];
+  const emit = async (entry: Entry) => {
+    const out = resolve(entry);
+    const oid = await hashObject(out.type, out.payload);
+    byOid.set(oid, out);
+    objects.push({ oid, ...out });
+  };
+  for (const entry of entries) if (entry.type !== undefined) await emit(entry);
+  let pending = entries.filter((entry) => entry.type === undefined);
+  while (pending.length > 0) {
+    const next: Entry[] = [];
+    for (const entry of pending) {
+      try {
+        await emit(entry);
+      } catch (error) {
+        if (String(error).includes("thin pack")) next.push(entry);
+        else throw error;
+      }
+    }
+    if (next.length === pending.length) {
+      throw new Error(`thin pack: ${next.length} delta(s) reference bases outside the pack`);
+    }
+    pending = next;
   }
   return objects;
 }
@@ -482,13 +528,22 @@ export function encodeReceivePackRequest(input: {
   return concat([pktLine(update), FLUSH, input.pack]);
 }
 
-export function parseReceivePackResponse(body: Uint8Array): { ok: boolean; refErrors: string[] } {
+export function parseReceivePackResponse(
+  body: Uint8Array,
+  expectedRef: string,
+): { ok: boolean; refErrors: string[] } {
   // The report may arrive sidebanded (channel 1 wraps an inner pkt stream) or
-  // plain; sniff the first frame.
+  // plain; sniff the first frame. Channel 3 carries fatal detail.
   const frames = [...pktFrames(body)].filter((frame) => frame.kind === "line");
   const first = frames[0]?.payload ?? new Uint8Array(0);
+  const refErrors: string[] = [];
   let report: Uint8Array;
   if (first.length > 0 && (first[0] === 1 || first[0] === 2 || first[0] === 3)) {
+    for (const frame of frames) {
+      if (frame.payload[0] === 3) {
+        refErrors.push(textDecoder.decode(frame.payload.subarray(1)).trim());
+      }
+    }
     report = concat(
       frames.filter((frame) => frame.payload[0] === 1).map((frame) => frame.payload.subarray(1)),
     );
@@ -496,18 +551,26 @@ export function parseReceivePackResponse(body: Uint8Array): { ok: boolean; refEr
     report = body;
   }
   let unpackOk = false;
-  const refErrors: string[] = [];
+  let expectedRefOk = false;
   for (const frame of pktFrames(report)) {
     if (frame.kind !== "line") continue;
     const line = pktText(frame.payload);
     if (line === "unpack ok") unpackOk = true;
     else if (line.startsWith("unpack ")) refErrors.push(line);
+    else if (line === `ok ${expectedRef}`) expectedRefOk = true;
+    else if (line.startsWith("ok ")) refErrors.push(`unexpected ref updated: ${line.slice(3)}`);
     else if (line.startsWith("ng ")) {
       const [, ref, ...reason] = line.split(" ");
       refErrors.push(`${ref}: ${reason.join(" ")}`);
     }
   }
-  return { ok: unpackOk && refErrors.length === 0, refErrors };
+  // Success is EXACTLY: unpack ok + a status line confirming OUR ref. A
+  // truncated report (unpack ok, then nothing) must read as failure — the
+  // caller treats non-ok as rejected/unknown, never as applied.
+  if (unpackOk && !expectedRefOk && refErrors.length === 0) {
+    refErrors.push(`no status line for ${expectedRef} in the receive-pack report`);
+  }
+  return { ok: unpackOk && expectedRefOk && refErrors.length === 0, refErrors };
 }
 
 // -- transport ---------------------------------------------------------------------
@@ -561,6 +624,9 @@ export function createGitWireTransport(input: {
     lsRefs: async (prefixes) =>
       parseLsRefs(await post("git-upload-pack", encodeLsRefsRequest({ prefixes }))),
     push: async (request) =>
-      parseReceivePackResponse(await post("git-receive-pack", encodeReceivePackRequest(request))),
+      parseReceivePackResponse(
+        await post("git-receive-pack", encodeReceivePackRequest(request)),
+        request.ref,
+      ),
   };
 }

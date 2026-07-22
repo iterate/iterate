@@ -11,8 +11,8 @@ import {
   type LsRefsEntry,
   type RawGitObject,
 } from "./git-wire.ts";
-import { createLazyRepoReader, LazyRepoConflict } from "./lazy-repo-reader.ts";
-import { sqliteGitObjectStore } from "./repo-object-store.ts";
+import { createLazyRepoReader } from "./lazy-repo-reader.ts";
+import { CorruptStoredObject, sqliteGitObjectStore } from "./repo-object-store.ts";
 
 const sqlite = createRequire(import.meta.url)("node:sqlite") as {
   DatabaseSync: new (path: string) => {
@@ -24,12 +24,28 @@ const sqlite = createRequire(import.meta.url)("node:sqlite") as {
   };
 };
 
-/** The Durable Object sql surface over Node's real SQLite. */
+/**
+ * The Durable Object sql surface over Node's real SQLite, with REAL
+ * transactions (BEGIN IMMEDIATE / COMMIT / ROLLBACK) and a fault hook: arm
+ * `failOn` to make the Nth statement matching a fragment throw mid-transaction
+ * — rollback behavior is then observable, not assumed.
+ */
 function nodeStorage() {
   const db = new sqlite.DatabaseSync(":memory:");
+  const fault = { armed: null as null | { fragment: string; remaining: number } };
   return {
+    failOn: (fragment: string, nth = 1) => {
+      fault.armed = { fragment, remaining: nth };
+    },
     sql: {
       exec: (query: string, ...bindings: unknown[]) => {
+        if (fault.armed !== null && query.includes(fault.armed.fragment)) {
+          fault.armed.remaining -= 1;
+          if (fault.armed.remaining <= 0) {
+            fault.armed = null;
+            throw new Error(`injected fault on: ${query.slice(0, 40)}…`);
+          }
+        }
         const statement = db.prepare(query);
         if (/^\s*(SELECT|PRAGMA)/i.test(query)) {
           const rows = statement.all(...(bindings as never[]));
@@ -39,16 +55,27 @@ function nodeStorage() {
         return { toArray: () => [] };
       },
     },
-    transactionSync: <T>(closure: () => T): T => closure(),
+    transactionSync: <T>(closure: () => T): T => {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = closure();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
   };
 }
 
 const text = new TextEncoder();
+const AUTHOR = { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" };
 
 /**
  * An in-memory Artifacts remote speaking the PROBED gitty semantics:
- * closure-walk from wants, recursive exclusion of have-closures, deepen 1
- * cutting parents, missing wants silently dropped, CAS on push.
+ * closure-walk from wants, recursive exclusion of in-closure have-closures,
+ * deepen 1 cutting parents, missing wants silently dropped, CAS on push.
  */
 function fakeRemote() {
   const objects = new Map<string, RawGitObject>();
@@ -58,6 +85,7 @@ function fakeRemote() {
     lastPushPackOids: [] as string[],
     pushes: 0,
   };
+  const faults = { lsRefsErrors: 0, pushError: null as null | "apply-then-throw" | "throw" };
 
   const closure = (oid: string, out: Set<string>, cutParents: boolean) => {
     if (out.has(oid)) return;
@@ -75,6 +103,17 @@ function fakeRemote() {
     }
   };
 
+  const applyPush = async (pack: Uint8Array, ref: string, oldOid: string, newOid: string) => {
+    const current = refs.get(ref) ?? "0".repeat(40);
+    if (current !== oldOid) return { ok: false, refErrors: [`${ref}: stale ref`] };
+    const unpacked = await parsePack(pack);
+    log.lastPushPackOids = unpacked.map((object) => object.oid);
+    for (const object of unpacked) objects.set(object.oid, object);
+    if (newOid === "0".repeat(40)) refs.delete(ref);
+    else refs.set(ref, newOid);
+    return { ok: true, refErrors: [] };
+  };
+
   const wire: GitWireTransport = {
     fetchObjects: async ({ deepen, haves = [], wants }) => {
       log.fetches.push({ haves: [...haves], wants: [...wants] });
@@ -82,8 +121,6 @@ function fakeRemote() {
       for (const want of wants) closure(want, wanted, deepen === 1);
       const excluded = new Set<string>();
       for (const have of haves) {
-        // gitty excludes a have's closure when the have is itself part of
-        // the wanted closure (probed: in-closure tree haves ACK + exclude).
         if (wanted.has(have)) closure(have, excluded, false);
       }
       return [...wanted]
@@ -91,6 +128,10 @@ function fakeRemote() {
         .map((oid) => objects.get(oid)!);
     },
     lsRefs: async () => {
+      if (faults.lsRefsErrors > 0) {
+        faults.lsRefsErrors -= 1;
+        throw new Error("ls-refs transiently unavailable");
+      }
       // gitty ignores ref-prefix filters; always return everything.
       const entries: LsRefsEntry[] = [];
       for (const [name, oid] of refs) entries.push({ name, oid });
@@ -98,14 +139,16 @@ function fakeRemote() {
     },
     push: async ({ newOid, oldOid, pack, ref }) => {
       log.pushes += 1;
-      const current = refs.get(ref) ?? "0".repeat(40);
-      if (current !== oldOid) return { ok: false, refErrors: [`${ref}: stale ref`] };
-      const unpacked = await parsePack(pack);
-      log.lastPushPackOids = unpacked.map((object) => object.oid);
-      for (const object of unpacked) objects.set(object.oid, object);
-      if (newOid === "0".repeat(40)) refs.delete(ref);
-      else refs.set(ref, newOid);
-      return { ok: true, refErrors: [] };
+      if (faults.pushError === "throw") {
+        faults.pushError = null;
+        throw new Error("socket closed before response");
+      }
+      if (faults.pushError === "apply-then-throw") {
+        faults.pushError = null;
+        await applyPush(pack, ref, oldOid, newOid);
+        throw new Error("response lost after the server applied the push");
+      }
+      return applyPush(pack, ref, oldOid, newOid);
     },
   };
 
@@ -133,8 +176,10 @@ function fakeRemote() {
     return oid;
   };
 
-  return { log, objects, putBlob, putCommit, putTree, refs, wire };
+  return { faults, log, objects, putBlob, putCommit, putTree, refs, wire };
 }
+
+type Remote = ReturnType<typeof fakeRemote>;
 
 /** Seed: tasks/one.md, tasks/two.md, sub/tasks/three.md, big.bin, tool (exec). */
 async function seededRemote() {
@@ -161,16 +206,53 @@ async function seededRemote() {
   return { head, remote, root };
 }
 
-function subject(remote: ReturnType<typeof fakeRemote>) {
-  const store = sqliteGitObjectStore(nodeStorage());
-  return { reader: createLazyRepoReader({ branch: "main", store, wire: remote.wire }), store };
+function subject(remote: Remote) {
+  const storage = nodeStorage();
+  const store = sqliteGitObjectStore(storage);
+  return {
+    reader: createLazyRepoReader({ branch: "main", store, wire: remote.wire }),
+    storage,
+    store,
+  };
+}
+
+const syncTip = async (
+  reader: ReturnType<typeof createLazyRepoReader>,
+): Promise<{ commitOid: string; rootTreeOid: string }> =>
+  reader.syncToHead(await reader.resolveRemoteHead());
+
+/** Push a one-file add/edit as an EXTERNAL writer, returning the new head. */
+async function externalEdit(remote: Remote, path: string, content: string) {
+  const head = remote.refs.get("refs/heads/main")!;
+  const root = parseCommit(remote.objects.get(head)!.payload).tree;
+  const segments = path.split("/");
+  const rebuild = async (treeOid: string, depth: number): Promise<string> => {
+    const entries = parseTree(remote.objects.get(treeOid)!.payload);
+    const name = segments[depth]!;
+    if (depth === segments.length - 1) {
+      const blob = await remote.putBlob(content);
+      const next = entries.some((entry) => entry.name === name)
+        ? entries.map((entry) => (entry.name === name ? { ...entry, oid: blob } : entry))
+        : [...entries, { mode: "100644", name, oid: blob }];
+      return remote.putTree(next);
+    }
+    const child = entries.find((entry) => entry.name === name)!;
+    const rebuilt = await rebuild(child.oid, depth + 1);
+    return remote.putTree(
+      entries.map((entry) => (entry.name === name ? { ...entry, oid: rebuilt } : entry)),
+    );
+  };
+  const newRoot = await rebuild(root, 0);
+  const newHead = await remote.putCommit(newRoot, [head], `edit ${path}\n`);
+  remote.refs.set("refs/heads/main", newHead);
+  return newHead;
 }
 
 describe("sync", () => {
   test("first sync ingests the snapshot and builds the manifest", async () => {
     const { head, remote } = await seededRemote();
     const { reader } = subject(remote);
-    const synced = await reader.syncToHead();
+    const synced = await syncTip(reader);
     expect(synced.commitOid).toBe(head);
     expect(reader.listPaths()).toEqual([
       "big.bin",
@@ -182,87 +264,168 @@ describe("sync", () => {
     expect(remote.log.fetches[0]?.haves).toEqual([]); // nothing to exclude yet
   });
 
-  test("incremental sync sends every known dir tree as a have and applies the delta", async () => {
-    const { remote } = await seededRemote();
-    const { reader, store } = subject(remote);
-    await reader.syncToHead();
-
-    // The remote moves: tasks/one.md edited (a fresh remote commit).
-    const oneV2 = await remote.putBlob("# one v2\n");
-    const tasksTree = await remote.putTree([
-      { mode: "100644", name: "one.md", oid: oneV2 },
-      { mode: "100644", name: "two.md", oid: await hashObject("blob", text.encode("# two\n")) },
-    ]);
-    const rootEntries = parseTree(
-      remote.objects.get(
-        parseCommit(remote.objects.get(remote.refs.get("refs/heads/main")!)!.payload).tree,
-      )!.payload,
-    );
-    const newRoot = await remote.putTree(
-      rootEntries.map((entry) => (entry.name === "tasks" ? { ...entry, oid: tasksTree } : entry)),
-    );
-    const newHead = await remote.putCommit(
-      newRoot,
-      [remote.refs.get("refs/heads/main")!],
-      "edit\n",
-    );
-    remote.refs.set("refs/heads/main", newHead);
-
-    const before = remote.log.fetches.length;
-    const synced = await reader.syncToHead();
-    expect(synced.commitOid).toBe(newHead);
-    const syncFetch = remote.log.fetches[before]!;
-    expect(syncFetch.haves.length).toBeGreaterThan(0); // dir trees rode along
-    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one v2\n"]);
-    // Unchanged manifest rows survived the resync.
-    expect(store.manifestEntries("main", ["sub/tasks/three.md"])[0]?.blobOid).toBeTruthy();
-  });
-
-  test("a no-op sync (same head) fetches nothing", async () => {
+  test("incremental sync sends dir-tree haves and applies only the delta", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
-    await reader.syncToHead();
+    await syncTip(reader);
+    const newHead = await externalEdit(remote, "tasks/one.md", "# one v2\n");
+
+    const before = remote.log.fetches.length;
+    const synced = await syncTip(reader);
+    expect(synced.commitOid).toBe(newHead);
+    expect(remote.log.fetches[before]!.haves.length).toBeGreaterThan(0);
+    await expect(reader.readPaths(["tasks/one.md", "sub/tasks/three.md"])).resolves.toEqual([
+      "# one v2\n",
+      "# three\n",
+    ]);
+  });
+
+  test("a no-op sync (already at target) touches no wire", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
     const fetches = remote.log.fetches.length;
-    await reader.syncToHead();
+    await reader.syncToHead(head);
     expect(remote.log.fetches.length).toBe(fetches);
+  });
+
+  test("a blob moved in from an UNCHANGED directory hydrates by exact oid (server under-send)", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+
+    // The new head copies sub/tasks/three.md's BLOB to tasks/copied.md; sub/
+    // is untouched, so the server's have-closure exclusion swallows the blob.
+    const head = remote.refs.get("refs/heads/main")!;
+    const root = parseCommit(remote.objects.get(head)!.payload).tree;
+    const rootEntries = parseTree(remote.objects.get(root)!.payload);
+    const threeBlob = await hashObject("blob", text.encode("# three\n"));
+    const tasksOid = rootEntries.find((entry) => entry.name === "tasks")!.oid;
+    const tasksEntries = parseTree(remote.objects.get(tasksOid)!.payload);
+    const newTasks = await remote.putTree([
+      ...tasksEntries,
+      { mode: "100644", name: "copied.md", oid: threeBlob },
+    ]);
+    const newRoot = await remote.putTree(
+      rootEntries.map((entry) => (entry.name === "tasks" ? { ...entry, oid: newTasks } : entry)),
+    );
+    const newHead = await remote.putCommit(newRoot, [head], "copy\n");
+    remote.refs.set("refs/heads/main", newHead);
+
+    await syncTip(reader);
+    await expect(reader.readPaths(["tasks/copied.md"])).resolves.toEqual(["# three\n"]);
+  });
+
+  test("a mid-transaction fault rolls the snapshot install back atomically", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader, storage } = subject(remote);
+    await syncTip(reader);
+    const newHead = await externalEdit(remote, "tasks/one.md", "# one v2\n");
+
+    storage.failOn("INSERT INTO git_dir_trees");
+    await expect(reader.syncToHead(newHead)).rejects.toThrow(/injected fault/);
+    // The whole install rolled back: head, manifest, and dirs still name the
+    // OLD snapshot — never a half-applied mixture.
+    expect(reader.head()?.commitOid).toBe(head);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one\n"]);
+
+    await expect(reader.syncToHead(newHead)).resolves.toMatchObject({ commitOid: newHead });
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one v2\n"]);
+  });
+
+  test("concurrent syncs with different targets both apply, in order", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader, store } = subject(remote);
+    const v2Head = await externalEdit(remote, "tasks/one.md", "# racing v2\n");
+
+    const first = reader.syncToHead(head);
+    const second = reader.syncToHead(v2Head);
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.commitOid).toBe(head);
+    expect(b.commitOid).toBe(v2Head);
+    expect(store.head("main")?.commitOid).toBe(v2Head);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# racing v2\n"]);
   });
 });
 
-describe("reads", () => {
-  test("readPaths serves from the store, hydrates evicted blobs by exact oid", async () => {
-    const { remote } = await seededRemote();
-    const { reader, store } = subject(remote);
-    await reader.syncToHead();
-
-    await expect(reader.readPaths(["tasks/one.md", "nope.md"])).resolves.toEqual(["# one\n", null]);
-
-    // Evict everything evictable, then read again: the reader must re-fetch
-    // exactly the blob it needs.
-    store.evictBlobs(0);
-    const fetchesBefore = remote.log.fetches.length;
-    await expect(reader.readPaths(["tasks/two.md"])).resolves.toEqual(["# two\n"]);
-    const hydration = remote.log.fetches[fetchesBefore]!;
-    expect(hydration.wants).toHaveLength(1);
-  });
-
+describe("verified reads", () => {
   test("a 700KB blob round-trips through chunked rows", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
-    await reader.syncToHead();
+    await syncTip(reader);
     const [big] = await reader.readPathBytes(["big.bin"]);
     expect(big?.length).toBe(700 * 1024);
+  });
+
+  test("a mutated chunk is detected, quarantined, and rehydrated", async () => {
+    const { remote } = await seededRemote();
+    const { reader, storage, store } = subject(remote);
+    await syncTip(reader);
+    const [entry] = store.manifestEntries("main", ["tasks/one.md"]);
+    storage.sql.exec(
+      `UPDATE git_object_chunks SET bytes = ? WHERE oid = ?`,
+      text.encode("# EVIL!\n"),
+      entry!.blobOid,
+    );
+    // A direct store read reports corruption and deletes the row…
+    await expect(store.getObject(entry!.blobOid)).rejects.toThrow(CorruptStoredObject);
+    // …and the reader path self-heals by rehydrating the exact oid.
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one\n"]);
+  });
+
+  test("a MISSING chunk (silent truncation) is detected, never served", async () => {
+    const { remote } = await seededRemote();
+    const { reader, storage, store } = subject(remote);
+    await syncTip(reader);
+    const [entry] = store.manifestEntries("main", ["big.bin"]);
+    storage.sql.exec(`DELETE FROM git_object_chunks WHERE oid = ? AND idx = 1`, entry!.blobOid);
+    await expect(store.getObject(entry!.blobOid)).rejects.toThrow(/assembled/);
+    const [healed] = await reader.readPathBytes(["big.bin"]);
+    expect(healed?.length).toBe(700 * 1024);
+  });
+});
+
+describe("lifecycle", () => {
+  test("superseded objects are pruned on every install — storage IS the working set", async () => {
+    const { remote } = await seededRemote();
+    const { reader, storage } = subject(remote);
+    await syncTip(reader);
+    const countRows = () =>
+      storage.sql.exec(`SELECT COUNT(*) AS n FROM git_objects`).toArray()[0]!.n as number;
+    const baseline = countRows();
+
+    for (let round = 1; round <= 5; round++) {
+      const outcome = await reader.commitFiles({
+        author: AUTHOR,
+        changes: [{ content: `# one round ${round}\n`, path: "tasks/one.md" }],
+        message: `round ${round}`,
+      });
+      expect(outcome.kind).toBe("applied");
+    }
+    // Five commits later the object count is UNCHANGED: every superseded
+    // blob, tree, and commit was pruned inside the install transaction.
+    expect(countRows()).toBe(baseline);
+  });
+
+  test("manifestByteSize sums the manifest's blob sizes", async () => {
+    const { remote } = await seededRemote();
+    const { reader, store } = subject(remote);
+    await syncTip(reader);
+    const total = store.manifestByteSize("main");
+    expect(total).toBeGreaterThan(700 * 1024);
+    expect(total).toBeLessThan(701 * 1024 + 100);
   });
 });
 
 describe("lazy commits", () => {
-  test("commit builds locally, pushes CAS, and primes read-your-write", async () => {
+  test("commit builds locally, pushes CAS, and reads back with zero fetches", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
-    await reader.syncToHead();
+    await syncTip(reader);
 
     const fetchesBefore = remote.log.fetches.length;
-    const committed = await reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
       changes: [
         { content: "# one edited\n", path: "tasks/one.md" },
         { content: "# fresh\n", path: "deep/new/tasks/fresh.md" },
@@ -270,67 +433,76 @@ describe("lazy commits", () => {
       ],
       message: "board commit",
     });
-    expect(committed.noChanges).toBe(false);
-    expect(remote.refs.get("refs/heads/main")).toBe(committed.commitOid);
-    // Read-your-write costs zero fetches.
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    expect(outcome.changedPaths).toEqual([
+      "deep/new/tasks/fresh.md",
+      "sub/tasks/three.md",
+      "tasks/one.md",
+    ]);
+    expect(remote.refs.get("refs/heads/main")).toBe(outcome.commitOid);
     await expect(
       reader.readPaths(["tasks/one.md", "deep/new/tasks/fresh.md", "sub/tasks/three.md"]),
     ).resolves.toEqual(["# one edited\n", "# fresh\n", null]);
     expect(remote.log.fetches.length).toBe(fetchesBefore);
-    // Empty directories were pruned: sub/ vanished with its last file.
     expect(reader.listPaths()).not.toContain("sub/tasks/three.md");
 
     // A FRESH reader syncing from the remote converges on identical state.
     const fresh = subject(remote);
-    await fresh.reader.syncToHead();
-    await expect(fresh.reader.readPaths(["deep/new/tasks/fresh.md"])).resolves.toEqual([
-      "# fresh\n",
-    ]);
+    await syncTip(fresh.reader);
     expect(fresh.reader.listPaths()).toEqual(reader.listPaths());
+  });
+
+  test("the pushed pack carries ONLY the changed ancestor chain", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# one v2\n", path: "tasks/one.md" }],
+      message: "one file",
+    });
+    expect(outcome.kind).toBe("applied");
+    // Exactly: 1 blob + tasks/ tree + root tree + commit. sub/'s subtree
+    // never rides, and nothing is duplicated.
+    expect(remote.log.lastPushPackOids).toHaveLength(4);
+    expect(new Set(remote.log.lastPushPackOids).size).toBe(4);
   });
 
   test("two changes with identical content pack ONE blob object", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
-    await reader.syncToHead();
-    const committed = await reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
+    await syncTip(reader);
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
       changes: [
         { content: "# twins\n", path: "tasks/alpha.md" },
         { content: "# twins\n", path: "tasks/beta.md" },
       ],
       message: "identical twins",
     });
-    expect(committed.noChanges).toBe(false);
-    await expect(reader.readPaths(["tasks/alpha.md", "tasks/beta.md"])).resolves.toEqual([
-      "# twins\n",
-      "# twins\n",
-    ]);
-    // The push's pack must not carry the shared blob twice — parsePack in the
-    // fake remote yields one object per entry, so a duplicate would surface
-    // as two identical oids.
+    expect(outcome.kind).toBe("applied");
     const pushedOids = remote.log.lastPushPackOids;
     expect(new Set(pushedOids).size).toBe(pushedOids.length);
   });
 
-  test("preserves executable modes and reports no-op commits", async () => {
+  test("preserves executable modes and reports no-op commits as applied-empty", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
-    await reader.syncToHead();
+    await syncTip(reader);
     const same = await reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
+      author: AUTHOR,
       changes: [{ content: "#!/bin/sh\n", path: "tool" }],
       message: "no-op",
     });
-    expect(same.noChanges).toBe(true);
+    expect(same).toMatchObject({ changedPaths: [], kind: "applied" });
 
-    await reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
+    const changed = await reader.commitFiles({
+      author: AUTHOR,
       changes: [{ content: "#!/bin/sh\necho v2\n", path: "tool" }],
       message: "tool v2",
     });
-    const fresh = subject(remote);
-    await fresh.reader.syncToHead();
+    expect(changed.kind).toBe("applied");
     const head = remote.refs.get("refs/heads/main")!;
     const root = parseCommit(remote.objects.get(head)!.payload).tree;
     const toolEntry = parseTree(remote.objects.get(root)!.payload).find(
@@ -339,81 +511,139 @@ describe("lazy commits", () => {
     expect(toolEntry?.mode).toBe("100755");
   });
 
-  test("a stale head surfaces as LazyRepoConflict", async () => {
+  test("rejects writing under a file or over a directory — classified input errors", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    await expect(
+      reader.commitFiles({
+        author: AUTHOR,
+        changes: [{ content: "x", path: "tool/nested.md" }],
+        message: "under a file",
+      }),
+    ).rejects.toThrow(/"tool" is a file/);
+    await expect(
+      reader.commitFiles({
+        author: AUTHOR,
+        changes: [{ content: "x", path: "tasks" }],
+        message: "over a directory",
+      }),
+    ).rejects.toThrow(/is a directory/);
+  });
+
+  test("deleting every file commits git's canonical empty tree", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: reader.listPaths().map((path) => ({ delete: true as const, path })),
+      message: "scorched earth",
+    });
+    expect(outcome.kind).toBe("applied");
+    expect(reader.listPaths()).toEqual([]);
+    const head = remote.refs.get("refs/heads/main")!;
+    expect(parseCommit(remote.objects.get(head)!.payload).tree).toBe(
+      "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    );
+  });
+
+  test("a stale head is a REJECTED outcome; the post-resync retry carries the true parent", async () => {
     const { remote } = await seededRemote();
     const first = subject(remote);
     const second = subject(remote);
-    await first.reader.syncToHead();
-    await second.reader.syncToHead();
-    await first.reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "a@iterate.com", name: "a" },
+    await syncTip(first.reader);
+    await syncTip(second.reader);
+    const winner = await first.reader.commitFiles({
+      author: AUTHOR,
       changes: [{ content: "# a\n", path: "tasks/one.md" }],
       message: "a wins",
     });
-    await expect(
-      second.reader.commitFiles({
-        author: { date: new Date(1767323045000), email: "b@iterate.com", name: "b" },
-        changes: [{ content: "# b\n", path: "tasks/one.md" }],
-        message: "b loses",
-      }),
-    ).rejects.toThrow(LazyRepoConflict);
-    // After re-syncing, the loser can commit on the new head — and the
-    // result's parent is the WINNER's commit, not the stale pre-conflict head
-    // (the caller's push metadata and tree-patch preconditions hang off it).
-    await second.reader.syncToHead();
-    const winnerHead = remote.refs.get("refs/heads/main")!;
+    expect(winner.kind).toBe("applied");
+    if (winner.kind !== "applied") throw new Error("unreachable");
+    const loser = await second.reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# b\n", path: "tasks/one.md" }],
+      message: "b loses",
+    });
+    expect(loser.kind).toBe("rejected");
+
+    await syncTip(second.reader);
     const retried = await second.reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "b@iterate.com", name: "b" },
+      author: AUTHOR,
       changes: [{ content: "# b\n", path: "tasks/one.md" }],
       message: "b retries",
     });
+    expect(retried.kind).toBe("applied");
+    if (retried.kind !== "applied") throw new Error("unreachable");
+    expect(retried.parentCommitOid).toBe(winner.commitOid);
     expect(remote.refs.get("refs/heads/main")).toBe(retried.commitOid);
-    expect(retried.parentCommitOid).toBe(winnerHead);
   });
 
-  test("commit results carry the parent they were built on", async () => {
-    const { head, remote } = await seededRemote();
+  test("push transport death reconciles: applied when the ref shows our commit", async () => {
+    const { remote } = await seededRemote();
     const { reader } = subject(remote);
-    await reader.syncToHead();
-    const committed = await reader.commitFiles({
-      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
-      changes: [{ content: "# parent check\n", path: "tasks/one.md" }],
-      message: "parent check",
+    await syncTip(reader);
+    remote.faults.pushError = "apply-then-throw";
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# survived\n", path: "tasks/one.md" }],
+      message: "response lost",
     });
-    expect(committed.parentCommitOid).toBe(head);
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    expect(remote.refs.get("refs/heads/main")).toBe(outcome.commitOid);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# survived\n"]);
   });
-});
 
-describe("sync serialization", () => {
-  test("concurrent syncs with different targets both apply, in order", async () => {
-    const { head, remote } = await seededRemote();
-    const { reader, store } = subject(remote);
+  test("push transport death reconciles: rejected when the ref never moved", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    remote.faults.pushError = "throw";
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# never landed\n", path: "tasks/one.md" }],
+      message: "socket died",
+    });
+    expect(outcome.kind).toBe("rejected");
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one\n"]);
+  });
 
-    // Prepare the v2 commit up front so both syncs can start back-to-back in
-    // the same tick — a REAL race on the single-flight machinery.
-    const v2Blob = await remote.putBlob("# racing v2\n");
-    const oldRoot = parseCommit(remote.objects.get(head)!.payload).tree;
-    const rootEntries = parseTree(remote.objects.get(oldRoot)!.payload);
-    const tasksOid = rootEntries.find((entry) => entry.name === "tasks")!.oid;
-    const tasksEntries = parseTree(remote.objects.get(tasksOid)!.payload).map((entry) =>
-      entry.name === "one.md" ? { ...entry, oid: v2Blob } : entry,
-    );
-    const newTasks = await remote.putTree(tasksEntries);
-    const newRoot = await remote.putTree(
-      rootEntries.map((entry) => (entry.name === "tasks" ? { ...entry, oid: newTasks } : entry)),
-    );
-    const v2Head = await remote.putCommit(newRoot, [head], "v2\n");
+  test("push transport death with an unreachable ref is INDETERMINATE — never a plain error", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    remote.faults.pushError = "throw";
+    remote.faults.lsRefsErrors = 3; // every reconcile attempt fails too
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# unknown\n", path: "tasks/one.md" }],
+      message: "black hole",
+    });
+    expect(outcome.kind).toBe("indeterminate");
+    if (outcome.kind !== "indeterminate") throw new Error("unreachable");
+    expect(outcome.proposedCommitOid).toMatch(/^[0-9a-f]{40}$/);
+  });
 
-    const first = reader.syncToHead(); // ls-refs: still the seeded head
-    const second = reader.syncToHead(v2Head); // explicit later target
-
-    const [a, b] = await Promise.all([first, second]);
-    remote.refs.set("refs/heads/main", v2Head);
-    // Each caller got the head IT asked for; the store finished at the later
-    // target — never a label from one sync over content from another.
-    expect(a.commitOid).toBe(head);
-    expect(b.commitOid).toBe(v2Head);
-    expect(store.head("main")?.commitOid).toBe(v2Head);
-    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# racing v2\n"]);
+  test("a pushed commit whose LOCAL install fails is applied-with-error; a resync heals", async () => {
+    const { remote } = await seededRemote();
+    const { reader, storage } = subject(remote);
+    await syncTip(reader);
+    storage.failOn("INSERT INTO git_manifest");
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# pushed anyway\n", path: "tasks/one.md" }],
+      message: "install dies",
+    });
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    expect(outcome.localInstallError).toBeDefined();
+    expect(remote.refs.get("refs/heads/main")).toBe(outcome.commitOid);
+    // The local store still shows the PARENT (the install rolled back)…
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# one\n"]);
+    // …until a sync converges it on the pushed head.
+    await syncTip(reader);
+    await expect(reader.readPaths(["tasks/one.md"])).resolves.toEqual(["# pushed anyway\n"]);
   });
 });

@@ -58,14 +58,16 @@ const timed = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
 const storeA = sqliteGitObjectStore(nodeStorage());
 const readerA = createLazyRepoReader({ branch: "main", store: storeA, wire });
 
-const head = await timed("cold sync (one-time full ingest)", () => readerA.syncToHead());
+const head = await timed("cold sync (one-time full ingest)", async () =>
+  readerA.syncToHead(await readerA.resolveRemoteHead()),
+);
 const paths = readerA.listPaths();
 const taskFiles = paths.filter((path) => /(^|\/)tasks\/[^/]+\.md$/.test(path));
 console.log(
   `manifest: ${paths.length} files, ${taskFiles.length} task files, head ${head.commitOid.slice(0, 8)}`,
 );
 
-await timed("warm no-op sync", () => readerA.syncToHead());
+await timed("warm no-op sync", async () => readerA.syncToHead(await readerA.resolveRemoteHead()));
 const contents = await timed(`scoped read of ${taskFiles.length} task files`, () =>
   readerA.readPaths(taskFiles),
 );
@@ -84,7 +86,10 @@ const committed = await timed("clone-free commit (1 file)", () =>
     message: "lazy reader live probe",
   }),
 );
-console.log(`  → commit ${committed.commitOid.slice(0, 8)} noChanges=${committed.noChanges}`);
+if (committed.kind !== "applied") throw new Error(`commit outcome: ${JSON.stringify(committed)}`);
+console.log(
+  `  → commit ${committed.commitOid.slice(0, 8)} changed=${committed.changedPaths.length}`,
+);
 await timed("post-commit read-your-write (must be ~0 network)", async () => {
   const [content] = await readerA.readPaths(["tasks/lazy-probe.md"]);
   if (!content?.includes("lazy reader probe")) throw new Error("read-your-write failed");
@@ -99,15 +104,21 @@ console.log("\npriming reader B at the PRE-commit head is impossible now — it 
 console.log(
   "post-commit head cold (same one-time cost), then we push again and measure its delta:",
 );
-await timed("reader B cold sync", () => readerB.syncToHead());
+await timed("reader B cold sync", async () =>
+  readerB.syncToHead(await readerB.resolveRemoteHead()),
+);
 
 const secondCommit = await readerA.commitFiles({
   author: { date: new Date(), email: "probe@iterate.com", name: "lazy-probe" },
   changes: [{ content: `# probe v2\n${new Date().toISOString()}\n`, path: "tasks/lazy-probe.md" }],
   message: "lazy reader live probe v2",
 });
+if (secondCommit.kind !== "applied")
+  throw new Error(`second commit: ${JSON.stringify(secondCommit)}`);
 console.log(`second commit ${secondCommit.commitOid.slice(0, 8)} pushed by reader A`);
-await timed("reader B INCREMENTAL resync after that push", () => readerB.syncToHead());
+await timed("reader B INCREMENTAL resync after that push", async () =>
+  readerB.syncToHead(await readerB.resolveRemoteHead()),
+);
 const [seen] = await readerB.readPaths(["tasks/lazy-probe.md"]);
 if (!seen?.includes("probe v2")) throw new Error("reader B did not converge on the pushed content");
 console.log("reader B converged on reader A's push");

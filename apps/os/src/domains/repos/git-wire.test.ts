@@ -247,6 +247,16 @@ describe("protocol v2 requests", () => {
   });
 });
 
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let cursor = 0;
+  for (const part of parts) {
+    out.set(part, cursor);
+    cursor += part.length;
+  }
+  return out;
+}
+
 function pktConcat(parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let cursor = 0;
@@ -295,6 +305,87 @@ describe("fetch response demux", () => {
   });
 });
 
+describe("pack validation", () => {
+  test("an ofs-delta whose base is a ref-delta entry resolves (mixed chain)", async () => {
+    // base blob ← ref-delta (target1) ← ofs-delta pointing at the REF entry.
+    const base = text.encode("hello world\n");
+    const target = text.encode("hello brave world\n");
+    const program = Uint8Array.from([
+      base.length,
+      target.length,
+      0b10010000,
+      6,
+      6,
+      ...text.encode("brave "),
+      0b10010001,
+      6,
+      6,
+    ]);
+    // second-hop program: identity copy of the FIRST delta's result
+    const program2 = Uint8Array.from([target.length, target.length, 0b10010001, 0, target.length]);
+    const baseOid = await hashObject("blob", base);
+    const parts: Uint8Array[] = [];
+    parts.push(Uint8Array.from([0x50, 0x41, 0x43, 0x4b, 0, 0, 0, 2, 0, 0, 0, 3]));
+    let offset = 12;
+    const entry = (headerByte: number, extra: Uint8Array, body: Uint8Array) => {
+      const start = offset;
+      parts.push(Uint8Array.from([headerByte]), extra, body);
+      offset += 1 + extra.length + body.length;
+      return start;
+    };
+    entry((3 << 4) | base.length, new Uint8Array(0), deflate(base)); // blob
+    const refStart = entry(
+      (7 << 4) | program.length,
+      Uint8Array.from(baseOid.match(/../g)!.map((pair) => Number.parseInt(pair, 16))),
+      deflate(program),
+    );
+    // ofs-delta whose base offset points at the REF-DELTA entry
+    const dist = offset - refStart;
+    expect(dist).toBeLessThan(128);
+    entry((6 << 4) | program2.length, Uint8Array.from([dist]), deflate(program2));
+    const body = concatBytes(parts);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", body as BufferSource));
+    const parsed = await parsePack(concatBytes([body, digest]));
+    const targetOid = await hashObject("blob", target);
+    expect(parsed.filter((object) => object.oid === targetOid)).toHaveLength(2);
+  });
+
+  test("rejects unsupported pack versions and wrong object counts", async () => {
+    const bad = (await buildPack([{ payload: text.encode("x"), type: "blob" }])).slice();
+    bad[7] = 3; // version 3
+    const redigested = concatBytes([
+      bad.subarray(0, bad.length - 20),
+      new Uint8Array(
+        await crypto.subtle.digest("SHA-1", bad.subarray(0, bad.length - 20) as BufferSource),
+      ),
+    ]);
+    await expect(parsePack(redigested)).rejects.toThrow(/version/);
+  });
+
+  test("rejects a delta whose copy op reads outside its base", async () => {
+    const base = text.encode("tiny");
+    const evil = Uint8Array.from([
+      base.length,
+      8,
+      0b10010001,
+      2,
+      200, // copy offset 2 size 200 — past the base
+    ]);
+    const baseOid = await hashObject("blob", base);
+    const parts: Uint8Array[] = [];
+    parts.push(Uint8Array.from([0x50, 0x41, 0x43, 0x4b, 0, 0, 0, 2, 0, 0, 0, 2]));
+    parts.push(Uint8Array.from([(3 << 4) | base.length]), deflate(base));
+    parts.push(
+      Uint8Array.from([(7 << 4) | evil.length]),
+      Uint8Array.from(baseOid.match(/../g)!.map((pair) => Number.parseInt(pair, 16))),
+      deflate(evil),
+    );
+    const body = concatBytes(parts);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", body as BufferSource));
+    await expect(parsePack(concatBytes([body, digest]))).rejects.toThrow(/base|bounds|outside/);
+  });
+});
+
 describe("receive-pack", () => {
   test("frames the ref update ahead of the pack", async () => {
     const pack = await buildPack([{ payload: text.encode("x"), type: "blob" }]);
@@ -311,19 +402,20 @@ describe("receive-pack", () => {
   });
 
   test("parses success and rejection reports, sidebanded or plain", () => {
+    const REF = "refs/heads/main";
     const plain = pktConcat([
       pktLine("unpack ok"),
       pktLine("ok refs/heads/main"),
       text.encode("0000"),
     ]);
-    expect(parseReceivePackResponse(plain)).toEqual({ ok: true, refErrors: [] });
+    expect(parseReceivePackResponse(plain, REF)).toEqual({ ok: true, refErrors: [] });
 
     const rejected = pktConcat([
       pktLine("unpack ok"),
       pktLine("ng refs/heads/main non-fast-forward"),
       text.encode("0000"),
     ]);
-    expect(parseReceivePackResponse(rejected)).toEqual({
+    expect(parseReceivePackResponse(rejected, REF)).toEqual({
       ok: false,
       refErrors: ["refs/heads/main: non-fast-forward"],
     });
@@ -341,6 +433,34 @@ describe("receive-pack", () => {
       band,
       text.encode("0000"),
     ]);
-    expect(parseReceivePackResponse(sidebanded)).toEqual({ ok: true, refErrors: [] });
+    expect(parseReceivePackResponse(sidebanded, REF)).toEqual({ ok: true, refErrors: [] });
+  });
+
+  test("success REQUIRES the expected ref's ok line — truncation is not success", () => {
+    const REF = "refs/heads/main";
+    // unpack ok but NO command-status line for our ref (truncated report)
+    const truncated = pktConcat([pktLine("unpack ok"), text.encode("0000")]);
+    const verdict = parseReceivePackResponse(truncated, REF);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.refErrors.join(" ")).toMatch(/no status/);
+
+    // ok for a DIFFERENT ref is not our success
+    const wrongRef = pktConcat([
+      pktLine("unpack ok"),
+      pktLine("ok refs/heads/other"),
+      text.encode("0000"),
+    ]);
+    expect(parseReceivePackResponse(wrongRef, REF).ok).toBe(false);
+
+    // sideband channel 3 surfaces as an error even alongside ok lines
+    const err = text.encode("\u0003fatal: disk full");
+    const withBand3 = pktConcat([
+      text.encode(`${(4 + err.length).toString(16).padStart(4, "0")}`),
+      err,
+      text.encode("0000"),
+    ]);
+    const bandVerdict = parseReceivePackResponse(withBand3, REF);
+    expect(bandVerdict.ok).toBe(false);
+    expect(bandVerdict.refErrors.join(" ")).toMatch(/disk full/);
   });
 });

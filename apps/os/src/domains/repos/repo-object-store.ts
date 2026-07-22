@@ -1,18 +1,28 @@
-import type { GitObjectType } from "./git-wire.ts";
+import { hashObject, type GitObjectType } from "./git-wire.ts";
 
 /**
- * The repo Durable Object's persistent git object cache — the storage half of
- * the lazy read path. Objects are immutable and content-addressed, so rows
- * never invalidate: a head move only ADDS objects. What changes per branch is
- * the synced head, its flat file manifest (path → blob), and the directory
- * tree listing (the `have`s that make incremental fetches cheap).
+ * The repo Durable Object's durable git snapshot — the storage half of the
+ * lazy lane and the SINGLE byte authority for lazy reads. Content-addressed
+ * objects (chunked under the SQLite value cap) plus, per branch: the synced
+ * head, a flat path→blob manifest, and the directory-tree listing (the
+ * `have`s that make incremental fetches cheap).
  *
- * Blob payloads are chunked well under the Durable Object SQLite value cap.
- * Blobs are LRU-evictable (they can always be re-fetched by exact oid); trees
- * and commits are small, load-bearing for sync diffing, and never evicted.
+ * Lifecycle is bounded by construction: `installSnapshot` applies the
+ * manifest delta and, in the same transaction, prunes every object no
+ * longer reachable from any branch's manifest, dir listing, or head. The
+ * store holds exactly the live snapshots — no eviction policy, no budget.
+ *
+ * Reads are verified: assembled chunks must match the recorded size and
+ * re-hash to their oid. A corrupt row is deleted and reported, never served.
  */
 
 const CHUNK_BYTES = 512 * 1024;
+
+export class CorruptStoredObject extends Error {
+  constructor(oid: string, detail: string) {
+    super(`stored git object ${oid} is corrupt (${detail}) — deleted; rehydrate by oid`);
+  }
+}
 
 export interface StoredHead {
   commitOid: string;
@@ -26,26 +36,30 @@ export interface ManifestFile {
   path: string;
 }
 
+export interface SnapshotDelta {
+  commitOid: string;
+  /** Full directory listing at the new head (small; replaced wholesale). */
+  dirs: { path: string; treeOid: string }[];
+  /** Manifest rows to delete (paths removed by this transition). */
+  removes: string[];
+  rootTreeOid: string;
+  /** Manifest rows to insert or overwrite. */
+  upserts: ManifestFile[];
+}
+
 export interface GitObjectStore {
-  dirTreeOids(branch: string): string[];
-  getObject(oid: string): { payload: Uint8Array; type: GitObjectType } | null;
-  hasObject(oid: string): boolean;
+  dirTrees(branch: string): { path: string; treeOid: string }[];
+  /** Verified read: null when absent; throws CorruptStoredObject (and deletes) on damage. */
+  getObject(oid: string): Promise<{ payload: Uint8Array; type: GitObjectType } | null>;
+  hasObjects(oids: string[]): Set<string>;
   head(branch: string): StoredHead | null;
   manifest(branch: string): ManifestFile[];
   manifestEntries(branch: string, paths: string[]): (ManifestFile | null)[];
   putObjects(objects: { oid: string; payload: Uint8Array; type: GitObjectType }[]): void;
-  replaceManifest(
-    branch: string,
-    input: {
-      commitOid: string;
-      dirs: { path: string; treeOid: string }[];
-      files: ManifestFile[];
-      rootTreeOid: string;
-    },
-  ): void;
-  /** Evict least-recently-read blobs until total blob bytes ≤ budget. */
-  evictBlobs(budgetBytes: number): number;
-  touchBlobs(oids: string[]): void;
+  /** Apply a head transition and prune unreachable objects — one transaction. */
+  installSnapshot(branch: string, delta: SnapshotDelta): void;
+  /** Total blob bytes referenced by a branch's manifest (drives the contentHash gate). */
+  manifestByteSize(branch: string): number;
 }
 
 export function sqliteGitObjectStore(storage: {
@@ -55,8 +69,7 @@ export function sqliteGitObjectStore(storage: {
   const sql = storage.sql;
   sql.exec(
     `CREATE TABLE IF NOT EXISTS git_objects(
-       oid TEXT PRIMARY KEY, type TEXT NOT NULL, size INTEGER NOT NULL,
-       last_read INTEGER NOT NULL DEFAULT 0)`,
+       oid TEXT PRIMARY KEY, type TEXT NOT NULL, size INTEGER NOT NULL)`,
   );
   sql.exec(
     `CREATE TABLE IF NOT EXISTS git_object_chunks(
@@ -77,66 +90,69 @@ export function sqliteGitObjectStore(storage: {
        branch TEXT NOT NULL, path TEXT NOT NULL, tree_oid TEXT NOT NULL,
        PRIMARY KEY (branch, path))`,
   );
-  sql.exec(
-    `CREATE INDEX IF NOT EXISTS git_objects_blob_lru ON git_objects(last_read) WHERE type = 'blob'`,
-  );
 
-  let readClock = Date.now();
+  const deleteObject = (oid: string) => {
+    sql.exec(`DELETE FROM git_objects WHERE oid = ?`, oid);
+    sql.exec(`DELETE FROM git_object_chunks WHERE oid = ?`, oid);
+  };
 
-  const readPayload = (oid: string): Uint8Array => {
-    const chunks = sql
-      .exec(`SELECT bytes FROM git_object_chunks WHERE oid = ? ORDER BY idx`, oid)
-      .toArray()
-      .map((row) => new Uint8Array(row.bytes as ArrayBuffer));
-    const out = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
-    let cursor = 0;
-    for (const chunk of chunks) {
-      out.set(chunk, cursor);
-      cursor += chunk.length;
+  /** Bindings-list helper: `IN (?, ?, …)` for one chunk of values. */
+  const chunked = <T>(values: T[], size = 100): T[][] => {
+    const out: T[][] = [];
+    for (let index = 0; index < values.length; index += size) {
+      out.push(values.slice(index, index + size));
     }
     return out;
   };
 
   return {
-    dirTreeOids: (branch) =>
+    dirTrees: (branch) =>
       sql
-        .exec(`SELECT tree_oid FROM git_dir_trees WHERE branch = ?`, branch)
+        .exec(`SELECT path, tree_oid FROM git_dir_trees WHERE branch = ?`, branch)
         .toArray()
-        .map((row) => row.tree_oid as string),
+        .map((row) => ({ path: row.path as string, treeOid: row.tree_oid as string })),
 
-    evictBlobs: (budgetBytes) => {
-      return storage.transactionSync(() => {
-        const total = (sql
-          .exec(`SELECT COALESCE(SUM(size), 0) AS total FROM git_objects WHERE type = 'blob'`)
-          .toArray()[0]?.total ?? 0) as number;
-        let excess = total - budgetBytes;
-        if (excess <= 0) return 0;
-        let evicted = 0;
-        // Never evict a blob the CURRENT manifests still reference cheaply?
-        // Deliberately allowed: manifest blobs re-hydrate by exact oid. LRU
-        // order keeps hot board files resident in practice.
-        const victims = sql
-          .exec(`SELECT oid, size FROM git_objects WHERE type = 'blob' ORDER BY last_read ASC`)
-          .toArray();
-        for (const victim of victims) {
-          if (excess <= 0) break;
-          sql.exec(`DELETE FROM git_objects WHERE oid = ?`, victim.oid);
-          sql.exec(`DELETE FROM git_object_chunks WHERE oid = ?`, victim.oid);
-          excess -= victim.size as number;
-          evicted += 1;
-        }
-        return evicted;
-      });
-    },
-
-    getObject: (oid) => {
-      const row = sql.exec(`SELECT type FROM git_objects WHERE oid = ?`, oid).toArray()[0];
+    getObject: async (oid) => {
+      const row = sql.exec(`SELECT type, size FROM git_objects WHERE oid = ?`, oid).toArray()[0];
       if (row === undefined) return null;
-      return { payload: readPayload(oid), type: row.type as GitObjectType };
+      const chunks = sql
+        .exec(`SELECT idx, bytes FROM git_object_chunks WHERE oid = ? ORDER BY idx`, oid)
+        .toArray();
+      const payload = new Uint8Array(
+        chunks.reduce((total, chunk) => total + (chunk.bytes as ArrayBuffer).byteLength, 0),
+      );
+      let cursor = 0;
+      let contiguous = true;
+      for (const [index, chunk] of chunks.entries()) {
+        if ((chunk.idx as number) !== index) contiguous = false;
+        payload.set(new Uint8Array(chunk.bytes as ArrayBuffer), cursor);
+        cursor += (chunk.bytes as ArrayBuffer).byteLength;
+      }
+      const type = row.type as GitObjectType;
+      if (!contiguous || payload.length !== (row.size as number)) {
+        deleteObject(oid);
+        throw new CorruptStoredObject(oid, `assembled ${payload.length}B of ${row.size}B`);
+      }
+      if ((await hashObject(type, payload)) !== oid) {
+        deleteObject(oid);
+        throw new CorruptStoredObject(oid, "content does not hash to its oid");
+      }
+      return { payload, type };
     },
 
-    hasObject: (oid) =>
-      sql.exec(`SELECT 1 AS one FROM git_objects WHERE oid = ?`, oid).toArray().length > 0,
+    hasObjects: (oids) => {
+      const present = new Set<string>();
+      for (const group of chunked([...new Set(oids)])) {
+        const rows = sql
+          .exec(
+            `SELECT oid FROM git_objects WHERE oid IN (${group.map(() => "?").join(",")})`,
+            ...group,
+          )
+          .toArray();
+        for (const row of rows) present.add(row.oid as string);
+      }
+      return present;
+    },
 
     head: (branch) => {
       const row = sql
@@ -145,6 +161,58 @@ export function sqliteGitObjectStore(storage: {
       return row === undefined
         ? null
         : { commitOid: row.commit_oid as string, rootTreeOid: row.root_tree_oid as string };
+    },
+
+    installSnapshot: (branch, delta) => {
+      storage.transactionSync(() => {
+        for (const group of chunked(delta.removes)) {
+          sql.exec(
+            `DELETE FROM git_manifest WHERE branch = ? AND path IN (${group.map(() => "?").join(",")})`,
+            branch,
+            ...group,
+          );
+        }
+        for (const file of delta.upserts) {
+          sql.exec(
+            `INSERT INTO git_manifest(branch, path, blob_oid, mode) VALUES (?, ?, ?, ?)
+               ON CONFLICT(branch, path) DO UPDATE SET blob_oid = excluded.blob_oid,
+                                                       mode = excluded.mode`,
+            branch,
+            file.path,
+            file.blobOid,
+            file.mode,
+          );
+        }
+        sql.exec(`DELETE FROM git_dir_trees WHERE branch = ?`, branch);
+        for (const dir of delta.dirs) {
+          sql.exec(
+            `INSERT INTO git_dir_trees(branch, path, tree_oid) VALUES (?, ?, ?)`,
+            branch,
+            dir.path,
+            dir.treeOid,
+          );
+        }
+        sql.exec(
+          `INSERT INTO git_heads(branch, commit_oid, root_tree_oid) VALUES (?, ?, ?)
+             ON CONFLICT(branch) DO UPDATE SET commit_oid = excluded.commit_oid,
+                                               root_tree_oid = excluded.root_tree_oid`,
+          branch,
+          delta.commitOid,
+          delta.rootTreeOid,
+        );
+        // The lifecycle: everything unreachable from the LIVE snapshots (any
+        // branch's manifest blobs, dir trees, or head commit) goes, in the
+        // same transaction that made it unreachable. No policy, no budget —
+        // the store holds exactly the current working set.
+        sql.exec(
+          `DELETE FROM git_objects WHERE oid NOT IN (
+             SELECT blob_oid FROM git_manifest
+             UNION SELECT tree_oid FROM git_dir_trees
+             UNION SELECT commit_oid FROM git_heads
+           )`,
+        );
+        sql.exec(`DELETE FROM git_object_chunks WHERE oid NOT IN (SELECT oid FROM git_objects)`);
+      });
     },
 
     manifest: (branch) =>
@@ -160,37 +228,61 @@ export function sqliteGitObjectStore(storage: {
           path: row.path as string,
         })),
 
-    manifestEntries: (branch, paths) =>
-      paths.map((path) => {
-        const row = sql
+    manifestByteSize: (branch) =>
+      (sql
+        .exec(
+          `SELECT COALESCE(SUM(o.size), 0) AS total
+             FROM git_manifest m JOIN git_objects o ON o.oid = m.blob_oid
+            WHERE m.branch = ?`,
+          branch,
+        )
+        .toArray()[0]?.total ?? 0) as number,
+
+    manifestEntries: (branch, paths) => {
+      const byPath = new Map<string, ManifestFile>();
+      for (const group of chunked(paths)) {
+        const rows = sql
           .exec(
-            `SELECT blob_oid, mode FROM git_manifest WHERE branch = ? AND path = ?`,
+            `SELECT path, blob_oid, mode FROM git_manifest
+              WHERE branch = ? AND path IN (${group.map(() => "?").join(",")})`,
             branch,
-            path,
+            ...group,
           )
-          .toArray()[0];
-        return row === undefined
-          ? null
-          : { blobOid: row.blob_oid as string, mode: row.mode as string, path };
-      }),
+          .toArray();
+        for (const row of rows) {
+          byPath.set(row.path as string, {
+            blobOid: row.blob_oid as string,
+            mode: row.mode as string,
+            path: row.path as string,
+          });
+        }
+      }
+      return paths.map((path) => byPath.get(path) ?? null);
+    },
 
     putObjects: (objects) => {
       storage.transactionSync(() => {
+        const present = new Set<string>();
+        for (const group of chunked([...new Set(objects.map((object) => object.oid))])) {
+          const rows = sql
+            .exec(
+              `SELECT oid FROM git_objects WHERE oid IN (${group.map(() => "?").join(",")})`,
+              ...group,
+            )
+            .toArray();
+          for (const row of rows) present.add(row.oid as string);
+        }
         for (const object of objects) {
-          const exists =
-            sql.exec(`SELECT 1 AS one FROM git_objects WHERE oid = ?`, object.oid).toArray()
-              .length > 0;
-          if (exists) continue;
+          if (present.has(object.oid)) continue;
+          present.add(object.oid);
           sql.exec(
-            `INSERT INTO git_objects(oid, type, size, last_read) VALUES (?, ?, ?, ?)`,
+            `INSERT INTO git_objects(oid, type, size) VALUES (?, ?, ?)`,
             object.oid,
             object.type,
             object.payload.length,
-            readClock,
           );
-          // Zero-length payloads store no chunk rows (an empty read is the
-          // empty payload); chunks are copied, not subarray views — binding a
-          // view is driver-dependent for offsets and NULLs empty slices.
+          // Zero-length payloads store no chunk rows; chunks are copies, not
+          // subarray views (binding views is driver-dependent for offsets).
           for (let index = 0; index * CHUNK_BYTES < object.payload.length; index++) {
             sql.exec(
               `INSERT INTO git_object_chunks(oid, idx, bytes) VALUES (?, ?, ?)`,
@@ -199,47 +291,6 @@ export function sqliteGitObjectStore(storage: {
               object.payload.slice(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES),
             );
           }
-        }
-      });
-    },
-
-    replaceManifest: (branch, input) => {
-      storage.transactionSync(() => {
-        sql.exec(`DELETE FROM git_manifest WHERE branch = ?`, branch);
-        sql.exec(`DELETE FROM git_dir_trees WHERE branch = ?`, branch);
-        for (const file of input.files) {
-          sql.exec(
-            `INSERT INTO git_manifest(branch, path, blob_oid, mode) VALUES (?, ?, ?, ?)`,
-            branch,
-            file.path,
-            file.blobOid,
-            file.mode,
-          );
-        }
-        for (const dir of input.dirs) {
-          sql.exec(
-            `INSERT INTO git_dir_trees(branch, path, tree_oid) VALUES (?, ?, ?)`,
-            branch,
-            dir.path,
-            dir.treeOid,
-          );
-        }
-        sql.exec(
-          `INSERT INTO git_heads(branch, commit_oid, root_tree_oid) VALUES (?, ?, ?)
-             ON CONFLICT(branch) DO UPDATE SET commit_oid = excluded.commit_oid,
-                                               root_tree_oid = excluded.root_tree_oid`,
-          branch,
-          input.commitOid,
-          input.rootTreeOid,
-        );
-      });
-    },
-
-    touchBlobs: (oids) => {
-      readClock = Math.max(readClock + 1, Date.now());
-      storage.transactionSync(() => {
-        for (const oid of oids) {
-          sql.exec(`UPDATE git_objects SET last_read = ? WHERE oid = ?`, readClock, oid);
         }
       });
     },

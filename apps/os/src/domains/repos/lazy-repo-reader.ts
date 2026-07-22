@@ -1,3 +1,5 @@
+import type { RepoFileChange } from "./types.ts";
+import { base64ToBytes } from "./utils.ts";
 import {
   buildPack,
   encodeCommit,
@@ -18,33 +20,44 @@ import type { GitObjectStore, ManifestFile, StoredHead } from "./repo-object-sto
  *   wire  (git-wire.ts)          what the server speaks
  *   store (repo-object-store.ts) what this object remembers durably
  *
- * Sync transfers the delta between the remote head and the store: one fetch
- * wanting the new head with every KNOWN directory tree as a `have`, which the
- * server (probed) excludes recursively — unchanged subtrees never ride the
- * wire again. First-ever sync has no haves and ingests the whole snapshot
- * once; that cost is durable, not per-wake, because the store is SQLite.
- * Reads hydrate missing blobs by exact oid. Commits are built locally from
- * the manifest (new blobs + rebuilt ancestor trees + commit), pushed as a
- * self-contained pack with a compare-and-swap on the old head, and primed
- * back into the store — a post-commit read fetches nothing.
+ * Sync installs the delta between a CALLER-VALIDATED target head and the
+ * store: one fetch wanting the target with every known directory tree as a
+ * `have` (the server excludes unchanged subtrees recursively), plus exact-oid
+ * hydration for blobs the exclusion swallowed. Reads serve verified store
+ * bytes, rehydrating missing or corrupt blobs by exact oid. Commits rebuild
+ * ONLY the changed paths' ancestor directories, push one small pack under a
+ * compare-and-swap, and return a TYPED outcome — a caller may fall back to
+ * another write lane only on `rejected`, where the remote provably did not
+ * move.
+ *
+ * This module holds no freshness policy: WHICH head to sync to, and whether
+ * a resolved candidate is trustworthy, is the caller's decision (the Durable
+ * Object judges candidates against its branch authority).
  */
 
-export class LazyRepoConflict extends Error {
-  constructor(detail: string) {
-    super(`lazy commit rejected by the remote (ref moved?): ${detail}`);
-  }
-}
-
-export type LazyChange =
-  | { content: string; path: string }
-  | { contentBase64: string; path: string }
-  | { delete: true; path: string };
+type LazyCommitOutcome =
+  | {
+      changedPaths: string[];
+      commitOid: string;
+      kind: "applied";
+      /** Set when the push landed but installing it locally failed — the
+       * caller must drop its cursors so reads re-sync; NEVER re-commit. */
+      localInstallError?: unknown;
+      parentCommitOid: string;
+    }
+  | { detail: string; kind: "rejected" }
+  | { detail: string; kind: "indeterminate"; proposedCommitOid: string };
 
 const GITLINK_MODE = "160000";
 const DIR_MODE = "40000";
+/** git's canonical empty tree — a commit may legally empty the repository. */
+const EMPTY_TREE_OID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+
+const parentDirOf = (path: string): string =>
+  path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 
 export function createLazyRepoReader(input: {
   branch: string;
@@ -52,84 +65,130 @@ export function createLazyRepoReader(input: {
   wire: GitWireTransport;
 }) {
   const { branch, store, wire } = input;
-  // Syncs SERIALIZE: two concurrent calls with different targets must not
-  // share one result (a caller could get a head label for content another
-  // sync wrote). Each queued run re-reads the store, so an already-satisfied
-  // target short-circuits without touching the wire.
-  let syncChain: Promise<unknown> = Promise.resolve();
+  // Store mutations SERIALIZE: concurrent syncs (and commit installs) each
+  // run against fresh store state, in arrival order — a caller can never get
+  // one sync's head label over another sync's content.
+  let installChain: Promise<unknown> = Promise.resolve();
+  const serialized = <T>(run: () => Promise<T>): Promise<T> => {
+    const result = installChain.then(run, run);
+    installChain = result.catch(() => {});
+    return result;
+  };
 
-  const resolveTree = (oid: string, fromPack: Map<string, RawGitObject>): TreeEntry[] => {
+  const resolveTree = async (
+    oid: string,
+    fromPack: Map<string, RawGitObject>,
+  ): Promise<TreeEntry[]> => {
     const packed = fromPack.get(oid);
     if (packed !== undefined) {
       if (packed.type !== "tree") throw new Error(`object ${oid} is a ${packed.type}, not a tree`);
       return parseTree(packed.payload);
     }
-    const stored = store.getObject(oid);
+    const stored = await store.getObject(oid);
     if (stored === null || stored.type !== "tree") {
       throw new Error(`tree ${oid} is in neither the sync pack nor the store`);
     }
     return parseTree(stored.payload);
   };
 
-  const walkManifest = (
+  const walkManifest = async (
     rootTreeOid: string,
     fromPack: Map<string, RawGitObject>,
-  ): { dirs: { path: string; treeOid: string }[]; files: ManifestFile[] } => {
+  ): Promise<{ dirs: { path: string; treeOid: string }[]; files: ManifestFile[] }> => {
     const files: ManifestFile[] = [];
     const dirs: { path: string; treeOid: string }[] = [];
-    const walk = (treeOid: string, prefix: string) => {
+    const walk = async (treeOid: string, prefix: string): Promise<void> => {
       dirs.push({ path: prefix, treeOid });
-      for (const entry of resolveTree(treeOid, fromPack)) {
+      for (const entry of await resolveTree(treeOid, fromPack)) {
         const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-        if (entry.mode === DIR_MODE) walk(entry.oid, path);
+        if (entry.mode === DIR_MODE) await walk(entry.oid, path);
         else files.push({ blobOid: entry.oid, mode: entry.mode, path });
       }
     };
-    walk(rootTreeOid, "");
+    await walk(rootTreeOid, "");
     return { dirs, files };
   };
 
-  const syncOnce = async (targetOid?: string): Promise<StoredHead> => {
-    const target =
-      targetOid ??
-      (await wire.lsRefs([`refs/heads/${branch}`])).find(
-        // gitty ignores ref-prefix filters (probed) — match by exact name.
-        (ref) => ref.name === `refs/heads/${branch}`,
-      )?.oid;
-    if (target === undefined) throw new Error(`remote has no refs/heads/${branch}`);
+  /** Fetch `oids` the store lacks, in bounded batches, and persist them. */
+  const hydrate = async (oids: string[]): Promise<void> => {
+    const unique = [...new Set(oids)];
+    const present = store.hasObjects(unique);
+    const missing = unique.filter((oid) => !present.has(oid));
+    for (let index = 0; index < missing.length; index += 200) {
+      store.putObjects(await wire.fetchObjects({ wants: missing.slice(index, index + 200) }));
+    }
+    const after = store.hasObjects(missing);
+    if (after.size < missing.length) {
+      const gone = missing.filter((oid) => !after.has(oid));
+      throw new Error(`remote did not return ${gone.length} wanted object(s): ${gone[0]} …`);
+    }
+  };
+
+  const syncOnce = async (targetOid: string): Promise<StoredHead> => {
     const current = store.head(branch);
-    if (current?.commitOid === target) return current;
+    if (current?.commitOid === targetOid) return current;
     const objects = await wire.fetchObjects({
       deepen: 1,
-      haves: store.dirTreeOids(branch),
-      wants: [target],
+      haves: store.dirTrees(branch).map((dir) => dir.treeOid),
+      wants: [targetOid],
     });
     const fromPack = new Map(objects.map((object) => [object.oid, object]));
-    const commit = fromPack.get(target);
+    const commit = fromPack.get(targetOid);
     if (commit === undefined || commit.type !== "commit") {
       // Wants for unknown oids are silently dropped by the server — surface
       // the inconsistency instead of persisting a half-synced head.
-      throw new Error(`sync fetch did not return commit ${target}`);
+      throw new Error(`sync fetch did not return commit ${targetOid}`);
     }
     const rootTreeOid = parseCommit(commit.payload).tree;
-    const manifest = walkManifest(rootTreeOid, fromPack);
+    const next = await walkManifest(rootTreeOid, fromPack);
+    const before = new Map(store.manifest(branch).map((file) => [file.path, file]));
+    const nextPaths = new Set(next.files.map((file) => file.path));
+    const upserts = next.files.filter((file) => {
+      const old = before.get(file.path);
+      return old === undefined || old.blobOid !== file.blobOid || old.mode !== file.mode;
+    });
+    // Persist pack objects, then make sure every NEW manifest blob is really
+    // held: the server's have-closure exclusion can swallow a blob that moved
+    // into a changed directory from an unchanged one (rename/copy).
     store.putObjects(objects);
-    store.replaceManifest(branch, { commitOid: target, rootTreeOid, ...manifest });
-    return { commitOid: target, rootTreeOid };
+    await hydrate(upserts.filter((file) => file.mode !== GITLINK_MODE).map((file) => file.blobOid));
+    store.installSnapshot(branch, {
+      commitOid: targetOid,
+      dirs: next.dirs,
+      removes: [...before.keys()].filter((path) => !nextPaths.has(path)),
+      rootTreeOid,
+      upserts,
+    });
+    return { commitOid: targetOid, rootTreeOid };
   };
 
-  const hydrate = async (oids: string[]): Promise<void> => {
-    const missing = [...new Set(oids)].filter((oid) => !store.hasObject(oid));
-    if (missing.length === 0) return;
-    store.putObjects(await wire.fetchObjects({ wants: missing }));
-    const still = missing.filter((oid) => !store.hasObject(oid));
-    if (still.length > 0) {
-      throw new Error(`remote did not return ${still.length} wanted blob(s): ${still[0]} …`);
+  const readPathBytes = async (paths: string[]): Promise<(Uint8Array | null)[]> => {
+    const entries = store.manifestEntries(branch, paths);
+    await hydrate(
+      entries
+        .filter((entry): entry is ManifestFile => entry !== null && entry.mode !== GITLINK_MODE)
+        .map((entry) => entry.blobOid),
+    );
+    const out: (Uint8Array | null)[] = [];
+    for (const entry of entries) {
+      if (entry === null || entry.mode === GITLINK_MODE) {
+        out.push(null);
+        continue;
+      }
+      let object = await store.getObject(entry.blobOid).catch(() => null);
+      if (object === null) {
+        // Missing after hydration = a corrupt row was deleted mid-read; give
+        // the remote one chance to replace it.
+        await hydrate([entry.blobOid]);
+        object = await store.getObject(entry.blobOid);
+      }
+      if (object === null) throw new Error(`blob ${entry.blobOid} unavailable after rehydration`);
+      out.push(object.payload);
     }
+    return out;
   };
 
   return {
-    /** The synced head, or null before the first sync. */
     head: (): StoredHead | null => store.head(branch),
 
     /** Every file path at the synced head (gitlinks excluded, like a checkout walk). */
@@ -139,104 +198,119 @@ export function createLazyRepoReader(input: {
         .filter((file) => file.mode !== GITLINK_MODE)
         .map((file) => file.path),
 
-    /**
-     * Bring the store to the remote head (or to `targetOid` when the caller
-     * already knows it, saving the ls-refs round trip). Serialized: every
-     * call runs its OWN sync against fresh store state, in arrival order.
-     */
-    syncToHead: (targetOid?: string): Promise<StoredHead> => {
-      const run = () => syncOnce(targetOid);
-      const result = syncChain.then(run, run);
-      syncChain = result.catch(() => {});
-      return result;
+    /** The remote's current tip — a CANDIDATE the caller must validate
+     * against its authority before syncing to it. */
+    resolveRemoteHead: async (): Promise<string> => {
+      const refs = await wire.lsRefs([`refs/heads/${branch}`]);
+      // gitty ignores ref-prefix filters (probed) — match by exact name.
+      const tip = refs.find((ref) => ref.name === `refs/heads/${branch}`)?.oid;
+      if (tip === undefined) throw new Error(`remote has no refs/heads/${branch}`);
+      return tip;
     },
 
-    /** Read blob bytes at the synced head; null for absent paths and gitlinks. */
-    readPathBytes: async (paths: string[]): Promise<(Uint8Array | null)[]> => {
-      const entries = store.manifestEntries(branch, paths);
-      await hydrate(
-        entries
-          .filter((entry): entry is ManifestFile => entry !== null && entry.mode !== GITLINK_MODE)
-          .map((entry) => entry.blobOid),
-      );
-      const oidsRead: string[] = [];
-      const results = entries.map((entry) => {
-        if (entry === null || entry.mode === GITLINK_MODE) return null;
-        const object = store.getObject(entry.blobOid);
-        if (object === null) throw new Error(`blob ${entry.blobOid} vanished after hydration`);
-        oidsRead.push(entry.blobOid);
-        return object.payload;
-      });
-      store.touchBlobs(oidsRead);
-      return results;
-    },
+    /** Install a validated target head. Serialized; a no-op when current. */
+    syncToHead: (targetOid: string): Promise<StoredHead> => serialized(() => syncOnce(targetOid)),
 
-    /** Read utf-8 contents at the synced head; null for absent paths. */
-    readPaths: async function (paths: string[]): Promise<(string | null)[]> {
-      const bytes = await this.readPathBytes(paths);
-      return bytes.map((payload) => (payload === null ? null : textDecoder.decode(payload)));
-    },
+    readPathBytes,
+
+    readPaths: async (paths: string[]): Promise<(string | null)[]> =>
+      (await readPathBytes(paths)).map((payload) =>
+        payload === null ? null : textDecoder.decode(payload),
+      ),
 
     /**
-     * Build a commit locally from the manifest and push it with a
-     * compare-and-swap on the synced head. No clone, no fetch. On success the
-     * store is primed with the new objects and manifest, so read-your-write
-     * costs nothing. Throws LazyRepoConflict when the remote head moved.
+     * Build a commit from the synced head — rebuilding ONLY the changed
+     * paths' ancestor directories — and push it under a compare-and-swap.
+     * Returns a typed outcome; see LazyCommitOutcome for the caller contract.
      */
     commitFiles: async (input: {
       author: { date: Date; email: string; name: string };
-      changes: LazyChange[];
+      changes: RepoFileChange[];
       message: string;
-    }): Promise<{ commitOid: string; noChanges: boolean; parentCommitOid: string }> => {
+    }): Promise<LazyCommitOutcome> => {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
-      // Keyed by oid: identical contents (or a re-write of an existing blob)
-      // must appear in the pack exactly once.
+      const oldDirs = new Map(store.dirTrees(branch).map((dir) => [dir.path, dir.treeOid]));
+
+      // Apply changes to the manifest map, validating structure: a path may
+      // not be written where a DIRECTORY lives, nor under an existing FILE —
+      // the same shapes the clone lane's real filesystem rejects.
+      const dirsWithFiles = new Set<string>();
+      for (const file of manifest.keys()) {
+        for (let dir = parentDirOf(file); dir !== ""; dir = parentDirOf(dir)) {
+          dirsWithFiles.add(dir);
+        }
+      }
       const newBlobs = new Map<string, Uint8Array>();
+      const removes: string[] = [];
+      const upserts = new Map<string, ManifestFile>();
       for (const change of input.changes) {
         const path = change.path.replace(/^\/+/, "");
-        if ("delete" in change) {
-          manifest.delete(path);
+        if ("delete" in change && change.delete) {
+          if (manifest.delete(path)) {
+            upserts.delete(path);
+            removes.push(path);
+          }
           continue;
         }
+        if (dirsWithFiles.has(path)) throw new Error(`cannot write "${path}": it is a directory`);
+        for (let dir = parentDirOf(path); dir !== ""; dir = parentDirOf(dir)) {
+          if (manifest.has(dir)) throw new Error(`cannot write "${path}": "${dir}" is a file`);
+          dirsWithFiles.add(dir);
+        }
         const payload =
-          "content" in change
-            ? textEncoder.encode(change.content)
-            : Uint8Array.from(atob(change.contentBase64), (c) => c.charCodeAt(0));
+          "contentBase64" in change
+            ? base64ToBytes(change.contentBase64)
+            : textEncoder.encode((change as { content: string }).content);
         const oid = await hashObject("blob", payload);
         newBlobs.set(oid, payload);
-        manifest.set(path, { blobOid: oid, mode: manifest.get(path)?.mode ?? "100644", path });
+        const file = { blobOid: oid, mode: manifest.get(path)?.mode ?? "100644", path };
+        manifest.set(path, file);
+        upserts.set(path, file);
       }
 
-      // Rebuild the tree from the manifest. Unchanged directories hash to
-      // their existing oids (content-addressing IS the reuse), so the pack
-      // and the store writes below stay proportional to the change.
+      // Rebuild exactly the ancestor chains of the touched paths; every other
+      // directory keeps its synced oid (content addressing IS the reuse).
+      const changedDirs = new Set<string>([""]);
+      for (const path of [...upserts.keys(), ...removes]) {
+        for (let dir = parentDirOf(path); ; dir = parentDirOf(dir)) {
+          changedDirs.add(dir);
+          if (dir === "") break;
+        }
+      }
       const filesByDir = new Map<string, ManifestFile[]>();
       const childDirs = new Map<string, Set<string>>();
-      const noteDir = (dir: string) => {
-        if (childDirs.has(dir)) return;
-        childDirs.set(dir, new Set());
-        if (dir !== "") {
-          const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
-          noteDir(parent);
-          childDirs.get(parent)!.add(dir);
+      const noteChild = (dir: string) => {
+        if (dir === "") return;
+        const parent = parentDirOf(dir);
+        let set = childDirs.get(parent);
+        if (set === undefined) childDirs.set(parent, (set = new Set()));
+        if (!set.has(dir)) {
+          set.add(dir);
+          noteChild(parent);
         }
       };
-      noteDir("");
       for (const file of manifest.values()) {
-        const dir = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "";
-        noteDir(dir);
+        const dir = parentDirOf(file.path);
+        noteChild(dir);
+        if (!changedDirs.has(dir)) continue;
         let list = filesByDir.get(dir);
         if (list === undefined) filesByDir.set(dir, (list = []));
         list.push(file);
       }
-      const newTrees = new Map<string, Uint8Array>(); // oid-keyed like newBlobs
+      for (const dir of oldDirs.keys()) if (dir !== "") noteChild(dir);
+
+      const newTrees = new Map<string, Uint8Array>();
+      const newDirs = new Map<string, string>(oldDirs);
       const buildDir = async (dir: string): Promise<string | null> => {
+        if (!changedDirs.has(dir)) return oldDirs.get(dir) ?? null;
         const entries: TreeEntry[] = [];
         for (const child of childDirs.get(dir) ?? []) {
           const childOid = await buildDir(child);
-          if (childOid !== null) {
+          if (childOid === null) newDirs.delete(child);
+          else {
+            newDirs.set(child, childOid);
             entries.push({
               mode: DIR_MODE,
               name: child.slice(dir === "" ? 0 : dir.length + 1),
@@ -251,16 +325,24 @@ export function createLazyRepoReader(input: {
             oid: file.blobOid,
           });
         }
-        if (entries.length === 0) return null; // git prunes empty directories
+        if (entries.length === 0 && dir !== "") return null; // git prunes empty dirs
         const payload = encodeTree(entries);
         const oid = await hashObject("tree", payload);
         newTrees.set(oid, payload);
         return oid;
       };
-      const newRootOid = await buildDir("");
-      if (newRootOid === null) throw new Error("a commit cannot empty the whole repository");
+      const newRootOid = (await buildDir("")) ?? EMPTY_TREE_OID;
+      if (newRootOid === EMPTY_TREE_OID && !newTrees.has(EMPTY_TREE_OID)) {
+        newTrees.set(EMPTY_TREE_OID, new Uint8Array(0));
+      }
+      newDirs.set("", newRootOid);
       if (newRootOid === head.rootTreeOid) {
-        return { commitOid: head.commitOid, noChanges: true, parentCommitOid: head.commitOid };
+        return {
+          changedPaths: [],
+          commitOid: head.commitOid,
+          kind: "applied",
+          parentCommitOid: head.commitOid,
+        };
       }
 
       const commitPayload = encodeCommit({
@@ -270,25 +352,11 @@ export function createLazyRepoReader(input: {
         tree: newRootOid,
       });
       const commitOid = await hashObject("commit", commitPayload);
-      const packObjects: { payload: Uint8Array; type: "blob" | "commit" | "tree" }[] = [
-        ...[...newBlobs.entries()]
-          .filter(([oid]) => !store.hasObject(oid))
-          .map(([, payload]) => ({ payload, type: "blob" as const })),
-        ...[...newTrees.entries()]
-          .filter(([oid]) => !store.hasObject(oid))
-          .map(([, payload]) => ({ payload, type: "tree" as const })),
-        { payload: commitPayload, type: "commit" as const },
-      ];
-      const pushed = await wire.push({
-        newOid: commitOid,
-        oldOid: head.commitOid,
-        pack: await buildPack(packObjects),
-        ref: `refs/heads/${branch}`,
-      });
-      if (!pushed.ok) throw new LazyRepoConflict(pushed.refErrors.join("; "));
-
-      // Prime the store: read-your-write without a single fetch.
-      store.putObjects([
+      const packCandidates: {
+        oid: string;
+        payload: Uint8Array;
+        type: "blob" | "commit" | "tree";
+      }[] = [
         ...[...newBlobs.entries()].map(([oid, payload]) => ({
           oid,
           payload,
@@ -300,10 +368,71 @@ export function createLazyRepoReader(input: {
           type: "tree" as const,
         })),
         { oid: commitOid, payload: commitPayload, type: "commit" as const },
-      ]);
-      const manifestNow = walkManifest(newRootOid, new Map());
-      store.replaceManifest(branch, { commitOid, rootTreeOid: newRootOid, ...manifestNow });
-      return { commitOid, noChanges: false, parentCommitOid: head.commitOid };
+      ];
+      const alreadyStored = store.hasObjects(packCandidates.map((object) => object.oid));
+      const pack = await buildPack(
+        packCandidates.filter((object) => !alreadyStored.has(object.oid)),
+      );
+
+      let pushed: { ok: boolean; refErrors: string[] } | undefined;
+      try {
+        pushed = await wire.push({
+          newOid: commitOid,
+          oldOid: head.commitOid,
+          pack,
+          ref: `refs/heads/${branch}`,
+        });
+      } catch (transportError) {
+        // The request died in flight — the server may or may not have applied
+        // it. Reconcile against the ref itself before judging.
+        for (let attempt = 0; attempt < 3 && pushed === undefined; attempt++) {
+          try {
+            const tip = (await wire.lsRefs([`refs/heads/${branch}`])).find(
+              (ref) => ref.name === `refs/heads/${branch}`,
+            )?.oid;
+            if (tip === commitOid) pushed = { ok: true, refErrors: [] };
+            else if (tip === head.commitOid && attempt === 2) {
+              // Provably still at our parent after retries: never applied.
+              return { detail: String(transportError), kind: "rejected" };
+            }
+          } catch {
+            // the reconcile read itself failed; keep trying
+          }
+        }
+        if (pushed === undefined) {
+          return {
+            detail: `push transport failed and the ref state is unknown: ${String(transportError)}`,
+            kind: "indeterminate",
+            proposedCommitOid: commitOid,
+          };
+        }
+      }
+      if (!pushed.ok) return { detail: pushed.refErrors.join("; "), kind: "rejected" };
+
+      // THE PUSH IS APPLIED. Local install failures degrade the outcome, not
+      // the verdict — the caller must never re-run the mutation.
+      const changedPaths = [...new Set([...upserts.keys(), ...removes])].sort();
+      try {
+        await serialized(async () => {
+          store.putObjects(packCandidates);
+          store.installSnapshot(branch, {
+            commitOid,
+            dirs: [...newDirs.entries()].map(([path, treeOid]) => ({ path, treeOid })),
+            removes,
+            rootTreeOid: newRootOid,
+            upserts: [...upserts.values()],
+          });
+        });
+      } catch (localInstallError) {
+        return {
+          changedPaths,
+          commitOid,
+          kind: "applied",
+          localInstallError,
+          parentCommitOid: head.commitOid,
+        };
+      }
+      return { changedPaths, commitOid, kind: "applied", parentCommitOid: head.commitOid };
     },
   };
 }
