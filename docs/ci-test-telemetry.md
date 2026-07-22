@@ -551,6 +551,28 @@ and completion overhead. This is why named phases matter: the dashboard can
 separate a test's contractual wait from runner contention and product latency
 without inferring a cause from one aggregate duration.
 
+The deployment-shaped validation of the shortened suspend test (`382a2e7`)
+then completed in 18.2 seconds with zero retries, down 71% from 63.4 seconds.
+Its largest phases were 10.2 seconds of project-fixture creation, 3.0 seconds
+waiting for real post-thaw delivery, and the one-second suspend stimulus. The
+same run also showed why lane timing must stay separate from individual test
+timing: Playwright took 140.8 seconds because an unrelated project-creation
+test spent 60 seconds waiting for its composer and then passed its retry. That
+test recorded 85.6 seconds total, including 66.7 seconds of retry work, while
+the preview test orchestrator recorded 148.8 seconds for the whole OS lane.
+With the fixed sleeps gone, the longest no-retry e2e on that code head became
+the Vitest sandbox-deadline proof at 55.1 seconds. All 55.1 seconds were test
+body time with no hook or retry work. That duration is contractual: the test
+sets a 60-second absolute script deadline and proves that a requested 20-minute
+sandbox timeout is capped to it. The next result was the concurrency proof at
+53.9 seconds, including its explicit 30-second remote hold. Neither should be
+reported as unexplained runner idle time.
+The finalizer retained seven raw artifacts, normalized 5,732 events, matched
+all six expected preview producers, and reported no missing, incomplete, or
+foreign artifacts. These values are queryable by the commit SHA in either the
+CLI examples above or the dashboards; they are not conclusions inferred from
+the console log.
+
 ## Adding Or Changing A Reporter
 
 1. Extend the canonical Zod schema only with runner-neutral fields; missing
