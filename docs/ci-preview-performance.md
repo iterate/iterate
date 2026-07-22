@@ -115,6 +115,10 @@ serially because they intentionally share one warm container.
 - `[preview:os] lane start/finish` lines show the four overlapping OS lanes.
 - The managed preview block in the PR body records per-app deploy duration,
   test duration, and consumed retries.
+- The reporting tail remains part of the end-to-end budget. Test events are
+  packed into size-bounded PostHog batches (5 MB of encoded events, below the
+  20 MB request limit), so telemetry volume does not turn into one serial HTTP
+  round trip per 100 events.
 
 Use at least three unchanged warm-slot runs when changing concurrency. A single
 green run proves neither the tail nor the retry rate. Classify every retry and

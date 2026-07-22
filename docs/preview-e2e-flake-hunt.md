@@ -82,6 +82,7 @@ Round-8 run ledger:
 | ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------- |
 | Pre-round normal preview | `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4` |          0/25 |       1 | Passed in 5m20s; cross-project stream retry |
 | Round-8 marathon 1       | `e301520145a6259a743a3e300366a0a53689a009` |          0/25 |       2 | Functional pass; rejected at 311s           |
+| Round-8 marathon 2       | `c2a695fac7279da1b3b9bb64512a2d08d20aa576` |          0/25 |       0 | Clean pass; rejected at 311s                |
 
 The first round-8 attempt was [Depot run
 `3jp43c0dbg`](https://depot.dev/orgs/0p91s0lz49/workflows/vxd3v2n769?job=xjm4379s33&attempt=lp5zq2dfp4).
@@ -111,6 +112,24 @@ active.
 
 This head therefore contributes zero accepted runs. The next immutable head
 starts a new 0/25 streak through the same canonical Depot workflow.
+
+The next canonical attempt on that head was [Depot run
+`w9sc1f40ds`](https://depot.dev/orgs/0p91s0lz49/workflows/s5sm8wx775?job=xl2nzs4w1s&attempt=jf9f0zg4z2).
+It was the first complete zero-retry pass in this round: all 48 runnable OS
+Vitest files and all 63 Playwright cases passed on their first attempt. OS
+deployed in 116.2 seconds and its e2e lane passed in 146.9 seconds (Vitest
+113.08 seconds; Playwright 2.3 minutes). The strict proof still rejected it
+because dispatch creation through completion took 311 seconds.
+
+Reporting accounted for the avoidable final tail: normalization produced
+6,865 PostHog events, then the uploader sent 69 fixed 100-event batches
+strictly sequentially, consuming 12.9 seconds before artifact collection.
+The uploader now packs events by encoded size, with a conservative 5 MB event
+payload budget beneath PostHog's 20 MB batch-request limit. The preceding
+5,906-event artifact packs into three requests instead of 60 while preserving
+every deterministic event UUID and the existing per-batch bounded retry. The
+next immutable head again starts at 0/25; only a canonical Depot run can prove
+the real reporting and whole-workflow reduction.
 
 ## Round 7 (2026-07-21, post-#2226 and #2227)
 
