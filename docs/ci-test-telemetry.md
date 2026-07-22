@@ -243,29 +243,53 @@ therefore use the sync's actual observation time. Event timestamps are the
 provider's completion time or the snapshot's observation time, not an
 unrelated PR-updated timestamp.
 
-| Event                      | Source                        | Questions answered                                                        |
-| -------------------------- | ----------------------------- | ------------------------------------------------------------------------- |
-| `ci workflow finished`     | GitHub Actions and Depot APIs | failure/cancellation rate, queue/run/total wall time by workflow/provider |
-| `ci job finished`          | GitHub Actions and Depot APIs | slow/failing jobs and failed-step rate                                    |
-| `ci job attempt finished`  | Depot metrics                 | retries, availability, queue/run time, average/peak CPU and memory        |
-| `ci review finished`       | GitHub checks/reviews         | immutable completion/duration for Cursor Bugbot and Iterate Review        |
-| `ci review state observed` | GitHub review threads         | current findings and unresolved findings by provider and PR head          |
+The scheduled collector reads `github-actions`, `github-reviews`, and `depot` as
+independent sources. A failed provider cannot erase healthy events from either
+of the others: the collector sends every successful source plus one health
+event per source, then fails the job. All three health rows share
+`telemetry_sync_id`; CI rows also share `collector_head_sha`. Each records
+status, event count, lookback, duration, and a bounded error name/message.
+PostHog delivery failure still fails the job, and the dashboard then becomes
+stale rather than claiming the collection was healthy. The two GitHub sources
+run serially on their shared token while Depot collects concurrently.
+
+| Event                               | Source                        | Questions answered                                                        |
+| ----------------------------------- | ----------------------------- | ------------------------------------------------------------------------- |
+| `ci workflow finished`              | GitHub Actions and Depot APIs | failure/cancellation rate, queue/run/total wall time by workflow/provider |
+| `ci job finished`                   | GitHub Actions and Depot APIs | slow/failing jobs and failed-step rate                                    |
+| `ci job attempt finished`           | Depot metrics                 | retries, availability, queue/run time, average/peak CPU and memory        |
+| `ci review finished`                | GitHub checks/reviews         | immutable completion/duration for Cursor Bugbot and Iterate Review        |
+| `ci review state observed`          | GitHub review threads         | current findings and unresolved findings by provider and PR head          |
+| `ci telemetry source sync finished` | scheduled collector           | freshness, success/failure, event count, error, and collector version     |
 
 Finding counts are mutable and therefore belong only to the state snapshot;
 they are not rewritten into immutable review-completion events. Iterate Review
 is captured from submitted GitHub App reviews even when it has no check-run.
 Thread authors are normalized to the correct provider before counting.
 
-CI needs a read-only Depot organization token named
-`DEPOT_CI_TELEMETRY_TOKEN`. The scheduled job intentionally fails if it is
-missing:
+CI needs a dedicated [Depot organization API token](https://depot.dev/docs/cli/authentication#organization-tokens) named
+`DEPOT_CI_TELEMETRY_TOKEN`. Depot does not currently expose a read-only token
+limited to CI metrics, so this credential has broad organization API scope.
+Never reuse a developer's personal Depot login token. Create a dedicated token
+named `CI telemetry` in Depot Organization Settings, then store it as a secret
+variant restricted to this repository and workflow. The scheduled job
+intentionally fails if it is missing:
 
 ```bash
 read -rs DEPOT_TELEMETRY_VALUE
 printf '%s' "$DEPOT_TELEMETRY_VALUE" | \
-  depot ci secrets add DEPOT_CI_TELEMETRY_TOKEN --org 0p91s0lz49
+  depot ci secrets set DEPOT_CI_TELEMETRY_TOKEN ci-telemetry \
+    --from-stdin \
+    --org 0p91s0lz49 \
+    --repo iterate/iterate \
+    --workflow ci-telemetry.yml \
+    --description "Dedicated Depot organization API token for historical CI telemetry"
 unset DEPOT_TELEMETRY_VALUE
 ```
+
+Confirm the variant scope with `depot ci secrets list --org 0p91s0lz49`.
+Rotate or revoke the organization token immediately if it is ever exposed;
+deleting the secret alone does not revoke the token at Depot.
 
 Local collection uses `gh` auth and the developer's Depot CLI login:
 
@@ -279,14 +303,62 @@ GH_TOKEN="$(gh auth token)" \
 
 - [Test reliability & performance](https://eu.posthog.com/project/115112/dashboard/839068)
   ranks no-retry tests, failure/flake rates, module/import startup, scheduling,
-  hooks/body, named phases, and incomplete/missing runner evidence.
+  hooks/body, named phases, and incomplete/missing runner evidence. The first
+  two tables make finalizer completeness explicit for both unit jobs (expected
+  workspaces) and preview jobs (expected runner sources).
 - [CI reliability & performance](https://eu.posthog.com/project/115112/dashboard/839069)
   covers GitHub/Depot workflow and job reliability, queue/execution latency,
-  Depot saturation, and Cursor/Iterate review outcomes and unresolved state.
+  Depot saturation, telemetry-source freshness, and Cursor/Iterate review
+  outcomes and unresolved state.
+
+Both dashboards default to 30 days and honor the dashboard date filter. A
+healthy zero never renders as a blank table:
+
+- test finalizers say `HEALTHY` or `INCOMPLETE`;
+- review snapshots say `HEALTHY`, `ACTION REQUIRED`, or
+  `NO SNAPSHOTS RECEIVED`;
+- source health says `HEALTHY`, `EMPTY COLLECTION`, `STALE`,
+  `ACTION REQUIRED`, or `NO HEALTH EVENT`.
+
+`EMPTY COLLECTION` means the provider call succeeded but returned no events;
+inspect it whenever repository activity was expected. `STALE` means the newest
+health event is more than 30 minutes old (twice the schedule interval). Blank,
+missing, stale, unknown, incomplete, and foreign evidence are never success
+states.
+
+Workflow, job, and review tables keep failures, cancellations,
+skipped/neutral outcomes, and unknown outcomes in separate columns. Failure
+rate is `failures / (successes + failures)`; cancellation rate is
+`cancellations / all observations`. Any non-zero `unknown_outcomes` is a data
+model defect to investigate, not a bucket to normalize away.
 
 Dashboards answer routine questions. Use HogQL for one SHA, run, branch, test,
-or unusual time window. Production insights filter
+or unusual time window. Production test insights filter
 `execution_context = 'ci'` where that property applies.
+
+### Dashboard acceptance check
+
+After changing ingestion or a saved insight, force every tile to execute. The
+command must return every listed tile with no query error. Seeded health tiles
+must return their documented status rows; pure aggregations may have zero rows
+for a legitimately quiet filtered window. Then read once through the cache
+path used by the UI:
+
+```bash
+posthog-cli api info dashboard-insights-run
+posthog-cli api call dashboard-insights-run \
+  '{"id":839068,"refresh":"force_blocking"}'
+posthog-cli api call dashboard-insights-run \
+  '{"id":839069,"refresh":"force_blocking"}'
+posthog-cli api call dashboard-insights-run \
+  '{"id":839068,"refresh":"force_cache"}'
+posthog-cli api call dashboard-insights-run \
+  '{"id":839069,"refresh":"force_cache"}'
+```
+
+Finally open both links in PostHog and verify the rendered tables with the same
+date filter. API success is necessary but does not prove that the saved tile
+renders or that the browser is using the intended project.
 
 ## Analyse With `posthog-cli`
 
@@ -336,6 +408,12 @@ SELECT properties.workflow_name AS workflow,
   properties.job_name AS job,
   count() AS finalizer_count,
   countIf(properties.telemetry_incomplete = true) AS incomplete_count,
+  sum(toInt(properties.expected_workspace_count)) AS expected_workspaces,
+  sum(toInt(properties.observed_workspace_count)) AS observed_workspaces,
+  sum(toInt(properties.missing_workspace_count)) AS missing_workspaces,
+  sum(toInt(properties.expected_artifact_source_count)) AS expected_sources,
+  sum(toInt(properties.observed_artifact_source_count)) AS observed_sources,
+  sum(toInt(properties.matched_expected_artifact_source_count)) AS matched_sources,
   sum(toInt(properties.missing_artifact_source_count)) AS missing_source_count,
   sum(toInt(properties.incomplete_artifact_count)) AS incomplete_artifact_count,
   sum(toInt(properties.foreign_artifact_count)) AS foreign_artifact_count
@@ -347,6 +425,37 @@ WHERE event = 'ci test telemetry finalized'
 GROUP BY workflow, job
 ORDER BY incomplete_count DESC, missing_source_count DESC, finalizer_count DESC
 ```
+
+Unit finalizers enforce workspace cardinality and can legitimately have zero
+expected runner sources. Preview finalizers enforce exact runner-source
+cardinality and can legitimately have zero expected workspaces. Always inspect
+both sets of columns; source counts alone make healthy unit evidence look
+incomplete.
+
+Check whether the historical CI dataset itself is trustworthy before using its
+rates or latency:
+
+```sql
+SELECT properties.telemetry_source AS telemetry_source,
+  argMax(properties.status, timestamp) AS latest_status,
+  max(timestamp) AS last_observed_at,
+  dateDiff('minute', last_observed_at, now()) AS age_minutes,
+  argMax(toInt(properties.event_count), timestamp) AS event_count,
+  argMax(properties.telemetry_sync_id, timestamp) AS telemetry_sync_id,
+  argMax(properties.collector_head_sha, timestamp) AS collector_head_sha,
+  argMax(properties.error_name, timestamp) AS error_name,
+  argMax(properties.error_message, timestamp) AS error_message
+FROM events
+WHERE event = 'ci telemetry source sync finished'
+  AND timestamp >= now() - INTERVAL 7 DAY
+  AND toInt(properties.schema_version) = 2
+GROUP BY telemetry_source
+ORDER BY telemetry_source
+```
+
+Expect one fresh row each for `github-actions`, `github-reviews`, and `depot`.
+Do not trust a provider's downstream tiles when its row is missing, failed, or
+older than 30 minutes.
 
 `telemetry_incomplete = true` means reporter shutdown did not finish and the
 dataset may omit test details, or an expected runner artifact is wholly absent.
@@ -442,6 +551,11 @@ discovery sequence rather than inventing tool arguments:
 1. Search for `schema events SQL HogQL`.
 2. Inspect `read-data-schema`, then call it for the event being queried.
 3. Inspect `execute-sql`, then pass one of the bounded HogQL queries above.
+4. For a dashboard, discover and inspect `dashboard-insights-run`, then run
+   dashboard `839068` or `839069` with `refresh = force_blocking`. Every tile
+   must return no error; seeded health tiles must return status rows, while a
+   pure aggregation may be empty in a legitimately quiet filtered window.
+   Repeat with `force_cache` to verify the UI cache path.
 
 Conceptual call payload after discovery:
 
@@ -546,7 +660,7 @@ though the test explicitly kills the socket; a timer probe then proved its
 experimental `Page.setWebLifecycleState` command did not actually suspend the
 current headless CI browser. The second slept for a guessed probe window before
 beginning the actual delivery assertion. The test now uses
-`Emulation.setScriptExecutionDisabled`, verifies the one-second suspension with
+`Emulation.setScriptExecutionDisabled`, verifies the two-second suspension with
 an armed page-timer gap, appends its durable marker immediately after resume,
 and polls marker delivery for the existing bounded 90-second recovery window.
 A healthy run can finish as soon as recovery is observed, while the historical

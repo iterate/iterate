@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { Octokit } from "@octokit/rest";
 import { durationMs, sendPostHogEvents, systemEvent, type PostHogEvent } from "./posthog-events.ts";
 import { buildReviewEvents, reviewProviderKey, selectReviewSources } from "./review-telemetry.ts";
+import { collectTelemetrySources } from "./telemetry-source-sync.ts";
 
 const execFile = promisify(execFileCallback);
 const repository = process.env.GITHUB_REPOSITORY ?? "iterate/iterate";
@@ -13,19 +14,52 @@ const githubLimit = Number.parseInt(process.env.CI_TELEMETRY_GITHUB_LIMIT ?? "50
 const dryRun = process.argv.includes("--dry-run");
 
 async function main() {
-  const events = [...(await githubEvents()), ...(await depotEvents())];
+  const telemetrySyncStartedAt = new Date().toISOString();
+  const { events, failures } = await collectTelemetrySources({
+    repository,
+    lookbackDays,
+    telemetrySyncId: process.env.GITHUB_RUN_ID
+      ? `${process.env.GITHUB_RUN_ID}:${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`
+      : `local:${telemetrySyncStartedAt}`,
+    collectorHeadSha: process.env.GITHUB_SHA,
+    sourceGroups: [
+      [
+        {
+          name: "github-actions",
+          dataSource: "github-actions-api",
+          collect: githubActionsEvents,
+        },
+        {
+          name: "github-reviews",
+          dataSource: "github-checks-reviews-and-threads-api",
+          collect: githubReviewEvents,
+        },
+      ],
+      [{ name: "depot", dataSource: "depot-api", collect: depotEvents }],
+    ],
+  });
   console.log(`[ci-telemetry] collected ${events.length} idempotent event(s)`);
   if (dryRun) {
     console.log(JSON.stringify(summarize(events), null, 2));
-    return;
+  } else {
+    await sendPostHogEvents(events);
   }
-  await sendPostHogEvents(events);
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.error),
+      `CI telemetry source collection failed: ${failures.map((failure) => failure.source).join(", ")}`,
+    );
+  }
 }
 
-async function githubEvents(): Promise<PostHogEvent[]> {
+function githubClient() {
   const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
   if (!token) throw new Error("GH_TOKEN is required to sync GitHub Actions and review telemetry");
-  const octokit = new Octokit({ auth: token });
+  return new Octokit({ auth: token });
+}
+
+async function githubActionsEvents(): Promise<PostHogEvent[]> {
+  const octokit = githubClient();
   const events: PostHogEvent[] = [];
   const runs = (
     await octokit.paginate(octokit.rest.actions.listWorkflowRunsForRepo, {
@@ -107,6 +141,12 @@ async function githubEvents(): Promise<PostHogEvent[]> {
     }
   }
 
+  return events;
+}
+
+async function githubReviewEvents(): Promise<PostHogEvent[]> {
+  const octokit = githubClient();
+  const events: PostHogEvent[] = [];
   const pulls = await recentPullRequests(octokit);
   for (const pull of pulls) {
     if (Date.parse(pull.updated_at) < cutoff) break;
@@ -282,8 +322,9 @@ async function depotEvents(): Promise<PostHogEvent[]> {
       "DEPOT_CI_TELEMETRY_TOKEN is required for Depot timing and utilization telemetry",
     );
   }
-  // Developer runs may use the Depot CLI's local login. CI must use the
-  // dedicated read-only organization token above so backfills are reliable.
+  // Developer runs may use the Depot CLI's local login. CI uses a dedicated
+  // organization API token scoped to this repository and workflow as a Depot
+  // CI secret; Depot does not currently offer a read-only metrics token.
   const environment = token ? { ...process.env, DEPOT_TOKEN: token } : process.env;
   const list = await depotJson<Array<{ workflow_id: string; status: string; created_at: string }>>(
     [

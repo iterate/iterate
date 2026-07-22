@@ -12,7 +12,8 @@ runtime logic in normal scripts under `scripts/ci` instead of embedding large
 Historical workflow/job/attempt timing, queueing, CPU/memory utilization, and
 failure-rate analysis lives in PostHog; see
 [CI and test telemetry](ci-test-telemetry.md) for the dashboards, event model,
-scheduled backfill, required read-only Depot token, and CLI/MCP queries.
+scheduled backfill, dedicated Depot organization token and its scope caveat,
+and CLI/MCP queries.
 
 ## Quick Links
 

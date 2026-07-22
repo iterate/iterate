@@ -24,7 +24,8 @@ const WEB_MESSAGE_SENT = "events.iterate.com/agents/web-message-sent";
 // in-page timer immediately before CDP suspends script execution and verifies
 // its gap after resume. Socket death is modeled explicitly, so the stimulus
 // need not wait for the OS to reap a connection during a guessed long window.
-const SUSPEND_STIMULUS_MS = 1_000;
+const SUSPEND_STIMULUS_MS = 2_000;
+const SUSPEND_EVIDENCE_MIN_GAP_MS = 1_500;
 
 type SuspendTimerEvidence = {
   maxTimerGapMs: number;
@@ -172,7 +173,7 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
         message: "the armed page timer should remain suspended for the stimulus window",
         timeout: 5_000,
       })
-      .toBeGreaterThanOrEqual(SUSPEND_STIMULUS_MS);
+      .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
   });
 
   // Going back online invokes the runtime's resume check; its periodic probe
