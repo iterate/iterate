@@ -81,10 +81,36 @@ Round-8 run ledger:
 | Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                     |
 | ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------- |
 | Pre-round normal preview | `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4` |          0/25 |       1 | Passed in 5m20s; cross-project stream retry |
+| Round-8 marathon 1       | `e301520145a6259a743a3e300366a0a53689a009` |          0/25 |       2 | Functional pass; rejected at 311s           |
 
-The dedicated round-8 PR dispatches the canonical Depot workflow for every
-attempt. Its immutable head, workflow IDs, timings, and retry counts will be
-recorded here without replacing normal preview CI with a custom runner.
+The first round-8 attempt was [Depot run
+`3jp43c0dbg`](https://depot.dev/orgs/0p91s0lz49/workflows/vxd3v2n769?job=xjm4379s33&attempt=lp5zq2dfp4).
+Every test eventually passed, but the proof stopped because the workflow took
+311 seconds and absorbed two retries. OS deployed in 101.7 seconds and its e2e
+lane took 152.6 seconds. Vitest passed 48 files, with 2 skipped, in 86.15
+seconds; Playwright passed 63 cases in 146 seconds.
+
+The project-worker cross-post case again exhausted its 30-second stream wait
+before passing on retry, reaching 62.79 seconds across both attempts. This
+second consecutive occurrence establishes a cold-build delivery tail rather
+than a one-off test failure. The test still exercises a fresh worker build and
+is not quarantined; its public delivery budget is temporarily 100 seconds, and
+`tasks/reduce-project-worker-cross-post-tail.md` tracks instrumentation,
+latency reduction, and restoration of the tighter budget.
+
+The other retry was the markdown-preview Playwright spec. The network trace
+showed the parent project route's identity `beforeLoad` taking 1.79 seconds
+after the Preview search-param navigation. The test selected Code while that
+first transition was still settling; `.cm-content` remained absent for roughly
+1.3 seconds, then the editor was fully rendered in the failure screenshot
+about 100 milliseconds after the action deadline. The IDE now renders a
+visible, `data-spinner`-marked status while TanStack Router is loading. This
+exposes the real product wait and lets the normal spinner-aware action deadline
+cover it; the substantial markdown editing and sanitization spec remains
+active.
+
+This head therefore contributes zero accepted runs. The next immutable head
+starts a new 0/25 streak through the same canonical Depot workflow.
 
 ## Round 7 (2026-07-21, post-#2226 and #2227)
 
