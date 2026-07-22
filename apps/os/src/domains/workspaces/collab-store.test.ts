@@ -76,7 +76,7 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
       { birth: true },
     );
     expect(store.hasSession(PATH)).toBe(true);
-    expect(store.livePaths()).toEqual([PATH]);
+    expect(store.sessions().map((s) => s.path)).toEqual([PATH]);
     expect(store.getBase(PATH)).toEqual({ content: "seed", version: 0 });
     // A later compaction snapshot must not reset the base or the session.
     await store.putSnapshot(PATH, { clientSeqs: {}, content: "later", epoch: EPOCH, version: 5 });
@@ -93,9 +93,19 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     await store.append(PATH, EPOCH, [op(0), op(1)]);
     expect(await store.readOps(PATH, EPOCH, -1)).toEqual([op(0), op(1)]);
     expect(await store.readOps(PATH, EPOCH, 0)).toEqual([op(1)]);
-    expect(store.dirtySessions()).toEqual([PATH]);
+    expect(
+      store
+        .sessions()
+        .filter((s) => s.headVersion > s.overlayVersion)
+        .map((s) => s.path),
+    ).toEqual([PATH]);
     store.markFlushed(PATH, 2);
-    expect(store.dirtySessions()).toEqual([]);
+    expect(
+      store
+        .sessions()
+        .filter((s) => s.headVersion > s.overlayVersion)
+        .map((s) => s.path),
+    ).toEqual([]);
   });
 
   test("compaction prunes only BELOW the redline baseline", async () => {
@@ -141,7 +151,7 @@ describe.each(implementations)("collab store contract (%s)", (_name, makeStore) 
     await store.append(PATH, EPOCH, [op(0)]);
     store.endSession(PATH);
     expect(store.hasSession(PATH)).toBe(false);
-    expect(store.livePaths()).toEqual([]);
+    expect(store.sessions().map((s) => s.path)).toEqual([]);
     expect(store.getBase(PATH)).toBeNull();
     expect(await store.getSnapshot(PATH)).toBeNull();
     expect(await store.readOps(PATH, EPOCH, -1)).toEqual([]);

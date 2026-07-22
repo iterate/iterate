@@ -48,11 +48,12 @@ export function fakeSessionStore() {
     },
     readOps: async (path, _epoch, afterVersion) =>
       structuredClone((ops.get(path) ?? []).filter((op) => op.version > afterVersion)),
-    dirtySessions: () =>
-      [...sessions.entries()].filter(([, row]) => row.head > row.overlay).map(([path]) => path),
-    livePaths: () => [...sessions.keys()],
-    sessionHeads: () =>
-      [...sessions.entries()].map(([path, row]) => ({ headVersion: row.head, path })),
+    sessions: () =>
+      [...sessions.entries()].map(([path, row]) => ({
+        headVersion: row.head,
+        overlayVersion: row.overlay,
+        path,
+      })),
     hasSession: (path) => sessions.has(path),
     markFlushed: (path, version, epoch) => {
       const row = sessions.get(path);

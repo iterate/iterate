@@ -155,21 +155,15 @@ export function sqliteCollabStore(storage: {
               version: row.version as number,
             }) satisfies PersistedCollabOp,
         ),
-    dirtySessions: () =>
+    sessions: () =>
       sql
-        .exec(`SELECT path FROM collab_sessions WHERE head_version > overlay_version`)
+        .exec(`SELECT path, head_version, overlay_version FROM collab_sessions`)
         .toArray()
-        .map((row) => row.path as string),
-    livePaths: () =>
-      sql
-        .exec(`SELECT path FROM collab_sessions`)
-        .toArray()
-        .map((row) => row.path as string),
-    sessionHeads: () =>
-      sql
-        .exec(`SELECT path, head_version FROM collab_sessions`)
-        .toArray()
-        .map((row) => ({ headVersion: row.head_version as number, path: row.path as string })),
+        .map((row) => ({
+          headVersion: row.head_version as number,
+          overlayVersion: row.overlay_version as number,
+          path: row.path as string,
+        })),
     hasSession: (path) =>
       sql.exec(`SELECT 1 FROM collab_sessions WHERE path = ?`, path).toArray().length > 0,
     markFlushed: (path, version, epoch) => {

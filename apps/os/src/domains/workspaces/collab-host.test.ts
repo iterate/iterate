@@ -117,12 +117,22 @@ describe("collab host", () => {
 
     state.failWrites = true;
     await expect(host.reconcile()).rejects.toThrow("overlay write failure");
-    expect(store.dirtySessions()).toEqual([PATH]);
+    expect(
+      store
+        .sessions()
+        .filter((s) => s.headVersion > s.overlayVersion)
+        .map((s) => s.path),
+    ).toEqual([PATH]);
 
     state.failWrites = false;
     await host.reconcile();
     expect(files.get(PATH)).toBe(`sticky ${SEED}`);
-    expect(store.dirtySessions()).toEqual([]);
+    expect(
+      store
+        .sessions()
+        .filter((s) => s.headVersion > s.overlayVersion)
+        .map((s) => s.path),
+    ).toEqual([]);
   });
 
   test("open refuses files past the live-collaboration size cap", async () => {
@@ -594,5 +604,60 @@ describe("retention quota on the agent gateway", () => {
     await expect(
       pushOne(host, { epoch: opened.epoch, version: 1 }, "y", `hi ${SEED}`.length, 1),
     ).rejects.toThrow(/retention quota/);
+  });
+});
+
+describe("clean-session commit stamping", () => {
+  test("a push racing the settle loop stays above the stamped baseline", async () => {
+    const { store } = fakeSessionStore();
+    const files = new Map<string, string>([
+      ["/a.md", "aaa"],
+      [PATH, SEED],
+    ]);
+    let releaseWrite: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (releaseWrite = resolve));
+    let slow = false;
+    const fs: CollabSettledFs = {
+      readFile: async (path) => files.get(path) ?? null,
+      writeFile: async (path, content) => {
+        if (slow && path === "/a.md") await gate;
+        files.set(path, content);
+      },
+    };
+    const host = new CollabHost({ fs, store });
+    const openedA = await host.open("/a.md");
+    const openedB = await host.open(PATH);
+    await pushOne(host, { epoch: openedB.epoch, version: openedB.version }, "early ", SEED.length);
+    await host.reconcile(); // B settles — clean at overlay v1
+    await pushOne(host, { epoch: openedA.epoch, version: openedA.version }, "dirty ", 3);
+    slow = true;
+    // The barrier flushes dirty A first (parked); B's mid-loop push lands
+    // while the loop is suspended, BEFORE B's clean-branch report runs.
+    const fence = host.commitBarrier(
+      async () => ({ mount: "/" }),
+      () => true,
+    );
+    await Promise.resolve();
+    await host.push({
+      baseVersion: 1,
+      clientId: "peer",
+      epoch: openedB.epoch,
+      ops: [
+        {
+          changes: ChangeSet.of(
+            { from: 0, insert: "late ", to: 0 },
+            `early ${SEED}`.length,
+          ).toJSON(),
+          clientSeq: 9,
+        },
+      ],
+      path: PATH,
+    });
+    releaseWrite();
+    await fence;
+    // The racing push is NOT in the commit — it must still be a redline.
+    const changes = await host.changes(PATH);
+    expect(changes.inserted.length).toBeGreaterThan(0);
+    expect(changes.baseVersion).toBe(1);
   });
 });

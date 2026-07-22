@@ -40,12 +40,9 @@ export interface CollabSettledFs {
 
 /** CollabStore plus the durable session bookkeeping the host layers on. */
 export interface CollabSessionStore extends CollabStore {
-  /** Paths whose accepted head is ahead of the settled overlay. */
-  dirtySessions(): string[];
-  /** Every durable session path (the routing truth across incarnations). */
-  livePaths(): string[];
-  /** Durable head versions — the change cursor must survive eviction. */
-  sessionHeads(): { headVersion: number; path: string }[];
+  /** Every durable session with its head and overlay versions — the ONE
+   * routing/liveness/dirtiness read (dirty = head ahead of overlay). */
+  sessions(): { headVersion: number; overlayVersion: number; path: string }[];
   /** Whether a durable session exists — one local-SQLite lookup. */
   hasSession(path: string): boolean;
   /** Record that `version` is settled into the overlay (epoch-conditional). */
@@ -143,7 +140,7 @@ export class CollabHost {
 
   /** Every durable session path — for listings and mount-transition sweeps. */
   livePaths(): string[] {
-    return this.#store.livePaths();
+    return this.#store.sessions().map((session) => session.path);
   }
 
   /** The engine for a durable session, recovered lazily after eviction. */
@@ -232,7 +229,7 @@ export class CollabHost {
     // DURABLE heads, not memory: after an eviction the sessions are still
     // live and the board's cursor must see them before anyone re-opens.
     const map: Record<string, number> = {};
-    for (const { headVersion, path } of this.#store.sessionHeads()) {
+    for (const { headVersion, path } of this.#store.sessions()) {
       map[path] = this.#engine.head(path)?.version ?? headVersion;
     }
     return map;
@@ -353,17 +350,25 @@ export class CollabHost {
     // over a mount HEAD that moved since), but REPORT every live session:
     // a commit that follows contains work the debounce already settled, and
     // its baseline must advance too or changes() keeps showing committed
-    // text and the uncommitted-ops quota never resets.
+    // text and the uncommitted-ops quota never resets. Clean sessions are
+    // reported at their OVERLAY state (settled content + overlay version),
+    // never the live head — a push racing this loop stays above the stamped
+    // baseline and in the redline, exactly like a post-barrier keystroke.
     const settled: SettledFile[] = [];
-    const dirty = new Set(this.#store.dirtySessions());
-    for (const path of this.#store.livePaths()) {
-      if (dirty.has(path)) {
-        const file = await this.#flush(path);
+    for (const session of this.#store.sessions()) {
+      if (session.headVersion > session.overlayVersion) {
+        const file = await this.#flush(session.path);
         if (file !== null) settled.push(file);
         continue;
       }
-      const head = await this.#opened(path);
-      settled.push({ content: head.content, epoch: head.epoch, path, version: head.version });
+      const head = await this.#opened(session.path);
+      const content = (await this.#fs.readFile(session.path)) ?? head.content;
+      settled.push({
+        content,
+        epoch: head.epoch,
+        path: session.path,
+        version: session.overlayVersion,
+      });
     }
     return settled;
   }
@@ -452,7 +457,7 @@ export class CollabHost {
     // Synchronous ON PURPOSE (no coordinator await): destruction must win
     // instantly against anything mid-flight; the generation bump plus the
     // store's epoch-CAS unwind whatever was already queued.
-    for (const path of (paths ?? this.#store.livePaths()).map(CollabHost.canonical)) {
+    for (const path of (paths ?? this.livePaths()).map(CollabHost.canonical)) {
       this.#destroyed.set(path, (this.#destroyed.get(path) ?? 0) + 1);
       this.#lastActivity.delete(path);
       if (!this.isLive(path)) continue;
@@ -475,7 +480,7 @@ export class CollabHost {
   }
 
   async #sweep(now: number): Promise<void> {
-    for (const path of this.#store.livePaths()) {
+    for (const path of this.livePaths()) {
       const idleSince = this.#lastActivity.get(path);
       if (idleSince === undefined) {
         // A fresh incarnation has no activity memory: treat every durable
@@ -487,7 +492,7 @@ export class CollabHost {
       if (now - idleSince < IDLE_END_MS) continue;
       if ((this.#waiters.get(path)?.size ?? 0) > 0) continue;
       await this.#flush(path).catch(() => {});
-      if (this.#store.dirtySessions().includes(path)) continue; // flush failed
+      if (this.#isDirty(path)) continue; // flush failed
       // The ONE end path: a wait that parked during the awaited flush must
       // wake into `ended` now, not sit out its whole timeout — and pending
       // flush timers die with the session.
@@ -508,7 +513,7 @@ export class CollabHost {
     if (!this.isLive(path)) return null;
     // Same dirtiness guard for the debounce lane: only unflushed work may
     // touch the overlay (see #settleAll on why a clean write is harmful).
-    if (!this.#store.dirtySessions().includes(path)) return null;
+    if (!this.#isDirty(path)) return null;
     const head = await this.#opened(path);
     const settled = await this.#fs.readFile(path);
     if ((this.#destroyed.get(path) ?? 0) !== generation || !this.isLive(path)) return null;
@@ -545,6 +550,11 @@ export class CollabHost {
   #touch(path: string): void {
     this.#lastActivity.set(path, Date.now());
     void this.sweepIdle().catch(() => {});
+  }
+
+  #isDirty(path: string): boolean {
+    const session = this.#store.sessions().find((candidate) => candidate.path === path);
+    return session !== undefined && session.headVersion > session.overlayVersion;
   }
 
   #assertLive(path: string): void {
