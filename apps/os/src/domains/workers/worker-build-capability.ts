@@ -15,7 +15,7 @@ export type WorkerBuildRequest = {
 };
 
 /** A caller-owned wait on a build whose execution is anchored by the coordinator actor. */
-export type WorkerBuildOperation = Promise<WorkerBuildArtifact> & Partial<Disposable>;
+type WorkerBuildOperation = Promise<WorkerBuildArtifact> & Partial<Disposable>;
 
 /** Route one immutable build to its globally keyed coordinator actor. */
 export function coordinateWorkerBuild(
