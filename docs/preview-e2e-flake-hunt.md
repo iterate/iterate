@@ -52,6 +52,40 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 8 (2026-07-22, post-#2251)
+
+This is a fresh proof from `origin/main` at
+`cd5f4a67b9df5bc05fd2e38fe5ea9eda63bd6e7b`, including the cold worker-build
+handoff from #2251 and the fixed durable-stream telemetry from #2249. It
+inherits no streak: the accepted-run counter starts at zero.
+
+The final #2251 head, `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4`,
+passed its normal preview check on the first workflow attempt. The complete
+check took 5m20s. OS deployment was the critical deployment lane at 148.9s,
+while OS e2e took 133.7s: Playwright passed 63/63 tests in 2.1m and Vitest
+passed 48 files, with 2 skipped, in 78.98s. This is useful green baseline
+evidence but not an accepted marathon run because it exceeded five minutes
+and absorbed one Vitest retry.
+
+The retried case was `Project worker processEventBatch receives events from
+every project stream and can cross-post`. Its first attempt reached the
+30-second stream-wait watchdog and its retry passed, bringing the case to
+59.18s. This first occurrence is recorded rather than quarantining a
+substantial concurrency test from one observation. Any recurrence in this
+round rejects the run and triggers diagnosis; a test shown to be independently
+flaky or pathologically slow will be fixed or quarantined with a tracking task
+under the normal testing policy.
+
+Round-8 run ledger:
+
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                     |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------- |
+| Pre-round normal preview | `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4` |          0/25 |       1 | Passed in 5m20s; cross-project stream retry |
+
+The dedicated round-8 PR dispatches the canonical Depot workflow for every
+attempt. Its immutable head, workflow IDs, timings, and retry counts will be
+recorded here without replacing normal preview CI with a custom runner.
+
 ## Round 7 (2026-07-21, post-#2226 and #2227)
 
 This is a fresh proof from `origin/main` at
