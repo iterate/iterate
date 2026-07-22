@@ -236,11 +236,16 @@ function ApprovalCard({
   targeted: boolean;
 }) {
   const queryClient = useQueryClient();
-  const detailsKey = ["approval-details", projectId, request.offset];
+  const detailsKey = ["approval-details", projectId, request.offset, interaction.kind];
+  const initialDetails = {
+    body: false,
+    expanded: interaction.kind === "pending",
+    script: false,
+  };
   const details = useQuery({
     queryKey: detailsKey,
-    queryFn: async () => ({ body: false, script: false }),
-    initialData: { body: false, script: false },
+    queryFn: async () => initialDetails,
+    initialData: initialDetails,
     staleTime: Infinity,
   });
   const source = request.payload.source;
@@ -269,7 +274,7 @@ function ApprovalCard({
     staleTime: Infinity,
   });
   const body = approvalBodyForDisplay(request.payload);
-  const toggle = (section: "body" | "script") => {
+  const toggle = (section: "body" | "expanded" | "script") => {
     queryClient.setQueryData(detailsKey, { ...details.data, [section]: !details.data[section] });
   };
 
@@ -281,7 +286,15 @@ function ApprovalCard({
         </Text>
       ) : null}
       {interaction.kind === "resolved" ? (
-        <View style={styles.outcomeRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: details.data.expanded }}
+          onPress={() => toggle("expanded")}
+          style={styles.compactSummary}
+        >
+          <Text numberOfLines={1} style={[styles.method, styles.compactMethod]}>
+            {request.payload.method} {safeHost(request.payload.url)}
+          </Text>
           <Text
             style={[
               styles.outcomeBadge,
@@ -292,146 +305,159 @@ function ApprovalCard({
           >
             {interaction.outcome.decision === "approved" ? "Approved" : "Rejected"}
           </Text>
-          <Text style={styles.outcomeDetail}>
-            {interaction.outcome.decision === "rejected"
-              ? interaction.outcome.reason
-              : interaction.outcome.deliveryError
-                ? `Delivery failed · ${interaction.outcome.deliveryError}`
-                : `Upstream ${interaction.outcome.upstreamStatus || "status unavailable"}`}
+          <Text style={styles.compactChevron}>{details.data.expanded ? "▾" : "▸"}</Text>
+        </Pressable>
+      ) : (
+        <Text style={styles.method}>
+          {request.payload.method} {safeHost(request.payload.url)}
+        </Text>
+      )}
+
+      {details.data.expanded ? (
+        <>
+          {interaction.kind === "resolved" ? (
+            <Text style={styles.outcomeDetail}>
+              {interaction.outcome.decision === "rejected"
+                ? interaction.outcome.reason
+                : interaction.outcome.deliveryError
+                  ? `Delivery failed · ${interaction.outcome.deliveryError}`
+                  : `Upstream ${interaction.outcome.upstreamStatus || "status unavailable"}`}
+            </Text>
+          ) : null}
+          <Text style={styles.url} selectable>
+            {request.payload.url}
           </Text>
-        </View>
-      ) : null}
-      <Text style={styles.method}>
-        {request.payload.method} {safeHost(request.payload.url)}
-      </Text>
-      <Text style={styles.url} selectable>
-        {request.payload.url}
-      </Text>
-      {request.payload.secretPaths.length > 0 ? (
-        <Text style={styles.secretLine}>spends {request.payload.secretPaths.join(", ")}</Text>
-      ) : null}
-      <Text style={styles.meta} selectable>
-        body sha256: {request.payload.bodySha256 || "none"}
-      </Text>
-
-      {body ? (
-        <View style={styles.detailSection}>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => toggle("body")}
-            style={styles.detailHeader}
-          >
-            <Text style={styles.chevron}>{details.data.body ? "▾" : "▸"}</Text>
-            <Text style={styles.detailTitle}>
-              {request.payload.body === undefined ? "Request body preview" : "Full request body"}
-            </Text>
-            {request.payload.body?.encoding === "base64" ? (
-              <Text style={styles.detailHint}>base64</Text>
-            ) : null}
-          </Pressable>
-          {details.data.body ? (
-            body.language === "json" ? (
-              <CodeBlock language="json" muted={false} text={body.text} />
-            ) : (
-              <ScrollView style={styles.bodyScroller} nestedScrollEnabled>
-                <Text style={styles.bodyText} selectable>
-                  {body.text}
-                </Text>
-              </ScrollView>
-            )
+          {request.payload.secretPaths.length > 0 ? (
+            <Text style={styles.secretLine}>spends {request.payload.secretPaths.join(", ")}</Text>
           ) : null}
-        </View>
-      ) : null}
+          <Text style={styles.meta} selectable>
+            body sha256: {request.payload.bodySha256 || "none"}
+          </Text>
 
-      {source?.kind === "script-execution" ? (
-        <View style={styles.detailSection}>
-          <View style={styles.sourceHeader}>
-            <View style={styles.sourceCopy}>
-              <Text style={styles.detailLabel}>Triggered by codemode</Text>
-              <Text style={styles.sourceMeta} selectable>
-                {source.streamPath} · script event #{source.scriptRunRequestedEventOffset}
-              </Text>
-            </View>
-            {source.streamPath.startsWith("/agents/") ? (
+          {body ? (
+            <View style={styles.detailSection}>
               <Pressable
-                accessibilityRole="link"
-                onPress={() =>
-                  router.push({
-                    pathname: "/project/[projectId]/chat",
-                    params: { path: source.streamPath, projectId, slug: projectSlug },
-                  })
-                }
-                style={styles.threadLink}
+                accessibilityRole="button"
+                onPress={() => toggle("body")}
+                style={styles.detailHeader}
               >
-                <Text style={styles.threadLinkText}>Show thread</Text>
+                <Text style={styles.chevron}>{details.data.body ? "▾" : "▸"}</Text>
+                <Text style={styles.detailTitle}>
+                  {request.payload.body === undefined
+                    ? "Request body preview"
+                    : "Full request body"}
+                </Text>
+                {request.payload.body?.encoding === "base64" ? (
+                  <Text style={styles.detailHint}>base64</Text>
+                ) : null}
               </Pressable>
-            ) : null}
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => toggle("script")}
-            style={styles.detailHeader}
-          >
-            <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
-            <Text style={styles.detailTitle}>Script</Text>
-          </Pressable>
-          {details.data.script ? (
-            script.isPending ? (
-              <ActivityIndicator color={colors.textMuted} size="small" />
-            ) : script.isError ? (
-              <Text style={styles.error}>{script.error.message}</Text>
-            ) : (
-              <CodeBlock language="typescript" muted={false} text={script.data} />
-            )
+              {details.data.body ? (
+                body.language === "json" ? (
+                  <CodeBlock language="json" muted={false} text={body.text} />
+                ) : (
+                  <ScrollView style={styles.bodyScroller} nestedScrollEnabled>
+                    <Text style={styles.bodyText} selectable>
+                      {body.text}
+                    </Text>
+                  </ScrollView>
+                )
+              ) : null}
+            </View>
           ) : null}
-        </View>
-      ) : source ? (
-        <Text style={styles.sourceMeta}>Triggered from {source.scopePath}</Text>
-      ) : (
-        <Text style={styles.sourceMeta}>Source metadata unavailable for this older request.</Text>
-      )}
 
-      <View style={styles.policy}>
-        <Text style={styles.detailLabel}>Approval policy</Text>
-        <Text style={styles.policyDescription}>
-          {request.payload.ruleDescription || request.payload.ruleKey}
-        </Text>
-        <Text style={styles.meta}>
-          {request.payload.ruleKey} · expires{" "}
-          {new Date(request.payload.expiresAt).toLocaleTimeString()}
-        </Text>
-      </View>
-
-      {interaction.kind === "resolved" ? null : interaction.submitted ? (
-        <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
-      ) : (
-        <View style={styles.actions}>
-          <Pressable
-            style={[styles.button, styles.reject]}
-            disabled={interaction.pending}
-            onPress={() => interaction.onRespond("reject")}
-          >
-            <Text style={styles.rejectText}>Reject</Text>
-          </Pressable>
-          <Pressable
-            style={[
-              styles.button,
-              styles.approve,
-              !interaction.canApprove && styles.buttonDisabled,
-            ]}
-            disabled={interaction.pending || !interaction.canApprove}
-            onPress={() => interaction.onRespond("grant")}
-          >
-            <Text style={styles.approveText}>
-              {interaction.pending
-                ? "Signing…"
-                : interaction.canApprove
-                  ? "Approve (Face ID)"
-                  : "Enroll to approve"}
+          {source?.kind === "script-execution" ? (
+            <View style={styles.detailSection}>
+              <View style={styles.sourceHeader}>
+                <View style={styles.sourceCopy}>
+                  <Text style={styles.detailLabel}>Triggered by codemode</Text>
+                  <Text style={styles.sourceMeta} selectable>
+                    {source.streamPath} · script event #{source.scriptRunRequestedEventOffset}
+                  </Text>
+                </View>
+                {source.streamPath.startsWith("/agents/") ? (
+                  <Pressable
+                    accessibilityRole="link"
+                    onPress={() =>
+                      router.push({
+                        pathname: "/project/[projectId]/chat",
+                        params: { path: source.streamPath, projectId, slug: projectSlug },
+                      })
+                    }
+                    style={styles.threadLink}
+                  >
+                    <Text style={styles.threadLinkText}>Show thread</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => toggle("script")}
+                style={styles.detailHeader}
+              >
+                <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
+                <Text style={styles.detailTitle}>Script</Text>
+              </Pressable>
+              {details.data.script ? (
+                script.isPending ? (
+                  <ActivityIndicator color={colors.textMuted} size="small" />
+                ) : script.isError ? (
+                  <Text style={styles.error}>{script.error.message}</Text>
+                ) : (
+                  <CodeBlock language="typescript" muted={false} text={script.data} />
+                )
+              ) : null}
+            </View>
+          ) : source ? (
+            <Text style={styles.sourceMeta}>Triggered from {source.scopePath}</Text>
+          ) : (
+            <Text style={styles.sourceMeta}>
+              Source metadata unavailable for this older request.
             </Text>
-          </Pressable>
-        </View>
-      )}
+          )}
+
+          <View style={styles.policy}>
+            <Text style={styles.detailLabel}>Approval policy</Text>
+            <Text style={styles.policyDescription}>
+              {request.payload.ruleDescription || request.payload.ruleKey}
+            </Text>
+            <Text style={styles.meta}>
+              {request.payload.ruleKey} · expires{" "}
+              {new Date(request.payload.expiresAt).toLocaleTimeString()}
+            </Text>
+          </View>
+
+          {interaction.kind === "resolved" ? null : interaction.submitted ? (
+            <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
+          ) : (
+            <View style={styles.actions}>
+              <Pressable
+                style={[styles.button, styles.reject]}
+                disabled={interaction.pending}
+                onPress={() => interaction.onRespond("reject")}
+              >
+                <Text style={styles.rejectText}>Reject</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.button,
+                  styles.approve,
+                  !interaction.canApprove && styles.buttonDisabled,
+                ]}
+                disabled={interaction.pending || !interaction.canApprove}
+                onPress={() => interaction.onRespond("grant")}
+              >
+                <Text style={styles.approveText}>
+                  {interaction.pending
+                    ? "Signing…"
+                    : interaction.canApprove
+                      ? "Approve (Face ID)"
+                      : "Enroll to approve"}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+        </>
+      ) : null}
     </View>
   );
 }
@@ -471,7 +497,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textTransform: "uppercase",
   },
-  outcomeRow: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
+  compactSummary: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    minHeight: 30,
+  },
+  compactMethod: { flex: 1 },
+  compactChevron: { color: colors.textFaint, fontSize: 12 },
   outcomeBadge: {
     borderRadius: radius.full,
     borderWidth: 1,
