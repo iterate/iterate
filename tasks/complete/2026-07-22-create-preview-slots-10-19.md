@@ -1,5 +1,5 @@
 ---
-status: operational-follow-ups
+status: complete
 size: large
 branch: ops/finish-preview-slots-10-19
 started: 2026-07-20
@@ -15,7 +15,8 @@ nineteen-slot pool. Preview-14 proved the full deploy/e2e lifecycle plus real
 Google, GitHub, and Slack connections through OS. All preview Auth/OS stacks now
 inherit one project-app session secret from `_shared/preview`; their deployed
 bindings were updated without replacing code owned by other PRs. The remaining
-work is final PR CI/review and merge verification.
+provisioner and runbook encode the proven topology; final PR CI and Bugbot are
+green with no unresolved review threads.
 
 ## Goal
 
@@ -608,3 +609,7 @@ the recorded projection.
   updates preserved code owned by leased PRs. All updates passed first try and
   the five leased stacks passed both health probes. A red/green provisioner
   regression and the runbook now encode the proven topology.
+- 2026-07-22: The first final-head preview run deployed all five apps correctly
+  but OS exhausted its bounded retry on one stream-backed Waitrose scenario.
+  A same-commit retry passed in 6m04s. Every required check and Bugbot is green,
+  with no unresolved review threads; the PR is ready to merge.
