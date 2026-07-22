@@ -6241,7 +6241,11 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
     // operation. Awaiting catchUpBeforeSnapshot here first made timeoutMs
     // dishonest: a stuck catch-up could hold this call forever before the
     // timed waiter even existed.
-    await this.#reads.waitUntilEvent(input);
+    // This is the last local hop before capnweb strips workerd's lifecycle
+    // flags. Preserve the explicit availability classification so the outer
+    // relay can re-dial the replacement DO exactly once. Application errors
+    // pass through unchanged.
+    await this.#reads.waitUntilEvent(input).catch(rethrowStreamUnavailable);
   }
 }
 

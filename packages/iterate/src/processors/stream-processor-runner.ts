@@ -474,20 +474,17 @@ export class StreamProcessorRunner<
       // frames — no double-drive against a concurrent live frame, because
       // redelivered offsets dedupe against the acknowledged cursor — and
       // resolves the waiter through the ordinary frame commit. A genuinely
-      // future offset stays parked for delivery. Pull failures are logged, not
-      // rethrown: the waiter stays valid (a later frame still resolves it) and
-      // `timeoutMs` stays the caller's bound.
-      this.catchUp().catch((error: unknown) => {
-        console.error(
-          `stream processor "${this.driver.contract.slug}" waitUntilEvent(offset ${offset}) ` +
-            `self-pull failed; the waiter stays parked for delivery`,
-          error,
-        );
+      // future offset stays parked for delivery after a successful pull. A
+      // failed pull is authoritative, however: settle this wait immediately
+      // so the caller can apply its bounded availability retry instead of
+      // hiding the failure behind the full wait timeout.
+      void this.catchUp().catch((error: unknown) => {
+        reached.reject(error);
       });
-      return await reached;
+      return await reached.promise;
     }
     const { predicate, signal, timeoutMs } = args;
-    await this.#parkEventWaiter({ kind: "predicate", predicate }, { signal, timeoutMs });
+    await this.#parkEventWaiter({ kind: "predicate", predicate }, { signal, timeoutMs }).promise;
   }
 
   /** Release delivery resources. Idempotent; a disposed runner rejects new work. */
@@ -1040,9 +1037,10 @@ export class StreamProcessorRunner<
       | { kind: "predicate"; predicate: (event: StreamEvent) => boolean }
       | { kind: "offset"; offset: number },
     opts: { signal?: AbortSignal; timeoutMs?: number },
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const waiter: EventWaiter = { ...match, reject, resolve, signal: opts.signal };
+  ): { promise: Promise<void>; reject: (error: unknown) => void } {
+    let waiter!: EventWaiter;
+    const promise = new Promise<void>((resolve, reject) => {
+      waiter = { ...match, reject, resolve, signal: opts.signal };
       this.#eventWaiters.add(waiter);
       if (opts.timeoutMs !== undefined) {
         waiter.timer = setTimeout(() => {
@@ -1061,6 +1059,10 @@ export class StreamProcessorRunner<
         if (opts.signal.aborted) waiter.abortListener();
       }
     });
+    return {
+      promise,
+      reject: (error: unknown) => this.#settleEventWaiter(waiter, { error }),
+    };
   }
 
   #settleEventWaiter(
