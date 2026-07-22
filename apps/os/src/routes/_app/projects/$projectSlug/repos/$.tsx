@@ -34,6 +34,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$")({
       project: context.project,
       streamBreadcrumb: streamBreadcrumb(context.project, repoPathFromSplat(params._splat)),
     }),
+  // The loader depends on the project and repo path, never the IDE's URL-owned
+  // view state. Keep Code/Preview and sidebar search-param changes synchronous
+  // instead of re-running the project breadcrumb server function.
+  shouldReload: false,
   component: ProjectRepoDetailContent,
 });
 

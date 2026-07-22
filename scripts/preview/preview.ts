@@ -664,7 +664,7 @@ function resolvePreviewTestBaseUrlEnvironment({
     }
   }
 
-  return [...requiredUrls].map(([appSlug, environmentVariable]) => {
+  const environment = [...requiredUrls].map(([appSlug, environmentVariable]) => {
     const entry = apps[appSlug];
     if (!entry?.publicUrl || entry.headSha !== headSha) {
       throw new Error(
@@ -673,6 +673,15 @@ function resolvePreviewTestBaseUrlEnvironment({
     }
     return `${environmentVariable}=${entry.publicUrl}`;
   });
+
+  // APP_CONFIG_BASE_URL is the common runtime contract used by app-level
+  // suites. Inject the same recorded origin here so tests do not reintroduce
+  // a Doppler copy of repository-owned route data.
+  const appEntry = apps[app.slug];
+  if (app.previewTestBaseUrlEnvVar !== "APP_CONFIG_BASE_URL") {
+    environment.splice(1, 0, `APP_CONFIG_BASE_URL=${appEntry!.publicUrl}`);
+  }
+  return environment;
 }
 
 type PreviewTestTargetRunner = "vitest" | "playwright";
@@ -2119,9 +2128,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // The apps/os e2e Vitest suite runs its `node` project (engine + itx
     // catalogue matrix; the `browser` project is skipped here — the root
     // Playwright REPL specs cover the catalogue in-browser). It reads
-    // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
-    // preview Doppler config. Root Playwright specs run alongside it, using
-    // the same preview Doppler config.
+    // APP_CONFIG_BASE_URL from the orchestrator's recorded envs.ts origin and
+    // APP_CONFIG_ADMIN_API_SECRET from the leased preview Doppler config.
+    // Root Playwright specs run alongside it with the same values.
     previewTestCommandArgs: [
       "bash",
       "-c",
@@ -3545,6 +3554,32 @@ function resolveAuthPreviewRootSecret(input: {
   );
 }
 
+function resolveSharedPreviewRootSecret(input: {
+  authDevSecret: string | null;
+  osDevSecret: string | null;
+  sharedPreviewSecret: string | null;
+}) {
+  if (!input.authDevSecret || !input.osDevSecret) {
+    throw new Error("auth/dev and os/dev must both define the project-app session secret");
+  }
+  if (input.authDevSecret !== input.osDevSecret) {
+    throw new Error("Auth and OS dev project-app session secrets differ");
+  }
+  if (input.sharedPreviewSecret && input.sharedPreviewSecret !== input.authDevSecret) {
+    throw new Error("The shared preview project-app session secret differs from dev");
+  }
+  return input.authDevSecret;
+}
+
+function previewProvisionedIntegrationSecrets() {
+  return {
+    APP_CONFIG_INTEGRATIONS__PETSHOP: JSON.stringify({
+      oauthClientId: "petshop-default",
+      oauthClientSecret: "petshop-default-secret",
+    }),
+  };
+}
+
 async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[] }) {
   const authSigningPrivateJwk = getDopplerSecret("_shared", "preview", "AUTH_FORGE_PRIVATE_JWK");
   if (!authSigningPrivateJwk) {
@@ -3574,8 +3609,20 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
     }
     rootValues[appConfigName] = value;
   }
+  const projectAppSessionSecret = resolveSharedPreviewRootSecret({
+    authDevSecret: getDopplerSecret("auth", "dev", "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
+    osDevSecret: getDopplerSecret("os", "dev", "APP_CONFIG_PROJECT_APP_SESSION_SECRET"),
+    sharedPreviewSecret: getDopplerSecret(
+      "_shared",
+      "preview",
+      "APP_CONFIG_PROJECT_APP_SESSION_SECRET",
+    ),
+  });
   setDopplerSecrets("auth", "preview", rootValues);
-  console.log("auth/preview root config ensured");
+  setDopplerSecrets("_shared", "preview", {
+    APP_CONFIG_PROJECT_APP_SESSION_SECRET: projectAppSessionSecret,
+  });
+  console.log("auth/preview and _shared/preview root configs ensured");
 
   for (const slot of input.slots) {
     const config = `preview_${slot}`;
@@ -3592,6 +3639,17 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
     ensureDopplerConfig("auth", config, "preview");
     ensureDopplerConfig("semaphore", config, "preview");
     ensureDopplerConfig("streams-example-app", config, "preview");
+
+    for (const project of ["auth", "os"]) {
+      if (
+        getDopplerSecret(project, config, "APP_CONFIG_PROJECT_APP_SESSION_SECRET") !==
+        projectAppSessionSecret
+      ) {
+        throw new Error(
+          `${project}/${config} must inherit APP_CONFIG_PROJECT_APP_SESSION_SECRET from _shared/preview; remove the child override`,
+        );
+      }
+    }
 
     const existingSeed = input.rotate
       ? null
@@ -3616,7 +3674,6 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
       ? null
       : getDopplerSecret("auth", config, "APP_CONFIG_BETTER_AUTH_SECRET");
     const betterAuthSecret = existingBetterAuthSecret || freshSecret();
-
     const seed = JSON.stringify([
       {
         clientId,
@@ -3655,6 +3712,7 @@ async function ensureAuthPreviewConfigs(input: { rotate: boolean; slots: number[
     });
 
     setDopplerSecrets("os", config, {
+      ...previewProvisionedIntegrationSecrets(),
       APP_CONFIG_ITERATE_AUTH__ISSUER: `${authOrigin}/api/auth`,
       APP_CONFIG_ITERATE_AUTH__CLIENT_ID: clientId,
       APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET: clientSecret,
@@ -4275,18 +4333,27 @@ async function readPreviewAppConfig(input: {
 
   const dopplerConfig: unknown = JSON.parse(result.stdout);
   return parsePreviewAppConfig(
-    typeof dopplerConfig === "object" && dopplerConfig !== null
-      ? {
-          ...dopplerConfig,
-          ...repoConfig,
-          projectHostnameBases:
-            repoConfig.projectHostnameBases ??
-            ("projectHostnameBases" in dopplerConfig
-              ? dopplerConfig.projectHostnameBases
-              : undefined),
-        }
-      : dopplerConfig,
+    mergePreviewAppConfig({ dopplerConfig, repositoryConfig: repoConfig }),
   );
+}
+
+function mergePreviewAppConfig(input: {
+  dopplerConfig: unknown;
+  repositoryConfig: { baseUrl: string; projectHostnameBases?: string[]; workerName: string };
+}) {
+  if (typeof input.dopplerConfig !== "object" || input.dopplerConfig === null) {
+    return input.dopplerConfig;
+  }
+  return {
+    ...input.dopplerConfig,
+    baseUrl: input.repositoryConfig.baseUrl,
+    workerName: input.repositoryConfig.workerName,
+    projectHostnameBases:
+      input.repositoryConfig.projectHostnameBases ??
+      ("projectHostnameBases" in input.dopplerConfig
+        ? input.dopplerConfig.projectHostnameBases
+        : undefined),
+  };
 }
 
 async function runPreviewDeployCommand(input: {
@@ -5274,9 +5341,8 @@ async function retakeRecordedSlotIfFree(input: {
 /**
  * Why a slot action was refused: the semaphore no longer attributes a slot
  * to this holder. CONTRACT: the message always contains the exact substring
- * "no longer belongs to" — scripts/preview/flake-hunt-loop.sh and on-call
- * humans grep for it to tell a slot steal apart from ordinary failures.
- * Change both sides together.
+ * "no longer belongs to" — on-call humans grep for it to tell a slot steal
+ * apart from ordinary failures.
  */
 function describeLostSlotOwnership(input: {
   currentHolder: string | null;
@@ -6344,6 +6410,8 @@ export const previewInternals = {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  mergePreviewAppConfig,
+  previewProvisionedIntegrationSecrets,
   readPlaywrightTestTelemetry,
   readPreviewAppConfig,
   readCanonicalTestTelemetry,
@@ -6353,6 +6421,7 @@ export const previewInternals = {
   renderPreviewRetrySummary,
   previewTestFailureMessage,
   resolveAuthPreviewRootSecret,
+  resolveSharedPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,

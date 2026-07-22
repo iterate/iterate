@@ -57,9 +57,10 @@ away from.
 4. **One retry, watchdogs above, telemetry always.** Retries live in
    exactly one layer (the individual test, CI only); everything above is
    a fail-never-retry watchdog sized to ~2× healthy p99; every absorbed
-   retry surfaces in the PR table but does not make an otherwise-green run
-   fail. A recurring or pathologically slow unrelated flake is explicitly
-   quarantined and tracked instead of repeatedly taxing the critical path.
+   retry surfaces in the PR table but does not make an otherwise-green
+   ordinary PR run fail. A recurring or pathologically slow unrelated flake
+   is explicitly quarantined and tracked instead of repeatedly taxing the
+   critical path.
    Budgets are evidence, not vibes — see [Retries and
    timeouts](#retries-and-timeouts) and the marathon audit.
 
@@ -269,25 +270,25 @@ The root Playwright config additionally honors the Playwright-conventional
 `apps/os/e2e/tui-test/tui-test.config.ts` and returns to this table if that
 lane is revived.
 
-| Variable                             | Set by                                             | Controls                                                                                                                | Default                               |
-| ------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `APP_CONFIG_BASE_URL`                | Doppler (deployed configs); unset in local configs | THE deployment under test, for every lane                                                                               | Local dev-server discovery file       |
-| `APP_CONFIG_ADMIN_API_SECRET`        | Doppler                                            | Admin credential for the itx surface (project seeding, admin lanes)                                                     | None — lanes that need it throw       |
-| `APP_CONFIG_INTEGRATIONS__SLACK`     | Doppler                                            | Gates the slack-agent e2e suite (provides the Slack signing secret)                                                     | Unset → suite skips                   |
-| `SLACK_CI_BOT_TOKEN`                 | Doppler (`os/*`, `_shared/prd`)                    | **Inbound message actor** for real Slack smokes (Niterate). Not the product bot — see [Slack testing](slack-testing.md) | Unset → scripted smokes cannot post   |
-| `TEST_TELEMETRY_ARTIFACT_FILE`       | The preview orchestrator, or you                   | Optional named immediate canonical JSON used by the PR retry summary                                                    | Unset → no immediate copy             |
-| `TEST_TELEMETRY_ARTIFACT_DIR`        | CI, or you                                         | Durable canonical JSON directory consumed by the always-running finalizer                                               | Unset → reporter does not write       |
-| `TEST_TELEMETRY_KIND`                | CI/orchestrator                                    | Shared `unit`, `integration`, or `e2e` dimension                                                                        | Runner-appropriate default            |
-| `TEST_TELEMETRY_LANE`                | CI/orchestrator                                    | Shared lane dimension (`unit`, `vitest`, `playwright`, `onboarding-smoke`, …)                                           | Runner-appropriate default            |
-| `TEST_TELEMETRY_APP`                 | Preview orchestrator                               | Deployed application dimension                                                                                          | Unset outside app e2e                 |
-| `TEST_TELEMETRY_PREVIEW_SLOT`        | Preview orchestrator                               | Preview slot dimension                                                                                                  | Unset outside preview                 |
-| `TEST_TELEMETRY_HEAD_SHA`            | Preview orchestrator                               | Exact tested commit identity, including manually dispatched PR runs                                                     | Ambient GitHub SHA, then local HEAD   |
-| `TEST_TELEMETRY_BRANCH`              | Preview orchestrator                               | Exact tested source branch, including manually dispatched PR runs                                                       | Ambient GitHub head/ref name          |
-| `TEST_TELEMETRY_PULL_REQUEST_NUMBER` | Preview orchestrator                               | Exact selected PR identity for manually dispatched preview runs                                                         | Ambient pull-request ref, then unset  |
-| `TEST_TELEMETRY_EXPECTED_WORKSPACES` | CI finalizer                                       | Comma-separated unit workspaces that must each have emitted one runner artifact                                         | Unset → require at least one artifact |
-| `GITHUB_SHA`                         | GitHub Actions (ambient)                           | Labels the preview-smoke seed project slug in CI                                                                        | `"manual"`                            |
-| `CI`                                 | GitHub Actions                                     | Playwright: `forbidOnly`, one retry, trace on first retry, never reuse an existing dev server                           | Unset locally                         |
-| `VIDEO_MODE`                         | You                                                | `"1"` records spec demo videos with relaxed timeouts — see [Video mode](#video-mode-recorded-spec-demos-for-prs)        | Video only retained on failure        |
+| Variable                             | Set by                                                | Controls                                                                                                                | Default                               |
+| ------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `APP_CONFIG_BASE_URL`                | Doppler (deployed configs); unset in local configs    | THE deployment under test, for every lane                                                                               | Local dev-server discovery file       |
+| `APP_CONFIG_ADMIN_API_SECRET`        | Doppler                                               | Admin credential for the itx surface (project seeding, admin lanes)                                                     | None — lanes that need it throw       |
+| `APP_CONFIG_INTEGRATIONS__SLACK`     | Doppler                                               | Gates the slack-agent e2e suite (provides the Slack signing secret)                                                     | Unset → suite skips                   |
+| `SLACK_CI_BOT_TOKEN`                 | Doppler (`_shared/prd`; injected or loaded by helper) | **Inbound message actor** for real Slack smokes (Niterate). Not the product bot — see [Slack testing](slack-testing.md) | Unset → scripted smokes cannot post   |
+| `TEST_TELEMETRY_ARTIFACT_FILE`       | The preview orchestrator, or you                      | Optional named immediate canonical JSON used by the PR retry summary                                                    | Unset → no immediate copy             |
+| `TEST_TELEMETRY_ARTIFACT_DIR`        | CI, or you                                            | Durable canonical JSON directory consumed by the always-running finalizer                                               | Unset → reporter does not write       |
+| `TEST_TELEMETRY_KIND`                | CI/orchestrator                                       | Shared `unit`, `integration`, or `e2e` dimension                                                                        | Runner-appropriate default            |
+| `TEST_TELEMETRY_LANE`                | CI/orchestrator                                       | Shared lane dimension (`unit`, `vitest`, `playwright`, `onboarding-smoke`, …)                                           | Runner-appropriate default            |
+| `TEST_TELEMETRY_APP`                 | Preview orchestrator                                  | Deployed application dimension                                                                                          | Unset outside app e2e                 |
+| `TEST_TELEMETRY_PREVIEW_SLOT`        | Preview orchestrator                                  | Preview slot dimension                                                                                                  | Unset outside preview                 |
+| `TEST_TELEMETRY_HEAD_SHA`            | Preview orchestrator                                  | Exact tested commit identity, including manually dispatched PR runs                                                     | Ambient GitHub SHA, then local HEAD   |
+| `TEST_TELEMETRY_BRANCH`              | Preview orchestrator                                  | Exact tested source branch, including manually dispatched PR runs                                                       | Ambient GitHub head/ref name          |
+| `TEST_TELEMETRY_PULL_REQUEST_NUMBER` | Preview orchestrator                                  | Exact selected PR identity for manually dispatched preview runs                                                         | Ambient pull-request ref, then unset  |
+| `TEST_TELEMETRY_EXPECTED_WORKSPACES` | CI finalizer                                          | Comma-separated unit workspaces that must each have emitted one runner artifact                                         | Unset → require at least one artifact |
+| `GITHUB_SHA`                         | GitHub Actions (ambient)                              | Labels the preview-smoke seed project slug in CI                                                                        | `"manual"`                            |
+| `CI`                                 | GitHub Actions                                        | Playwright: `forbidOnly`, one retry, trace on first retry, never reuse an existing dev server                           | Unset locally                         |
+| `VIDEO_MODE`                         | You                                                   | `"1"` records spec demo videos with relaxed timeouts — see [Video mode](#video-mode-recorded-spec-demos-for-prs)        | Video only retained on failure        |
 
 ## Artifacts
 
@@ -435,8 +436,8 @@ only on genuine infra wedges).
 | A container-cold-boot test  | per-test `{ timeout }`                 | individual tests, capped at `E2E_HEAVY_TEST_TIMEOUT_MS`                                                     | ≤ 240s                                            | retry once (CI)                                             |
 | The onboarding smoke lane   | attempt loop + `timeout N <command>`   | `apps/os/e2e/vitest/onboarding-smoke.ts`; `scripts/preview/preview.ts` ← `OS_ONBOARDING_SMOKE_TIMEOUT_SECS` | 90s greeting wait per attempt; 240s lane watchdog | one more attempt, then fail; watchdog expiry fails the lane |
 | Each Vitest/Playwright lane | `timeout N <lane command>`             | `scripts/preview/preview.ts` ← `OS_PREVIEW_LANE_TIMEOUT_SECS`                                               | 480s                                              | **fail — never retry**                                      |
-| One whole preview run       | `RUN_TIMEOUT_SECS` kill-tree watchdog  | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                          | 600s                                              | **kill — never retry**                                      |
-| The Depot CI job            | `timeout-minutes`                      | `.depot/workflows/*.yml`                                                                                    | 10–45 (mainline/preview) / 300 (marathon)         | outer edge: re-run button                                   |
+| One whole preview run       | `RUN_TIMEOUT_SECS` Depot cancellation  | `scripts/preview/flake-hunt-loop.sh` ← `PREVIEW_RUN_WATCHDOG_SECS`                                          | 600s                                              | **cancel — never retry**                                    |
+| The Depot CI job            | `timeout-minutes`                      | `.depot/workflows/*.yml`                                                                                    | 10–45 minutes (20 for preview)                    | outer edge: re-run button                                   |
 
 The ladder is strictly ordered and the guard test asserts it stays that way.
 Note the deliberate rule-3 consequence: the 480s lane watchdog does _not_
@@ -446,8 +447,10 @@ watchdog does not budget for the lane doing that twice.
 ### Retry telemetry
 
 An attempt that fails and then passes on its one permitted retry does **not**
-make the run fail or block an unrelated PR. It remains useful reliability
-telemetry and must stay visible:
+make the ordinary PR run fail or block an unrelated PR. It remains useful
+reliability telemetry and must stay visible. A stability marathon has a
+different acceptance contract: any absorbed retry stops the streak so it can
+be diagnosed, even though the same test outcome remains green in normal CI.
 
 - **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
 retries: ...` (the Vitest `RetryTelemetryReporter` lives in
@@ -463,9 +466,11 @@ retries: ...` (the Vitest `RetryTelemetryReporter` lives in
   incident rather than independent flakes).
 - **Volume**: probabilistic regressions need run volume to detect — that is
   what the on-demand marathon is for
-  (`.depot/workflows/preview-e2e-marathon.yml`, N consecutive runs of the
-  full preview lane on Depot). Watch the retry counts across a marathon, not
-  just the pass/fail streak.
+  (`scripts/preview/flake-hunt-loop.sh`, N sequential dispatches of the
+  canonical full preview workflow on Depot). Every iteration follows the same
+  runner and PostHog path as ordinary preview CI. The orchestrator records the
+  retry and exits non-zero immediately; only zero-retry runs advance its
+  accepted streak.
 
 When telemetry trends up without failures, investigate it. If the test is
 repeatedly flaky or adds disproportionate tail latency, use the quarantine
