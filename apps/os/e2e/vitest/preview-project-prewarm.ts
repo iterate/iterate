@@ -5,12 +5,7 @@
  */
 import { fileURLToPath } from "node:url";
 import {
-  ciTelemetrySourceFromEnvironment,
   normalizeTestTelemetryError,
-  testTelemetryArtifactId,
-  testTelemetryContextFromEnvironment,
-  writeTestTelemetryArtifact,
-  writeTestTelemetryFailureSentinel,
   type TestTelemetryError,
   type TestTelemetryPhase,
 } from "@iterate-com/shared/test-support/ci-telemetry";
@@ -20,11 +15,13 @@ import {
 } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { connectItx } from "iterate/node";
+import {
+  PREVIEW_PROJECT_PREWARM_OPERATION_DEADLINE_MS,
+  writePreviewProjectPrewarmTelemetry,
+} from "./preview-project-prewarm-telemetry.ts";
 
-const OPERATION_DEADLINE_MS = 70_000;
-const producer = "preview-project-prewarm";
+const OPERATION_DEADLINE_MS = PREVIEW_PROJECT_PREWARM_OPERATION_DEADLINE_MS;
 const runStartedAt = Date.now();
-const startedAt = new Date(runStartedAt).toISOString();
 const moduleId = fileURLToPath(import.meta.url);
 
 const baseUrl = requiredEnvironment("APP_CONFIG_BASE_URL").replace(/\/+$/, "");
@@ -37,26 +34,13 @@ if (!headers[CLOUDFLARE_WORKERS_VERSION_OVERRIDES_HEADER]) {
   );
 }
 
-const workspace =
-  process.env.TEST_TELEMETRY_WORKSPACE ?? process.env.npm_package_name ?? "iterate-root";
-const context = testTelemetryContextFromEnvironment("script", {
-  testKind: "e2e",
-  lane: "project-prewarm",
-  workspace,
-  app: "os",
-});
-const ci = ciTelemetrySourceFromEnvironment(
-  process.env,
-  `local-preview-project-prewarm-${process.pid}-${runStartedAt}`,
-);
-const artifactId = testTelemetryArtifactId(producer, process.pid, runStartedAt);
-writeTestTelemetryFailureSentinel({ artifactId, producer, startedAt, ci, context });
-
 const phases: TestTelemetryPhase[] = [];
 const annotations: Array<{ type: string; description?: string }> = [];
 let state: "passed" | "failed" | "timedout" = "passed";
 let error: TestTelemetryError | undefined;
 
+// Do not write a pessimistic sentinel here. If the outer watchdog kills this
+// process, the parent shell writes one complete non-gating artifact instead.
 const session = connectItx({
   auth: { type: "admin-secret", secret: adminSecret },
   baseUrl,
@@ -86,84 +70,13 @@ try {
   }
 }
 
-const finishedAtMs = Date.now();
-const durationMs = finishedAtMs - runStartedAt;
-const attempt = {
-  attemptIndex: 0,
-  state,
-  durationMs,
-  startedAt,
-  startedAtSource: "reporter-clock" as const,
-  ...(error ? { error } : {}),
+const { durationMs } = writePreviewProjectPrewarmTelemetry({
+  annotations,
+  error,
+  moduleId,
   phases,
-};
-writeTestTelemetryArtifact({
-  artifactSchemaVersion: 1,
-  artifactId,
-  producer,
-  createdAt: new Date(finishedAtMs).toISOString(),
-  ci,
-  context,
-  // The optimization is non-gating by design. Its logical test outcome is
-  // expected even when it times out/fails, so analytics retain the latency
-  // and error without classifying healthy product lanes as failed.
-  run: {
-    status: "passed",
-    startedAt,
-    finishedAt: new Date(finishedAtMs).toISOString(),
-    durationMs,
-  },
-  lanes: [
-    {
-      context,
-      status: "passed",
-      durationMs,
-      exitCode: 0,
-      testCount: 1,
-      retryCount: 0,
-      collectionErrors: [],
-    },
-  ],
-  tests: [
-    {
-      fullName: "preview project prewarm > creates one fully-ready project",
-      moduleId,
-      expectedState: state,
-      outcome: "expected",
-      configuredTimeoutMs: OPERATION_DEADLINE_MS,
-      tags: [],
-      annotations,
-      retryCount: 0,
-      passedAfterRetry: false,
-      state,
-      durationMs,
-      startedAt,
-      startedAtSource: "reporter-clock",
-      attemptDetail: "complete",
-      beforeEachDurationMs: 0,
-      afterEachDurationMs: 0,
-      bodyDurationMs: durationMs,
-      attempts: [attempt],
-      phases,
-      errors: error ? [error] : [],
-      ...(error ? { firstFailure: error.message.slice(0, 300) } : {}),
-    },
-  ],
-  modules: [
-    {
-      moduleId,
-      environmentSetupDurationMs: 0,
-      prepareDurationMs: 0,
-      collectDurationMs: 0,
-      setupDurationMs: 0,
-      testAndHookDurationMs: durationMs,
-      importDurationMs: 0,
-      imports: [],
-      startedAt,
-      finishedAt: new Date(finishedAtMs).toISOString(),
-      executionWallDurationMs: durationMs,
-    },
-  ],
+  runStartedAt,
+  state,
 });
 
 console.log(`[preview-project-prewarm] ${state} in ${durationMs}ms`);

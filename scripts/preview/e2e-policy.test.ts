@@ -143,6 +143,12 @@ describe("retries live in exactly one layer", () => {
     expect(script).toContain(
       `timeout --signal=TERM --kill-after=5s ${OS_PREVIEW_PROJECT_PREWARM_TIMEOUT_SECS}s pnpm exec tsx e2e/vitest/preview-project-prewarm.ts`,
     );
+    expect(script).toContain(
+      "if [ ! -s /tmp/os-preview-project-prewarm.json ]; then env TEST_TELEMETRY_LANE=project-prewarm",
+    );
+    expect(script).toContain(
+      'pnpm exec tsx e2e/vitest/preview-project-prewarm-fallback.ts "$PREWARM_OK" "$PREWARM_DURATION_SECONDS"',
+    );
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm e2e`);
     expect(script).toContain(`timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec`);
     // Exactly one invocation each: a second occurrence means a retry wrapper came back.
@@ -151,6 +157,11 @@ describe("retries live in exactly one layer", () => {
     expect(script.split("pnpm --dir ../.. spec")).toHaveLength(2);
     expect(script.split("pnpm exec tsx e2e/vitest/onboarding-smoke.ts")).toHaveLength(2);
     expect(script.split("pnpm exec tsx e2e/vitest/preview-project-prewarm.ts")).toHaveLength(2);
+    expect(
+      script.split("pnpm exec tsx e2e/vitest/preview-project-prewarm-fallback.ts"),
+    ).toHaveLength(2);
+    expect(script).toContain('[ "$PREWARM_HARNESS_OK" -eq 0 ] && [ "$SMOKE_OK" -eq 0 ]');
+    expect(script).toContain('if [ "$PREWARM_OK" -eq 124 ] || [ "$PREWARM_OK" -eq 137 ]');
   });
 
   it("finishes the prewarm before starting the burst lanes but keeps smoke concurrent", () => {

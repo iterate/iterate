@@ -42,7 +42,10 @@ raise the budget automatically.
   Vitest, and Playwright remote burst. It warms the shared project bootstrap
   path without masking a defect: its 70-second operation deadline and outcome
   are telemetry, while failure is non-gating and the normal isolated suites
-  still prove the product. There is no retry.
+  still prove the product. There is no retry. If the outer watchdog kills the
+  prewarm before it can finish its artifact, the parent shell writes a complete
+  non-gating fallback record; failure to write or parse that fallback remains
+  a gating telemetry-harness defect.
 - TUI, Vitest, and Playwright then run concurrently. Every background process
   is joined even if another one fails, so a failure cannot orphan work or
   discard another lane's result.

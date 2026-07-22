@@ -29,6 +29,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Operational preview scripts invoked by the orchestration shell.
       "e2e/vitest/onboarding-smoke.ts",
       "e2e/vitest/preview-project-prewarm.ts",
+      "e2e/vitest/preview-project-prewarm-fallback.ts",
       // Seeded as a standalone worker entry outside apps/os/src. Tests import
       // parts of it, but the deployed config-repo worker uses the whole file.
       "config-repo-template/worker.ts",
