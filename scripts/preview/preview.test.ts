@@ -446,12 +446,14 @@ describe("preview workflow scope", () => {
         repositoryConfig: {
           baseUrl: "https://os.iterate-preview-14.com",
           projectHostnameBases: ["iterate-preview-14.app"],
+          workerName: "os-preview-14",
         },
       }),
     ).toEqual({
       baseUrl: "https://os.iterate-preview-14.com",
       projectHostnameBases: ["iterate-preview-14.app"],
       readinessBearerToken: "deployment-secret",
+      workerName: "os-preview-14",
     });
   });
 

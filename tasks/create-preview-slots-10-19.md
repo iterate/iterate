@@ -589,3 +589,7 @@ the recorded projection.
   branch's obsolete exact-subscription retry and regression while retaining the
   preview-origin and shared-session-secret work. The scripts suite (266 tests),
   scripts typecheck, focused formatting, and diff checks pass.
+- 2026-07-22: The first post-merge preview run exposed a merge-resolution bug:
+  repository-owned `workerName` was dropped when Doppler contributed readiness
+  secrets, so OS and Streams failed config validation before deploy. A red/green
+  regression now requires deployment identity to survive config composition.

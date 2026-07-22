@@ -4346,7 +4346,7 @@ async function readPreviewAppConfig(input: {
 
 function mergePreviewAppConfig(input: {
   dopplerConfig: unknown;
-  repositoryConfig: { baseUrl: string; projectHostnameBases?: string[] };
+  repositoryConfig: { baseUrl: string; projectHostnameBases?: string[]; workerName: string };
 }) {
   if (typeof input.dopplerConfig !== "object" || input.dopplerConfig === null) {
     return input.dopplerConfig;
@@ -4354,6 +4354,7 @@ function mergePreviewAppConfig(input: {
   return {
     ...input.dopplerConfig,
     baseUrl: input.repositoryConfig.baseUrl,
+    workerName: input.repositoryConfig.workerName,
     projectHostnameBases:
       input.repositoryConfig.projectHostnameBases ??
       ("projectHostnameBases" in input.dopplerConfig
