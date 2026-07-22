@@ -138,6 +138,9 @@ export class CollabEngine {
   readonly #store: CollabStore;
   readonly #broadcast: (event: CollabBroadcast) => void;
   readonly #files = new Map<string, FileEngine | Promise<FileEngine>>();
+  /** Bumped per discard — boots check it so a destructive op landing
+   * mid-boot can neither persist a doomed birth nor reinstall an orphan. */
+  readonly #discards = new Map<string, number>();
 
   constructor(options: { broadcast?: (event: CollabBroadcast) => void; store: CollabStore }) {
     this.#store = options.store;
@@ -374,6 +377,7 @@ export class CollabEngine {
    * where the durable rows are being deleted and must not resurrect. */
   discard(path: string): void {
     this.#files.delete(path);
+    this.#discards.set(path, (this.#discards.get(path) ?? 0) + 1);
   }
 
   async #live(path: string): Promise<FileEngine> {
@@ -390,18 +394,15 @@ export class CollabEngine {
     // (racing boots would mint two epochs and collide on version PKs).
     const existing = this.#files.get(path);
     if (existing !== undefined) return await existing;
-    // eslint-disable-next-line prefer-const -- assigned right below, but the
-    // closure must exist before #boot runs.
-    let booting: Promise<FileEngine>;
-    const stillCurrent = () => this.#files.get(path) === booting;
-    booting = this.#boot(path, seed, stillCurrent);
+    const generation = this.#discards.get(path) ?? 0;
+    const booting = this.#boot(path, seed, generation);
     this.#files.set(path, booting);
     try {
       const file = await booting;
       // A discard during the boot cleared our map entry: reinstalling would
       // revive an orphan engine with no durable session, and a later open
       // would serve the deleted epoch instead of seeding fresh truth.
-      if (this.#files.get(path) !== booting) {
+      if ((this.#discards.get(path) ?? 0) !== generation) {
         throw new Error(`session for ${path} ended while opening — retry to reopen`);
       }
       this.#files.set(path, file);
@@ -415,7 +416,7 @@ export class CollabEngine {
   async #boot(
     path: string,
     seed: () => Promise<{ content: string; epoch: string }>,
-    stillCurrent: () => boolean,
+    generation: number,
   ): Promise<FileEngine> {
     const snapshot = await this.#store.getSnapshot(path);
     if (snapshot === null) {
@@ -424,7 +425,7 @@ export class CollabEngine {
       // now would RESURRECT durable rows the destruction just deleted
       // (birth bypasses the epoch CAS by design — it has to, for fresh
       // sessions). Abort before touching the store.
-      if (!stillCurrent()) {
+      if ((this.#discards.get(path) ?? 0) !== generation) {
         throw new Error(`session for ${path} ended while opening — retry to reopen`);
       }
       const file = fileEngine(seeded.content, seeded.epoch, 0);
