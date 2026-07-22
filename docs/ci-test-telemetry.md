@@ -704,6 +704,24 @@ are historical PostHog `head_sha` values rather than promises that their branch
 refs or retained raw artifacts live forever. Query them with the CLI examples
 above while they remain in the configured PostHog retention window.
 
+A later PR #2241 preview at head
+`510a34bcbcb51bb822d7758f7e8221c53ee90c1a` caught a remaining modelling
+mistake: the suspend case still took 52.2 seconds. Timestamped step evidence
+showed about 22 seconds of fixture/subscription setup and another 30 seconds
+after socket close. The runtime logged a 10-second liveness timeout because CDP
+disabled page script before the browser delivered the socket's close event;
+the case had accidentally become a second half-open test and paid two guarded
+timeout windows plus redial. The suite already has a dedicated no-close-frame
+case for that path. The suspend case now waits for every original socket's
+close event, takes the network offline to stop the replacement dial from
+completing, freezes script for two seconds, and restores connectivity before
+thaw. Three zero-retry headed runs against that same preview completed in 29.4,
+28.3, and 30.4 seconds, with the recovered runtime subscribed, zero timeout
+strikes, and no reconnect warning. This is the kind of distinction the phase
+model is meant to force: a shorter stimulus did not remove the slow path until
+the evidence proved which production recovery lane the test was actually
+exercising.
+
 ## Adding Or Changing A Reporter
 
 1. Extend the canonical Zod schema only with runner-neutral fields; missing

@@ -36,7 +36,7 @@ type SuspendTimerEvidence = {
 // healthy-path window is 30s, not the theoretical "instant".
 const HEALTHY_DELIVERY_MS = 30_000;
 // Post-death recovery window. Worst case is the half-open lane: up to two
-// probe intervals + two 5s probe timeouts to declare the transport suspect,
+// probe intervals + two 10s probe timeouts to declare the transport suspect,
 // then resetTransport + a fresh dial + election + subscribe — measured ~40-56s
 // locally, so 90s leaves headroom for slower preview CI boxes without hiding
 // a real wedge (the wedge is permanent; any finite window catches it).
@@ -149,22 +149,29 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
   await waitForSubscribed(page, keys);
 
   // Mobile suspend ≈ suspended page script + the OS reaping the TCP
-  // connection. The socket close must happen BEFORE script suspension because
-  // page.evaluate is unavailable during it. Going offline while suspended also
-  // models the radio dropping, though CDP's network emulation does not reliably
-  // kill established WebSockets on its own; the explicit close guarantees it.
+  // connection. This lane covers the close-event-delivered shape; the dedicated
+  // half-open test below covers a death with no close frame and pays the real
+  // two-strike liveness windows. Wait for the ORIGINAL socket's close event
+  // before freezing so this case does not accidentally duplicate that slower
+  // half-open lane merely because CDP disabled script before the event arrived.
   const cdp = await page.context().newCDPSession(page);
-  const closed = await page.evaluate(() =>
-    (window as unknown as { __closeAllApiSockets: () => string[] }).__closeAllApiSockets(),
-  );
+  const closed = await test.step("observe socket death before suspending page script", () =>
+    page.evaluate(() =>
+      (
+        window as unknown as { __closeAllApiSocketsAndWait: () => Promise<string[]> }
+      ).__closeAllApiSocketsAndWait(),
+    ));
   console.log(`closed sockets: ${JSON.stringify(closed)}`);
   expect(closed.length, "expected at least one live /api WebSocket to close").toBeGreaterThan(0);
   await test.step("suspend page script, drop network, and resume", async () => {
+    // Block the replacement dial as soon as the original close is observed.
+    // A WebSocket started while already offline keeps timing out in Chromium
+    // after connectivity returns, so the order here is deliberate.
+    await page.context().setOffline(true);
     await page.evaluate(() =>
       (window as unknown as { __armSuspendTimerProbe: () => void }).__armSuspendTimerProbe(),
     );
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: true });
-    await page.context().setOffline(true);
     await page.waitForTimeout(SUSPEND_STIMULUS_MS);
     await page.context().setOffline(false);
     await cdp.send("Emulation.setScriptExecutionDisabled", { value: false });
@@ -176,8 +183,9 @@ test("feed resumes after page freeze + socket death (mobile suspend shape)", asy
       .toBeGreaterThanOrEqual(SUSPEND_EVIDENCE_MIN_GAP_MS);
   });
 
-  // Going back online invokes the runtime's resume check; its periodic probe
-  // remains the fallback. Append immediately and wait on durable delivery so
+  // Going back online lets the runtime's resume check fire if the browser
+  // delivers that signal after thaw; its periodic probe remains the fallback.
+  // Append immediately and wait on durable delivery so
   // a healthy runtime finishes when it heals, while the historical permanent
   // wedge still consumes the full bounded recovery window and fails.
   const [marker] = await test.step("thaw: append recovery marker", () =>
@@ -351,7 +359,7 @@ test("feed resumes after the /api WebSocket goes half-open (no close frame)", as
   // recovery that dials fresh but strands the corpse (the #1894 signature)
   // fails here even when the total count happens to look small; (2) the live
   // census returned to its pre-mute baseline — no accumulation per cycle.
-  // Window: the resume sweep needs two 5s ping strikes before it evicts.
+  // Window: the resume sweep needs two 10s ping strikes before it evicts.
   await expect
     .poll(
       () =>
@@ -460,6 +468,8 @@ function installSuspendTimerProbe(page: Page) {
  * exactly the recovery the bug report says users are forced into.
  *
  *   __closeAllApiSockets — clean close, the "close event delivered" lane.
+ *   __closeAllApiSocketsAndWait — same close, but resolves only after every
+ *     original socket emitted close; a replacement socket does not hold it up.
  *   __muteAllApiSockets  — half-open simulation: sends are swallowed and
  *     message events suppressed, but no close ever fires. This is what a
  *     mobile-suspend-killed TCP connection looks like to the page when the OS
@@ -520,6 +530,38 @@ function installSocketKillSwitch(page: Page) {
         closed.push(ws.url);
         ws.close();
       }
+      return closed;
+    };
+    (
+      window as {
+        __closeAllApiSocketsAndWait?: () => Promise<string[]>;
+      }
+    ).__closeAllApiSocketsAndWait = async () => {
+      const sockets = apiSockets();
+      const closed = sockets.map((ws) => ws.url);
+      if (sockets.length === 0) return closed;
+      await new Promise<void>((resolve, reject) => {
+        let remaining = sockets.length;
+        const timeout = setTimeout(
+          () =>
+            reject(new Error(`${remaining}/${sockets.length} original /api sockets did not close`)),
+          5_000,
+        );
+        for (const ws of sockets) {
+          ws.addEventListener(
+            "close",
+            () => {
+              remaining -= 1;
+              if (remaining === 0) {
+                clearTimeout(timeout);
+                resolve();
+              }
+            },
+            { once: true },
+          );
+          ws.close();
+        }
+      });
       return closed;
     };
     const mutedList: WebSocket[] = [];
