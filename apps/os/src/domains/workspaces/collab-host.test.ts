@@ -328,8 +328,9 @@ describe("collab host", () => {
     let reads = 0;
     const slowFs: CollabSettledFs = {
       readFile: async (path) => {
-        // Only the flush's pre-write read is slowed (the seed read is first).
-        if (++reads > 1) await gate;
+        // Only the flush's pre-write read is slowed (open performs TWO reads:
+        // the seed and the post-birth reconcile that closes the seed window).
+        if (++reads > 2) await gate;
         return fs.readFile(path);
       },
       writeFile: fs.writeFile,
@@ -509,5 +510,38 @@ describe("commit stamping after prior settles", () => {
     const changes = await host.changes(PATH);
     expect(changes.inserted).toEqual([]);
     expect(changes.deleted).toEqual([]);
+  });
+});
+
+describe("open seed race", () => {
+  test("a settled write landing during the seed read is reflected in the born session", async () => {
+    const { store } = fakeSessionStore();
+    const files = new Map([[PATH, "first"]]);
+    let reads = 0;
+    const gate: { release?: () => void } = {};
+    const fs: CollabSettledFs = {
+      readFile: async (path) => {
+        reads++;
+        // Snapshot BEFORE parking: the settled layer answered with the old
+        // text, and the write lands while the seed is still in flight.
+        const snapshot = files.get(path) ?? null;
+        if (reads === 1) {
+          await new Promise<void>((resolve) => {
+            gate.release = resolve;
+          });
+          return snapshot;
+        }
+        return files.get(path) ?? null;
+      },
+      writeFile: async (path, content) => void files.set(path, content),
+    };
+    const host = new CollabHost({ fs, store });
+    const opening = host.open(PATH);
+    // Wait until the seed read is parked, then land the write and release.
+    while (gate.release === undefined) await new Promise((r) => setTimeout(r, 1));
+    files.set(PATH, "second");
+    gate.release();
+    await opening;
+    expect(await host.readFile(PATH)).toBe("second");
   });
 });

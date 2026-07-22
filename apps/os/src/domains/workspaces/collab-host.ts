@@ -197,6 +197,16 @@ export class CollabHost {
       this.#store.endSession(path);
       throw new Error(`${path} was deleted while the session was opening — retry to reopen`);
     }
+    // Writes that landed while the seed was in flight took the NON-live path
+    // (the session wasn't durable yet) — re-read now that it is, and fold any
+    // divergence in as an external splice. Writes from here on route through
+    // the live gateway, so one read closes the window; version 0 guards the
+    // splice against a gateway write that beat the re-read.
+    const settled = await this.#fs.readFile(path);
+    if (settled !== null && settled !== opened.content && this.#engine.head(path)?.version === 0) {
+      await this.#engine.applyExternal(path, (doc) => minimalSplice(doc, settled));
+      return { content: settled, epoch: opened.epoch, version: 1 };
+    }
     return opened;
   }
 

@@ -434,6 +434,13 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
 
   async collabOpen(path: string): Promise<{ content: string; epoch: string; version: number }> {
     await this.#assertCreated();
+    // Mount points and their virtual ancestors are DIRECTORIES in the merged
+    // view — a live session there would seed an empty "file" that shadows the
+    // subtree and whose flush dies inside writeFile's mount-point guard,
+    // wedging every workspace-wide barrier until the session ends.
+    if (isVirtualDirectoryPath(this.#currentConfig().mounts, path)) {
+      throw new Error(`cannot open a collaborative session on directory "${path}"`);
+    }
     return this.#collab.open(path);
   }
 
