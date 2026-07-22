@@ -98,7 +98,6 @@ it("gives bare fetch and scoped ITX the same host-minted invocation source", () 
     exports: {} as ExecutionContext["exports"],
     projectId: "prj_private",
     scopePath: "/agents/refund-agent",
-    waitUntil: () => undefined,
   });
 
   expect(h.itxEntrypointProps).toHaveBeenCalledWith({
@@ -132,7 +131,6 @@ describe("dynamic worker spans", () => {
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: `/${privateMarker}`,
-      waitUntil: () => undefined,
     });
 
     await expect(
@@ -196,7 +194,6 @@ describe("createApp asset dispatch", () => {
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
-      waitUntil: () => undefined,
     });
 
     const response = await runner.fetch({
@@ -216,7 +213,6 @@ describe("createApp asset dispatch", () => {
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
-      waitUntil: () => undefined,
     });
 
     const response = await runner.fetch({

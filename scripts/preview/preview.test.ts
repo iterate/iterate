@@ -43,11 +43,14 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  mergePreviewAppConfig,
+  previewProvisionedIntegrationSecrets,
   readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
+  resolveSharedPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
@@ -142,6 +145,53 @@ test("Auth preview provisioning can target only an approved slot range", () => {
       slots: "3-4",
     }),
   ).toThrow(/unknown preview slot 4/);
+});
+
+test("Preview provisioning seeds the shared preview project-app session secret from dev", () => {
+  expect(
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      sharedPreviewSecret: null,
+    }),
+  ).toBe("shared-non-production-secret");
+});
+
+test("Preview provisioning preserves a matching shared preview session secret", () => {
+  expect(
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      sharedPreviewSecret: "shared-non-production-secret",
+    }),
+  ).toBe("shared-non-production-secret");
+});
+
+test("Preview provisioning refuses divergent project-app session roots", () => {
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "auth-secret",
+      osDevSecret: "os-secret",
+      sharedPreviewSecret: null,
+    }),
+  ).toThrow(/dev project-app session secrets differ/);
+
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      sharedPreviewSecret: "stale-preview-secret",
+    }),
+  ).toThrow(/shared preview project-app session secret differs from dev/);
+});
+
+test("Preview provisioning includes the Dummy Petshop client OS deploys require", () => {
+  expect(
+    JSON.parse(previewProvisionedIntegrationSecrets().APP_CONFIG_INTEGRATIONS__PETSHOP),
+  ).toEqual({
+    oauthClientId: "petshop-default",
+    oauthClientSecret: "petshop-default-secret",
+  });
 });
 
 describe("preview app dependency expansion", () => {
@@ -349,6 +399,49 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- apps/dummy-petshop/**");
+  });
+
+  test("resolves repository-owned preview origins without duplicating them in Doppler", async () => {
+    await expect(
+      readPreviewAppConfig({
+        app: cloudflarePreviewApps.semaphore,
+        commandEnvironment: {},
+        dopplerConfig: "preview_14",
+        repositoryRoot: repoRoot,
+      }),
+    ).resolves.toEqual({
+      baseUrl: "https://semaphore.iterate-preview-14.com",
+      projectHostnameBases: [],
+      workerName: "semaphore-preview-14",
+    });
+
+    expect(cloudflarePreviewApps.os.resolvePreviewAppConfig?.("preview_14")).toEqual({
+      baseUrl: "https://os.iterate-preview-14.com",
+      projectHostnameBases: ["iterate-preview-14.app"],
+      workerName: "os-preview-14",
+    });
+  });
+
+  test("combines an envs.ts origin with a Doppler readiness bearer", () => {
+    expect(
+      mergePreviewAppConfig({
+        dopplerConfig: {
+          baseUrl: null,
+          projectHostnameBases: [],
+          readinessBearerToken: "deployment-secret",
+        },
+        repositoryConfig: {
+          baseUrl: "https://os.iterate-preview-14.com",
+          projectHostnameBases: ["iterate-preview-14.app"],
+          workerName: "os-preview-14",
+        },
+      }),
+    ).toEqual({
+      baseUrl: "https://os.iterate-preview-14.com",
+      projectHostnameBases: ["iterate-preview-14.app"],
+      readinessBearerToken: "deployment-secret",
+      workerName: "os-preview-14",
+    });
   });
 
   test("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {

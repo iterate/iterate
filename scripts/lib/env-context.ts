@@ -19,7 +19,7 @@ export class CloudflareApiError extends Error {
     readonly method: string,
     readonly path: string,
     readonly status: number,
-    details: unknown,
+    readonly details: unknown,
   ) {
     super(
       `Cloudflare API ${method} ${path} failed (${status}): ${String(JSON.stringify(details) ?? details).slice(0, 500)}`,

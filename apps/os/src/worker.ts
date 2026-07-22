@@ -202,7 +202,6 @@ async function apiFetch(
       exports: ctx.exports,
       projectId: route.resolved.projectId,
       scopePath: ref.path,
-      waitUntil: (promise) => ctx.waitUntil(promise),
     });
     // The serve envelope (domains/workers/project-serve.ts) owns everything a
     // browser sees around the dispatch: cold-build budget, building /

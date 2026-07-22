@@ -75,7 +75,6 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
       exports: this.ctx.exports,
       projectId,
       scopePath,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
 
     // Scripts execute inside THIS scope: the loaded worker's env.ITX resolves
