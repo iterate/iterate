@@ -390,14 +390,24 @@ export class CollabEngine {
     // (racing boots would mint two epochs and collide on version PKs).
     const existing = this.#files.get(path);
     if (existing !== undefined) return await existing;
-    const booting = this.#boot(path, seed);
+    // eslint-disable-next-line prefer-const -- assigned right below, but the
+    // closure must exist before #boot runs.
+    let booting: Promise<FileEngine>;
+    const stillCurrent = () => this.#files.get(path) === booting;
+    booting = this.#boot(path, seed, stillCurrent);
     this.#files.set(path, booting);
     try {
       const file = await booting;
+      // A discard during the boot cleared our map entry: reinstalling would
+      // revive an orphan engine with no durable session, and a later open
+      // would serve the deleted epoch instead of seeding fresh truth.
+      if (this.#files.get(path) !== booting) {
+        throw new Error(`session for ${path} ended while opening — retry to reopen`);
+      }
       this.#files.set(path, file);
       return file;
     } catch (error) {
-      this.#files.delete(path);
+      if (this.#files.get(path) === booting) this.#files.delete(path);
       throw error;
     }
   }
@@ -405,10 +415,18 @@ export class CollabEngine {
   async #boot(
     path: string,
     seed: () => Promise<{ content: string; epoch: string }>,
+    stillCurrent: () => boolean,
   ): Promise<FileEngine> {
     const snapshot = await this.#store.getSnapshot(path);
     if (snapshot === null) {
       const seeded = await seed();
+      // A discard landed while the seed was in flight: persisting the birth
+      // now would RESURRECT durable rows the destruction just deleted
+      // (birth bypasses the epoch CAS by design — it has to, for fresh
+      // sessions). Abort before touching the store.
+      if (!stillCurrent()) {
+        throw new Error(`session for ${path} ended while opening — retry to reopen`);
+      }
       const file = fileEngine(seeded.content, seeded.epoch, 0);
       await this.#snapshot(path, file, { birth: true });
       return file;

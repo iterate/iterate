@@ -492,3 +492,28 @@ describe("doc size gate", () => {
     expect(rejected).toBe(true);
   });
 });
+
+describe("discard during boot", () => {
+  test("a discard mid-boot unwinds the open instead of reviving an orphan engine", async () => {
+    const store = fakeStore().store;
+    const engine = new CollabEngine({ store });
+    const gate: { release?: () => void } = {};
+    const opening = engine.open(PATH, async () => {
+      await new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+      return { content: "doomed seed", epoch: "e-orphan" };
+    });
+    while (gate.release === undefined) await new Promise((r) => setTimeout(r, 1));
+    engine.discard(PATH); // destructive op lands while the seed is in flight
+    gate.release();
+    await expect(opening).rejects.toThrow(/ended while opening/);
+    // A later open must SEED FRESH, never resurrect the discarded engine.
+    const reopened = await engine.open(PATH, async () => ({
+      content: "fresh truth",
+      epoch: "e-fresh",
+    }));
+    expect(reopened.content).toBe("fresh truth");
+    expect(reopened.epoch).toBe("e-fresh");
+  });
+});
