@@ -1,4 +1,7 @@
 name: LOC report
+permissions:
+  contents: read
+  pull-requests: write
 on:
   pull_request: {}
   workflow_dispatch: {}
@@ -11,7 +14,7 @@ jobs:
       size: 8x32
       image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
     env:
-      ITERATE_BOT_GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

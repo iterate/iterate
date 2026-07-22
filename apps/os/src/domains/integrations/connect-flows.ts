@@ -1258,6 +1258,7 @@ async function disconnectSlack(input: {
     connection: input.connection,
     method: "auth.revoke",
     projectId: input.projectId,
+    streamContext: { kind: "scope", scopePath: "/" },
   }).catch(() => null);
   const teamId = status.metadata.teamId as string | undefined;
   await recordDisconnection({
@@ -1317,6 +1318,7 @@ async function disconnectTelegram(input: {
     connection: input.connection,
     method: "deleteWebhook",
     projectId: input.projectId,
+    streamContext: { kind: "scope", scopePath: "/" },
   }).catch(() => null);
   const botId = status.metadata.botId as string | undefined;
   await recordDisconnection({

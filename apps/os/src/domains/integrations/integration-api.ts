@@ -147,7 +147,10 @@ async function handleMcpOAuthCallback(input: {
     } catch {
       return redirectWithError(null, "mcp_oauth_not_a_member");
     }
-    const egress = projectEgressFetcher(input.context.executionCtx.exports, state.projectId);
+    const egress = projectEgressFetcher(input.context.executionCtx.exports, state.projectId, {
+      kind: "scope",
+      scopePath: "/",
+    });
     const result = await completeMcpOAuth(state, {
       code,
       ...(iss ? { iss } : {}),

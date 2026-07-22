@@ -461,6 +461,7 @@ describe("getConnectionStatus (telegram) + disconnect", () => {
       connection: "mishashelperbot",
       method: "deleteWebhook",
       projectId: PROJECT_ID,
+      streamContext: { kind: "scope", scopePath: "/" },
     });
 
     // Secrets have no delete: the emptied egress allowlist bricks the token.

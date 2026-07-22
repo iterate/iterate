@@ -9,7 +9,6 @@ export async function updatePrDashboard() {
   const repo = getRepo();
   const isTest = getEventName() !== "pull_request";
   const channel = isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#ci"];
-  const stateVariableName = isTest ? "SLACK_PR_DASHBOARD_STATE_TEST" : "SLACK_PR_DASHBOARD_STATE";
   const dryRun = !process.env.CI;
 
   const now = new Date();
@@ -107,24 +106,7 @@ export async function updatePrDashboard() {
     blocks: chunkSlackBlocks(lines),
   };
   const slack = getSlackClient();
-  type State = { date: string; channel: string; ts: string; details_ts?: string };
-  const state: State | null = await github.rest.actions
-    .getRepoVariable({ ...repo, name: stateVariableName })
-    .then((res) => JSON.parse(res.data.value) as State)
-    .catch((error: { status?: number }) => {
-      if (error.status === 404) return null;
-      throw error;
-    });
-
-  const writeState = async (newState: State) => {
-    const value = JSON.stringify(newState);
-    await github.rest.actions
-      .updateRepoVariable({ ...repo, name: stateVariableName, value })
-      .catch(async (error: { status?: number }) => {
-        if (error.status !== 404) throw error;
-        await github.rest.actions.createRepoVariable({ ...repo, name: stateVariableName, value });
-      });
-  };
+  const state = await findDashboardState(slack, { channel, heading, today });
   const postDetailsInThread = async (parentTs: string) => {
     const details = await slack.chat.postMessage({
       ...detailsPayload,
@@ -134,7 +116,7 @@ export async function updatePrDashboard() {
     return details.ts;
   };
 
-  if (state && state.date === today && state.channel === channel) {
+  if (state) {
     const updated = await slack.chat
       .update({ channel, ts: state.ts, text: summaryText, blocks: [] })
       .catch((error) => {
@@ -143,13 +125,13 @@ export async function updatePrDashboard() {
       });
     if (updated) {
       const detailsUpdated =
-        state.details_ts &&
-        (await slack.chat.update({ ...detailsPayload, ts: state.details_ts }).catch((error) => {
+        state.detailsTs &&
+        (await slack.chat.update({ ...detailsPayload, ts: state.detailsTs }).catch((error) => {
           console.warn("details chat.update failed, re-posting in thread:", error);
           return null;
         }));
       if (!detailsUpdated) {
-        await writeState({ ...state, details_ts: await postDetailsInThread(state.ts) });
+        await postDetailsInThread(state.ts);
       }
       console.log(`Updated existing dashboard message ${state.ts}`);
       return;
@@ -159,8 +141,44 @@ export async function updatePrDashboard() {
   const message = await slack.chat.postMessage({ channel, text: summaryText });
   if (!message.ts) throw new Error("No ts in postMessage response");
   const detailsTs = await postDetailsInThread(message.ts);
-  await writeState({ date: today, channel, ts: message.ts, details_ts: detailsTs });
   console.log(`Posted new dashboard message ${message.ts} (details ${detailsTs})`);
+}
+
+/** Find today's dashboard in Slack itself, avoiding a second mutable state store. */
+export async function findDashboardState(
+  slack: ReturnType<typeof getSlackClient>,
+  input: { channel: string; heading: string; today: string },
+): Promise<{ ts: string; detailsTs?: string } | null> {
+  const oldest = String(Date.parse(`${input.today}T00:00:00.000Z`) / 1_000);
+  let cursor: string | undefined;
+  for (;;) {
+    const history = await slack.conversations.history({
+      channel: input.channel,
+      cursor,
+      limit: 100,
+      oldest,
+    });
+    const parent = history.messages?.find(
+      (message) => message.ts && message.text?.startsWith(`${input.heading} —`),
+    );
+    if (parent?.ts) {
+      const replies = await slack.conversations.replies({
+        channel: input.channel,
+        limit: 100,
+        ts: parent.ts,
+      });
+      const details = replies.messages?.find(
+        (message) =>
+          message.ts !== parent.ts &&
+          ((parent.bot_id && message.bot_id === parent.bot_id) ||
+            (parent.user && message.user === parent.user)),
+      );
+      return { ts: parent.ts, ...(details?.ts ? { detailsTs: details.ts } : {}) };
+    }
+
+    cursor = history.response_metadata?.next_cursor || undefined;
+    if (!cursor) return null;
+  }
 }
 
 function chunkSlackBlocks(lines: string[]) {

@@ -42,6 +42,7 @@ import { NotificationProcessor } from "../notifications/notification-processor-i
 import type { ProjectEgressIntercept, ProjectEgressInterceptor } from "./egress.ts";
 import {
   buildApprovalMessage,
+  approvalRequestBody,
   evaluateGrant,
   matchEgressRule,
   sha256Hex,
@@ -55,6 +56,7 @@ import {
   openAiAiGatewayRoutingFromConfig,
   openAiGatewayBindingEndpoint,
 } from "./openai-ai-gateway-egress.ts";
+import { takeStreamContext, type StreamContext } from "./stream-context.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
@@ -127,6 +129,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       itx: itxForScope({
         auth: trustedInternalAuthContext(),
         ctx: this.ctx,
+        streamContext: { kind: "scope", scopePath: "/" },
         path: "/",
         projectId: this.#name.projectId,
       }),
@@ -166,6 +169,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
             connection,
             method: "reactions.add",
             projectId: this.#name.projectId,
+            streamContext: { kind: "scope", scopePath: this.#name.path },
           });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -199,6 +203,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
           connection,
           method: "sendMessage",
           projectId: this.#name.projectId,
+          streamContext: { kind: "scope", scopePath: this.#name.path },
         }),
       telegramAccessSettingsUrl: async ({ connection, projectId }) => {
         const project = await readProjectById(this.env.PROJECT_DIRECTORY, projectId);
@@ -327,12 +332,13 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const taken = takeStreamContext(request);
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
       // receive raw secret material, only getSecret(...) placeholders.
-      return await this.#egressInterceptor.value(request);
+      return await this.#egressInterceptor.value(taken.request);
     }
-    return this.#egressWithApprovalGate(request);
+    return this.#egressWithApprovalGate(taken.request, taken.streamContext);
   }
 
   /**
@@ -344,7 +350,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
    * UI reading them) can honestly say "this request spends /secrets/x"
    * without material ever leaving the platform.
    */
-  async #egressWithApprovalGate(request: Request): Promise<Response> {
+  async #egressWithApprovalGate(request: Request, streamContext: StreamContext): Promise<Response> {
     const rules = await this.#egressRules();
     if (rules.length === 0) return this.#egress(request);
 
@@ -366,7 +372,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       });
     }
     if (scanned.problems[0] !== undefined) return this.#egress(request);
-    return this.#holdForHumanApproval({ request, rule, secretPaths });
+    return this.#holdForHumanApproval({ request, rule, secretPaths, streamContext });
   }
 
   /**
@@ -397,6 +403,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
     request: Request;
     rule: EgressRule;
     secretPaths: string[];
+    streamContext: StreamContext;
   }): Promise<Response> {
     const { request, rule } = input;
     // ONE deadline drives both the `expiresAt` the approver UI reads and the
@@ -412,8 +419,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
       headers: Object.fromEntries(request.headers),
       bodySha256: bodyBytes === null ? null : await sha256Hex(bodyBytes),
       bodyPreview: bodyBytes === null ? null : utf8Preview(bodyBytes),
+      body: bodyBytes === null ? null : approvalRequestBody(bodyBytes),
       secretPaths: input.secretPaths,
       ruleKey: rule.ruleKey,
+      ruleDescription: rule.description,
+      streamContext: input.streamContext,
       expiresAt: new Date(deadline).toISOString(),
     };
 

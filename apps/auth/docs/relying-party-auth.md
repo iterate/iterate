@@ -75,7 +75,7 @@ An internal app in a project's config repo does not configure an OAuth client.
 It asks its project capability for the stronger project-member gate:
 
 ```ts
-export class InternalApp extends IterateWorkerEntrypoint {
+export class PrivateApp extends IterateWorkerEntrypoint {
   async fetch(request: Request): Promise<Response> {
     using itx = await this.env.ITX.get();
     const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(request);
@@ -93,9 +93,8 @@ check, and denial response. It is not the OIDC relying-party implementation
 used by OS.
 
 For an app-defined Cap'n Web API, exchange the exact-origin project cookie for
-an actor and return an app-specific session capability. The complete working
-example is in
-[`apps/os/config-repo-template/worker.ts`](../../os/config-repo-template/worker.ts).
+an actor and return an app-specific session capability (the seeded template's
+member-gated todo app shows the partial-fetch half live).
 Cookie authentication performed inside an already-open RPC transport must not
 refresh: it cannot return the rotated `Set-Cookie`. OS enforces that with the
 narrow session method and `refresh: "never"`; non-browser clients use an

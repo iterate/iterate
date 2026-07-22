@@ -13,9 +13,4 @@ export {
   SPEC_TEST_TIMEOUT_MS,
   TUI_TEST_TIMEOUT_MS,
 } from "./budgets.ts";
-export {
-  compactRetryFailure,
-  RetryTelemetryReporter,
-  type RetriedTestRecord,
-  type RetryTelemetryFile,
-} from "./retry-telemetry-reporter.ts";
+export { compactRetryFailure, RetryTelemetryReporter } from "./retry-telemetry-reporter.ts";

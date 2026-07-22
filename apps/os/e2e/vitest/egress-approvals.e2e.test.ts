@@ -9,12 +9,18 @@
 
 import { expect, test } from "vitest";
 import {
+  APPROVAL_BODY_INSPECTION_LIMIT_BYTES,
   buildApprovalMessage,
   bytesToBase64,
   type HumanApprovalRequestedPayload,
 } from "../../src/domains/projects/egress-approvals.ts";
+import { STREAM_CONTEXT_HEADER } from "../../src/domains/projects/stream-context.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
-import { startEgressEcho } from "./itx-capability-fixtures.ts";
+import {
+  startEgressEcho,
+  startWebSocketEcho,
+  WEBSOCKET_ECHO_GREETING,
+} from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RULES_CONFIGURED = "events.iterate.com/project/egress-rules-configured";
@@ -83,6 +89,12 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     expect(requestedPayload).toMatchObject({
       method: "POST",
       ruleKey: "post-echo",
+      body: {
+        encoding: "utf8",
+        content: "please approve",
+        originalByteLength: 14,
+        truncated: false,
+      },
       bodyPreview: "please approve",
       secretPaths: [],
     });
@@ -108,14 +120,24 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
       status: 200,
     });
 
-    // ── reject lane: a human refusal turns into a 403 for the caller.
+    // ── reject lane: a human refusal turns into a 403 for the caller, and an
+    // oversized readable body stays a bounded inspection prefix in the event.
+    const oversizedBody = "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES + 10_000);
     const rejectedFetch = project.egress.fetch(
-      new Request(echo.url, { method: "POST", body: "please reject" }),
+      new Request(echo.url, { method: "POST", body: oversizedBody }),
     );
     const rejectedRequested = await stream.waitForEvent({
       afterOffset: settled.offset,
       eventTypes: [REQUESTED],
       timeoutMs: 30_000,
+    });
+    expect(rejectedRequested.payload as HumanApprovalRequestedPayload).toMatchObject({
+      body: {
+        encoding: "utf8",
+        content: "r".repeat(APPROVAL_BODY_INSPECTION_LIMIT_BYTES),
+        originalByteLength: oversizedBody.length,
+        truncated: true,
+      },
     });
     await stream.append({
       type: REJECTED,
@@ -184,6 +206,184 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
     await echo.close();
   }
 }, 120_000);
+
+test("an agent codemode script carries one durable source through bare and scoped fetch", async () => {
+  const echo = await startEgressEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+
+  try {
+    using project = await itx.projects
+      .get(`egress-approval-source-${crypto.randomUUID()}`)
+      .create({});
+    const root = project.streams.get("/");
+    const agentPath = "/agents/refund-agent";
+    const agent = await project.agents.get(agentPath).create();
+    const echoHost = new URL(echo.url).hostname;
+    await root.append({
+      type: RULES_CONFIGURED,
+      payload: {
+        rules: [
+          {
+            ruleKey: "refunds-need-confirmation",
+            description: "Refunds require confirmation",
+            match: { hosts: [echoHost], methods: ["POST"] },
+            verdict: "hold",
+            approvalTimeoutMs: 60_000,
+          },
+        ],
+      },
+    });
+    await waitForCondition(
+      async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+      { description: "project processor to fold the approval rule" },
+    );
+
+    const code = `async (itx) => {
+      const bare = await fetch(${JSON.stringify(echo.url)}, {
+        method: "POST",
+        body: JSON.stringify({ orderId: 1234, via: "bare fetch" }),
+      });
+      const scoped = await itx.egress.fetch(new Request(${JSON.stringify(echo.url)}, {
+        method: "POST",
+        body: JSON.stringify({ orderId: 1234, via: "itx egress" }),
+      }));
+      return [bare.status, scoped.status];
+    }`;
+    const execution = agent.capabilityHost.runScript(code);
+
+    const bareRequest = await root.waitForEvent({
+      afterOffset: 0,
+      eventTypes: [REQUESTED],
+      timeoutMs: 30_000,
+    });
+    const barePayload = bareRequest.payload as HumanApprovalRequestedPayload;
+    expect(barePayload).toMatchObject({
+      body: {
+        encoding: "utf8",
+        content: JSON.stringify({ orderId: 1234, via: "bare fetch" }),
+      },
+      ruleDescription: "Refunds require confirmation",
+      ruleKey: "refunds-need-confirmation",
+      streamContext: {
+        kind: "script-execution",
+        executionId: expect.any(String),
+        scriptRunRequestedEventOffset: expect.any(Number),
+        streamPath: agentPath,
+      },
+    });
+    if (barePayload.streamContext?.kind !== "script-execution") {
+      throw new Error("expected script-execution approval provenance");
+    }
+    const scriptEvent = await agent.stream.getEvent({
+      offset: barePayload.streamContext.scriptRunRequestedEventOffset,
+    });
+    expect(scriptEvent).toMatchObject({
+      type: "events.iterate.com/capability-host/script-run-requested",
+      payload: { code, executionId: barePayload.streamContext.executionId },
+    });
+
+    await root.append({
+      type: GRANTED,
+      payload: { approvalRequestEventOffset: bareRequest.offset },
+    });
+    const scopedRequest = await root.waitForEvent({
+      afterOffset: bareRequest.offset,
+      eventTypes: [REQUESTED],
+      timeoutMs: 30_000,
+    });
+    expect(scopedRequest.payload).toMatchObject({
+      body: {
+        encoding: "utf8",
+        content: JSON.stringify({ orderId: 1234, via: "itx egress" }),
+      },
+      streamContext: barePayload.streamContext,
+    });
+    await root.append({
+      type: GRANTED,
+      payload: { approvalRequestEventOffset: scopedRequest.offset },
+    });
+
+    await expect(execution).resolves.toMatchObject({ result: [200, 200] });
+  } finally {
+    await echo.close();
+  }
+}, 120_000);
+
+test("approved worker WebSocket egress stays on the fetch-native transport", async () => {
+  await using echo = await startWebSocketEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects
+    .get(`egress-approval-websocket-${crypto.randomUUID()}`)
+    .create({});
+  const root = project.streams.get("/");
+  const agent = await project.agents.get("/agents/websocket-agent").create();
+  const websocketUrl = new URL(echo.url);
+  websocketUrl.protocol = "wss:";
+
+  await root.append({
+    type: RULES_CONFIGURED,
+    payload: {
+      rules: [
+        {
+          ruleKey: "websockets-need-confirmation",
+          description: "WebSocket connections require confirmation",
+          match: { hosts: [websocketUrl.hostname], methods: ["GET"] },
+          verdict: "hold",
+          approvalTimeoutMs: 60_000,
+        },
+      ],
+    },
+  });
+  await waitForCondition(
+    async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+    { description: "project processor to fold the WebSocket approval rule" },
+  );
+
+  const echoedMessage = `approved-websocket-${crypto.randomUUID()}`;
+  const execution = agent.capabilityHost.runScript(`async () => {
+    const socket = new WebSocket(${JSON.stringify(websocketUrl.href)});
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("WebSocket echo timed out")), 30_000);
+      socket.addEventListener("message", (event) => {
+        const message = String(event.data);
+        if (message === ${JSON.stringify(WEBSOCKET_ECHO_GREETING)}) {
+          socket.send(${JSON.stringify(echoedMessage)});
+        }
+        if (message === ${JSON.stringify(echoedMessage)}) {
+          clearTimeout(timeout);
+          socket.close(1000, "approval-proof-complete");
+          resolve(message);
+        }
+      });
+      socket.addEventListener("error", () => reject(new Error("WebSocket echo failed")));
+    });
+  }`);
+
+  const requested = await root.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [REQUESTED],
+    timeoutMs: 30_000,
+  });
+  expect(requested.payload).toMatchObject({
+    method: "GET",
+    ruleKey: "websockets-need-confirmation",
+    streamContext: {
+      kind: "script-execution",
+      streamPath: "/agents/websocket-agent",
+    },
+  });
+  expect((requested.payload as HumanApprovalRequestedPayload).headers).not.toHaveProperty(
+    STREAM_CONTEXT_HEADER,
+  );
+  await root.append({
+    type: GRANTED,
+    payload: { approvalRequestEventOffset: requested.offset },
+  });
+
+  await expect(execution).resolves.toMatchObject({ result: echoedMessage });
+});
 
 test("enrolled approval keys make unsigned grants inert; a signed grant releases", async () => {
   const echo = await startEgressEcho();

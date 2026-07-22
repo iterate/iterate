@@ -5,7 +5,9 @@ import { DynamicWorkerRunner, type DynamicWorkerTraceRole } from "./worker-runne
 
 const h = vi.hoisted(() => ({
   handleAssetRequest: vi.fn(),
+  itxEntrypointProps: vi.fn((input: unknown) => input),
   loadResolvedWorker: vi.fn(),
+  projectEgressFetcher: vi.fn(() => ({})),
   resolveWorkerSource: vi.fn(),
   statefulFetch: vi.fn(),
   workerGetByName: vi.fn(),
@@ -20,11 +22,11 @@ vi.mock("../../env.ts", () => ({
 
 vi.mock("../itx/utils.ts", () => ({
   itxEntrypointBinding: () => ({}),
-  itxEntrypointProps: () => ({}),
+  itxEntrypointProps: h.itxEntrypointProps,
 }));
 
 vi.mock("../projects/utils.ts", () => ({
-  projectEgressFetcher: () => ({}),
+  projectEgressFetcher: h.projectEgressFetcher,
 }));
 
 vi.mock("./worker-loader.ts", () => ({
@@ -73,12 +75,38 @@ const statefulAppRef = {
 beforeEach(() => {
   resetRecordedSpans();
   h.handleAssetRequest.mockReset();
+  h.itxEntrypointProps.mockClear();
   h.loadResolvedWorker.mockReset();
+  h.projectEgressFetcher.mockClear();
   h.resolveWorkerSource
     .mockReset()
     .mockRejectedValue(new Error("stop after entering the trace span"));
   h.statefulFetch.mockReset().mockRejectedValue(new Error("stop at stateful fetch"));
   h.workerGetByName.mockReset().mockReturnValue({ fetch: h.statefulFetch });
+});
+
+it("gives bare fetch and scoped ITX the same host-minted invocation source", () => {
+  const source = {
+    kind: "script-execution" as const,
+    executionId: "agent-output:119",
+    scriptRunRequestedEventOffset: 123,
+    streamPath: "/agents/refund-agent",
+  };
+
+  new DynamicWorkerRunner({
+    streamContext: source,
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/agents/refund-agent",
+  });
+
+  expect(h.itxEntrypointProps).toHaveBeenCalledWith({
+    streamContext: source,
+    path: "/agents/refund-agent",
+    projectId: "prj_private",
+    purpose: "userspace",
+  });
+  expect(h.projectEgressFetcher).toHaveBeenCalledWith(expect.anything(), "prj_private", source);
 });
 
 describe("dynamic worker spans", () => {
@@ -99,10 +127,10 @@ describe("dynamic worker spans", () => {
         ? fixture.ref.source.createApp.files
         : fixture.ref.source.createWorker.files;
     const runner = new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: `/${privateMarker}` },
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: `/${privateMarker}`,
-      waitUntil: () => undefined,
     });
 
     await expect(
@@ -162,10 +190,10 @@ describe("createApp asset dispatch", () => {
       }),
     );
     const runner = new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: statefulAppRef.path },
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
-      waitUntil: () => undefined,
     });
 
     const response = await runner.fetch({
@@ -181,10 +209,10 @@ describe("createApp asset dispatch", () => {
   it("sends a stateful app WebSocket upgrade directly to its Durable Object", async () => {
     h.statefulFetch.mockResolvedValue(new Response("upgrade lane"));
     const runner = new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: statefulAppRef.path },
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
-      waitUntil: () => undefined,
     });
 
     const response = await runner.fetch({

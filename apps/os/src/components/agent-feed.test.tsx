@@ -117,6 +117,27 @@ test("the live tail shows accumulated work above a timer for the current LLM pha
   expect(summary?.compareDocumentPosition(status!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
+test("a collapsed stream wake run shows its count on the final wake", () => {
+  const container = document.createElement("div");
+  container.innerHTML = renderToStaticMarkup(
+    <AgentFeedItemRow
+      item={{
+        kind: "stream-woken",
+        id: "stream-woken-99",
+        text: "Stream durable object woke",
+        timestampMs: Date.UTC(2026, 6, 22),
+        count: 99,
+      }}
+      toggledIds={new Set()}
+      onToggle={() => {}}
+    />,
+  );
+
+  expect(container.querySelector('[data-testid="agent-feed-stream-woken"]')?.textContent).toContain(
+    "Stream durable object woke (99)",
+  );
+});
+
 test("the accumulated line does not claim that the active operation already finished", () => {
   vi.useFakeTimers();
   const now = Date.UTC(2026, 6, 15, 22, 0, 0);

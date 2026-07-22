@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { detachExternalDurableObjectBindings, resetWorkerDurableObjects } from "./do-reset.ts";
+import { CloudflareApiError } from "./env-context.ts";
 
 type Settings = {
   annotations?: Record<string, unknown>;
@@ -202,7 +203,9 @@ describe("resetWorkerDurableObjects", () => {
     ];
     let deployedMetadata: unknown;
     const cf = vi.fn(async (path: string, init?: RequestInit) => {
-      if (path === "/workers/scripts") return [{ id: "os-preview-4" }];
+      if (path === "/workers/scripts") {
+        return [{ id: "os-preview-4" }, { id: "unrelated-worker" }];
+      }
       if (path.startsWith("/workers/durable_objects/namespaces?")) {
         return [
           {
@@ -266,5 +269,157 @@ describe("resetWorkerDurableObjects", () => {
         durable_objects: { namespace_id: "sandbox-namespace" },
       },
     ]);
+    expect(cf.mock.calls.some(([path]) => path.includes("/settings"))).toBe(false);
+  });
+
+  test("scans only a Worker named by Cloudflare when its external binding blocks retirement", async () => {
+    const sidecarSettings: Settings = {
+      bindings: [
+        {
+          class_name: "Project",
+          name: "PROJECT",
+          namespace_id: "project-namespace",
+          script_name: "os-preview-4",
+          type: "durable_object_namespace",
+        },
+      ],
+    };
+    let uploadAttempts = 0;
+    const cf = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/workers/scripts") {
+        return [{ id: "os-preview-4" }, { id: "branch-sidecar" }, { id: "unrelated-worker" }];
+      }
+      if (path.startsWith("/workers/durable_objects/namespaces?")) {
+        return [{ id: "project-namespace", script: "os-preview-4", class: "Project" }];
+      }
+      if (path === "/containers/applications") return [];
+      if (path === "/workers/scripts/branch-sidecar/settings") {
+        if (!init) return structuredClone(sidecarSettings);
+        const patch = await readSettingsPatch(init);
+        sidecarSettings.bindings = patch.bindings;
+        return undefined;
+      }
+      if (path === "/workers/scripts/os-preview-4") {
+        uploadAttempts++;
+        if (uploadAttempts === 1) {
+          throw new Error(
+            "Cannot delete Durable Object class Project because Worker branch-sidecar has a binding that references it",
+          );
+        }
+        return undefined;
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      resetWorkerDurableObjects({
+        ctx: { cf } as never,
+        workerName: "os-preview-4",
+        cwd: "/tmp/os",
+        credentials: {},
+        compatibilityDate: "2026-07-01",
+        containerClassNames: [],
+      }),
+    ).resolves.toEqual({
+      action: "reset",
+      deletedClasses: ["Project"],
+      keptContainerClasses: [],
+    });
+
+    expect(uploadAttempts).toBe(2);
+    expect(sidecarSettings.bindings).toEqual([]);
+    expect(
+      cf.mock.calls.some(([path]) => path === "/workers/scripts/unrelated-worker/settings"),
+    ).toBe(false);
+  });
+
+  test("finds a blocking Worker in structured Cloudflare details beyond the message limit", async () => {
+    const sidecarSettings: Settings = {
+      bindings: [
+        {
+          class_name: "Project",
+          name: "PROJECT",
+          namespace_id: "project-namespace",
+          script_name: "os-preview-4",
+          type: "durable_object_namespace",
+        },
+      ],
+    };
+    let uploadAttempts = 0;
+    const cf = vi.fn(async (path: string, init?: RequestInit) => {
+      if (path === "/workers/scripts") {
+        return [{ id: "os-preview-4" }, { id: "branch-sidecar" }];
+      }
+      if (path.startsWith("/workers/durable_objects/namespaces?")) {
+        return [{ id: "project-namespace", script: "os-preview-4", class: "Project" }];
+      }
+      if (path === "/containers/applications") return [];
+      if (path === "/workers/scripts/branch-sidecar/settings") {
+        if (!init) return structuredClone(sidecarSettings);
+        const patch = await readSettingsPatch(init);
+        sidecarSettings.bindings = patch.bindings;
+        return undefined;
+      }
+      if (path === "/workers/scripts/os-preview-4") {
+        uploadAttempts++;
+        if (uploadAttempts === 1) {
+          throw new CloudflareApiError("PUT", path, 400, [
+            {
+              message:
+                "Cannot delete Durable Object class Project because a binding references it: " +
+                `${"padding ".repeat(80)}Worker branch-sidecar`,
+            },
+          ]);
+        }
+        return undefined;
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      resetWorkerDurableObjects({
+        ctx: { cf } as never,
+        workerName: "os-preview-4",
+        cwd: "/tmp/os",
+        credentials: {},
+        compatibilityDate: "2026-07-01",
+        containerClassNames: [],
+      }),
+    ).resolves.toMatchObject({ action: "reset" });
+
+    expect(uploadAttempts).toBe(2);
+    expect(sidecarSettings.bindings).toEqual([]);
+  });
+
+  test("does not scan or retry an unclassified retirement failure", async () => {
+    let uploadAttempts = 0;
+    const cf = vi.fn(async (path: string) => {
+      if (path === "/workers/scripts") {
+        return [{ id: "os-preview-4" }, { id: "branch-sidecar" }];
+      }
+      if (path.startsWith("/workers/durable_objects/namespaces?")) {
+        return [{ id: "project-namespace", script: "os-preview-4", class: "Project" }];
+      }
+      if (path === "/containers/applications") return [];
+      if (path === "/workers/scripts/os-preview-4") {
+        uploadAttempts++;
+        throw new Error("Cloudflare rejected the upload for an unrelated reason");
+      }
+      throw new Error(`unexpected Cloudflare request: ${path}`);
+    });
+
+    await expect(
+      resetWorkerDurableObjects({
+        ctx: { cf } as never,
+        workerName: "os-preview-4",
+        cwd: "/tmp/os",
+        credentials: {},
+        compatibilityDate: "2026-07-01",
+        containerClassNames: [],
+      }),
+    ).rejects.toThrow("unrelated reason");
+
+    expect(uploadAttempts).toBe(1);
+    expect(cf.mock.calls.some(([path]) => path.includes("/settings"))).toBe(false);
   });
 });

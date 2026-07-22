@@ -43,17 +43,22 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
+  mergePreviewAppConfig,
+  previewProvisionedIntegrationSecrets,
   readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
   releaseLeaseDespiteTeardownFailure,
   renderCloudflarePreviewPullRequestBody,
   resolveAuthPreviewRootSecret,
+  resolveSharedPreviewRootSecret,
   resolveProvisionAuthPreviewSlotNumbers,
   resolveRequestedPreviewEnvironment,
   resolvePreviewCompareBaseSha,
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewTestTargetPlan,
+  resolvePreviewTestTelemetryEnvironment,
   resolvePreviewTestWorkerVersionOverrides,
   selectExpiredLeasesForGc,
   selectPreviewAppsForPullRequest,
@@ -140,6 +145,53 @@ test("Auth preview provisioning can target only an approved slot range", () => {
       slots: "3-4",
     }),
   ).toThrow(/unknown preview slot 4/);
+});
+
+test("Preview provisioning seeds the shared preview project-app session secret from dev", () => {
+  expect(
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      sharedPreviewSecret: null,
+    }),
+  ).toBe("shared-non-production-secret");
+});
+
+test("Preview provisioning preserves a matching shared preview session secret", () => {
+  expect(
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      sharedPreviewSecret: "shared-non-production-secret",
+    }),
+  ).toBe("shared-non-production-secret");
+});
+
+test("Preview provisioning refuses divergent project-app session roots", () => {
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "auth-secret",
+      osDevSecret: "os-secret",
+      sharedPreviewSecret: null,
+    }),
+  ).toThrow(/dev project-app session secrets differ/);
+
+  expect(() =>
+    resolveSharedPreviewRootSecret({
+      authDevSecret: "shared-non-production-secret",
+      osDevSecret: "shared-non-production-secret",
+      sharedPreviewSecret: "stale-preview-secret",
+    }),
+  ).toThrow(/shared preview project-app session secret differs from dev/);
+});
+
+test("Preview provisioning includes the Dummy Petshop client OS deploys require", () => {
+  expect(
+    JSON.parse(previewProvisionedIntegrationSecrets().APP_CONFIG_INTEGRATIONS__PETSHOP),
+  ).toEqual({
+    oauthClientId: "petshop-default",
+    oauthClientSecret: "petshop-default-secret",
+  });
 });
 
 describe("preview app dependency expansion", () => {
@@ -257,6 +309,47 @@ describe("preview workflow scope", () => {
     });
   });
 
+  test("declares and pins every runner artifact source started by preview e2e", () => {
+    expect(
+      Object.fromEntries(
+        Object.entries(cloudflarePreviewApps).map(([slug, app]) => [
+          slug,
+          app.previewTestArtifactSources.map(
+            ({ producer, framework, testKind, lane, workspace }) =>
+              `${producer}:${framework}/${testKind}/${lane}@${workspace}`,
+          ),
+        ]),
+      ),
+    ).toEqual({
+      auth: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/auth"],
+      "dummy-petshop": [
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
+      ],
+      os: [
+        "onboarding-smoke:script/e2e/onboarding-smoke@iterate-root",
+        "tui-quarantine:script/e2e/tui@iterate-root",
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/os",
+        "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root",
+      ],
+      semaphore: ["vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/semaphore"],
+      "streams-example-app": [
+        "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/streams-example-app",
+        "playwright-telemetry-reporter:playwright/e2e/playwright@@iterate-com/streams-example-app",
+      ],
+    });
+
+    for (const app of Object.values(cloudflarePreviewApps)) {
+      const command = app.previewTestCommandArgs.join(" ");
+      for (const workspace of new Set(
+        app.previewTestArtifactSources.map(({ workspace }) => workspace),
+      )) {
+        expect(command, `${app.slug} must pin ${workspace}`).toContain(
+          `TEST_TELEMETRY_WORKSPACE=${workspace}`,
+        );
+      }
+    }
+  });
+
   test("runs the auth OAuth provider e2e against its deployed preview", () => {
     // The auth lane runs the full apps/auth/e2e suite (authorize → code →
     // token exchange), not a discovery curl: a bare metadata probe is what
@@ -266,7 +359,11 @@ describe("preview workflow scope", () => {
       appPath: "apps/auth",
       previewReadyUrlPath: "/api/auth/ok",
       previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
-      previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
+      previewTestCommandArgs: [
+        "bash",
+        "-c",
+        expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
+      ],
     });
   });
 
@@ -278,7 +375,11 @@ describe("preview workflow scope", () => {
       paths: ["apps/dummy-petshop/**"],
       previewReadyUrlPath: "/",
       previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
-      previewTestCommandArgs: ["bash", "-c", expect.stringContaining("E2E_RETRY_TELEMETRY_FILE=")],
+      previewTestCommandArgs: [
+        "bash",
+        "-c",
+        expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
+      ],
     });
     await expect(
       readPreviewAppConfig({
@@ -298,6 +399,49 @@ describe("preview workflow scope", () => {
     expect(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),
     ).toContain("- apps/dummy-petshop/**");
+  });
+
+  test("resolves repository-owned preview origins without duplicating them in Doppler", async () => {
+    await expect(
+      readPreviewAppConfig({
+        app: cloudflarePreviewApps.semaphore,
+        commandEnvironment: {},
+        dopplerConfig: "preview_14",
+        repositoryRoot: repoRoot,
+      }),
+    ).resolves.toEqual({
+      baseUrl: "https://semaphore.iterate-preview-14.com",
+      projectHostnameBases: [],
+      workerName: "semaphore-preview-14",
+    });
+
+    expect(cloudflarePreviewApps.os.resolvePreviewAppConfig?.("preview_14")).toEqual({
+      baseUrl: "https://os.iterate-preview-14.com",
+      projectHostnameBases: ["iterate-preview-14.app"],
+      workerName: "os-preview-14",
+    });
+  });
+
+  test("combines an envs.ts origin with a Doppler readiness bearer", () => {
+    expect(
+      mergePreviewAppConfig({
+        dopplerConfig: {
+          baseUrl: null,
+          projectHostnameBases: [],
+          readinessBearerToken: "deployment-secret",
+        },
+        repositoryConfig: {
+          baseUrl: "https://os.iterate-preview-14.com",
+          projectHostnameBases: ["iterate-preview-14.app"],
+          workerName: "os-preview-14",
+        },
+      }),
+    ).toEqual({
+      baseUrl: "https://os.iterate-preview-14.com",
+      projectHostnameBases: ["iterate-preview-14.app"],
+      readinessBearerToken: "deployment-secret",
+      workerName: "os-preview-14",
+    });
   });
 
   test("deploys OS after Petshop and passes that exact preview URL to OS e2e", () => {
@@ -603,6 +747,82 @@ describe("auth preview root secrets", () => {
 });
 
 describe("preview test commands", () => {
+  test("uses the canonical artifact file variable for targeted test telemetry", () => {
+    const source = readFileSync(resolve(repoRoot, "scripts/preview/preview.ts"), "utf8");
+
+    expect(source).not.toContain("E2E_RETRY_TELEMETRY_FILE");
+  });
+
+  test("builds a focused Vitest invocation from the OS app", () => {
+    expect(
+      resolvePreviewTestTargetPlan({
+        grep: "Agent scripts can send web-chat messages",
+        repositoryRoot: repoRoot,
+        runner: "vitest",
+        target: "e2e/vitest/itx-agents.e2e.test.ts",
+      }),
+    ).toEqual({
+      args: [
+        "e2e",
+        "--project",
+        "node",
+        "e2e/vitest/itx-agents.e2e.test.ts",
+        "--testNamePattern",
+        "Agent scripts can send web-chat messages",
+      ],
+      command: "pnpm",
+      runnerResultFiles: [],
+      telemetryFile: resolve(repoRoot, "test-results/preview-target-vitest.json"),
+      workingDirectory: resolve(repoRoot, "apps/os"),
+    });
+  });
+
+  test("builds a focused Playwright invocation from the repository root", () => {
+    const plan = resolvePreviewTestTargetPlan({
+      grep: "discarding a new file",
+      repositoryRoot: repoRoot,
+      runner: "playwright",
+      target: "specs/repo-ide.spec.ts",
+    });
+
+    expect(plan).toEqual({
+      args: ["spec", "specs/repo-ide.spec.ts", "--grep", "discarding a new file"],
+      command: "pnpm",
+      runnerResultFiles: [resolve(repoRoot, "test-results/playwright-results.json")],
+      telemetryFile: resolve(repoRoot, "test-results/preview-target-playwright-telemetry.json"),
+      workingDirectory: repoRoot,
+    });
+    expect(plan.runnerResultFiles).not.toContain(plan.telemetryFile);
+  });
+
+  test("gives targeted and full preview tests the same exact PR identity", () => {
+    expect(
+      resolvePreviewTestTelemetryEnvironment({
+        app: "os",
+        context: {
+          githubToken: "token",
+          pullRequestBaseSha: "base-sha",
+          pullRequestBody: "",
+          pullRequestHeadSha: "head-sha",
+          pullRequestHeadRef: "telemetry-branch",
+          pullRequestIsDraft: false,
+          pullRequestLabels: [],
+          pullRequestNumber: 2237,
+          repositoryFullName: "iterate/iterate",
+          workflowRunUrl: "https://github.com/iterate/iterate/actions/runs/123",
+        },
+        previewSlot: "preview-19",
+      }),
+    ).toEqual({
+      TEST_TELEMETRY_APP: "os",
+      TEST_TELEMETRY_BRANCH: "telemetry-branch",
+      TEST_TELEMETRY_HEAD_SHA: "head-sha",
+      TEST_TELEMETRY_KIND: "e2e",
+      TEST_TELEMETRY_PREVIEW_SLOT: "preview-19",
+      TEST_TELEMETRY_PULL_REQUEST_NUMBER: "2237",
+    });
+  });
+
   test("normalizes OS preview artifacts before Depot upload", () => {
     const workflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"),
@@ -619,19 +839,8 @@ describe("preview test commands", () => {
       "utf8",
     );
     expect(collector).toContain('copy_dir_contents "apps/os/e2e/tui-test/tui-traces"');
-  });
-
-  test("normalizes marathon artifacts before Depot upload", () => {
-    const workflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
-      "utf8",
-    );
-
-    expect(workflow).toContain("scripts/preview/collect-test-artifacts.sh test-results");
-    expect(workflow).toContain("path: test-results");
-    expect(workflow).toContain("include-hidden-files: true");
-    expect(workflow).not.toContain("            /tmp/os-e2e-*");
-    expect(workflow).not.toContain("            /tmp/marathon");
+    expect(collector).not.toContain("preview_telemetry_candidates");
+    expect(collector).not.toContain("runner-telemetry");
   });
 
   test("starts every isolated OS sub-lane in parallel", () => {
@@ -647,7 +856,9 @@ describe("preview test commands", () => {
     expect(script).toContain(tuiLane);
     expect(script).toContain(e2eLane);
     expect(script).toContain(playwrightSpec);
-    expect(script).toContain("env PLAYWRIGHT_PREVIEW_SLOW_FIRST=1");
+    expect(script).toContain(
+      "env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1",
+    );
     expect(script).toContain('wait "$PW_INSTALL_PID"');
     expect(script).toContain("SMOKE_PID");
     expect(script).toContain("TUI_PID");

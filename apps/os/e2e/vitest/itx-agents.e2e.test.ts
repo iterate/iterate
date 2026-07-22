@@ -191,6 +191,14 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     predicate: (event) => event.payload?.message === "string form with files",
     timeoutMs: 30_000,
   });
+  const reflectedFilesReply = agent.stream.waitForEvent({
+    eventTypes: [AGENT_CONTEXT_ADDED_TYPE],
+    predicate: (event) =>
+      event.payload?.role === "assistant" &&
+      event.payload.content ===
+        "The assistant sent this visible web-chat message: string form with files",
+    timeoutMs: 30_000,
+  });
   const scriptSettled = agent.stream.waitForEvent({
     eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
     timeoutMs: 30_000,
@@ -225,6 +233,7 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     },
   });
   await scriptSettled;
+  const reflectedFilesEvent = await reflectedFilesReply;
 
   const events = await agent.stream.getEvents();
   expect(events).toEqual(
@@ -246,15 +255,8 @@ test("Agent scripts can send web-chat messages (with file attachments) and call 
     ]),
   );
 
-  const reflectedFilesReply = events.find(
-    (event) =>
-      event.type === AGENT_CONTEXT_ADDED_TYPE &&
-      event.payload?.role === "assistant" &&
-      event.payload.content ===
-        "The assistant sent this visible web-chat message: string form with files",
-  );
-  expect(reflectedFilesReply?.payload).toMatchObject({ role: "assistant" });
-  expect(reflectedFilesReply?.payload).not.toHaveProperty("llmRequestOffset");
+  expect(reflectedFilesEvent.payload).toMatchObject({ role: "assistant" });
+  expect(reflectedFilesEvent.payload).not.toHaveProperty("llmRequestOffset");
 });
 
 test("Agent create replays its earlier birth and setup events through its subscriptions", async () => {
@@ -415,17 +417,27 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       [
         "get",
         {
-          // The seeded stateful app: CounterApp is a named export of the
-          // one-file seeded worker.ts.
-          className: "CounterApp",
+          // A test-authored stateful worker: the proof is about agent-scope
+          // capability provisioning, not any seeded app.
+          className: "CounterDo",
           durableWorkerKey,
           path: agentPath,
-          source: {
-            createWorker: {
-              entryPoint: "worker.ts",
-              files: { repoPath: "/repos/config", type: "repo" },
-            },
-          },
+          source: inlineJsSource("counter-do.js", {
+            "counter-do.js": `
+                import { DurableObject } from "cloudflare:workers";
+
+                export class CounterDo extends DurableObject {
+                  async increment() {
+                    const next = ((await this.ctx.storage.get("n")) ?? 0) + 1;
+                    await this.ctx.storage.put("n", next);
+                    return next;
+                  }
+                  async current() {
+                    return (await this.ctx.storage.get("n")) ?? 0;
+                  }
+                }
+              `,
+          }),
           type: "stateful",
         },
       ],
@@ -756,7 +768,12 @@ test("Project worker processEventBatch receives events from every project stream
   const crossPosted = project.streams.get("/cross-posted");
   const copied = crossPosted.waitForEvent({
     eventTypes: ["events.iterate.com/test/cross-posted"],
-    timeoutMs: 30_000,
+    // A fresh commit deliberately exercises the cold project-worker build.
+    // Durable feed handoff preserves delivery, but two consecutive preview
+    // runs exceeded the old 30s client deadline before the worker cross-posted.
+    // Keep enough headroom to observe that delivery while the follow-up task
+    // reduces the cold-path tail and restores the tighter budget.
+    timeoutMs: 100_000,
   });
 
   const [sourceEvent] = await project.streams.get(sourcePath).append({

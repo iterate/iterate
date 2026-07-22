@@ -90,6 +90,35 @@ describe("retries live in exactly one layer", () => {
     }
   });
 
+  it("every Vitest and Playwright e2e config writes the canonical telemetry artifact", () => {
+    const vitestConfigs = [
+      "apps/auth/e2e/vitest.config.ts",
+      "apps/dummy-petshop/e2e/vitest.config.ts",
+      "apps/mobile/vitest.e2e.config.ts",
+      "apps/os/e2e/vitest.config.ts",
+      "apps/semaphore/e2e/vitest.config.ts",
+      "apps/streams-example-app/vitest.config.ts",
+    ];
+    for (const config of vitestConfigs) {
+      const source = readFileSync(resolve(repoRoot, config), "utf8");
+      expect(source, `${config} must install the canonical Vitest reporter`).toContain(
+        "RetryTelemetryReporter",
+      );
+      expect(source, `${config} must identify itself as e2e`).toContain('testKind: "e2e"');
+    }
+
+    for (const config of [
+      "playwright.config.ts",
+      "apps/streams-example-app/playwright.config.ts",
+      "apps/tanstack/playwright.config.ts",
+    ]) {
+      expect(
+        readFileSync(resolve(repoRoot, config), "utf8"),
+        `${config} must install the canonical Playwright reporter`,
+      ).toContain("playwright-telemetry-reporter.ts");
+    }
+  });
+
   it("the TUI lane stays an explicit no-op skip, not a half-revived runner", () => {
     // The lane is deliberately disabled (TUI has known bugs and no users;
     // tui-test 0.0.4 has framework defects). Reviving it means rebuilding the
@@ -129,7 +158,7 @@ describe("retries live in exactly one layer", () => {
   it("bounds the onboarding smoke as a joined background lane", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs.at(-1)!;
     expect(script).toContain(
-      `run_logged_lane smoke /tmp/os-preview-smoke.log env E2E_RETRY_TELEMETRY_FILE=/tmp/os-preview-onboarding-smoke.json timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+      `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=/tmp/os-preview-onboarding-smoke.json timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
     );
     expect(script).toContain('wait "$SMOKE_PID"');
   });
@@ -144,28 +173,32 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain(
       `MAX_RUN_DURATION_SECS="\${MAX_RUN_DURATION_SECS:-${PREVIEW_RUN_PROOF_BUDGET_SECS}}"`,
     );
-
-    const marathonWorkflow = readFileSync(
-      resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),
-      "utf8",
-    );
-    // The marathon shares the normal preview job's per-PR concurrency group
-    // without cancelling it — otherwise the two ping-pong the preview slot.
-    expect(marathonWorkflow).toContain(
-      "group: cloudflare-previews-${{ inputs.pull-request-number }}",
-    );
-    expect(marathonWorkflow).toContain("cancel-in-progress: false");
-    // Uncounted priming runs are a masking layer; every run counts.
-    expect(marathonWorkflow).not.toContain("warmup-runs");
+    const retryGate = 'if [ "$retries" -gt 0 ]; then';
+    const passRecord = 'record_result "$run" PASS';
+    expect(source).toContain(retryGate);
+    expect(source).toContain('record_result "$run" RETRIED');
+    expect(source).toContain("streak rejected");
+    expect(source.indexOf(retryGate)).toBeLessThan(source.indexOf(passRecord));
+    // The harness only orchestrates the production preview workflow. It never
+    // carries a second deploy/test implementation or a nested Depot runner.
+    expect(source.match(/depot ci dispatch/g)).toHaveLength(1);
+    expect(source).toContain("--workflow cloudflare-previews.yml");
+    expect(source).toContain('--input "pull-request-number=$PR_NUMBER"');
+    expect(source).toContain('depot ci logs "$attempt_id"');
+    expect(source).toContain('depot ci run show "$run_id"');
+    expect(source).not.toContain("pnpm preview deploy");
+    expect(source).not.toContain("pnpm preview test");
+    expect(source).not.toContain("warmup-runs");
   });
 
   it("keeps the retry annotation parseable by the marathon's ledger", () => {
-    // flake-hunt-loop.sh cannot import renderPreviewRetrySummary, so it seds
-    // the annotation preview.ts prints. Pin the sed pattern in the shell and
-    // prove a real rendered summary still matches its JS mirror — a wording
-    // change in either file fails here instead of silently zeroing the
-    // ledger's retry column.
+    // flake-hunt-loop.sh cannot import renderPreviewRetrySummary. Depot's
+    // finite log export converts the raw workflow command to ##[notice] or
+    // ##[warning], so pin both the exported form and the raw fallback. This
+    // fixture comes from a real canonical Depot preview log; changing either
+    // side must not silently zero the ledger's retry column again.
     const shell = readFileSync(resolve(repoRoot, "scripts/preview/flake-hunt-loop.sh"), "utf8");
+    expect(shell).toContain("s/.*##\\[(notice|warning)\\][^:]+: ([0-9]+) retried:.*/\\2/p");
     expect(shell).toContain("s/.*title=Preview e2e retries::.*: ([0-9]+) retried:.*/\\1/p");
 
     const rendered = previewInternals.renderPreviewRetrySummary({
@@ -174,30 +207,56 @@ describe("watchdogs the shell can't import stay in sync", () => {
         { lane: "specs", name: "b", retryCount: 1, passedAfterRetry: false },
       ],
     });
-    const annotation = `::notice title=Preview e2e retries::os: ${rendered}. The retry passed and does not fail this run.`;
-    expect(annotation.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
+    const raw = `::notice title=Preview e2e retries::os: ${rendered}. The retry passed and does not fail this run.`;
+    expect(raw.match(/.*title=Preview e2e retries::.*: (\d+) retried:.*/)?.[1]).toBe("2");
+    const depotExport = `2026-07-22T07:24:00.175Z ##[warning]os: ${rendered}. The retry passed and does not fail this run.`;
+    expect(depotExport.match(/.*##\[(?:notice|warning)\][^:]+: (\d+) retried:.*/)?.[1]).toBe("2");
   });
 });
 
-describe("complete test telemetry parsers", () => {
-  it("reads every Vitest result plus timing phases and modules", async () => {
+describe("preview retry-summary parsers", () => {
+  it("counts Vitest results and retains retry evidence", async () => {
     const file = join(tmpdir(), `e2e-policy-test-vitest-${process.pid}.json`);
     writeFileSync(
       file,
       JSON.stringify({
+        artifactSchemaVersion: 1,
+        artifactId: "vitest-test-fixture",
+        producer: "test",
+        createdAt: "2026-07-21T12:00:06Z",
+        ci: {
+          repository: "iterate/iterate",
+          workflowRunId: "123",
+          workflowRunAttempt: "1",
+          runnerProvider: "local",
+          executionContext: "local",
+        },
+        context: { framework: "vitest", testKind: "e2e", lane: "vitest" },
+        run: {
+          status: "passed",
+          startedAt: "2026-07-21T12:00:00Z",
+          finishedAt: "2026-07-21T12:00:06Z",
+          durationMs: 6000,
+        },
+        lanes: [],
         tests: [
           {
             fullName: "sandbox > executes",
             moduleId: "/repo/apps/os/e2e/vitest/sandbox.test.ts",
+            tags: [],
+            annotations: [],
             retryCount: 1,
             passedAfterRetry: true,
             state: "passed",
             durationMs: 5200,
+            attemptDetail: "aggregate-only",
             beforeEachDurationMs: 100,
             afterEachDurationMs: 50,
             bodyDurationMs: 5050,
             phases: [{ name: "sandbox boot", category: "runtime", durationMs: 4000 }],
             errors: [{ message: "Network connection lost" }],
+            attempts: [],
+            firstFailure: "Network connection lost",
           },
         ],
         modules: [
@@ -209,40 +268,22 @@ describe("complete test telemetry parsers", () => {
             setupDurationMs: 40,
             testAndHookDurationMs: 5200,
             importDurationMs: 25,
-          },
-        ],
-        retried: [
-          {
-            fullName: "sandbox > executes",
-            moduleId: "/repo/apps/os/e2e/vitest/sandbox.test.ts",
-            retryCount: 1,
-            passedAfterRetry: true,
-            state: "passed",
-            durationMs: 5200,
-            firstFailure: "Network connection lost",
+            imports: [],
           },
         ],
       }),
     );
     await expect(
-      previewInternals.readVitestTestTelemetry(file, "vitest", "/repo"),
+      previewInternals.readCanonicalTestTelemetry(file, "vitest"),
     ).resolves.toMatchObject({
-      tests: [
-        expect.objectContaining({
-          name: "sandbox > executes",
-          moduleId: "apps/os/e2e/vitest/sandbox.test.ts",
-          durationMs: 5200,
-          bodyDurationMs: 5050,
-        }),
-      ],
-      modules: [expect.objectContaining({ collectDurationMs: 30 })],
+      testCount: 1,
       retried: [expect.objectContaining({ name: "sandbox > executes", retryCount: 1 })],
       collectionErrors: [],
     });
     rmSync(file);
   });
 
-  it("reads every Playwright attempt and named step, including nested suites", async () => {
+  it("counts nested Playwright results and retains retry evidence", async () => {
     const file = join(tmpdir(), `e2e-policy-test-pw-${process.pid}.json`);
     writeFileSync(
       file,
@@ -291,24 +332,17 @@ describe("complete test telemetry parsers", () => {
       }),
     );
     await expect(
-      previewInternals.readPlaywrightTestTelemetry(file, "specs", "/repo"),
+      previewInternals.readPlaywrightTestTelemetry(file, "specs"),
     ).resolves.toMatchObject({
-      tests: expect.arrayContaining([
+      testCount: 2,
+      retried: [
         expect.objectContaining({
           name: "repl.spec.ts › REPL › runs a script",
-          durationMs: 10000,
           retryCount: 1,
-          attempts: [
-            expect.objectContaining({
-              attemptIndex: 0,
-              durationMs: 7000,
-              phases: [{ name: "evict transport", category: "test.step", durationMs: 5000 }],
-            }),
-            expect.objectContaining({ attemptIndex: 1, durationMs: 3000 }),
-          ],
+          passedAfterRetry: true,
+          firstFailure: "Network connection lost",
         }),
-      ]),
-      retried: [expect.objectContaining({ retryCount: 1, passedAfterRetry: true })],
+      ],
       collectionErrors: [],
     });
     rmSync(file);

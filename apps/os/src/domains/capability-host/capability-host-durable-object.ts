@@ -11,8 +11,6 @@ import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/v
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
-  type RunScriptCommand,
-  type RunScriptResult,
 } from "./capability-host-processor-implementation.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
@@ -75,6 +73,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       itx: itxForScope({
         auth: trustedInternalAuthContext(),
         ctx: this.ctx,
+        streamContext: { kind: "scope", scopePath: this.#name.path },
         path: this.#name.path,
         projectId: this.#name.projectId,
       }),
@@ -153,10 +152,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
     return this.#capabilityHostProcessor.revokeCapability(input);
-  }
-
-  runScript(input: RunScriptCommand): Promise<RunScriptResult> {
-    return this.#capabilityHostProcessor.runScript(input);
   }
 
   describeCapabilities(): Promise<CapabilityDescription[]> {

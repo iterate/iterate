@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
-import type { WorkerBuildArtifact } from "./artifact-store.ts";
+import { isWorkerBuildFailedError, type WorkerBuildArtifact } from "./artifact-store.ts";
 import {
   WorkerBuildCoordinator,
   type WorkerBuildCoordinatorEvent,
@@ -9,6 +9,8 @@ import {
   executeCoordinatedWorkerBuild,
   type WorkerBuildRequest,
 } from "./worker-build-capability.ts";
+
+const QUEUED_BUILD_STORAGE_KEY = "worker-build:queued-request";
 
 /** One globally addressed coordinator per immutable worker build key. */
 export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
@@ -22,29 +24,67 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     return workerVersion(this.env);
   }
 
-  build(request: WorkerBuildRequest): Promise<WorkerBuildArtifact> {
+  async build(request: WorkerBuildRequest, buildBudgetMs?: number): Promise<WorkerBuildArtifact> {
+    this.#assertRequest(request);
+    if (buildBudgetMs !== undefined && (!Number.isFinite(buildBudgetMs) || buildBudgetMs < 0)) {
+      throw new TypeError("worker build budget must be a non-negative finite number");
+    }
+
+    const operation = this.#coordinator.build(request);
+    if (buildBudgetMs === undefined) return await operation;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            this.enqueue(request).then(() => reject(workerBuildInProgressError()), reject);
+          }, buildBudgetMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Durably hand a cache-missed build to this key's alarm and return. */
+  async enqueue(request: WorkerBuildRequest): Promise<void> {
+    this.#assertRequest(request);
+    this.ctx.storage.kv.put(QUEUED_BUILD_STORAGE_KEY, request);
+    await this.ctx.storage.setAlarm(Date.now());
+  }
+
+  /** Alarm ownership survives the caller, actor eviction, and transient build failure. */
+  async alarm(): Promise<void> {
+    const request = this.ctx.storage.kv.get<WorkerBuildRequest>(QUEUED_BUILD_STORAGE_KEY);
+    if (request === undefined) return;
+    this.#assertRequest(request);
+    try {
+      await this.#coordinator.build(request);
+      this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
+    } catch (error) {
+      if (!isWorkerBuildFailedError(error)) throw error;
+      // Immutable source failure is a modeled terminal result, not an alarm
+      // retry. A later foreground call still receives the exact build error.
+      this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
+    }
+  }
+
+  #assertRequest(request: WorkerBuildRequest): void {
     if (!/^[a-f0-9]{64}$/.test(request.buildKey)) {
       throw new TypeError("worker build key must be a lowercase SHA-256 digest");
     }
     if (this.ctx.id.name !== request.buildKey) {
       throw new TypeError("worker build request does not match its coordinator identity");
     }
-
-    const operation = this.#coordinator.build(request);
-    // The browser may stop waiting at its serve budget, but the immutable
-    // artifact remains useful. Anchor the elected operation in the actor; a
-    // refresh then joins this flight or reads the KV result it produces. Do
-    // not use blockConcurrencyWhile: Cloudflare resets an object when its
-    // callback exceeds 30 seconds, while dependency installation may be slow.
-    // https://developers.cloudflare.com/durable-objects/api/state/#blockconcurrencywhile
-    this.ctx.waitUntil(
-      operation.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return operation;
   }
+}
+
+function workerBuildInProgressError(): Error {
+  const error = new Error("This worker is still building.");
+  error.name = "WorkerBuildInProgressError";
+  return error;
 }
 
 function observeCoordinatorEvent(event: WorkerBuildCoordinatorEvent) {

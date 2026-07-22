@@ -84,6 +84,28 @@ test("workspaces are event-sourced and mount-routed: overlays shadow, commits ro
   expect(await workspace.listAllFiles()).not.toContain("/worker.ts");
   expect(await project.repo.readFile({ path: "worker.ts" })).not.toBeNull();
 
+  // -- batched reads agree with every single-file arm ------------------------
+  // One readFiles call mixing an overlay write, a copied-up edit, a whiteout,
+  // a pure mount fall-through, and a miss — the board-seed lane. The mount
+  // arm reaches the repo through a snapshot SCOPED to the asked paths (an
+  // unscoped one ships the whole HEAD tree across a 32MiB-capped RPC, which
+  // is exactly how big-repo boards died in production).
+  expect(
+    await workspace.readFiles([
+      "/notes/e2e.md",
+      "/docs/freshness.md",
+      "/worker.ts",
+      "/package.json",
+      "/nope/missing.md",
+    ]),
+  ).toEqual({
+    "/notes/e2e.md": "workspace hello world",
+    "/docs/freshness.md": "fresh off main + overlay addendum",
+    "/worker.ts": null,
+    "/package.json": seededPackageJson,
+    "/nope/missing.md": null,
+  });
+
   // revert un-pins one path: a shadowed file follows main again, a deleted
   // one comes back — the surgical sibling of reset().
   await workspace.revert("/docs/freshness.md");

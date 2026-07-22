@@ -37,6 +37,10 @@ export type AgentFeed = {
   state: AgentUiState;
 };
 
+export type MobileFeedItem =
+  | Exclude<AgentUiItem, { kind: "stream-woken" }>
+  | (Extract<AgentUiItem, { kind: "stream-woken" }> & { wakeCount: number });
+
 // packages/ui doesn't export its local `Event` type (StreamEvent + streamPath)
 // from the package boundary, so we borrow it the same way the browser-feed
 // projector does — the parameter type of the exported reducer function.
@@ -79,6 +83,24 @@ export function reduceFeed(agentPath: string, events: StreamEvent[]): AgentFeed 
     working,
     state,
   };
+}
+
+/** Replace each adjacent run of stream wakes with its final event and the run length. */
+export function collapseConsecutiveStreamWakes(items: AgentUiItem[]): MobileFeedItem[] {
+  const collapsed: MobileFeedItem[] = [];
+  for (const item of items) {
+    const previous = collapsed.at(-1);
+    if (item.kind === "stream-woken") {
+      if (previous?.kind === "stream-woken") {
+        collapsed[collapsed.length - 1] = { ...item, wakeCount: previous.wakeCount + 1 };
+      } else {
+        collapsed.push({ ...item, wakeCount: 1 });
+      }
+    } else {
+      collapsed.push(item);
+    }
+  }
+  return collapsed;
 }
 
 /** One-line summary for a collapsed activity row: "Ran code 2× · 3 requests · 7.4s". */
