@@ -894,7 +894,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Workspace",
     kind: "interface",
     sourceText:
-      "/**\n * One durable workspace: an event-sourced, mount-routed private filesystem.\n * Its mount table (getConfig/configure) maps repos into the tree: reads under\n * a mount fall through to that repo's main at HEAD, writes land in a private\n * copy-on-write local layer (large files spill to R2 transparently), and\n * `git.commit({ scope })` turns ONE mount's changes into one commit on that\n * repo's main (honoring the mount's policy). Paths outside every mount are\n * private scratch. The `.git` name is reserved (platform-managed).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Explicitly create this workspace and wait through its complete birth batch. */\n  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The workspace stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;\n  /** The folded configuration (birth certificate + configured patches). */\n  getConfig(): Promise<WorkspaceConfig>;\n  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */\n  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;\n  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */\n  readFile(path: string): Promise<string | null>;\n  /** One file's raw bytes from the merged view; null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /** Whether a path exists in the merged view. */\n  exists(path: string): Promise<boolean>;\n  /** Write one file into the private overlay. */\n  writeFile(path: string, content: string): Promise<void>;\n  /** Write raw bytes to one file in the private overlay. */\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  /** Replace an exact string in one file (copies a mount file up first). */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  /** Delete one file (whiteouts a mount copy; false when it did not exist). */\n  deleteFile(path: string): Promise<boolean>;\n  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */\n  listAllFiles(): Promise<string[]>;\n  /** Merged file paths matching a glob pattern. */\n  glob(pattern: string): Promise<string[]>;\n  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */\n  reset(): Promise<void>;\n  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */\n  revert(path: string): Promise<void>;\n  /** Per-mount git surface. */\n  git: WorkspaceGit;\n}",
+      "/**\n * One durable workspace: an event-sourced, mount-routed private filesystem.\n * Its mount table (getConfig/configure) maps repos into the tree: reads under\n * a mount fall through to that repo's main at HEAD, writes land in a private\n * copy-on-write local layer (large files spill to R2 transparently), and\n * `git.commit({ scope })` turns ONE mount's changes into one commit on that\n * repo's main (honoring the mount's policy). Paths outside every mount are\n * private scratch. The `.git` name is reserved (platform-managed).\n */\nexport interface Workspace {\n  __describe(): Promise<Description>;\n  /** Explicitly create this workspace and wait through its complete birth batch. */\n  create(input: { mounts?: Record<string, WorkspaceMount> }): Promise<Workspace>;\n  whoami(): Promise<string>;\n  /** Restart the workspace's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The workspace stream processor (snapshot/state). */\n  processor: WakeableStreamProcessorRpc<WorkspaceProcessorState>;\n  /** The folded configuration (birth certificate + configured patches). */\n  getConfig(): Promise<WorkspaceConfig>;\n  /** Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured). */\n  configure(input: { config: WorkspaceConfigPatch }): Promise<WorkspaceConfig>;\n  /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */\n  readFile(path: string): Promise<string | null>;\n  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */\n  collab: WorkspaceCollab;\n  /** A path's mount content at HEAD — the base uncommitted work diffs against. */\n  readBase(path: string): Promise<string | null>;\n  /** Batched file reads (board seeds): one RPC, missing paths map to null. */\n  readFiles(paths: string[]): Promise<Record<string, string | null>>;\n  /** One file's raw bytes from the merged view; null when missing. */\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  /** Whether a path exists in the merged view. */\n  exists(path: string): Promise<boolean>;\n  /** Write one file into the private overlay. */\n  writeFile(path: string, content: string): Promise<void>;\n  /** Write raw bytes to one file in the private overlay. */\n  writeFileBytes(path: string, data: Uint8Array): Promise<void>;\n  /** Replace an exact string in one file (copies a mount file up first). */\n  edit(input: EditWorkspaceFileInput): Promise<EditWorkspaceFileResult>;\n  /** Delete one file (whiteouts a mount copy; false when it did not exist). */\n  deleteFile(path: string): Promise<boolean>;\n  /** Every file path in the merged view (local layer + every mount at HEAD, sorted). */\n  listAllFiles(): Promise<string[]>;\n  /** Merged file paths matching a glob pattern. */\n  glob(pattern: string): Promise<string[]>;\n  /** Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST. */\n  reset(): Promise<void>;\n  /** Un-pin ONE path: drop the local copy/deletion so it follows its mount again. */\n  revert(path: string): Promise<void>;\n  /** Per-mount git surface. */\n  git: WorkspaceGit;\n}",
     summary: "One durable workspace: an event-sourced, mount-routed private filesystem.",
     memberSummaries: {
       create: "Explicitly create this workspace and wait through its complete birth batch.",
@@ -905,6 +905,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
         "Patch configuration — deep-merged per mount point; null removes a mount (appends workspace/configured).",
       readFile:
         "One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing.",
+      collab: "The collaborative session lane (rebase model, no Yjs) — workspace.collab.",
+      readBase: "A path's mount content at HEAD — the base uncommitted work diffs against.",
+      readFiles: "Batched file reads (board seeds): one RPC, missing paths map to null.",
       readFileBytes: "One file's raw bytes from the merged view; null when missing.",
       exists: "Whether a path exists in the merged view.",
       writeFile: "Write one file into the private overlay.",
@@ -925,6 +928,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "WorkspaceProcessorState",
       "WorkspaceConfig",
       "WorkspaceConfigPatch",
+      "WorkspaceCollab",
       "EditWorkspaceFileInput",
       "EditWorkspaceFileResult",
       "WorkspaceGit",
@@ -966,6 +970,22 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["Description", "CfVideoTransformInput"],
   },
   {
+    name: "WorkspaceCollab",
+    kind: "interface",
+    sourceText:
+      '/**\n * The collaborative session lane of a workspace: server-authoritative\n * rebase-model editing (@codemirror/collab wire — per-file op logs, integer\n * versions, optimistic clients rebasing unconfirmed edits). Sessions are\n * durable; the workspace\'s ordinary filesystem RPC reads/writes route through\n * live sessions automatically, so this surface is only for LIVE participants\n * (editors) and redline consumers.\n */\nexport interface WorkspaceCollab {\n  __describe(): Promise<Description>;\n  /** Join (or start) the collaborative editing session for one file. */\n  open(path: string): Promise<{ content: string; epoch: string; version: number }>;\n  /** Submit a client update batch (rebase model; idempotent via clientSeq). */\n  push(input: {\n    baseVersion: number;\n    clientId: string;\n    epoch: string;\n    ops: { changes: unknown; clientSeq: number }[];\n    path: string;\n  }):\n    | (Promise<{ status: "accepted"; version: number } & Disposable> &\n        Pick<{ status: Promise<"accepted">; version: Promise<number> }, "status" | "version">)\n    | (Promise<{ status: "epoch-mismatch"; epoch: string } & Disposable> &\n        Pick<{ status: Promise<"epoch-mismatch">; epoch: Promise<string> }, "epoch" | "status">)\n    | (Promise<{ status: "history-miss" } & Disposable> &\n        Pick<{ status: Promise<"history-miss"> }, "status">)\n    | (Promise<{ status: "too-large"; maxBytes: number } & Disposable> &\n        Pick<{ status: Promise<"too-large">; maxBytes: Promise<number> }, "maxBytes" | "status">);\n  /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a\n   * snapshot when past the retained floor, or ended after a destructive op. */\n  wait(\n    path: string,\n    epoch: string,\n    afterVersion: number,\n    clientId?: string,\n  ):\n    | Promise<{ ops: { changes: unknown; clientId: string }[]; status: "ops" } & Disposable>\n    | (Promise<\n        {\n          snapshot: { ackedSeq: number; content: string; epoch: string; version: number };\n          status: "snapshot";\n        } & Disposable\n      > &\n        Pick<\n          {\n            snapshot: Promise<\n              { ackedSeq: number; content: string; epoch: string; version: number } & Disposable\n            > &\n              Pick<\n                {\n                  ackedSeq: Promise<number>;\n                  content: Promise<string>;\n                  epoch: Promise<string>;\n                  version: Promise<number>;\n                },\n                "ackedSeq" | "content" | "epoch" | "version"\n              >;\n            status: Promise<"snapshot">;\n          },\n          "snapshot" | "status"\n        >)\n    | (Promise<{ status: "ended" } & Disposable> & Pick<{ status: Promise<"ended"> }, "status">);\n  /** Head versions of every live session (a cheap board change cursor). */\n  versions(): Promise<Record<string, number>>;\n  /** Attributed tracked changes since the last commit (redline segments). */\n  changes(path: string): Promise<CollabChangesResult>;\n}',
+    summary:
+      "The collaborative session lane of a workspace: server-authoritative rebase-model editing (@codemirror/collab wire — per-file op logs, integer versions, optimistic clients rebasing unconfirmed edits).",
+    memberSummaries: {
+      open: "Join (or start) the collaborative editing session for one file.",
+      push: "Submit a client update batch (rebase model; idempotent via clientSeq).",
+      wait: "Long-poll catch-up: ops after a version (parking ~20s for new ones), a snapshot when past the retained floor, or ended after a destructive op.",
+      versions: "Head versions of every live session (a cheap board change cursor).",
+      changes: "Attributed tracked changes since the last commit (redline segments).",
+    },
+    referencedTypeNames: ["Description", "CollabChangesResult"],
+  },
+  {
     name: "WorkspaceGit",
     kind: "interface",
     sourceText:
@@ -984,6 +1004,16 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "WorkspaceGitLogInput",
       "WorkspaceGitLogEntry",
     ],
+  },
+  {
+    name: "CollabChangesResult",
+    kind: "interface",
+    sourceText:
+      "/** Attributed tracked changes since the last commit: author-tagged inserted\n * spans and deleted-text markers in current-head coordinates, plus the ONE\n * baseline both redline layers render against. */\nexport interface CollabChangesResult {\n  baseContent: string;\n  baseVersion: number;\n  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];\n  headVersion: number;\n  inserted: { clientId: string; createdAt?: number; from: number; to: number }[];\n}",
+    summary:
+      "Attributed tracked changes since the last commit: author-tagged inserted spans and deleted-text markers in current-head coordinates, plus the ONE baseline both redline layers render against.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "ItxBinding",
