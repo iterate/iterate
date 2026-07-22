@@ -18,7 +18,7 @@ proved real Google, GitHub, and Slack connections through OS. Normal cleanup
 erased the canary in 18 seconds, released preview-14, and reconciliation is
 clean. Remaining work is the separately approved shared-session-root migration
 and classification/fix of Cloudflare runtime anomalies observed around the
-preview run; `os/preview_14` also has a stale mirrored `SLACK_CI_BOT_TOKEN`.
+preview run.
 
 ## Goal
 
@@ -563,10 +563,9 @@ the recorded projection.
   Reconnecting restored both Google origins and material, after which the read
   passed. A visible historical connection row is therefore not proof that the
   connection is live; verify its status or perform the provider call.
-- 2026-07-21: The Slack smoke found `os/preview_14`'s mirrored
-  `SLACK_CI_BOT_TOKEN` returns `invalid_auth`; the canonical `_shared/prd`
-  trigger actor worked. This is recorded as credential drift to repair, not an
-  expected fallback. The product connection token itself passed `auth.test`.
+- 2026-07-21: The ad-hoc Slack smoke reported `invalid_auth` for
+  `os/preview_14`'s CI trigger actor, then succeeded with the canonical
+  `_shared/prd` actor. The product connection token itself passed `auth.test`.
 - 2026-07-21: A 30-minute `os-preview-14` telemetry audit after CI found 28
   error-level events. Intentional test events (`kill requested` and the explicit
   retry-path failure) are understood, but Durable Object storage resets,
@@ -579,3 +578,9 @@ the recorded projection.
   status then reported 19 total / 17 available / 2 active / 0 orphaned, and
   reconciliation returned `{}`. Removed #2182's `preview` label so the draft
   cannot immediately reacquire another slot.
+- 2026-07-22: Corrected the CI-trigger diagnosis. `os/preview_14` does not have
+  `SLACK_CI_BOT_TOKEN`; the ad-hoc command sent `Bearer undefined`, so its
+  `invalid_auth` response did not identify a stale secret. `_shared/prd` is the
+  canonical live actor. Fresh `auth.test` calls also found the preview 3 and 6
+  product-bot fallback tokens healthy. Updated the smoke preflight to fail
+  clearly on a missing variable and verify the canonical actor before posting.

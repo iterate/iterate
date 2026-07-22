@@ -601,11 +601,11 @@ explicitly approved.
   template.
 - Existing OS preview configs inherited one preview-1 GitHub credential even
   though a GitHub App has only one webhook URL.
-- Stored Slack bot tokens for preview 3 and preview 6 returned `invalid_auth`;
-  secret presence is not credential verification.
-- The mirrored `SLACK_CI_BOT_TOKEN` in `os/preview_14` also returned
-  `invalid_auth`; `_shared/prd`'s canonical CI actor worked. Repair stale mirrors
-  instead of silently normalizing the fallback.
+- A 2026-07-22 `auth.test` recheck found the preview 3 and preview 6 product-bot
+  fallback tokens healthy. The preview-14 config has no `SLACK_CI_BOT_TOKEN`,
+  which is correct: `_shared/prd` owns the live CI trigger actor. An earlier
+  ad-hoc smoke sent `Bearer undefined` and misclassified Slack's `invalid_auth`
+  response as a stale preview token.
 - Slots 10–19 initially had matching Auth/OS session secrets per slot, but the
   values differed across slots and shadowed empty preview roots. Root
   inheritance is the required shape for later slots.
