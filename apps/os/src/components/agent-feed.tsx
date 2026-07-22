@@ -209,6 +209,7 @@ function StreamWakeRow({ item }: { item: Extract<AgentUiItem, { kind: "stream-wo
           title={formatDateTime(item.timestampMs)}
         >
           {item.text}
+          {item.count != null && item.count > 1 ? ` (${item.count})` : ""}
         </time>
         <Tooltip>
           <TooltipTrigger

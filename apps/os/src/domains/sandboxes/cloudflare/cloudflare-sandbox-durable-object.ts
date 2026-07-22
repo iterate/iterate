@@ -21,6 +21,7 @@ import { DurableObjectNameCodec } from "../../durable-object-names.ts";
 import { listIntegrationConnections } from "../../integrations/connect-flows.ts";
 import { describeNode } from "../../itx/utils.ts";
 import { projectStub } from "../../projects/egress.ts";
+import { withStreamContext } from "../../projects/stream-context.ts";
 import { withWebSocketHandshakeHeaders } from "../../secrets/websocket-handshake.ts";
 import { sandboxCreationEvents } from "../sandbox-defaults.ts";
 import {
@@ -261,7 +262,9 @@ async function resolveEgressProjectId(
 function sandboxOutboundFor(instanceType: SandboxInstanceType): OutboundHandler<Env> {
   return async (request, env, ctx) => {
     const projectId = await resolveEgressProjectId(env, ctx.containerId, instanceType);
-    const response = await projectStub(env.PROJECT, projectId).fetch(request);
+    const response = await projectStub(env.PROJECT, projectId).fetch(
+      withStreamContext(request, { kind: "scope", scopePath: "/" }),
+    );
     // Container intercept converts Response.webSocket → HTTP 101 for the
     // in-container client. Stamp Accept for this caller's key and leave frame
     // transport to the native WebSocket response path.

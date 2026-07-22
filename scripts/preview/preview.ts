@@ -125,7 +125,11 @@ async function resolvePreviewCommandSetup(options: PullRequestCommandOptions) {
  */
 export async function deploy(options: DeployCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
-  return await deployPreviewApps({ context, options, runtime });
+  return await withPreviewE2eTelemetry(context, runtime, "deploy", (telemetry) =>
+    measurePreviewDeployRun(telemetry, () =>
+      deployPreviewApps({ context, options, runtime, telemetry }),
+    ),
+  );
 }
 
 /**
@@ -298,7 +302,9 @@ export async function testTarget(options: TestTargetOptions) {
 export async function run(options: DeployCommandOptions = {}) {
   const { context, runtime } = await resolvePreviewCommandSetup(options);
   return await withPreviewE2eTelemetry(context, runtime, "run", async (telemetry) => {
-    const deployResult = await deployPreviewApps({ context, options, runtime });
+    const deployResult = await measurePreviewDeployRun(telemetry, () =>
+      deployPreviewApps({ context, options, runtime, telemetry }),
+    );
     if ("skippedReason" in deployResult && deployResult.skippedReason === "draft") {
       return deployResult;
     }
@@ -312,7 +318,7 @@ export async function run(options: DeployCommandOptions = {}) {
 async function withPreviewE2eTelemetry<T>(
   context: PullRequestPreviewContext,
   runtime: PreviewRuntime,
-  operation: "test" | "run",
+  operation: "deploy" | "test" | "run",
   execute: (telemetry: PreviewE2eTelemetryArtifact) => Promise<T>,
 ): Promise<T> {
   const telemetry = new PreviewE2eTelemetryArtifact({
@@ -353,20 +359,61 @@ async function withPreviewE2eTelemetry<T>(
   return result;
 }
 
+async function measurePreviewDeployRun<T>(
+  telemetry: PreviewE2eTelemetryArtifact,
+  execute: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  telemetry.deployRunStarted();
+  try {
+    const result = await execute();
+    telemetry.deployRunFinished({
+      status: previewOperationWasSkipped(result) ? "skipped" : "passed",
+      durationMs: Date.now() - startedAt,
+      slot: previewResultSlot(result),
+    });
+    return result;
+  } catch (error) {
+    telemetry.deployRunFinished({
+      status: "failed",
+      durationMs: Date.now() - startedAt,
+      error,
+    });
+    throw error;
+  }
+}
+
 function previewOperationWasSkipped(result: unknown) {
   return (
     typeof result === "object" && result !== null && "skipped" in result && result.skipped === true
   );
 }
 
+function previewResultSlot(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null || !("state" in result)) return undefined;
+  const state = result.state;
+  if (typeof state !== "object" || state === null || !("environmentConfigLease" in state)) {
+    return undefined;
+  }
+  const lease = state.environmentConfigLease;
+  return typeof lease === "object" &&
+    lease !== null &&
+    "slug" in lease &&
+    typeof lease.slug === "string"
+    ? lease.slug
+    : undefined;
+}
+
 async function deployPreviewApps({
   context,
   options,
   runtime,
+  telemetry,
 }: {
   context: PullRequestPreviewContext;
   options: DeployCommandOptions;
   runtime: PreviewRuntime;
+  telemetry: PreviewE2eTelemetryArtifact;
 }) {
   logPreview(
     `deploy for PR #${context.pullRequestNumber} (head ${context.pullRequestHeadSha.slice(0, 7)}) — holder ${pullRequestHolder(context.pullRequestNumber)}, semaphore ${defaultSemaphoreBaseUrl}`,
@@ -570,11 +617,11 @@ async function deployPreviewApps({
   // resurrect a pre-claim "waiting for a slot" banner.
   const accumulatedEntries: Record<string, CloudflarePreviewAppEntry> = {};
   for (const batch of orderPreviewDeployBatches(appsToDeploy)) {
-    const entries = await mapWithConcurrency(
+    const completedDeploys = await mapWithConcurrency(
       batch,
       defaultPreviewDeployConcurrency,
       async (app) => {
-        return await deployPreviewAppWithStatus({
+        const entry = await deployPreviewAppWithStatus({
           app,
           existingEntry: current.state.apps[app.slug] ?? null,
           commandEnvironment: {
@@ -596,14 +643,32 @@ async function deployPreviewApps({
           runUrl: context.workflowRunUrl,
           signal: runtime.signal,
         });
+        // Capture this before waiting for slower siblings in the batch. The
+        // lane timestamp must describe this app's own completion, not the tail
+        // of the concurrent deploy fleet.
+        return { entry, finishedAt: new Date().toISOString() };
       },
     );
+    const entries = completedDeploys.map(({ entry }) => entry);
     if (entries.some((entry) => entry.status === "deploy-failed")) {
       ok = false;
     }
 
-    for (const entry of entries) {
+    for (const { entry, finishedAt } of completedDeploys) {
       accumulatedEntries[entry.appSlug] = entry;
+      telemetry.deployAppFinished({
+        app: entry.appSlug,
+        finishedAt,
+        slot: environmentConfigLease.slug,
+        status: entry.status === "awaiting-tests" ? "passed" : "failed",
+        durationMs: entry.deployDurationMs ?? 0,
+        configDurationMs: entry.deployConfigDurationMs,
+        commandDurationMs: entry.deployCommandDurationMs,
+        readinessDurationMs: entry.deployReadinessDurationMs,
+        reuseProofDurationMs: entry.deployReuseProofDurationMs,
+        workerName: entry.deployedWorkerName,
+        workerVersion: entry.deployedWorkerVersion,
+      });
     }
     const update = await updatePreviewState(context, (state) => ({
       ...state,
@@ -2478,6 +2543,14 @@ export const CloudflarePreviewAppEntry = z.object({
   shortSha: z.string().trim().min(1).nullable().optional(),
   cleanupDurationMs: z.number().nonnegative().finite().nullable().optional(),
   deployDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Time spent resolving the Doppler-backed public URL and Worker identity. */
+  deployConfigDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Time spent in the app's build, Cloudflare mutation, and app-level smoke command. */
+  deployCommandDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Time from a successful deploy command to exact-version readiness. */
+  deployReadinessDurationMs: z.number().nonnegative().finite().nullable().optional(),
+  /** Time spent proving that a content-identical recorded deployment can be reused. */
+  deployReuseProofDurationMs: z.number().nonnegative().finite().nullable().optional(),
   /** Public Worker script and immutable Wrangler version proven by this entry. */
   deployedWorkerName: z.string().trim().min(1).nullable().optional(),
   deployedWorkerVersion: z.uuid().nullable().optional(),
@@ -4128,6 +4201,7 @@ async function deployPreviewApp(input: {
   runUrl: string | null;
   signal?: AbortSignal;
 }) {
+  const configStartedAt = Date.now();
   const appConfig = await readPreviewAppConfig({
     app: input.app,
     commandEnvironment: input.commandEnvironment,
@@ -4135,9 +4209,11 @@ async function deployPreviewApp(input: {
     repositoryRoot: input.repositoryRoot,
     signal: input.signal,
   });
+  const deployConfigDurationMs = Date.now() - configStartedAt;
   const baseEntry = {
     appDisplayName: input.app.displayName,
     appSlug: input.app.slug,
+    deployConfigDurationMs,
     headSha: input.pullRequestHeadSha,
     publicUrl: appConfig.baseUrl,
     runUrl: input.runUrl,
@@ -4146,44 +4222,52 @@ async function deployPreviewApp(input: {
   } as const;
 
   const fingerprint = previewAppContentFingerprint(input.app, input.repositoryRoot);
+  const existingEntry = input.existingEntry;
+  let deployReuseProofDurationMs: number | undefined;
   if (
     fingerprint !== null &&
-    input.existingEntry?.status === "deployed" &&
-    input.existingEntry.publicUrl === appConfig.baseUrl &&
-    input.existingEntry.deployedFingerprint === fingerprint &&
-    input.existingEntry.deployedWorkerName === appConfig.workerName &&
-    input.existingEntry.deployedWorkerVersion &&
+    existingEntry?.status === "deployed" &&
+    existingEntry.publicUrl === appConfig.baseUrl &&
+    existingEntry.deployedFingerprint === fingerprint &&
+    existingEntry.deployedWorkerName === appConfig.workerName &&
+    existingEntry.deployedWorkerVersion
+  ) {
     // The record alone is not proof the worker still answers — this app may
     // be selected precisely because the not-serving sweep found it dead
     // (selectRecordedGreenAppsNotServing), e.g. after a slot erase. Skip only
     // when every readiness URL answers right now.
-    (
+    const reuseProofStartedAt = Date.now();
+    const reuseProofPassed = (
       await Promise.all(
         resolvePreviewReadinessUrls({
           publicUrl: appConfig.baseUrl,
           readyUrlPath: input.app.previewReadyUrlPath,
         }).map((url) => probePreviewAppServingOnce(url)),
       )
-    ).every((probe) => probe.ok)
-  ) {
-    // Same slot, same content, last run fully green, worker answering: what
-    // is serving is byte-identical to what this deploy would upload. Skip
-    // the wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
-    logPreview(
-      `deploy skipped: ${input.app.slug} unchanged since ${input.existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
-    );
-    return CloudflarePreviewAppEntry.parse({
-      ...baseEntry,
-      deployedFingerprint: fingerprint,
-      deployedWorkerName: input.existingEntry.deployedWorkerName,
-      deployedWorkerVersion: input.existingEntry.deployedWorkerVersion,
-      workerSizeKib: input.existingEntry.workerSizeKib ?? null,
-      workerGzipKib: input.existingEntry.workerGzipKib ?? null,
-      mainWorkerGzipKib: input.existingEntry.mainWorkerGzipKib ?? null,
-      status: "awaiting-tests",
-    });
+    ).every((probe) => probe.ok);
+    deployReuseProofDurationMs = Date.now() - reuseProofStartedAt;
+    if (reuseProofPassed) {
+      // Same slot, same content, last run fully green, worker answering: what
+      // is serving is byte-identical to what this deploy would upload. Skip
+      // the wrangler/Cloudflare-API round trip; the e2e smoke still verifies it.
+      logPreview(
+        `deploy skipped: ${input.app.slug} unchanged since ${existingEntry.shortSha ?? "the recorded deploy"} on this slot and serving (fingerprint ${fingerprint.slice(0, 12)}…)`,
+      );
+      return CloudflarePreviewAppEntry.parse({
+        ...baseEntry,
+        deployedFingerprint: fingerprint,
+        deployedWorkerName: existingEntry.deployedWorkerName,
+        deployedWorkerVersion: existingEntry.deployedWorkerVersion,
+        deployReuseProofDurationMs,
+        workerSizeKib: existingEntry.workerSizeKib ?? null,
+        workerGzipKib: existingEntry.workerGzipKib ?? null,
+        mainWorkerGzipKib: existingEntry.mainWorkerGzipKib ?? null,
+        status: "awaiting-tests",
+      });
+    }
   }
 
+  const commandStartedAt = Date.now();
   const deployResult = await runPreviewDeployCommand({
     app: input.app,
     commandEnvironment: input.commandEnvironment,
@@ -4192,6 +4276,7 @@ async function deployPreviewApp(input: {
     repositoryRoot: input.repositoryRoot,
     signal: input.signal,
   });
+  const deployCommandDurationMs = Date.now() - commandStartedAt;
   // Wrangler prints "Total Upload: … KiB / gzip: … KiB" on every upload —
   // lift it out of the captured deploy output for the PR table's size column.
   const workerSize = parseWorkerSizeFromDeployOutput(
@@ -4206,6 +4291,8 @@ async function deployPreviewApp(input: {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
+      deployCommandDurationMs,
+      deployReuseProofDurationMs,
       message: commandFailureMessage(deployResult, "Preview deployment failed."),
       status: "deploy-failed",
     });
@@ -4218,12 +4305,15 @@ async function deployPreviewApp(input: {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
+      deployCommandDurationMs,
+      deployReuseProofDurationMs,
       message:
         "Preview deployment succeeded, but wrangler did not report the exact Worker version required by preview tests.",
       status: "deploy-failed",
     });
   }
 
+  const readinessStartedAt = Date.now();
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
@@ -4238,10 +4328,14 @@ async function deployPreviewApp(input: {
           }
         : undefined,
   });
+  const deployReadinessDurationMs = Date.now() - readinessStartedAt;
   if (!readiness.ok) {
     return CloudflarePreviewAppEntry.parse({
       ...baseEntry,
       ...sizeFields,
+      deployCommandDurationMs,
+      deployReadinessDurationMs,
+      deployReuseProofDurationMs,
       message: readiness.message,
       status: "deploy-failed",
     });
@@ -4250,6 +4344,9 @@ async function deployPreviewApp(input: {
   return CloudflarePreviewAppEntry.parse({
     ...baseEntry,
     ...sizeFields,
+    deployCommandDurationMs,
+    deployReadinessDurationMs,
+    deployReuseProofDurationMs,
     deployedWorkerName: appConfig.workerName,
     deployedWorkerVersion,
     deployedFingerprint: fingerprint,

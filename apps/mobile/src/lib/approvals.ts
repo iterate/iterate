@@ -37,6 +37,72 @@ export function safeHost(url: string): string {
   }
 }
 
+export function approvalBodyForDisplay(payload: RequestedPayload): {
+  language: "json" | "text";
+  originalByteLength: number | null;
+  text: string;
+  truncated: boolean;
+} | null {
+  if (payload.body === null) return null;
+  if (payload.body === undefined) {
+    return payload.bodyPreview === null
+      ? null
+      : {
+          language: "text",
+          originalByteLength: null,
+          text: payload.bodyPreview,
+          truncated: true,
+        };
+  }
+  const originalByteLength =
+    payload.body.originalByteLength === undefined ? null : payload.body.originalByteLength;
+  if (payload.body.encoding === "base64") {
+    return {
+      language: "text",
+      originalByteLength,
+      text: payload.body.content,
+      truncated: payload.body.truncated,
+    };
+  }
+  try {
+    JSON.parse(payload.body.content);
+    return {
+      language: "json",
+      originalByteLength,
+      text: payload.body.content,
+      truncated: payload.body.truncated,
+    };
+  } catch {
+    return {
+      language: "text",
+      originalByteLength,
+      text: payload.body.content,
+      truncated: payload.body.truncated,
+    };
+  }
+}
+
+export function scriptCodeForApproval(
+  payload: RequestedPayload,
+  event: StreamEvent | undefined,
+): string {
+  const streamContext = payload.streamContext;
+  if (streamContext?.kind !== "script-execution") {
+    throw new Error("This approval was not triggered by a codemode script.");
+  }
+  if (
+    event === undefined ||
+    event.type !== "events.iterate.com/capability-host/script-run-requested" ||
+    event.path !== streamContext.streamPath ||
+    event.offset !== streamContext.scriptRunRequestedEventOffset ||
+    event.payload?.executionId !== streamContext.executionId ||
+    typeof event.payload.code !== "string"
+  ) {
+    throw new Error("The approval's source script event could not be verified.");
+  }
+  return event.payload.code;
+}
+
 /** The canonical bytes a grant for this request signs over. */
 export function messageFor(
   projectId: string,
@@ -94,6 +160,15 @@ export async function reject(stream: RpcStub<Stream>, offset: number): Promise<v
 
 export type OpenRequest = { offset: number; payload: RequestedPayload; submitted: boolean };
 
+export type ResolvedRequest = {
+  offset: number;
+  payload: RequestedPayload;
+  resolutionEventOffset: number;
+  outcome:
+    | { decision: "approved"; upstreamStatus: number | null; deliveryError: string | null }
+    | { decision: "rejected"; reason: string };
+};
+
 /** Put the approval opened from a notification first without disturbing the queue's other items. */
 export function focusOpenRequest(
   requests: OpenRequest[],
@@ -146,6 +221,70 @@ export function deriveOpenRequests(events: readonly StreamEvent[]): OpenRequest[
       payload,
       submitted: firstResolution.get(offset) === "granted",
     }));
+}
+
+/** Pair recent terminal decisions back to their requests so resolved cards retain provenance. */
+export function deriveRecentResolvedRequests(
+  events: readonly StreamEvent[],
+  limit: number,
+): ResolvedRequest[] {
+  const requests = new Map<number, RequestedPayload>();
+  const firstDecision = new Map<number, "granted" | "rejected">();
+  const resolved = new Map<number, ResolvedRequest>();
+
+  for (const event of [...events].sort((left, right) => left.offset - right.offset)) {
+    if (event.type === EVENT.requested) {
+      requests.set(event.offset, event.payload as RequestedPayload);
+      continue;
+    }
+
+    const payload = event.payload as {
+      approvalRequestEventOffset?: number;
+      error?: string;
+      reason?: string;
+      status?: number;
+    };
+    const requestOffset = payload.approvalRequestEventOffset;
+    if (typeof requestOffset !== "number") continue;
+
+    if (event.type === EVENT.granted) {
+      if (!firstDecision.has(requestOffset)) firstDecision.set(requestOffset, "granted");
+      continue;
+    }
+
+    if (event.type === EVENT.rejected) {
+      if (!firstDecision.has(requestOffset)) firstDecision.set(requestOffset, "rejected");
+      if (firstDecision.get(requestOffset) !== "rejected") continue;
+      const request = requests.get(requestOffset);
+      if (!request) continue;
+      resolved.set(requestOffset, {
+        offset: requestOffset,
+        payload: request,
+        resolutionEventOffset: event.offset,
+        outcome: { decision: "rejected", reason: payload.reason || "human" },
+      });
+      continue;
+    }
+
+    if (event.type === EVENT.settled) {
+      const request = requests.get(requestOffset);
+      if (!request) continue;
+      resolved.set(requestOffset, {
+        offset: requestOffset,
+        payload: request,
+        resolutionEventOffset: event.offset,
+        outcome: {
+          decision: "approved",
+          deliveryError: typeof payload.error === "string" ? payload.error : null,
+          upstreamStatus: typeof payload.status === "number" ? payload.status : null,
+        },
+      });
+    }
+  }
+
+  return [...resolved.values()]
+    .sort((left, right) => right.resolutionEventOffset - left.resolutionEventOffset)
+    .slice(0, limit);
 }
 
 /**

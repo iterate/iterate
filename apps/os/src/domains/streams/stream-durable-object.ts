@@ -303,7 +303,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     const auth = streamDeliveryAuthContext();
     return this.name.projectId === null
       ? deploymentItxForInternal({ auth, ctx: this.ctx })
-      : itxForScope({ auth, ctx: this.ctx, path: "/", projectId: this.name.projectId });
+      : itxForScope({
+          auth,
+          ctx: this.ctx,
+          streamContext: { kind: "scope", scopePath: "/" },
+          path: "/",
+          projectId: this.name.projectId,
+        });
   }
 
   constructor(ctx: DurableObjectState, env: Env) {

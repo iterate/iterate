@@ -1,4 +1,3 @@
-import { minimatch } from "minimatch";
 import { Workspace } from "@cloudflare/shell";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import type { RepoFileChange } from "../repos/types.ts";
@@ -42,6 +41,15 @@ export interface MountRepoAccess {
     encoding?: "utf8" | "base64";
   }): Promise<{ commitOid: string; content: string; path: string } | null>;
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
+  /** HEAD tree text contents in ONE call (head-cache-backed) — bulk consumers
+   * must use this instead of fanning readFile() per path, which overloads the
+   * repo object. `paths` scopes the returned record to exactly those
+   * repo-relative files; mount reads MUST pass it, because a big repo's full
+   * tree does not fit a 32MiB RPC (iterate/iterate: 43.7MB at HEAD). */
+  getFilesSnapshot(input?: { branch?: string; paths?: string[] }): Promise<{
+    commitOid: string;
+    files: Record<string, string>;
+  }>;
   commitFiles(input: {
     author?: { email: string; name: string };
     changes: RepoFileChange[];
@@ -153,7 +161,7 @@ export class WorkspaceCore {
    * mounted beneath that path — cross-repository data loss. A directory
    * tombstone type can exist only if a directory-delete API ever does.
    */
-  #isMaskedFromMount(path: string): boolean {
+  isMaskedFromMount(path: string): boolean {
     return this.#whiteouts()[resolveAbsolutePath(path)] === true;
   }
 
@@ -198,12 +206,93 @@ export class WorkspaceCore {
   async readFile(path: string): Promise<string | null> {
     const local = await this.#workspace.readFile(path);
     if (local !== null) return local;
-    if (this.#isMaskedFromMount(path)) return null;
-    const mounts = await this.#mounts();
-    // A virtual directory (a mount point or an ancestor of one) is a
-    // DIRECTORY in the merged view: an outer repo's file at the same path is
-    // masked, exactly as files under a deeper mount point are shadowed.
+    const resolved = this.resolveMountFallThrough(await this.#mounts(), path);
+    if (resolved === null) return null;
+    const file = await this.#repo(resolved.mount.repoPath).readFile({
+      path: resolved.repoRelativePath,
+    });
+    return file === null ? null : file.content;
+  }
+
+  /**
+   * THE mount fall-through predicate — whiteout mask, virtual-directory mask
+   * (a mount point or an ancestor of one is a DIRECTORY in the merged view),
+   * then longest-prefix routing. Every reader that falls through a missing
+   * local copy (readFile, readFileBytes, batched readFiles) consults THIS,
+   * so single-file and batched semantics agree structurally.
+   */
+  resolveMountFallThrough(
+    mounts: Record<string, WorkspaceMount>,
+    path: string,
+  ): ResolvedMount | null {
+    if (this.isMaskedFromMount(path)) return null;
     if (isVirtualDirectoryPath(mounts, path)) return null;
+    const resolved = routeMount(mounts, path);
+    return resolved === null || resolved.repoRelativePath === "" ? null : resolved;
+  }
+
+  /** The OVERLAY copy only — no mount fall-through (bulk readers take the
+   * batched fall-through arm instead; see readMountFiles). */
+  async readOverlayFile(path: string): Promise<string | null> {
+    return this.#workspace.readFile(path);
+  }
+
+  /**
+   * The batched mount fall-through — readFile's routing at bulk-read scale.
+   * Each mount pays ONE snapshot RPC scoped to exactly the repo-relative
+   * paths routed to it: fanning readFile() per path overloads the repo
+   * object, and an UNSCOPED snapshot ships the whole HEAD tree across a
+   * 32MiB-capped RPC (43.7MB on iterate/iterate — the board-seed outage).
+   * Paths that resolve to no mount (whiteouts, virtual directories, scratch)
+   * read as null.
+   */
+  async readMountFiles(paths: string[]): Promise<Record<string, string | null>> {
+    const result: Record<string, string | null> = {};
+    // ONE mount-table read, then synchronous grouping — an awaited read per
+    // path could interleave with a configure, mint two groups for one mount,
+    // and route them by different tables.
+    const mounts = await this.#mounts();
+    const byMount = new Map<
+      string,
+      { entries: { path: string; repoRelativePath: string }[]; repoPath: string }
+    >();
+    for (const path of paths) {
+      const resolved = this.resolveMountFallThrough(mounts, path);
+      if (resolved === null) {
+        result[path] = null;
+        continue;
+      }
+      const group = byMount.get(resolved.mountPath) ?? {
+        entries: [],
+        repoPath: resolved.mount.repoPath,
+      };
+      group.entries.push({ path, repoRelativePath: resolved.repoRelativePath });
+      byMount.set(resolved.mountPath, group);
+    }
+    await Promise.all(
+      [...byMount.values()].map(async (group) => {
+        const snapshot = await this.#repo(group.repoPath).getFilesSnapshot({
+          paths: group.entries.map((entry) => entry.repoRelativePath),
+        });
+        for (const entry of group.entries) {
+          result[entry.path] = snapshot.files[entry.repoRelativePath] ?? null;
+        }
+      }),
+    );
+    return result;
+  }
+
+  /** The BASE of a path — its mount's content at HEAD, ignoring the overlay
+   * and whiteouts entirely. This is what uncommitted work diffs against
+   * (redlines, merge views); null for unmounted/scratch paths. */
+  async readBase(path: string): Promise<string | null> {
+    const mounts = await this.#mounts();
+    if (isVirtualDirectoryPath(mounts, path)) return null;
+    return this.#mountRead(mounts, path);
+  }
+
+  /** The mount read arm for readBase (baselines ignore whiteouts by design). */
+  async #mountRead(mounts: Record<string, WorkspaceMount>, path: string): Promise<string | null> {
     const resolved = routeMount(mounts, path);
     if (resolved === null || resolved.repoRelativePath === "") return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
@@ -215,11 +304,8 @@ export class WorkspaceCore {
   async readFileBytes(path: string): Promise<Uint8Array | null> {
     const local = await this.#workspace.readFileBytes(path);
     if (local !== null) return local;
-    if (this.#isMaskedFromMount(path)) return null;
-    const mounts = await this.#mounts();
-    if (isVirtualDirectoryPath(mounts, path)) return null;
-    const resolved = routeMount(mounts, path);
-    if (resolved === null || resolved.repoRelativePath === "") return null;
+    const resolved = this.resolveMountFallThrough(await this.#mounts(), path);
+    if (resolved === null) return null;
     const file = await this.#repo(resolved.mount.repoPath).readFile({
       encoding: "base64",
       path: resolved.repoRelativePath,
@@ -235,13 +321,12 @@ export class WorkspaceCore {
     // masks a file, and a mounted subtree implies its ancestor chain.
     if (isVirtualDirectoryPath(mounts, path)) return true;
     const resolved = routeMount(mounts, path);
-    if (this.#isMaskedFromMount(path)) return false;
+    if (this.isMaskedFromMount(path)) return false;
     if (resolved === null) return false;
     const target = resolveAbsolutePath(path);
     const mountFiles = await this.#mountFilePaths(resolved.mountPath, resolved.mount);
     return mountFiles.some(
-      (file) =>
-        (file === target || file.startsWith(`${target}/`)) && !this.#isMaskedFromMount(file),
+      (file) => (file === target || file.startsWith(`${target}/`)) && !this.isMaskedFromMount(file),
     );
   }
 
@@ -320,7 +405,7 @@ export class WorkspaceCore {
       // it again must NOT touch the existing whiteout (retracting it would
       // resurrect the mount file). Only a local copy — visible above an
       // ancestor whiteout because the local layer wins — can remain to delete.
-      if (this.#isMaskedFromMount(path)) {
+      if (this.isMaskedFromMount(path)) {
         return this.#workspace.deleteFile(path);
       }
       // ALL fallible inspection happens BEFORE any mutation: a failed repo
@@ -358,7 +443,7 @@ export class WorkspaceCore {
     const merged = new Set(await this.#localFilePaths());
     for (const [mountPath, mount] of Object.entries(mounts)) {
       for (const path of await this.#mountFilePaths(resolveAbsolutePath(mountPath), mount)) {
-        if (this.#isMaskedFromMount(path)) continue;
+        if (this.isMaskedFromMount(path)) continue;
         // A deeper mount shadows this one's files under its point.
         if (routeMount(mounts, path)?.mount !== mount) continue;
         // A repo FILE at a deeper mount's ancestor is masked: that path is a
@@ -368,12 +453,6 @@ export class WorkspaceCore {
       }
     }
     return [...merged].sort();
-  }
-
-  /** Files in the merged view matching a glob pattern (paths only). */
-  async glob(pattern: string): Promise<string[]> {
-    const all = await this.listAllFiles();
-    return all.filter((path) => minimatch(path, pattern, { dot: true }));
   }
 
   /** All file paths of the local layer (absolute, no directories), fully paged. */
@@ -439,13 +518,7 @@ export class WorkspaceCore {
   ): Promise<void> {
     const localFiles = await this.#localFilePaths();
     const dirty = [...localFiles, ...Object.keys(this.#whiteouts())];
-    const moved = dirty.filter((path) => {
-      const before = routeMount(current, path);
-      const after = routeMount(next, path);
-      return (
-        before?.mountPath !== after?.mountPath || before?.mount.repoPath !== after?.mount.repoPath
-      );
-    });
+    const moved = reRoutedPaths(current, next, dirty);
     if (moved.length > 0) {
       throw new Error(
         `mount change would silently move uncommitted work to a different repo (or orphan it): ` +
@@ -533,11 +606,11 @@ export class WorkspaceCore {
     const mountSet = new Set(mountFiles);
 
     const changes: WorkspaceChange[] = localPaths.map((path) => ({
-      change: mountSet.has(path) && !this.#isMaskedFromMount(path) ? "modified" : "added",
+      change: mountSet.has(path) && !this.isMaskedFromMount(path) ? "modified" : "added",
       path,
     }));
     for (const path of mountFiles) {
-      if (!this.#isMaskedFromMount(path) || ownedSet.has(path)) continue;
+      if (!this.isMaskedFromMount(path) || ownedSet.has(path)) continue;
       if (routeMount(snapshot.mounts, path)?.mountPath !== mountPath) continue;
       changes.push({ change: "deleted", path });
     }
@@ -795,7 +868,10 @@ type GroupedOverlay = {
  */
 /** A mount point or a strict ancestor of one: a DIRECTORY in the merged view
  * by construction — no file may appear, be written, or be deleted there. */
-function isVirtualDirectoryPath(mounts: Record<string, WorkspaceMount>, path: string): boolean {
+export function isVirtualDirectoryPath(
+  mounts: Record<string, WorkspaceMount>,
+  path: string,
+): boolean {
   const resolved = resolveAbsolutePath(path);
   return Object.keys(mounts).some((key) => {
     const mountPath = resolveAbsolutePath(key);
@@ -803,7 +879,28 @@ function isVirtualDirectoryPath(mounts: Record<string, WorkspaceMount>, path: st
   });
 }
 
-function routeMount(mounts: Record<string, WorkspaceMount>, path: string): ResolvedMount | null {
+/** Paths whose OWNING mount changed between two mount tables (longest-prefix
+ * ownership): removed, re-pointed, or stolen by a newly added nested mount.
+ * The mount-transition session sweep ends exactly these. */
+export function reRoutedPaths(
+  before: Record<string, WorkspaceMount>,
+  after: Record<string, WorkspaceMount>,
+  paths: string[],
+): string[] {
+  return paths.filter((path) => {
+    const ownerBefore = routeMount(before, path);
+    const ownerAfter = routeMount(after, path);
+    return (
+      ownerBefore?.mountPath !== ownerAfter?.mountPath ||
+      ownerBefore?.mount.repoPath !== ownerAfter?.mount.repoPath
+    );
+  });
+}
+
+export function routeMount(
+  mounts: Record<string, WorkspaceMount>,
+  path: string,
+): ResolvedMount | null {
   const resolved = resolveAbsolutePath(path);
   let best: { mount: WorkspaceMount; mountPath: string } | null = null;
   for (const [key, mount] of Object.entries(mounts)) {

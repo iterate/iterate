@@ -327,6 +327,7 @@ import type {
   DeviceEnrollInput,
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
+import { withStreamContext, type StreamContext } from "./domains/projects/stream-context.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -347,6 +348,7 @@ import type {
   WorkspaceMount,
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
+import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
   DynamicWorkerRunner,
   type DynamicWorkerTraceRole,
@@ -1855,12 +1857,16 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         edit: "Replace an exact string in one file (copies a mount file up first); private until committed.",
         exists: "Whether a path exists in the merged view.",
         getConfig: "The folded configuration (birth certificate + configured patches).",
+        collab:
+          "Collaborative session lane: open(path) / push(batch) / wait(path, epoch, afterVersion) / changes(path) — live rebase-model editing plus attributed redlines.",
         git: "Per-mount git surface: status (changes grouped by mount), commit ({ message, scope? }), log ({ scope? }).",
         glob: "Merged file paths matching a glob pattern.",
         kill: "Restart the workspace's server-side object; the next request boots it fresh.",
         listAllFiles: "Every file path in the merged view (local layer + every mount, sorted).",
         processor: "The workspace stream processor (snapshot/state).",
-        readFile: "One file's contents; null when missing.",
+        readBase: "A path's mount content at HEAD — what uncommitted work diffs against.",
+        readFile: "One file's contents; null when missing (routes through a live collab session).",
+        readFiles: "Batched reads for board-style consumers — one RPC, missing paths map to null.",
         readFileBytes: "One file's raw bytes; null when missing (use for binaries).",
         reset:
           "Wipe the local layer and deletions — back to a pristine view of the mounts. Uncommitted work is LOST.",
@@ -1946,6 +1952,21 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
   /** One file's contents from the merged view (overlay, then owning mount at HEAD); null when missing. */
   readFile(path: string): Promise<string | null> {
     return this.#read("readFile", () => this.durableObjectStub.readFile(path));
+  }
+
+  /** The collaborative session lane (rebase model, no Yjs) — workspace.collab. */
+  get collab(): WorkspaceCollabRpcTarget {
+    return new WorkspaceCollabRpcTarget(this.props);
+  }
+
+  /** A path's mount content at HEAD — the base uncommitted work diffs against. */
+  readBase(path: string): Promise<string | null> {
+    return this.durableObjectStub.readBase(path);
+  }
+
+  /** Batched file reads (board seeds): one RPC, missing paths map to null. */
+  readFiles(paths: string[]): Promise<Record<string, string | null>> {
+    return this.durableObjectStub.readFiles(paths);
   }
 
   /** One file's raw bytes from the merged view; null when missing. */
@@ -2070,6 +2091,76 @@ class WorkspaceGitRpcTarget extends IterateRpcTarget<"WorkspaceGit"> {
       message: "workspace read retrying after Durable Object reset",
       operation: call,
     });
+  }
+}
+
+/**
+ * The collaborative session lane of a workspace: server-authoritative
+ * rebase-model editing (@codemirror/collab wire — per-file op logs, integer
+ * versions, optimistic clients rebasing unconfirmed edits). Sessions are
+ * durable; the workspace's ordinary filesystem RPC reads/writes route through
+ * live sessions automatically, so this surface is only for LIVE participants
+ * (editors) and redline consumers.
+ */
+class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `Collaborative session lane of the workspace at "${this.props.path}": open(path) joins (or starts) a durable per-file session; push(batch) submits client updates (idempotent via clientSeq, rebased server-side when stale); wait(path, epoch, afterVersion) long-polls for accepted ops (snapshot past the retained floor, "ended" after a destructive op); changes(path) returns attributed redline segments since the last commit.`,
+      children: {
+        changes: "Attributed tracked changes since the last commit (redline segments).",
+        open: "Join (or start) the collaborative editing session for one file.",
+        push: "Submit a client update batch ({ path, epoch, baseVersion, clientId, ops }).",
+        wait: "Long-poll catch-up: ops after a version, a snapshot past the floor, or ended.",
+      },
+      parent: "a workspace (workspace.collab)",
+    });
+  }
+
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  /** @internal */
+  get durableObjectStub() {
+    return env.WORKSPACE_V2.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  /** Join (or start) the collaborative editing session for one file. */
+  open(path: string): Promise<{ content: string; epoch: string; version: number }> {
+    return this.durableObjectStub.collabOpen(path);
+  }
+
+  /** Submit a client update batch (rebase model; idempotent via clientSeq). */
+  push(input: {
+    baseVersion: number;
+    clientId: string;
+    epoch: string;
+    ops: { changes: unknown; clientSeq: number }[];
+    path: string;
+  }) {
+    return this.durableObjectStub.collabPush(input);
+  }
+
+  /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
+   * snapshot when past the retained floor, or ended after a destructive op. */
+  wait(path: string, epoch: string, afterVersion: number, clientId?: string) {
+    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId);
+  }
+
+  /** Head versions of every live session (a cheap board change cursor). */
+  versions(): Promise<Record<string, number>> {
+    return this.durableObjectStub.collabVersions();
+  }
+
+  /** Attributed tracked changes since the last commit (redline segments). */
+  changes(path: string): Promise<CollabChangesResult> {
+    return this.durableObjectStub.collabChanges(path);
   }
 }
 
@@ -2370,7 +2461,8 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
     return this.durableObjectStub.append(...events);
   }
 
-  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent> {
+  /** Idempotently disable push; null means this installation was never enrolled. */
+  revoke(reason: "disabled" | "permission-denied" | "sign-out"): Promise<StreamEvent | null> {
     return this.durableObjectStub.revoke(reason);
   }
 
@@ -2838,7 +2930,14 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
  * verified itx-side.
  */
 class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations"> {
-  constructor(readonly props: { auth: ItxAuth; ctx: CfExecutionContext; projectId: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      ctx: CfExecutionContext;
+      streamContext: StreamContext;
+      projectId: string;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -2903,7 +3002,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
   /** Parallel API, preconfigured with iterate's platform API key. Not a connection. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
-      egress: projectEgressFetcher(this.props.ctx.exports, this.props.projectId),
+      egress: projectEgressFetcher(
+        this.props.ctx.exports,
+        this.props.projectId,
+        this.props.streamContext,
+      ),
       parent: "a project itx (itx.integrations.parallel)",
     });
   }
@@ -3026,7 +3129,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // API path onto it (chat.postMessage, conversations.list, …) — the real
       // SDK, its transport riding the connection secret's substituting egress
       // (slack-api.ts).
-      const slack = connectionSlackClient({ connection, projectId: this.props.projectId });
+      const slack = connectionSlackClient({
+        connection,
+        projectId: this.props.projectId,
+        streamContext: this.props.streamContext,
+      });
       try {
         return await replayPathCall(slack, { args, path: method });
       } catch (error) {
@@ -3063,6 +3170,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
         authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
+        streamContext: this.props.streamContext,
         projectId: this.props.projectId,
         request: args[0] as GmailRequestInput,
       });
@@ -3088,7 +3196,11 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // The connection's mandatory `.octokit` namespace identifies the SDK;
       // replay the remaining dotted path onto the real Octokit. Its transport
       // rides the connection secret's substituting egress (github-api.ts).
-      const octokit = connectionOctokit({ connection, projectId: this.props.projectId });
+      const octokit = connectionOctokit({
+        connection,
+        streamContext: this.props.streamContext,
+        projectId: this.props.projectId,
+      });
       try {
         return await replayPathCall(octokit, { args, path: method.slice(1) });
       } catch (error) {
@@ -3126,6 +3238,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         connection,
         method: method[0]!,
         projectId: this.props.projectId,
+        streamContext: this.props.streamContext,
       });
     }
 
@@ -3150,6 +3263,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       const waitrose = connectionWaitroseClient({
         connection,
         projectId: this.props.projectId,
+        streamContext: this.props.streamContext,
       });
       return await replayPathCall(waitrose, { args, path: method });
     }
@@ -4309,6 +4423,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
     readonly props: {
       auth: ItxAuth;
       ctx: CfExecutionContext;
+      streamContext: StreamContext;
       projectId: string;
     },
   ) {
@@ -4325,6 +4440,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
     return new DynamicWorkerRpcTarget({
       buildBudgetMs: streamDeliveryBuildBudget(this.props.auth, options?.buildBudgetMs),
       ctx: this.props.ctx,
+      streamContext: this.props.streamContext,
       flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
@@ -4343,7 +4459,11 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
 class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> {
   readonly #buildBudgetMs: number | undefined;
   readonly #flattenNestedPaths: boolean;
-  readonly #props: { ctx: CfExecutionContext; projectId: string };
+  readonly #props: {
+    ctx: CfExecutionContext;
+    streamContext: StreamContext;
+    projectId: string;
+  };
   readonly #ref: DynamicWorkerRef;
   readonly #traceRole: DynamicWorkerTraceRole | undefined;
   #lazyRunner: DynamicWorkerRunner | undefined;
@@ -4351,6 +4471,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   constructor(props: {
     buildBudgetMs?: number;
     ctx: CfExecutionContext;
+    streamContext: StreamContext;
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
@@ -4359,7 +4480,11 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     super();
     this.#buildBudgetMs = props.buildBudgetMs;
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
-    this.#props = { ctx: props.ctx, projectId: props.projectId };
+    this.#props = {
+      ctx: props.ctx,
+      streamContext: props.streamContext,
+      projectId: props.projectId,
+    };
     this.#ref = props.ref;
     this.#traceRole = props.traceRole;
   }
@@ -4370,6 +4495,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   // binding and egress fetcher come from the HOSTING context, not the ref.
   get #runner(): DynamicWorkerRunner {
     this.#lazyRunner ??= new DynamicWorkerRunner({
+      streamContext: this.#props.streamContext,
       exports: this.#props.ctx.exports,
       projectId: this.#props.projectId,
       scopePath: this.#ref.path,
@@ -4530,6 +4656,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
+      streamContext: { kind: "scope", scopePath: "/" },
       path: "/",
       projectId,
     });
@@ -4968,6 +5095,7 @@ type ExistingProjectRpcTargetProps = {
   // dotted-path calls (`itx.foo.bar(...)` → `capabilityHost.invokeCapability`).
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
+  streamContext: StreamContext;
   projectId: string;
 };
 
@@ -5046,6 +5174,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.#existingProps.projectId;
   }
 
+  get #streamContext(): StreamContext {
+    return this.#existingProps.streamContext;
+  }
+
   /** The project this itx is scoped into. */
   get projectId(): string {
     return this.#projectId;
@@ -5104,6 +5236,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
+        streamContext: { kind: "scope", scopePath: "/" },
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -5515,7 +5648,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** Project-attributed outbound fetch (+ intercept). */
   get egress(): ProjectEgressRpcTarget {
-    return new ProjectEgressRpcTarget({ projectId: this.#projectId });
+    return new ProjectEgressRpcTarget({
+      projectId: this.#projectId,
+      streamContext: this.#streamContext,
+    });
   }
 
   /** Project email: send(...) and the connection-scoped inbound address. */
@@ -5552,6 +5688,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
+      streamContext: this.#streamContext,
       projectId: this.#projectId,
     });
   }
@@ -5559,7 +5696,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */
   get mcp(): McpClientCollectionRpcTarget {
     return new McpClientCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#streamContext),
       projectId: this.#projectId,
       // Makes beginOAuth links notify the calling agent when the flow completes.
       scopePath: this.#capabilityHost.path,
@@ -5569,14 +5706,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Ad-hoc OpenAPI clients: connect(spec). */
   get openapi(): OpenApiCollectionRpcTarget {
     return new OpenApiCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#streamContext),
     });
   }
 
   /** Parallel API, preconfigured with iterate's platform API key. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#streamContext),
       parent: "a project itx (itx.parallel)",
     });
   }
@@ -5644,6 +5781,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
+      streamContext: this.#streamContext,
       projectId: this.#projectId,
     });
   }
@@ -5715,6 +5853,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new DynamicWorkerRpcTarget({
       buildBudgetMs: streamDeliveryBuildBudget(this.#props.auth),
       ctx: this.#props.ctx,
+      streamContext: this.#streamContext,
       flattenNestedPaths: true,
       projectId: this.#projectId,
       ref: defaultProjectWorkerRef(),
@@ -5751,6 +5890,7 @@ const ITX_SURFACE_MEMBER_NAMES: ReadonlySet<string> = new Set(
 export function itxForScope(props: {
   auth: ItxAuth;
   ctx: CfExecutionContext;
+  streamContext: StreamContext;
   path: string;
   projectId: string;
 }): ProjectRpcTarget {
@@ -5758,6 +5898,7 @@ export function itxForScope(props: {
     auth: props.auth,
     capabilityHost: new CapabilityHostRpcTarget(props),
     ctx: props.ctx,
+    streamContext: props.streamContext,
     projectId: props.projectId,
   });
 }
@@ -6117,7 +6258,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     });
   }
 
-  constructor(readonly props: { projectId: string }) {
+  constructor(readonly props: { projectId: string; streamContext: StreamContext }) {
     super();
   }
 
@@ -6125,7 +6266,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse> {
-    return projectStub(env.PROJECT, this.props.projectId).fetch(request);
+    return projectStub(env.PROJECT, this.props.projectId).fetch(
+      withStreamContext(request, this.props.streamContext),
+    );
   }
 
   /** Install a live egress interceptor (last writer wins); returns a release handle. */

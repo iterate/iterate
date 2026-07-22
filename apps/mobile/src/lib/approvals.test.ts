@@ -1,6 +1,15 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { deriveOpenRequests, EVENT, focusOpenRequest, safeHost } from "./approvals.ts";
+import {
+  approvalBodyForDisplay,
+  deriveOpenRequests,
+  deriveRecentResolvedRequests,
+  EVENT,
+  focusOpenRequest,
+  safeHost,
+  scriptCodeForApproval,
+  type RequestedPayload,
+} from "./approvals.ts";
 
 test("an unresolved request is open", () => {
   const open = deriveOpenRequests([requested(1, "post-echo")]);
@@ -22,6 +31,44 @@ test("a settled request is no longer open", () => {
 test("a rejected request is no longer open", () => {
   const open = deriveOpenRequests([requested(1, "post-echo"), rejected(2, 1)]);
   expect(open).toEqual([]);
+});
+
+test("recent resolved requests retain their request details and decision", () => {
+  const events = [
+    requested(1, "approved-rule"),
+    requested(2, "rejected-rule"),
+    granted(3, 1),
+    rejected(4, 2),
+    settled(5, 1, 200),
+  ];
+
+  expect(deriveRecentResolvedRequests(events, 5)).toEqual([
+    {
+      offset: 1,
+      payload: expect.objectContaining({ ruleKey: "approved-rule" }),
+      outcome: { decision: "approved", deliveryError: null, upstreamStatus: 200 },
+      resolutionEventOffset: 5,
+    },
+    {
+      offset: 2,
+      payload: expect.objectContaining({ ruleKey: "rejected-rule" }),
+      outcome: { decision: "rejected", reason: "human" },
+      resolutionEventOffset: 4,
+    },
+  ]);
+});
+
+test("recent resolved requests are limited by newest outcome, not request order", () => {
+  const events = [
+    requested(1, "resolved-last"),
+    requested(2, "resolved-first"),
+    rejected(3, 2),
+    rejected(4, 1),
+  ];
+
+  expect(deriveRecentResolvedRequests(events, 1)).toMatchObject([
+    { offset: 1, outcome: { decision: "rejected" }, resolutionEventOffset: 4 },
+  ]);
 });
 
 test("an expired request is no longer open even with no resolution event", () => {
@@ -47,10 +94,65 @@ test("a notification-targeted approval is focused at the front of the queue", ()
   expect(focusOpenRequest(open, 20).map((request) => request.offset)).toEqual([20, 10]);
 });
 
+test("the approval view resolves the exact script event and complete request body", () => {
+  const request = requested(10, "refund", {
+    body: {
+      encoding: "utf8",
+      content: '{"orderId":1234}',
+      originalByteLength: 16,
+      truncated: false,
+    },
+    streamContext: {
+      kind: "script-execution",
+      executionId: "agent-output:8",
+      scriptRunRequestedEventOffset: 9,
+      streamPath: "/agents/refund-agent",
+    },
+  });
+  const payload = request.payload as RequestedPayload;
+  const scriptEvent = {
+    type: "events.iterate.com/capability-host/script-run-requested",
+    offset: 9,
+    createdAt: "2026-07-21T15:00:00Z",
+    path: "/agents/refund-agent",
+    payload: {
+      code: "async () => fetch('/refund')",
+      executionId: "agent-output:8",
+      expiresAt: Date.now() + 60_000,
+    },
+  } satisfies StreamEvent;
+
+  expect(scriptCodeForApproval(payload, scriptEvent)).toBe("async () => fetch('/refund')");
+  expect(approvalBodyForDisplay(payload)).toEqual({
+    language: "json",
+    originalByteLength: 16,
+    text: '{"orderId":1234}',
+    truncated: false,
+  });
+});
+
+test("the approval view labels a capped request body as truncated", () => {
+  const payload = requested(10, "upload", {
+    body: {
+      encoding: "utf8",
+      content: "readable prefix",
+      originalByteLength: 100_000,
+      truncated: true,
+    },
+  }).payload as RequestedPayload;
+
+  expect(approvalBodyForDisplay(payload)).toEqual({
+    language: "text",
+    originalByteLength: 100_000,
+    text: "readable prefix",
+    truncated: true,
+  });
+});
+
 function requested(
   offset: number,
   ruleKey: string,
-  overrides: Partial<{ expiresAt: string }> = {},
+  overrides: Partial<RequestedPayload> = {},
 ): StreamEvent {
   return {
     type: EVENT.requested,
@@ -63,9 +165,12 @@ function requested(
       headers: {},
       bodySha256: null,
       bodyPreview: null,
+      body: undefined,
       secretPaths: [],
       ruleKey,
+      ruleDescription: "",
       expiresAt: overrides.expiresAt ?? "2099-01-01T00:00:00Z",
+      ...overrides,
     },
   };
 }

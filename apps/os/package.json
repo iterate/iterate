@@ -36,6 +36,7 @@
     "@cloudflare/shell": "^0.3.4",
     "@cloudflare/worker-bundler": "0.2.1",
     "@codemirror/autocomplete": "^6.20.1",
+    "@codemirror/collab": "^6.1.1",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/language": "^6.12.2",

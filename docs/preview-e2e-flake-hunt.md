@@ -52,6 +52,107 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 8 (2026-07-22, post-#2251)
+
+This is a fresh proof from `origin/main` at
+`cd5f4a67b9df5bc05fd2e38fe5ea9eda63bd6e7b`, including the cold worker-build
+handoff from #2251 and the fixed durable-stream telemetry from #2249. It
+inherits no streak: the accepted-run counter starts at zero.
+
+The final #2251 head, `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4`,
+passed its normal preview check on the first workflow attempt. The complete
+check took 5m20s. OS deployment was the critical deployment lane at 148.9s,
+while OS e2e took 133.7s: Playwright passed 63/63 tests in 2.1m and Vitest
+passed 48 files, with 2 skipped, in 78.98s. This is useful green baseline
+evidence but not an accepted marathon run because it exceeded five minutes
+and absorbed one Vitest retry.
+
+The retried case was `Project worker processEventBatch receives events from
+every project stream and can cross-post`. Its first attempt reached the
+30-second stream-wait watchdog and its retry passed, bringing the case to
+59.18s. This first occurrence is recorded rather than quarantining a
+substantial concurrency test from one observation. Any recurrence in this
+round rejects the run and triggers diagnosis; a test shown to be independently
+flaky or pathologically slow will be fixed or quarantined with a tracking task
+under the normal testing policy.
+
+Round-8 run ledger:
+
+| Proof                    | Revision                                   | Accepted runs | Retries | Outcome                                     |
+| ------------------------ | ------------------------------------------ | ------------: | ------: | ------------------------------------------- |
+| Pre-round normal preview | `a0380f8d078ddab6a825f9a070b2a8f433d5e7e4` |          0/25 |       1 | Passed in 5m20s; cross-project stream retry |
+| Round-8 marathon 1       | `e301520145a6259a743a3e300366a0a53689a009` |          0/25 |       2 | Functional pass; rejected at 311s           |
+| Round-8 marathon 2       | `c2a695fac7279da1b3b9bb64512a2d08d20aa576` |          0/25 |       0 | Clean pass; rejected at 311s                |
+| Round-8 marathon 3       | `723f73067c13fa52512593f9e2952ffc91618ef2` |          0/25 |      19 | Shared-isolate cancellation; rejected       |
+
+The first round-8 attempt was [Depot run
+`3jp43c0dbg`](https://depot.dev/orgs/0p91s0lz49/workflows/vxd3v2n769?job=xjm4379s33&attempt=lp5zq2dfp4).
+Every test eventually passed, but the proof stopped because the workflow took
+311 seconds and absorbed two retries. OS deployed in 101.7 seconds and its e2e
+lane took 152.6 seconds. Vitest passed 48 files, with 2 skipped, in 86.15
+seconds; Playwright passed 63 cases in 146 seconds.
+
+The project-worker cross-post case again exhausted its 30-second stream wait
+before passing on retry, reaching 62.79 seconds across both attempts. This
+second consecutive occurrence establishes a cold-build delivery tail rather
+than a one-off test failure. The test still exercises a fresh worker build and
+is not quarantined; its public delivery budget is temporarily 100 seconds, and
+`tasks/reduce-project-worker-cross-post-tail.md` tracks instrumentation,
+latency reduction, and restoration of the tighter budget.
+
+The other retry was the markdown-preview Playwright spec. The network trace
+showed the parent project route's identity `beforeLoad` taking 1.79 seconds
+after the Preview search-param navigation. The test selected Code while that
+first transition was still settling; `.cm-content` remained absent for roughly
+1.3 seconds, then the editor was fully rendered in the failure screenshot
+about 100 milliseconds after the action deadline. The IDE now renders a
+visible, `data-spinner`-marked status while TanStack Router is loading. This
+exposes the real product wait and lets the normal spinner-aware action deadline
+cover it; the substantial markdown editing and sanitization spec remains
+active.
+
+This head therefore contributes zero accepted runs. The next immutable head
+starts a new 0/25 streak through the same canonical Depot workflow.
+
+The next canonical attempt on that head was [Depot run
+`w9sc1f40ds`](https://depot.dev/orgs/0p91s0lz49/workflows/s5sm8wx775?job=xl2nzs4w1s&attempt=jf9f0zg4z2).
+It was the first complete zero-retry pass in this round: all 48 runnable OS
+Vitest files and all 63 Playwright cases passed on their first attempt. OS
+deployed in 116.2 seconds and its e2e lane passed in 146.9 seconds (Vitest
+113.08 seconds; Playwright 2.3 minutes). The strict proof still rejected it
+because dispatch creation through completion took 311 seconds.
+
+Reporting accounted for the avoidable final tail: normalization produced
+6,865 PostHog events, then the uploader sent 69 fixed 100-event batches
+strictly sequentially, consuming 12.9 seconds before artifact collection.
+The uploader now packs events by encoded size, with a conservative 5 MB event
+payload budget beneath PostHog's 20 MB batch-request limit. The preceding
+5,906-event artifact packs into three requests instead of 60 while preserving
+every deterministic event UUID and the existing per-batch bounded retry. The
+next canonical run, [Depot run
+`h95t4wvm5n`](https://depot.dev/orgs/0p91s0lz49/workflows/vsm4b78r2d?job=gtxq2vksbg&attempt=ppp78dt78z),
+confirmed the real upload tail fell by roughly 10 seconds. The complete check
+still took 312 seconds and absorbed 19 Vitest retries, all from one synchronized
+`Peer closed WebSocket: 1006` wave; every retry passed.
+
+Cloudflare traces identified one causal test rather than 19 independent
+flakes. The live-capability WebSocket boundary probe caught its expected
+serialization error and reported a pass, then the runtime canceled that
+session's root `GET /api` because the Worker had hung and would never generate
+a response. Three isolated apparent passes reproduced the hidden runtime
+cancellation three times out of three. Because every Vitest file correctly
+runs in parallel against the same OS deployment, that isolate cancellation
+severed unrelated sessions across otherwise-independent projects.
+
+Both cases in `live-capability-websocket.e2e.test.ts` are explicitly
+quarantined under
+`tasks/quarantined-live-capability-websocket-e2e.md`. The causal boundary case
+is deterministically runtime-fatal; the second was a `test.fails` that stopped
+on an unrelated stale-template assertion and therefore provided no active
+coverage. Ordinary live capabilities, project-app WebSockets, and all other OS
+Vitest files remain enabled. This quarantine resets the immutable head and the
+accepted streak to 0/25; only a canonical Depot run can restart it.
+
 ## Round 7 (2026-07-21, post-#2226 and #2227)
 
 This is a fresh proof from `origin/main` at

@@ -11,6 +11,8 @@ test("public itx discovers an enrolled device and appends a notification request
   const projectId = (await project.__describe()).projectId;
   using phone = project.devices.get("phone-test-installation");
 
+  await expect(phone.revoke("sign-out")).resolves.toBeNull();
+
   await phone.enroll({
     appVersion: "e2e",
     expoPushToken: "ExponentPushToken[e2e-never-sent]",

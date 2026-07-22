@@ -125,9 +125,9 @@ function sortKeysDeep(value: unknown): unknown {
 /**
  * The exact bytes an approval signature covers. Reconstructable by both
  * sides from the requested event alone: the CLI builds it from the event it
- * received, the Project DO from the payload it appended. `bodyPreview` and
- * `expiresAt` are deliberately excluded — the preview is a UI hint (the
- * signature covers the body via its hash) and expiry is enforced server-side.
+ * received, the Project DO from the payload it appended. Display/provenance
+ * fields and `expiresAt` are deliberately excluded — the signature covers the
+ * body via its hash, and expiry is enforced server-side.
  */
 export function buildApprovalMessage(input: {
   projectId: string;
@@ -151,6 +151,45 @@ export function buildApprovalMessage(input: {
       decision: input.decision,
     }),
   );
+}
+
+export const APPROVAL_BODY_INSPECTION_LIMIT_BYTES = 64 * 1024;
+
+/** Keep a bounded body prefix for human inspection; UTF-8 stays readable and other bytes are base64. */
+export function approvalRequestBody(bytes: Uint8Array): {
+  encoding: "utf8" | "base64";
+  content: string;
+  originalByteLength: number;
+  truncated: boolean;
+} {
+  const truncated = bytes.byteLength > APPROVAL_BODY_INSPECTION_LIMIT_BYTES;
+  const inspectionBytes = bytes.slice(0, APPROVAL_BODY_INSPECTION_LIMIT_BYTES);
+  const metadata = { originalByteLength: bytes.byteLength, truncated };
+  try {
+    return {
+      encoding: "utf8",
+      content: decodeUtf8InspectionBytes(inspectionBytes, truncated),
+      ...metadata,
+    };
+  } catch {
+    return { encoding: "base64", content: bytesToBase64(inspectionBytes), ...metadata };
+  }
+}
+
+function decodeUtf8InspectionBytes(bytes: Uint8Array, truncated: boolean): string {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  if (!truncated) return decoder.decode(bytes);
+
+  // A byte cap may split the final UTF-8 code point. Trim only that incomplete
+  // suffix; invalid bytes elsewhere still fall back to the binary/base64 view.
+  for (let trim = 0; trim <= 3; trim++) {
+    try {
+      return decoder.decode(bytes.subarray(0, bytes.byteLength - trim));
+    } catch {
+      // Try the next possible UTF-8 suffix length.
+    }
+  }
+  throw new Error("The approval body inspection prefix is not UTF-8.");
 }
 
 // -----------------------------------------------------------------------------

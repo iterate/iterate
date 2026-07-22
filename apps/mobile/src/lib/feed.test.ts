@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { reduceFeed, summarizeActivity, type AgentUiActivity } from "./feed.ts";
+import {
+  collapseConsecutiveStreamWakes,
+  reduceFeed,
+  summarizeActivity,
+  type AgentUiActivity,
+} from "./feed.ts";
 
 const PATH = "/agents/mobile/test";
 
@@ -78,6 +83,24 @@ test("summarizes a settled activity", () => {
   ]);
   const activity = feed.items[0] as AgentUiActivity;
   expect(summarizeActivity(activity)).toBe("Ran code 1× · 1 request · 4 s");
+});
+
+test("consecutive stream wakes collapse into the last wake with a count", () => {
+  const feed = reduceFeed(PATH, [
+    event(1, "events.iterate.com/stream/created", {}),
+    event(2, "events.iterate.com/stream/woken", {}),
+    event(3, "events.iterate.com/stream/woken", {}),
+    event(4, "events.iterate.com/stream/woken", {}),
+    event(5, "events.iterate.com/agents/context-added", { content: "hello", role: "user" }),
+    event(6, "events.iterate.com/stream/woken", {}),
+    event(7, "events.iterate.com/stream/woken", {}),
+  ]);
+
+  expect(collapseConsecutiveStreamWakes(feed.items)).toMatchObject([
+    { kind: "stream-woken", id: "stream-woken-4", wakeCount: 2 },
+    { kind: "user", id: "user-5" },
+    { kind: "stream-woken", id: "stream-woken-7", wakeCount: 2 },
+  ]);
 });
 
 test("a late durable script result replaces its provisional activity", () => {
