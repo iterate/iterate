@@ -1,8 +1,4 @@
-import {
-  createDefaultMapFromCDN,
-  createSystem,
-  createVirtualTypeScriptEnvironment,
-} from "@typescript/vfs";
+import { createSystem, createVirtualTypeScriptEnvironment } from "@typescript/vfs";
 import { createWorker } from "@valtown/codemirror-ts/worker";
 import * as Comlink from "comlink";
 import ts from "typescript";
@@ -11,6 +7,34 @@ import { ITX_TYPES_PATH, itxReplDeclaration, itxTypesDeclaration } from "./itx-r
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const REPL_TYPES_PATH = "/iterate-repl-globals.d.ts";
+
+// Ship the configured libs with the worker so editor startup has no runtime
+// dependency on the TypeScript playground CDN. The ES prefixes include the
+// transitive references needed by es2022; DOM and decorators are explicit.
+const typeScriptLibSources = import.meta.glob<string>(
+  [
+    "/node_modules/typescript/lib/lib.decorators*.d.ts",
+    "/node_modules/typescript/lib/lib.dom.d.ts",
+    "/node_modules/typescript/lib/lib.es5.d.ts",
+    "/node_modules/typescript/lib/lib.es2015*.d.ts",
+    "/node_modules/typescript/lib/lib.es2016*.d.ts",
+    "/node_modules/typescript/lib/lib.es2017*.d.ts",
+    "/node_modules/typescript/lib/lib.es2018*.d.ts",
+    "/node_modules/typescript/lib/lib.es2019*.d.ts",
+    "/node_modules/typescript/lib/lib.es2020*.d.ts",
+    "/node_modules/typescript/lib/lib.es2021*.d.ts",
+    "/node_modules/typescript/lib/lib.es2022*.d.ts",
+  ],
+  { eager: true, import: "default", query: "?raw" },
+);
+
+const createTypeScriptLibMap = () =>
+  new Map(
+    Object.entries(typeScriptLibSources).map(([path, source]) => [
+      `/${path.slice(path.lastIndexOf("/") + 1)}`,
+      source,
+    ]),
+  );
 
 const compilerOptions: ts.CompilerOptions = {
   // The prelude imports the design-of-record module as "./itx-types.ts".
@@ -34,7 +58,7 @@ const compilerOptions: ts.CompilerOptions = {
 const IGNORED_DIAGNOSTIC_CODES = new Set([1108]);
 
 const worker = createWorker(async () => {
-  const fsMap = await createDefaultMapFromCDN(compilerOptions, ts.version, false, ts);
+  const fsMap = createTypeScriptLibMap();
   fsMap.set(ITX_TYPES_PATH, itxTypesDeclaration);
   fsMap.set(REPL_TYPES_PATH, itxReplDeclaration);
   fsMap.set(REPL_SOURCE_PATH, "\n");
