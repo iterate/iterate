@@ -161,11 +161,12 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "apps/guestbook/processor.ts",
     content:
-      "// Userspace stream processor: reduces guestbook signatures on the project stream\n" +
-      "// at /guestbook. Style matches the agent processor — inline contract schemas,\n" +
-      "// long switch reduce/processEvent, no event-type constants.\n" +
+      "// The guestbook's stream processor: it folds the signatures on the project\n" +
+      "// stream at /guestbook into a birth certificate plus an append-only list of\n" +
+      "// entries. The reduce is the whole processor — pure fold, no side effects.\n" +
       "import { z } from \"zod\";\n" +
-      "import { defineProcessorContract, StreamProcessor, type ProcessorState } from \"iterate/processors\";\n" +
+      "import { defineProcessorContract, StreamProcessor } from \"iterate/processors\";\n" +
+      "import type { ProcessorState, ReduceArgs } from \"iterate/processors\";\n" +
       "\n" +
       "export const GuestbookProcessorContract = defineProcessorContract({\n" +
       "  slug: \"guestbook\",\n" +
@@ -226,42 +227,31 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "          description: \"A visitor left a note.\",\n" +
       "          payload: { name: \"Ada\", message: \"Lovely worker you have here.\" },\n" +
       "        },\n" +
-      "        {\n" +
-      "          description: \"A short thank-you.\",\n" +
-      "          payload: { name: \"Grace\", message: \"Thanks for the demo.\" },\n" +
-      "        },\n" +
       "      ],\n" +
       "    },\n" +
       "  },\n" +
       "  consumes: [\"events.iterate.com/guestbook/created\", \"events.iterate.com/guestbook/entry-signed\"],\n" +
       "  emits: [],\n" +
       "});\n" +
+      "export type GuestbookProcessorContract = typeof GuestbookProcessorContract;\n" +
       "\n" +
-      "export type GuestbookState = ProcessorState<typeof GuestbookProcessorContract>;\n" +
+      "export type GuestbookState = ProcessorState<GuestbookProcessorContract>;\n" +
       "\n" +
-      "export class GuestbookProcessor extends StreamProcessor<typeof GuestbookProcessorContract> {\n" +
+      "export class GuestbookProcessor extends StreamProcessor<GuestbookProcessorContract> {\n" +
       "  readonly contract = GuestbookProcessorContract;\n" +
       "\n" +
-      "  protected override reduce({\n" +
-      "    event,\n" +
-      "    state,\n" +
-      "  }: Parameters<StreamProcessor<typeof GuestbookProcessorContract>[\"reduce\"]>[0]): GuestbookState {\n" +
+      "  protected override reduce({ event, state }: ReduceArgs<GuestbookProcessorContract>) {\n" +
       "    switch (event.type) {\n" +
-      "      case \"events.iterate.com/guestbook/created\": {\n" +
-      "        if (state.birthCertificate !== null) {\n" +
-      "          throw new Error(\"guestbook received more than one created event\");\n" +
-      "        }\n" +
+      "      case \"events.iterate.com/guestbook/created\":\n" +
+      "        // Idempotency-keyed at the source, but a duplicate that slips through\n" +
+      "        // folds to a no-op rather than wedging the frame.\n" +
+      "        if (state.birthCertificate !== null) return state;\n" +
       "        return { ...state, birthCertificate: event.payload };\n" +
-      "      }\n" +
-      "      case \"events.iterate.com/guestbook/entry-signed\": {\n" +
-      "        if (state.birthCertificate === null) {\n" +
-      "          throw new Error(\"guestbook received an entry before its created event\");\n" +
-      "        }\n" +
+      "      case \"events.iterate.com/guestbook/entry-signed\":\n" +
       "        return {\n" +
       "          ...state,\n" +
       "          entries: [...state.entries, { ...event.payload, signedAt: event.createdAt }],\n" +
       "        };\n" +
-      "      }\n" +
       "      default:\n" +
       "        return state;\n" +
       "    }\n" +
@@ -599,6 +589,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "// collapse.\n" +
       "import { z } from \"zod\";\n" +
       "import { defineProcessorContract, StreamProcessor } from \"iterate/processors\";\n" +
+      "import type { ProcessEventArgs } from \"iterate/processors\";\n" +
       "import type { Project, StreamEvent, StreamEventInput } from \"iterate/sdk\";\n" +
       "\n" +
       "// Record keys are stable rule IDs: duplicate identities are structurally\n" +
@@ -666,6 +657,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  consumes: [\"events.iterate.com/github/webhook-received\"],\n" +
       "  emits: [],\n" +
       "});\n" +
+      "export type ReviewBotProcessorContract = typeof ReviewBotProcessorContract;\n" +
       "\n" +
       "type ReviewBotProcessorDeps = {\n" +
       "  /** Opens the project itx handle the webhook router acts through. */\n" +
@@ -682,15 +674,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       " * idempotency keys collapse the re-run (the at-least-once contract).\n" +
       " */\n" +
       "export class ReviewBotProcessor extends StreamProcessor<\n" +
-      "  typeof ReviewBotProcessorContract,\n" +
+      "  ReviewBotProcessorContract,\n" +
       "  ReviewBotProcessorDeps\n" +
       "> {\n" +
       "  readonly contract = ReviewBotProcessorContract;\n" +
       "\n" +
-      "  protected override processEvent({\n" +
-      "    blockProcessorWhile,\n" +
-      "    event,\n" +
-      "  }: Parameters<StreamProcessor<typeof ReviewBotProcessorContract>[\"processEvent\"]>[0]): undefined {\n" +
+      "  protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {\n" +
+      "    const { blockProcessorWhile, event } = args;\n" +
       "    if (event === null || event.type !== \"events.iterate.com/github/webhook-received\") return;\n" +
       "    // First-hand facts only: a copy carrying cross-post provenance is another\n" +
       "    // stream's history (e.g. the agent-stream copy this router itself\n" +
