@@ -1769,6 +1769,13 @@ export type CloudflarePreviewApp = {
    * individually), so an out-of-band secret/config edit invalidates reuse.
    */
   fingerprintDopplerConfig?: boolean;
+  /**
+   * Whether an exact live Worker version is sufficient to reuse this app.
+   * Apps whose deploy command reconciles required mutable state must deploy
+   * whenever selected until they expose an equally strong state-generation
+   * proof; Worker identity alone survives an erase of their backing data.
+   */
+  previewDeploymentReuse: "immutable-worker" | "requires-deploy-reconciliation";
   /** Apps co-selected so this app deploys and tests against one coherent head. */
   previewDependencies?: CloudflarePreviewAppSlug[];
   /**
@@ -2214,6 +2221,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ...previewDeploymentSharedInputPaths,
     ],
     fingerprintDopplerConfig: true,
+    previewDeploymentReuse: "immutable-worker",
     // OS binds auth's RPC entrypoint, and its integration e2e uses dummy
     // Petshop. Co-select both; every deploy starts concurrently and OS derives
     // Auth's public signing key directly from Doppler.
@@ -2343,6 +2351,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ...previewDeploymentSharedInputPaths,
     ],
     fingerprintDopplerConfig: true,
+    previewDeploymentReuse: "immutable-worker",
     previewReadyWorkerVersion: { stableForMs: 0 },
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
@@ -2400,6 +2409,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ...previewDeploymentSharedInputPaths,
     ],
     fingerprintDopplerConfig: true,
+    // Auth deploy owns D1 migrations plus bootstrap-admin and OAuth-client
+    // reconciliation. Slot erase wipes that state but deliberately leaves the
+    // Worker serving, so immutable Worker-version proof cannot authorize a
+    // skip. A future state-generation proof could make reuse safe here.
+    previewDeploymentReuse: "requires-deploy-reconciliation",
     // Dedicated dependency-free route carrying the immutable Worker version.
     previewReadyUrlPath: "/api/__internal/health",
     previewReadyWorkerVersion: { stableForMs: 0 },
@@ -2471,6 +2485,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ...previewDeploymentSharedInputPaths,
     ],
     fingerprintDopplerConfig: true,
+    previewDeploymentReuse: "immutable-worker",
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
     previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
@@ -2561,6 +2576,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       ...previewDeploymentSharedInputPaths,
     ],
     fingerprintDopplerConfig: true,
+    previewDeploymentReuse: "immutable-worker",
     previewReadyUrlPath: "/",
     previewReadyWorkerVersion: { stableForMs: 0 },
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
@@ -4257,6 +4273,7 @@ function canReuseRecordedPreviewDeployment(input: {
 }) {
   const { app, appConfig, existingEntry, fingerprint } = input;
   return Boolean(
+    app.previewDeploymentReuse === "immutable-worker" &&
     fingerprint !== null &&
     existingEntry?.status === "deployed" &&
     existingEntry.publicUrl === appConfig.baseUrl &&

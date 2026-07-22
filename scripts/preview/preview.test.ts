@@ -505,6 +505,42 @@ describe("preview workflow scope", () => {
     ).toBe(false);
   });
 
+  test("does not reuse Auth from Worker evidence alone because deploy reconciles erased D1 seeds", () => {
+    const auth = cloudflarePreviewApps.auth;
+    const fingerprint = previewAppContentFingerprint(auth, repoRoot);
+    const configFingerprint = `sha256-v1:${"a".repeat(64)}`;
+    const appConfig = {
+      baseUrl: "https://auth.iterate-preview-6.com",
+      deploymentConfigFingerprint: configFingerprint,
+      projectHostnameBases: [],
+      workerName: "auth-preview-6",
+    };
+    const existingEntry = CloudflarePreviewAppEntry.parse({
+      appDisplayName: "Auth",
+      appSlug: "auth",
+      deployedConfigFingerprint: configFingerprint,
+      deployedFingerprint: fingerprint,
+      deployedWorkerName: appConfig.workerName,
+      deployedWorkerVersion: "11111111-1111-4111-8111-111111111111",
+      headSha: "previous-head",
+      publicUrl: appConfig.baseUrl,
+      status: "deployed",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+
+    // Slot erase wipes Auth D1 but deliberately leaves its Worker serving.
+    // The old immutable version therefore cannot prove that deploy-owned
+    // bootstrap-admin and OAuth-client state still exists.
+    expect(
+      canReuseRecordedPreviewDeployment({
+        app: auth,
+        appConfig,
+        existingEntry,
+        fingerprint,
+      }),
+    ).toBe(false);
+  });
+
   test("selects OS and its dependencies for a root Playwright-only change", async () => {
     const apps = await selectPreviewAppsForPullRequest({
       githubToken: "test-token",

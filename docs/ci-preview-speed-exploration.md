@@ -25,13 +25,23 @@ green preview means.
 
 ## Result
 
-For a change that selects and tests the whole fleet without changing any
-deployed artifact, exact-deployment reuse reduced the same-slot preview from
-4m35s to 2m46s (40%). The deployment barrier fell from OS's 116.82s upload and
-rollout path to an 8.07s live exact-version proof. All five apps retained their
+The historical all-app experiment reduced a same-slot preview from 4m35s to
+2m46s (40%). The deployment barrier fell from OS's 116.82s upload and rollout
+path to an 8.07s live exact-version proof. All five apps retained their
 recorded immutable Worker versions, all five suites passed, and neither arm
 used a test retry. OS test time was unchanged at 139.25s in both arms, so the
 109-second deployment saving was not shifted elsewhere.
+
+That number is an upper-bound experiment, not the current acceptance result.
+A later review found that Auth's deploy is not only an immutable Worker
+upload: it also reconciles D1 migrations, the bootstrap admin, and declarative
+OAuth clients. Slot erase wipes those records while deliberately leaving the
+old Auth Worker serving, so source/config/version proof alone could incorrectly
+reuse it. The implementation now requires every app to declare its reuse
+policy. OS, Semaphore, Streams, and Dummy Petshop may reuse; Auth always runs
+its deploy reconciliation when selected until it exposes an equally strong
+state-generation proof. A corrected warm-run measurement follows in the
+experiment log once CI exercises that policy.
 
 This gets the fully selected warm-slot case below three minutes without
 weakening isolation or version certainty. It does not make a change that
@@ -45,9 +55,10 @@ The preview workflow currently runs as one 16-core Depot job:
 
 1. Check out the pull request, install Node, pnpm, dependencies, and Doppler.
 2. Claim or renew one of 19 preview slots.
-3. Prove a prior content-identical deployment still serves its exact recorded
-   Worker version, or deploy the affected app normally; run apps concurrently
-   (up to five at a time).
+3. For immutable-worker apps, prove a prior content-identical deployment still
+   serves its exact recorded Worker version or deploy normally. Always deploy
+   selected apps such as Auth whose deploy also reconciles required mutable
+   state. Run apps concurrently (up to five at a time).
 4. Wait for the entire selected fleet to pass readiness.
 5. Run all selected app suites concurrently.
 
@@ -383,9 +394,10 @@ the exploration is active.
   version a test invokes.
 - Prefer removing a deployment from the critical path over making an
   inherently variable global rollout poll more aggressively.
-- Keep exact-deployment reuse as the warm-slot fast path. Its measured 2m46s
-  fleet result is below the three-minute target, and every missing or stale
-  proof still falls through to the full deploy.
+- Keep exact-deployment reuse as the warm-slot fast path only for apps whose
+  deploy has no unproved state-reconciliation effects. The historical 2m46s
+  fleet result is the immutable-worker ceiling; missing/stale evidence and
+  apps such as Auth retain the full deploy.
 - Treat OS test execution as the next common-path floor; reducing Cloudflare
   rollout cannot lower the 139-second test barrier.
 
@@ -410,3 +422,4 @@ the exploration is active.
 | 2026-07-21 | Reuse the recorded full fleet.               | Depot job `zl0r7x77kp` passed in 5m00s with zero retries. Four apps reused; OS reached all ten exact waves near 15s but its 15s deadline expired during mandatory revalidation, so it failed closed into a 122.6s deploy. | Give the multi-wave reuse proof a separate 60s maximum; retain the 15s single-serving probe and fail-closed exact-version double check.  |
 | 2026-07-21 | Record identities with the longer proof.     | Depot job `1jhc5qm0d0` passed in 4m35s with zero retries. OS took 116.82s to deploy (73.01s readiness) and 139.25s to test; Streams took 47.25s to deploy.                                                                | Use these exact five identities as the control for the orchestrator-test-only full-fleet reuse arm.                                      |
 | 2026-07-21 | Reuse all five recorded deployments.         | Depot job `rdrq8dphsc` passed in 2m46s with zero retries. All versions were retained; OS proof took 7.64s versus 116.82s deploy, while OS tests were unchanged at 139.25s.                                                | Keep the fail-closed warm-slot fast path; it cuts the full-fleet control by 109s/40% and makes OS tests the remaining common-path floor. |
+| 2026-07-22 | Audit deploy side effects before reuse.      | Review found that an erased Auth D1 can coexist with the recorded healthy Worker version, while Auth deploy owns migrations and required seed reconciliation.                                                             | Make reuse capability explicit per app; always deploy Auth when selected until a state-generation proof covers its required D1 state.    |
