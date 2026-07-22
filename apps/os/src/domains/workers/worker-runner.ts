@@ -54,6 +54,7 @@ export class DynamicWorkerRunner {
   readonly #globalOutbound: Fetcher;
   readonly #projectId: string;
   readonly #scopePath: string;
+  readonly #streamContext: StreamContext;
   readonly #waitUntil: (promise: Promise<unknown>) => void;
 
   constructor(props: {
@@ -82,6 +83,7 @@ export class DynamicWorkerRunner {
     );
     this.#projectId = props.projectId;
     this.#scopePath = props.scopePath;
+    this.#streamContext = props.streamContext;
     this.#waitUntil = props.waitUntil;
   }
 
@@ -294,6 +296,7 @@ export class DynamicWorkerRunner {
       projectId: this.#projectId,
       resolved,
       scopePath: this.#scopePath,
+      streamContext: this.#streamContext,
     });
   }
 

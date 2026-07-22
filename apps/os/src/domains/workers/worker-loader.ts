@@ -1,4 +1,5 @@
 import { itxEnv as env, workerVersion } from "../../env.ts";
+import { StreamContext } from "../projects/stream-context.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
@@ -187,12 +188,14 @@ export function loadResolvedWorker({
   projectId,
   resolved,
   scopePath,
+  streamContext,
 }: {
   bindings: WorkerBindings;
   globalOutbound: Fetcher;
   projectId: string;
   resolved: ResolvedWorkerSource;
   scopePath: string;
+  streamContext: StreamContext;
 }): WorkerStub {
   // Loader isolates capture the parent deployment's loopback RPC bindings.
   // They must not survive an OS rollout: a hit created by the previous
@@ -207,6 +210,7 @@ export function loadResolvedWorker({
     workerVersion(env),
     projectId,
     scopePath,
+    JSON.stringify(StreamContext.parse(streamContext)),
     resolved.cacheKey,
   ].join(":");
   return env.LOADER.get(cacheKey, () => ({

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import type { StreamContext } from "../projects/stream-context.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
 const h = vi.hoisted(() => {
@@ -286,6 +287,7 @@ describe("resolveWorkerSource", () => {
       projectId: "prj_wrangler",
       resolved,
       scopePath: "/",
+      streamContext: { kind: "scope", scopePath: "/" },
     });
 
     expect(h.state.loaderCalls[0]?.config).toMatchObject({
@@ -312,6 +314,7 @@ describe("resolveWorkerSource", () => {
         projectId: "prj_rollout",
         resolved,
         scopePath: "/",
+        streamContext: { kind: "scope", scopePath: "/" },
       });
 
     load();
@@ -322,5 +325,44 @@ describe("resolveWorkerSource", () => {
       expect.stringContaining("worker-loader:os-test:version-1:"),
       expect.stringContaining("worker-loader:os-test:version-2:"),
     ]);
+  });
+
+  test("does not reuse stream-context-bound workers across script executions", async () => {
+    const resolved = await resolveWorkerSource({
+      projectId: "prj_context",
+      source: {
+        createWorker: {
+          files: { files: { "main.js": "export default {};" }, type: "inline" },
+        },
+      },
+      waitUntil,
+    });
+    const load = (streamContext: StreamContext) =>
+      loadResolvedWorker({
+        bindings: {},
+        globalOutbound: {} as Fetcher,
+        projectId: "prj_context",
+        resolved,
+        scopePath: "/agents/refund-agent",
+        streamContext,
+      });
+
+    load({
+      kind: "script-execution",
+      executionId: "agent-output:1",
+      scriptRunRequestedEventOffset: 2,
+      streamPath: "/agents/refund-agent",
+    });
+    const secondContext = {
+      kind: "script-execution",
+      executionId: "agent-output:3",
+      scriptRunRequestedEventOffset: 4,
+      streamPath: "/agents/refund-agent",
+    } satisfies StreamContext;
+    load(secondContext);
+    load(secondContext);
+
+    expect(h.state.loaderCalls[0]?.key).not.toBe(h.state.loaderCalls[1]?.key);
+    expect(h.state.loaderCalls[2]?.key).toBe(h.state.loaderCalls[1]?.key);
   });
 });
