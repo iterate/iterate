@@ -3,7 +3,7 @@ import type { ProcessEventArgs, ProcessorState, ReduceArgs, StreamEvent } from "
 import type { ItxExpression } from "../../itx/expression.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
+import type { Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
 import type {
   CapabilityProvidedPayload,
@@ -15,7 +15,6 @@ import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capabi
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
-  SCRIPT_COMPLETION_OBSERVATION_GRACE_MS,
   SCRIPT_EXECUTION_SETTLEMENT_GRACE_MS,
   ScriptExecutionSettlement,
   scriptCompletionInput,
@@ -42,7 +41,7 @@ import {
  * row, and a mount's identity is `providedAtOffset` — the stream offset of the
  * event that created it, no synthetic mount ids anywhere. The itx-facing verbs
  * on this class (`provideCapability`, `revokeCapability`, `invokeCapability`,
- * `describeCapabilities`, `runScript`) are the scope's public surface:
+ * `describeCapabilities`) are the scope's public capability surface:
  * mounting appends the fact and then waits for its own delivery
  * (read-your-writes), reads resolve the longest matching prefix over the
  * reduced table, and a local miss follows the birth certificate's `fallback`
@@ -492,67 +491,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
     );
   }
 
-  async runScript(input: RunScriptCommand): Promise<RunScriptResult> {
-    await this.#assertCreated();
-    const { code, executionId, expiresAt } = input;
-    const settlementAbort = new AbortController();
-    // Register before the request append so a very fast settlement cannot
-    // pass the waiter. Observe the rejection immediately: if the request
-    // append itself fails, the bounded waiter may still time out later and
-    // must not become an unhandled rejection.
-    const settled = this.#waitForScriptSettlement(
-      executionId,
-      Math.max(1, expiresAt + SCRIPT_COMPLETION_OBSERVATION_GRACE_MS - this.#now()),
-      settlementAbort.signal,
-    );
-    const observedSettlement = settled.then(
-      (event) => ({ status: "fulfilled" as const, event }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
-    try {
-      // A replay either finds the previous incarnation's durable settlement
-      // here or observes it through the waiter registered above.
-      const existingEvent = await this.stream.getEvent({
-        idempotencyKey: this.idempotencyKey(`script-run-settled@${executionId}`),
-      });
-      if (existingEvent !== undefined) {
-        const existingSettlement = settlementFromSettledEvent(existingEvent, executionId);
-        if (existingSettlement === undefined) {
-          throw new Error(`Script execution "${executionId}" has a malformed settlement event.`);
-        }
-        settlementAbort.abort("durable settlement already exists");
-        void observedSettlement;
-        return scriptRunResult({
-          event: existingEvent,
-          executionId,
-          settlement: existingSettlement,
-        });
-      }
-
-      await this.#awaitAppendWithin(
-        this.append({
-          type: "events.iterate.com/capability-host/script-run-requested",
-          idempotencyKey: this.idempotencyKey(`script-run-requested@${executionId}`),
-          payload: { code, executionId, expiresAt },
-        }),
-        expiresAt,
-        `record the request for script execution "${executionId}"`,
-      );
-    } catch (error) {
-      settlementAbort.abort(error);
-      throw error;
-    }
-    const settlement = await observedSettlement;
-    if (settlement.status === "rejected") {
-      throw new Error(
-        `Script execution "${executionId}" did not settle before its absolute deadline.`,
-        { cause: settlement.error },
-      );
-    }
-    const { event, settlement: outcome } = settlement.event;
-    return scriptRunResult({ event, executionId, settlement: outcome });
-  }
-
   // ------------------------------------------------------- private machinery
 
   async #assertCreated(): Promise<void> {
@@ -691,23 +629,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
     const shadowed = new Set(local.map((c) => JSON.stringify(c.path)));
     const { capabilities: inherited } = await fallback.__describe();
     return [...local, ...inherited.filter((c) => !shadowed.has(JSON.stringify(c.path)))];
-  }
-
-  async #waitForScriptSettlement(executionId: string, timeoutMs: number, signal: AbortSignal) {
-    const idempotencyKey = this.idempotencyKey(`script-run-settled@${executionId}`);
-    await this.deps.reads.waitUntilEvent({
-      predicate: (event) =>
-        event.idempotencyKey === idempotencyKey &&
-        settlementFromSettledEvent(event, executionId) !== undefined,
-      timeoutMs,
-      signal,
-    });
-    const event = await this.stream.getEvent({ idempotencyKey });
-    const settlement = settlementFromSettledEvent(event, executionId);
-    if (event === undefined || settlement === undefined) {
-      throw new Error(`script execution "${executionId}" completed without an event`);
-    }
-    return { event, settlement };
   }
 
   /**
@@ -849,7 +770,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       // The entrypoint owns a timer around the dynamic-worker invocation, but
       // the RPC carrying that result back to this host is a second failure
       // boundary. Bound it independently: a half-open worker stub must not
-      // keep the obligation (and the public runScript call) alive forever
+      // keep the obligation (and its stream-native public waiter) alive forever
       // even if the remote timer fired correctly.
       const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
         emittedJs: checked.emittedJs,
@@ -1002,16 +923,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
 // Injected dependencies.
 // -----------------------------------------------------------------------------
 
-export type RunScriptResult = Awaited<ReturnType<CapabilityHost["runScript"]>>;
-
-/** Stable identity minted outside the hosting Durable Object so a caller can
- * rejoin the same journaled execution after losing an RPC acknowledgement. */
-export type RunScriptCommand = {
-  code: string;
-  executionId: string;
-  expiresAt: number;
-};
-
 type ScriptExecutionEntrypoint = {
   run(code: string, options: { emittedJs?: string; expiresAt: number }): Promise<unknown>;
 };
@@ -1020,9 +931,9 @@ type ScriptExecutionEntrypoint = {
  * RUNNER-backed reads of the committed reduction. Under registry drive the
  * runner owns both cursors and the processor instance's internal checkpoint
  * never advances, so every state read this processor makes OUTSIDE a hook's
- * own args — capability resolution, the revoke guard, the provide/revoke
- * read-your-writes barriers, the script-settlement wait — must go through the
- * runner's committed progress. The hosting DO wires this to
+ * own args — capability resolution, the revoke guard, and the provide/revoke
+ * read-your-writes barriers — must go through the runner's committed progress.
+ * The hosting DO wires this to
  * `registry.reads(processor)` (lazily — `reads()` needs the registered
  * processor); test harnesses wire it to the driving StreamProcessorRunner.
  * `waitUntilEvent` takes BOTH forms as one union parameter (the registry's
@@ -1179,19 +1090,6 @@ function settlementFromSettledEvent(
   }
   const parsed = ScriptExecutionSettlement.safeParse(event.payload.settlement);
   return parsed.success ? parsed.data : undefined;
-}
-
-function scriptRunResult(input: {
-  event: StreamEvent;
-  executionId: string;
-  settlement: ScriptExecutionSettlementValue;
-}): RunScriptResult {
-  if (input.settlement.status === "failed") throw new Error(input.settlement.error);
-  return {
-    completedEvent: input.event,
-    executionId: input.executionId,
-    result: input.settlement.result ?? null,
-  };
 }
 
 function assertExpressionDoesNotReferenceOwnMount(
