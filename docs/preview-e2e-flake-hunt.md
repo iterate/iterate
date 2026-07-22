@@ -52,6 +52,67 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 9 (2026-07-22, post-#2260)
+
+This proof starts from `origin/main` at
+`7ad6d92037663ac2aba0d0b15ba9550c2a0f685b`, after deploy-phase telemetry
+(#2254), the zero-budget worker-build cache race fix (#2256), sandbox RPC
+settlement lifetime hardening (#2257), and the bundled REPL TypeScript runtime
+(#2260). PR #2261 carries the immutable proof head. The accepted counter starts
+at zero.
+
+Round-9 run ledger:
+
+| Proof              | Revision                                   | Accepted runs | Retries | Outcome                                 |
+| ------------------ | ------------------------------------------ | ------------: | ------: | --------------------------------------- |
+| Round-9 marathon 1 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       4 | Functional pass; rejected at 363s       |
+| Round-9 marathon 2 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       0 | Clean functional pass; rejected at 350s |
+
+The first attempt was [Depot run
+`nfwh10j558`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=v96gml6mn4).
+All apps eventually passed, but four unrelated cases retried: agent delegation
+lost its CapabilityHost incarnation, direct MCP lost its connection, a project
+stream subscription exhausted its 120-second outer watchdog, and the browser
+half-open test did not paint an already-durable assistant event before its
+30-second UI wait. Running each exact case five more times against the unchanged
+warm deployment produced 20/20 first-attempt passes. That control does not count
+toward the streak; it localizes the shared cluster to the fresh-deployment
+window rather than four deterministic victim-test defects.
+
+The second attempt was [Depot run
+`bj3zqplkn6`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=whs8hfhl30).
+Every test passed on its first attempt, but the strict loop rejected the
+350-second wall time. The normalized phase evidence accounts for the whole
+critical path: roughly 40 seconds of pickup/setup, 158 seconds to the global
+deployment barrier, 143 seconds of tests, and 7 seconds of finalization. OS
+readiness alone took 72.3 seconds; streams readiness took 136.6 seconds. During
+those waits the active probes received Cloudflare 1101/HTTP 500 responses and
+later 503 `probe-timeout` responses even after all ten waves had previously
+reported ready.
+
+The readiness implementation was stale relative to the contract already
+documented in `ci-preview-performance.md`. OS created 25 synthetic Durable
+Object identities per wave across ten waves, then slept ten seconds and checked
+the complete set again: up to 500 Durable Object RPCs per deploy. Streams did
+the same with eight identities per wave: up to 160 more RPCs. Besides dominating
+the deploy tail, this finite placement sample cannot prove the rest of the fleet
+and did not prevent attempt 1's real project identities from encountering
+lifecycle transitions.
+
+PostHog confirms this was a fleet-wide tail rather than one bad runner. Across
+the preceding 24 hours, 30 OS deploy lanes spent a median 61.3 seconds in
+readiness (p90 93.9 seconds; max 118.8 seconds), while 22 streams deploy lanes
+spent a median 56.0 seconds (p90 93.5 seconds; max 136.6 seconds).
+
+PR #2261 therefore removes the synthetic Durable Object gate, its authenticated
+probe protocol, and its orchestration/test machinery. Readiness is once again a
+cheap public request that must report wrangler's exact `CF_VERSION_METADATA`
+version; the first exact match releases the test barrier with no artificial
+dwell. Product operations remain responsible for explicit Durable Object
+lifecycle outcomes, as the existing performance contract requires. This change
+resets the accepted streak to 0/25; only a canonical Depot run on its new
+immutable head can restart it.
+
 ## Round 8 (2026-07-22, post-#2251)
 
 This is a fresh proof from `origin/main` at

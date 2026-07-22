@@ -43,7 +43,6 @@ const {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
-  mergePreviewAppConfig,
   previewProvisionedIntegrationSecrets,
   readPreviewAppConfig,
   reconcileEnvironmentConfigLeaseResources,
@@ -367,7 +366,7 @@ describe("preview workflow scope", () => {
     });
   });
 
-  test("runs the dummy-petshop live e2e against its deployed preview", async () => {
+  test("runs the dummy-petshop live e2e against its deployed preview", () => {
     const petshop = cloudflarePreviewApps["dummy-petshop"];
 
     expect(petshop).toMatchObject({
@@ -381,14 +380,12 @@ describe("preview workflow scope", () => {
         expect.stringContaining("TEST_TELEMETRY_ARTIFACT_FILE="),
       ],
     });
-    await expect(
+    expect(
       readPreviewAppConfig({
         app: petshop,
-        commandEnvironment: {},
         dopplerConfig: "preview_3",
-        repositoryRoot: repoRoot,
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       baseUrl: "https://dummy-petshop.iterate-preview-3.com",
       projectHostnameBases: [],
       workerName: "dummy-petshop-preview-3",
@@ -401,15 +398,13 @@ describe("preview workflow scope", () => {
     ).toContain("- apps/dummy-petshop/**");
   });
 
-  test("resolves repository-owned preview origins without duplicating them in Doppler", async () => {
-    await expect(
+  test("resolves repository-owned preview origins without duplicating them in Doppler", () => {
+    expect(
       readPreviewAppConfig({
         app: cloudflarePreviewApps.semaphore,
-        commandEnvironment: {},
         dopplerConfig: "preview_14",
-        repositoryRoot: repoRoot,
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       baseUrl: "https://semaphore.iterate-preview-14.com",
       projectHostnameBases: [],
       workerName: "semaphore-preview-14",
@@ -418,28 +413,6 @@ describe("preview workflow scope", () => {
     expect(cloudflarePreviewApps.os.resolvePreviewAppConfig?.("preview_14")).toEqual({
       baseUrl: "https://os.iterate-preview-14.com",
       projectHostnameBases: ["iterate-preview-14.app"],
-      workerName: "os-preview-14",
-    });
-  });
-
-  test("combines an envs.ts origin with a Doppler readiness bearer", () => {
-    expect(
-      mergePreviewAppConfig({
-        dopplerConfig: {
-          baseUrl: null,
-          projectHostnameBases: [],
-          readinessBearerToken: "deployment-secret",
-        },
-        repositoryConfig: {
-          baseUrl: "https://os.iterate-preview-14.com",
-          projectHostnameBases: ["iterate-preview-14.app"],
-          workerName: "os-preview-14",
-        },
-      }),
-    ).toEqual({
-      baseUrl: "https://os.iterate-preview-14.com",
-      projectHostnameBases: ["iterate-preview-14.app"],
-      readinessBearerToken: "deployment-secret",
       workerName: "os-preview-14",
     });
   });
@@ -881,21 +854,11 @@ describe("preview test commands", () => {
   test("guards the parallel OS preview lane with target budgets", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewDeployBudgetMs: 90_000,
-      previewReadyBearerTokenEnvVar: "APP_CONFIG_ADMIN_API_SECRET",
-      previewReadyWorkerVersion: {
-        probeQueryParam: "deployment-probe",
-        probeWaveCount: 10,
-        stableForMs: 10_000,
-      },
+      previewReadyWorkerVersion: true,
       previewTestBudgetMs: 100_000,
     });
     expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
-      previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
-      previewReadyWorkerVersion: {
-        probeQueryParam: "deployment-probe",
-        probeWaveCount: 10,
-        stableForMs: 10_000,
-      },
+      previewReadyWorkerVersion: true,
     });
 
     const workflow = parseYaml(
@@ -936,7 +899,7 @@ describe("preview readiness URLs", () => {
     expect(parseLastDeployedWorkerVersionId("Uploaded os-preview-8")).toBeNull();
   });
 
-  test("requires the expected worker version to remain stable before declaring readiness", async () => {
+  test("waits for the expected edge worker version without an artificial dwell", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -958,303 +921,13 @@ describe("preview readiness URLs", () => {
         signal: undefined,
         timeoutMs: 10_000,
         url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: { expected: "expected-version", stableForMs: 2_000 },
+        workerVersion: { expected: "expected-version" },
       });
 
-      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       await expect(readiness).resolves.toEqual({ ok: true });
-      expect(fetchMock).toHaveBeenCalledTimes(4);
-    } finally {
-      fetchMock.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  test("proves every Durable Object wave in parallel and retries only failed waves", async () => {
-    vi.useFakeTimers();
-    let waveOneAttempts = 0;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const wave = new URL(String(input)).searchParams.get("deployment-probe");
-      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer readiness-secret");
-      if (wave === "1" && waveOneAttempts++ === 0) {
-        return Response.json(
-          {
-            deploymentProbeWave: 1,
-            deploymentProbeWaveCount: 3,
-            settlingReason: "durable-object-lifecycle",
-          },
-          {
-            status: 503,
-            headers: { "x-iterate-worker-version": "expected-version" },
-          },
-        );
-      }
-      return Response.json(
-        {
-          deploymentProbeWave: Number(wave),
-          deploymentProbeWaveCount: 3,
-        },
-        {
-          status: 200,
-          headers: { "x-iterate-worker-version": "expected-version" },
-        },
-      );
-    });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      const readiness = waitForHttpReadiness({
-        signal: undefined,
-        timeoutMs: 10_000,
-        url: new URL("https://os.iterate-preview-8.com/api/health"),
-        readinessBearerToken: "readiness-secret",
-        workerVersion: {
-          expected: "expected-version",
-          probeQueryParam: "deployment-probe",
-          probeWaveCount: 3,
-          stableForMs: 2_000,
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(3_000);
-      await expect(readiness).resolves.toEqual({ ok: true });
-      expect(
-        fetchMock.mock.calls.map(([input]) =>
-          new URL(String(input)).searchParams.get("deployment-probe"),
-        ),
-      ).toEqual(["0", "1", "2", "1", "0", "1", "2"]);
-    } finally {
-      error.mockRestore();
-      fetchMock.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  test("rejects a partially configured wave barrier instead of silently taking the simple path", async () => {
-    await expect(
-      waitForHttpReadiness({
-        signal: undefined,
-        timeoutMs: 10_000,
-        url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: {
-          expected: "expected-version",
-          probeQueryParam: "deployment-probe",
-          stableForMs: 2_000,
-        } as never,
-      }),
-    ).rejects.toThrow(/probeQueryParam and probeWaveCount together/);
-  });
-
-  test("fails immediately on an unclassified server error instead of retrying it as rollout", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json(
-        { error: "application bug" },
-        {
-          status: 500,
-          headers: { "x-iterate-worker-version": "expected-version" },
-        },
-      ),
-    );
-
-    try {
-      await expect(
-        waitForHttpReadiness({
-          signal: undefined,
-          timeoutMs: 10_000,
-          url: new URL("https://os.iterate-preview-8.com/api/health"),
-          workerVersion: {
-            expected: "expected-version",
-            probeQueryParam: "deployment-probe",
-            probeWaveCount: 1,
-            stableForMs: 2_000,
-          },
-        }),
-      ).resolves.toMatchObject({
-        ok: false,
-        message: expect.stringContaining('HTTP 500: {"error":"application bug"}'),
-      });
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      fetchMock.mockRestore();
-    }
-  });
-
-  test("retries an old Worker's server response without requiring its newer settling schema", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        Response.json(
-          { error: "old readiness response" },
-          {
-            status: 503,
-            headers: { "x-iterate-worker-version": "previous-version" },
-          },
-        ),
-      )
-      .mockImplementation(async (input) => {
-        const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
-        return Response.json(
-          { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
-          {
-            status: 200,
-            headers: { "x-iterate-worker-version": "expected-version" },
-          },
-        );
-      });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      const readiness = waitForHttpReadiness({
-        signal: undefined,
-        timeoutMs: 10_000,
-        url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: {
-          expected: "expected-version",
-          probeQueryParam: "deployment-probe",
-          probeWaveCount: 1,
-          stableForMs: 1_000,
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      await expect(readiness).resolves.toEqual({ ok: true });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    } finally {
-      error.mockRestore();
-      fetchMock.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  test("retries an unattributed framework error within the bounded rollout window", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(
-        Response.json(
-          {
-            message: "HTTPError",
-            status: 500,
-            unhandled: true,
-          },
-          { status: 500 },
-        ),
-      )
-      .mockImplementation(async (input) => {
-        const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
-        return Response.json(
-          { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
-          {
-            status: 200,
-            headers: { "x-iterate-worker-version": "expected-version" },
-          },
-        );
-      });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      const readiness = waitForHttpReadiness({
-        signal: undefined,
-        timeoutMs: 10_000,
-        url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: {
-          expected: "expected-version",
-          probeQueryParam: "deployment-probe",
-          probeWaveCount: 1,
-          stableForMs: 1_000,
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      await expect(readiness).resolves.toEqual({ ok: true });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    } finally {
-      error.mockRestore();
-      fetchMock.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  test("reports the last unattributed framework error when the rollout window expires", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-      Response.json(
-        {
-          message: "HTTPError",
-          reference: "8hluru350urjpunkhe9eq8e0",
-          status: 500,
-          unhandled: true,
-        },
-        { status: 500 },
-      ),
-    );
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      const readiness = waitForHttpReadiness({
-        signal: undefined,
-        timeoutMs: 1_500,
-        url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: {
-          expected: "expected-version",
-          probeQueryParam: "deployment-probe",
-          probeWaveCount: 1,
-          stableForMs: 1_000,
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(1_500);
-      await expect(readiness).resolves.toMatchObject({
-        ok: false,
-        message: expect.stringContaining("8hluru350urjpunkhe9eq8e0"),
-      });
       expect(fetchMock).toHaveBeenCalledTimes(2);
     } finally {
-      error.mockRestore();
-      fetchMock.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  test("cannot report ready when final wave validation finishes after the deadline", async () => {
-    vi.useFakeTimers();
-    let requestCount = 0;
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      if (requestCount++ > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 2_000));
-      }
-      const wave = Number(new URL(String(input)).searchParams.get("deployment-probe"));
-      return Response.json(
-        { deploymentProbeWave: wave, deploymentProbeWaveCount: 1 },
-        {
-          status: 200,
-          headers: { "x-iterate-worker-version": "expected-version" },
-        },
-      );
-    });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      const readiness = waitForHttpReadiness({
-        signal: undefined,
-        timeoutMs: 2_500,
-        url: new URL("https://os.iterate-preview-8.com/api/health"),
-        workerVersion: {
-          expected: "expected-version",
-          probeQueryParam: "deployment-probe",
-          probeWaveCount: 1,
-          stableForMs: 1_000,
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(3_000);
-      await expect(readiness).resolves.toMatchObject({
-        ok: false,
-        message: expect.stringContaining("deadline expired during complete-set revalidation"),
-      });
-    } finally {
-      error.mockRestore();
       fetchMock.mockRestore();
       vi.useRealTimers();
     }

@@ -8,10 +8,6 @@ import { request as httpsRequest } from "node:https";
 import { dirname, resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import {
-  deploymentReadinessProbeQueryParam,
-  deploymentReadinessProbeWaveCount,
-} from "../../apps/os/src/deployment-readiness.ts";
 import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import {
   authEnvs,
@@ -1736,18 +1732,6 @@ export const CloudflarePreviewAppSlug = z.enum([
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 type CloudflarePreviewAppSlugType = CloudflarePreviewAppSlug;
 
-type PreviewReadyWorkerVersion =
-  | {
-      probeQueryParam?: undefined;
-      probeWaveCount?: undefined;
-      stableForMs: number;
-    }
-  | {
-      probeQueryParam: string;
-      probeWaveCount: number;
-      stableForMs: number;
-    };
-
 export type CloudflarePreviewApp = {
   slug: CloudflarePreviewAppSlug;
   displayName: string;
@@ -1790,15 +1774,12 @@ export type CloudflarePreviewApp = {
   previewTestDependencyBaseUrlEnvVars?: Partial<Record<CloudflarePreviewAppSlug, string>>;
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
-  /** Doppler env var sent as a bearer only to the app's active rollout probe. */
-  previewReadyBearerTokenEnvVar?: string;
   /**
    * Require the readiness route to report wrangler's newly deployed Worker
-   * version before tests start. Apps with Durable Objects expose a finite set
-   * of probe waves: the orchestrator checks every wave in parallel, waits the
-   * stability interval, then revalidates the complete set.
+   * version before tests start. This is an edge-version barrier only: waking a
+   * finite sample of Durable Objects cannot prove the whole fleet.
    */
-  previewReadyWorkerVersion?: PreviewReadyWorkerVersion;
+  previewReadyWorkerVersion?: true;
   previewTestBaseUrlEnvVar: string;
   /** Every canonical artifact the app-level test command must produce once. */
   previewTestArtifactSources: readonly TestTelemetryArtifactSource[];
@@ -2146,15 +2127,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // probes the plain /api/health route that replaced it. Without this, the
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
-    previewReadyBearerTokenEnvVar: "APP_CONFIG_ADMIN_API_SECRET",
-    // Cloudflare rolls Durable Object namespaces independently from the edge.
-    // Exercise every namespace's bounded placement waves, then revalidate the
-    // exact version after a quiet interval before any project burst begins.
-    previewReadyWorkerVersion: {
-      probeQueryParam: deploymentReadinessProbeQueryParam,
-      probeWaveCount: deploymentReadinessProbeWaveCount,
-      stableForMs: 10_000,
-    },
+    previewReadyWorkerVersion: true,
     paths: [
       "apps/os/**",
       // The root Playwright suite is part of OS preview e2e. A test or
@@ -2176,8 +2149,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // Petshop. Co-select both; every deploy starts concurrently and OS derives
     // Auth's public signing key directly from Doppler.
     previewDependencies: ["auth", "dummy-petshop"],
-    // Require wrangler's exact edge version to stay visible for a quiet
-    // interval. Tests then pin that immutable version explicitly.
+    // Tests pin wrangler's immutable edge version explicitly.
     previewDeployBudgetMs: 90_000,
     previewTestBudgetMs: 100_000,
     previewTestBaseUrlEnvVar: "APP_CONFIG_BASE_URL",
@@ -2359,12 +2331,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
-    previewReadyBearerTokenEnvVar: "APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET",
-    previewReadyWorkerVersion: {
-      probeQueryParam: deploymentReadinessProbeQueryParam,
-      probeWaveCount: deploymentReadinessProbeWaveCount,
-      stableForMs: 10_000,
-    },
+    previewReadyWorkerVersion: true,
     previewTestBaseUrlEnvVar: "WORKER_URL",
     previewTestArtifactSources: [
       previewVitestArtifactSource("@iterate-com/streams-example-app"),
@@ -4204,10 +4171,7 @@ async function deployPreviewApp(input: {
   const configStartedAt = Date.now();
   const appConfig = await readPreviewAppConfig({
     app: input.app,
-    commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
-    repositoryRoot: input.repositoryRoot,
-    signal: input.signal,
   });
   const deployConfigDurationMs = Date.now() - configStartedAt;
   const baseEntry = {
@@ -4317,15 +4281,11 @@ async function deployPreviewApp(input: {
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
     readyUrlPath: input.app.previewReadyUrlPath,
-    readinessBearerToken: appConfig.readinessBearerToken,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
     workerVersion:
       deployedWorkerVersion && input.app.previewReadyWorkerVersion
-        ? {
-            expected: deployedWorkerVersion,
-            ...input.app.previewReadyWorkerVersion,
-          }
+        ? { expected: deployedWorkerVersion }
         : undefined,
   });
   const deployReadinessDurationMs = Date.now() - readinessStartedAt;
@@ -4354,103 +4314,13 @@ async function deployPreviewApp(input: {
   });
 }
 
-async function readPreviewAppConfig(input: {
-  app: PreviewAppRuntime;
-  commandEnvironment: NodeJS.ProcessEnv;
-  dopplerConfig: string;
-  repositoryRoot: string;
-  signal?: AbortSignal;
-}) {
+function readPreviewAppConfig(input: { app: PreviewAppRuntime; dopplerConfig: string }) {
   const PreviewAppConfig = z.object({
     baseUrl: z.string().trim().url(),
     projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
-    readinessBearerToken: z.string().trim().min(1).optional(),
     workerName: z.string().trim().min(1),
   });
-  const parsePreviewAppConfig = (value: unknown) => {
-    const parsed = PreviewAppConfig.parse(value);
-    if (input.app.previewReadyBearerTokenEnvVar && !parsed.readinessBearerToken) {
-      throw new Error(
-        `Preview readiness requires Doppler secret ${input.app.previewReadyBearerTokenEnvVar}.`,
-      );
-    }
-    return parsed;
-  };
-  const repoConfig = input.app.resolvePreviewAppConfig(input.dopplerConfig);
-  if (!input.app.previewReadyBearerTokenEnvVar) {
-    return parsePreviewAppConfig(repoConfig);
-  }
-
-  const readinessBearerTokenEnvVar = JSON.stringify(
-    input.app.previewReadyBearerTokenEnvVar ?? null,
-  );
-  const script = [
-    "function parseStringArrayEnv(value) {",
-    "  if (!value?.trim()) return [];",
-    "  const parsed = JSON.parse(value);",
-    "  return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];",
-    "}",
-    "function parseAppConfig() {",
-    "  if (!process.env.APP_CONFIG?.trim()) return {};",
-    "  return JSON.parse(process.env.APP_CONFIG);",
-    "}",
-    "const appConfig = parseAppConfig();",
-    "const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
-    `const readinessBearerTokenEnvVar = ${readinessBearerTokenEnvVar};`,
-    "const readinessBearerToken = readinessBearerTokenEnvVar ? process.env[readinessBearerTokenEnvVar]?.trim() : undefined;",
-    "const config = {",
-    "  baseUrl: process.env.APP_CONFIG_BASE_URL || appConfig.baseUrl || null,",
-    "  projectHostnameBases: envBases.length > 0 ? envBases : Array.isArray(appConfig.projectHostnameBases) ? appConfig.projectHostnameBases.filter((entry) => typeof entry === 'string') : [],",
-    "  ...(readinessBearerToken ? { readinessBearerToken } : {}),",
-    "};",
-    "console.log(JSON.stringify(config));",
-  ].join("\n");
-  const result = await runCommand({
-    args: [
-      "run",
-      "--project",
-      input.app.dopplerProject,
-      "--config",
-      input.dopplerConfig,
-      "--",
-      "node",
-      "-e",
-      script,
-    ],
-    command: "doppler",
-    echoOutput: false,
-    environment: input.commandEnvironment,
-    signal: input.signal,
-    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
-  });
-  if (result.exitCode !== 0) {
-    // stdout may contain the readiness bearer; never include command output.
-    throw new Error("Failed to read preview app config.");
-  }
-
-  const dopplerConfig: unknown = JSON.parse(result.stdout);
-  return parsePreviewAppConfig(
-    mergePreviewAppConfig({ dopplerConfig, repositoryConfig: repoConfig }),
-  );
-}
-
-function mergePreviewAppConfig(input: {
-  dopplerConfig: unknown;
-  repositoryConfig: { baseUrl: string; projectHostnameBases?: string[]; workerName: string };
-}) {
-  if (typeof input.dopplerConfig !== "object" || input.dopplerConfig === null) {
-    return input.dopplerConfig;
-  }
-  return {
-    ...input.dopplerConfig,
-    baseUrl: input.repositoryConfig.baseUrl,
-    workerName: input.repositoryConfig.workerName,
-    projectHostnameBases:
-      input.repositoryConfig.projectHostnameBases ??
-      ("projectHostnameBases" in input.dopplerConfig
-        ? input.dopplerConfig.projectHostnameBases
-        : undefined),
-  };
+  return PreviewAppConfig.parse(input.app.resolvePreviewAppConfig(input.dopplerConfig));
 }
 
 async function runPreviewDeployCommand(input: {
@@ -5851,10 +5721,9 @@ async function mapWithConcurrency<T, Result>(
 async function waitForPreviewAppReadiness(params: {
   publicUrl: string;
   readyUrlPath?: string;
-  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
-  workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
+  workerVersion?: { expected: string };
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
@@ -5863,7 +5732,6 @@ async function waitForPreviewAppReadiness(params: {
 
   for (const url of urls) {
     const readiness = await waitForHttpReadiness({
-      readinessBearerToken: params.readinessBearerToken,
       signal: params.signal,
       timeoutMs: params.timeoutMs,
       url,
@@ -5899,85 +5767,36 @@ function parseLastDeployedWorkerVersionId(output: string): string | null {
 }
 
 async function waitForHttpReadiness(params: {
-  readinessBearerToken?: string;
   signal?: AbortSignal;
   timeoutMs: number;
   url: URL;
-  workerVersion?: { expected: string } & PreviewReadyWorkerVersion;
+  workerVersion?: { expected: string };
 }) {
-  const startedAt = Date.now();
   const deadline = Date.now() + params.timeoutMs;
-  const hasProbeQueryParam = params.workerVersion?.probeQueryParam !== undefined;
-  const hasProbeWaveCount = params.workerVersion?.probeWaveCount !== undefined;
-
-  if (hasProbeQueryParam !== hasProbeWaveCount) {
-    throw new Error(
-      "Worker-version readiness must configure probeQueryParam and probeWaveCount together.",
-    );
-  }
-
-  if (hasProbeQueryParam && hasProbeWaveCount && params.workerVersion) {
-    const { probeQueryParam, probeWaveCount } = params.workerVersion;
-    if (probeQueryParam === undefined || probeWaveCount === undefined) {
-      throw new Error("Worker-version readiness probe configuration is incomplete.");
-    }
-    return await waitForWorkerVersionProbeWaves({
-      deadline,
-      readinessBearerToken: params.readinessBearerToken,
-      signal: params.signal,
-      startedAt,
-      url: params.url,
-      workerVersion: {
-        expected: params.workerVersion.expected,
-        probeQueryParam,
-        probeWaveCount,
-        stableForMs: params.workerVersion.stableForMs,
-      },
-    });
-  }
-
   let lastFailure = "No response received yet.";
-  let matchingWorkerVersionSince: number | null = null;
 
   while (Date.now() < deadline) {
     try {
       const response = await fetchReadinessResponse(params.url, {
-        readinessBearerToken: params.readinessBearerToken,
         signal: params.signal,
-        timeoutMs: readinessRequestTimeoutMs(deadline),
+        timeoutMs: Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now())),
       });
       if (response.status >= 200 && response.status < 300) {
         params.signal?.throwIfAborted();
         if (Date.now() >= deadline) break;
-        if (!params.workerVersion) {
+        if (!params.workerVersion || response.workerVersion === params.workerVersion.expected) {
           return { ok: true as const };
         }
 
-        if (response.workerVersion === params.workerVersion.expected) {
-          const now = Date.now();
-          matchingWorkerVersionSince ??= now;
-          const stableForMs = now - matchingWorkerVersionSince;
-          if (stableForMs >= params.workerVersion.stableForMs) {
-            return { ok: true as const };
-          }
-
-          lastFailure =
-            `Readiness check reported Worker version ${params.workerVersion.expected}, ` +
-            `but it has only remained stable for ${stableForMs}ms of the required ${params.workerVersion.stableForMs}ms.`;
-        } else {
-          matchingWorkerVersionSince = null;
-          lastFailure =
-            `Readiness check reported Worker version ${response.workerVersion ?? "<missing>"}; ` +
-            `expected ${params.workerVersion.expected}.`;
-        }
+        lastFailure =
+          `Readiness check reported Worker version ${response.workerVersion ?? "<missing>"}; ` +
+          `expected ${params.workerVersion.expected}.`;
       } else {
-        matchingWorkerVersionSince = null;
         lastFailure =
           `Readiness check returned ${response.status} for ${params.url.toString()}` +
           formatReadinessResponseDetail(response);
       }
     } catch (error) {
-      matchingWorkerVersionSince = null;
       lastFailure = formatPreviewErrorMessage(error);
     }
 
@@ -5990,231 +5809,9 @@ async function waitForHttpReadiness(params: {
   };
 }
 
-type WorkerVersionProbeResult = {
-  failure: string | null;
-  terminal: boolean;
-  wave: number;
-};
-
-/**
- * Exercise every bounded Durable Object readiness wave concurrently. A wave
- * that has already reported the exact deployment stays out of the hot retry
- * set; once every wave has passed, one complete set is checked again after the
- * stability interval. A slow request cannot let readiness expire without
- * revisiting the last failed wave.
- */
-async function waitForWorkerVersionProbeWaves(params: {
-  deadline: number;
-  readinessBearerToken?: string;
-  signal?: AbortSignal;
-  startedAt: number;
-  url: URL;
-  workerVersion: {
-    expected: string;
-    probeQueryParam: string;
-    probeWaveCount: number;
-    stableForMs: number;
-  };
-}) {
-  const { probeWaveCount } = params.workerVersion;
-  if (!Number.isSafeInteger(probeWaveCount) || probeWaveCount < 1 || probeWaveCount > 64) {
-    throw new Error("Worker-version readiness probeWaveCount must be an integer from 1 to 64.");
-  }
-
-  const allWaves = Array.from({ length: probeWaveCount }, (_, wave) => wave);
-  let pendingWaves = new Set(allWaves);
-  let lastFailure = "No probe wave has completed yet.";
-  let lastProgress = "";
-  let lastProgressAt = 0;
-
-  while (Date.now() < params.deadline) {
-    const results = await probeWorkerVersionWaves({
-      deadline: params.deadline,
-      expectedWorkerVersion: params.workerVersion.expected,
-      probeQueryParam: params.workerVersion.probeQueryParam,
-      probeWaveCount,
-      readinessBearerToken: params.readinessBearerToken,
-      signal: params.signal,
-      url: params.url,
-      waves: [...pendingWaves],
-    });
-    const terminalFailure = results.find((result) => result.terminal);
-    if (terminalFailure?.failure) {
-      return {
-        message: `Preview readiness failed at ${params.url.toString()}. ${terminalFailure.failure}`,
-        ok: false as const,
-      };
-    }
-    for (const result of results) {
-      if (result.failure === null) pendingWaves.delete(result.wave);
-    }
-
-    if (pendingWaves.size > 0) {
-      const failures = results.filter((result) => result.failure !== null);
-      lastFailure = describeWorkerVersionProbeFailures(failures);
-      const progress = `${probeWaveCount - pendingWaves.size}/${probeWaveCount}`;
-      const now = Date.now();
-      if (progress !== lastProgress || now - lastProgressAt >= 10_000) {
-        console.error(
-          `[preview] readiness ${params.url.origin}: ${progress} Durable Object probe waves have served version ${params.workerVersion.expected}; ${lastFailure}`,
-        );
-        lastProgress = progress;
-        lastProgressAt = now;
-      }
-      await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
-      continue;
-    }
-
-    const remainingStabilityBudgetMs = params.deadline - Date.now();
-    if (remainingStabilityBudgetMs < params.workerVersion.stableForMs) {
-      lastFailure =
-        `All waves served the expected version, but only ${Math.max(0, remainingStabilityBudgetMs)}ms ` +
-        `remained for the required ${params.workerVersion.stableForMs}ms stability interval.`;
-      break;
-    }
-    console.error(
-      `[preview] readiness ${params.url.origin}: all ${probeWaveCount} Durable Object probe waves served ${params.workerVersion.expected}; revalidating after ${formatDurationMs(params.workerVersion.stableForMs)}`,
-    );
-    await sleep(params.workerVersion.stableForMs, params.signal);
-    params.signal?.throwIfAborted();
-    if (Date.now() >= params.deadline) {
-      lastFailure = "The readiness deadline expired before complete-set revalidation began.";
-      break;
-    }
-
-    const validationResults = await probeWorkerVersionWaves({
-      deadline: params.deadline,
-      expectedWorkerVersion: params.workerVersion.expected,
-      probeQueryParam: params.workerVersion.probeQueryParam,
-      probeWaveCount,
-      readinessBearerToken: params.readinessBearerToken,
-      signal: params.signal,
-      url: params.url,
-      waves: allWaves,
-    });
-    params.signal?.throwIfAborted();
-    const terminalValidationFailure = validationResults.find((result) => result.terminal);
-    if (terminalValidationFailure?.failure) {
-      return {
-        message:
-          `Preview readiness failed at ${params.url.toString()}. ` +
-          terminalValidationFailure.failure,
-        ok: false as const,
-      };
-    }
-    const validationFailures = validationResults.filter((result) => result.failure !== null);
-    if (validationFailures.length === 0 && Date.now() < params.deadline) {
-      console.error(
-        `[preview] readiness ${params.url.origin}: all ${probeWaveCount} waves remained exact; ready after ${formatDurationMs(Date.now() - params.startedAt)}`,
-      );
-      return { ok: true as const };
-    }
-    if (Date.now() >= params.deadline) {
-      lastFailure = "The readiness deadline expired during complete-set revalidation.";
-      break;
-    }
-
-    pendingWaves = new Set(validationFailures.map((result) => result.wave));
-    lastFailure = describeWorkerVersionProbeFailures(validationFailures);
-    console.error(
-      `[preview] readiness ${params.url.origin}: complete-set revalidation found ${lastFailure}; retrying only those waves`,
-    );
-    lastProgress = "";
-    await sleep(Math.min(1_000, Math.max(0, params.deadline - Date.now())), params.signal);
-  }
-
-  return {
-    message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
-    ok: false as const,
-  };
-}
-
-async function probeWorkerVersionWaves(params: {
-  deadline: number;
-  expectedWorkerVersion: string;
-  probeQueryParam: string;
-  probeWaveCount: number;
-  readinessBearerToken?: string;
-  signal?: AbortSignal;
-  url: URL;
-  waves: readonly number[];
-}): Promise<WorkerVersionProbeResult[]> {
-  return await Promise.all(
-    params.waves.map(async (wave) => {
-      const requestUrl = new URL(params.url);
-      requestUrl.searchParams.set(params.probeQueryParam, String(wave));
-      try {
-        const response = await fetchReadinessResponse(requestUrl, {
-          readinessBearerToken: params.readinessBearerToken,
-          signal: params.signal,
-          timeoutMs: readinessRequestTimeoutMs(params.deadline),
-        });
-        if (response.status < 200 || response.status >= 300) {
-          const recognizedSettlingResponse =
-            response.settlingReason === "durable-object-lifecycle" ||
-            response.settlingReason === "probe-timeout" ||
-            response.settlingReason === "version-mismatch";
-          // During edge rollout Cloudflare can return a framework-generated 5xx
-          // without the Worker's version header. That response cannot be
-          // attributed to the deployment we are proving, so keep it inside the
-          // bounded rollout window. An unexplained 5xx explicitly served by the
-          // expected version is an application failure and remains terminal.
-          const servedByExpectedWorker = response.workerVersion === params.expectedWorkerVersion;
-          const terminal =
-            [400, 401, 403].includes(response.status) ||
-            (response.status >= 500 && !recognizedSettlingResponse && servedByExpectedWorker);
-          return {
-            failure:
-              `wave ${wave} returned HTTP ${response.status}` +
-              formatReadinessResponseDetail(response),
-            terminal,
-            wave,
-          };
-        }
-        if (response.workerVersion !== params.expectedWorkerVersion) {
-          return {
-            failure: `wave ${wave} served Worker version ${response.workerVersion ?? "<missing>"}`,
-            terminal: false,
-            wave,
-          };
-        }
-        if (
-          response.deploymentProbeWave !== wave ||
-          response.deploymentProbeWaveCount !== params.probeWaveCount
-        ) {
-          return {
-            failure:
-              `wave ${wave} returned probe identity ` +
-              `${response.deploymentProbeWave ?? "<missing>"}/` +
-              `${response.deploymentProbeWaveCount ?? "<missing>"}; ` +
-              `expected ${wave}/${params.probeWaveCount}`,
-            terminal: true,
-            wave,
-          };
-        }
-        return { failure: null, terminal: false, wave };
-      } catch (error) {
-        return {
-          failure: `wave ${wave} failed: ${formatPreviewErrorMessage(error)}`,
-          terminal: false,
-          wave,
-        };
-      }
-    }),
-  );
-}
-
-function describeWorkerVersionProbeFailures(results: readonly WorkerVersionProbeResult[]) {
-  const descriptions = results
-    .map((result) => result.failure)
-    .filter((failure): failure is string => failure !== null);
-  return descriptions.length === 0 ? "no failed waves" : descriptions.join("; ");
-}
-
 async function fetchReadinessResponse(
   url: URL,
   options: {
-    readinessBearerToken?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
   } = {},
@@ -6225,40 +5822,29 @@ async function fetchReadinessResponse(
   const requestSignal = options.signal
     ? AbortSignal.any([options.signal, requestTimeoutSignal])
     : requestTimeoutSignal;
-  const headers = options.readinessBearerToken
-    ? { authorization: `Bearer ${options.readinessBearerToken}` }
-    : undefined;
   try {
     const response = await fetch(url, {
       cache: "no-store",
-      headers,
       method: "GET",
       redirect: "follow",
       signal: requestSignal,
     });
-    return parseReadinessResponse({
+    return {
       body: await readBoundedResponseBody(response),
       status: response.status,
       workerVersion: response.headers.get(workerVersionReadinessHeader),
-    });
+    };
   } catch (error) {
     if (!isDnsLookupError(error)) {
       throw error;
     }
 
-    return await requestReadinessWithDnsResolve({
-      readinessBearerToken: options.readinessBearerToken,
-      signal: requestSignal,
-      url,
-    });
+    return await requestReadinessWithDnsResolve({ signal: requestSignal, url });
   }
 }
 
 type ReadinessResponse = {
   body: string;
-  deploymentProbeWave: number | null;
-  deploymentProbeWaveCount: number | null;
-  settlingReason: string | null;
   status: number;
   workerVersion: string | null;
 };
@@ -6304,45 +5890,12 @@ function concatenateBytes(chunks: readonly Uint8Array[], length: number): Uint8A
   return combined;
 }
 
-function parseReadinessResponse(input: {
-  body: string;
-  status: number;
-  workerVersion: string | null;
-}): ReadinessResponse {
-  let parsed: unknown = null;
-  try {
-    parsed = input.body ? JSON.parse(input.body) : null;
-  } catch {
-    // Non-JSON proxy and platform errors remain useful as bounded diagnostics.
-  }
-  const record =
-    typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : undefined;
-  return {
-    ...input,
-    deploymentProbeWave: readSafeInteger(record?.deploymentProbeWave),
-    deploymentProbeWaveCount: readSafeInteger(record?.deploymentProbeWaveCount),
-    settlingReason: typeof record?.settlingReason === "string" ? record.settlingReason : null,
-  };
-}
-
-function readSafeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) ? (value as number) : null;
-}
-
 function formatReadinessResponseDetail(response: ReadinessResponse): string {
   const detail = response.body.trim().replace(/\s+/g, " ");
   return detail ? `: ${detail}` : "";
 }
 
-function readinessRequestTimeoutMs(deadline: number): number {
-  return Math.max(1, Math.min(previewReadinessRequestTimeoutMs, deadline - Date.now()));
-}
-
-async function requestReadinessWithDnsResolve(input: {
-  readinessBearerToken?: string;
-  signal?: AbortSignal;
-  url: URL;
-}) {
+async function requestReadinessWithDnsResolve(input: { signal?: AbortSignal; url: URL }) {
   const { signal, url } = input;
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
@@ -6360,9 +5913,6 @@ async function requestReadinessWithDnsResolve(input: {
 
   return await new Promise<ReadinessResponse>((resolve, reject) => {
     const headers: Record<string, string> = { Host: url.host };
-    if (input.readinessBearerToken) {
-      headers.authorization = `Bearer ${input.readinessBearerToken}`;
-    }
     const req = request(
       resolvedUrl,
       {
@@ -6387,13 +5937,11 @@ async function requestReadinessWithDnsResolve(input: {
         });
         response.on("error", reject);
         response.on("end", () =>
-          resolve(
-            parseReadinessResponse({
-              body: truncated ? `${body}…` : body,
-              status: statusCode,
-              workerVersion,
-            }),
-          ),
+          resolve({
+            body: truncated ? `${body}…` : body,
+            status: statusCode,
+            workerVersion,
+          }),
         );
       },
     );
@@ -6507,7 +6055,6 @@ export const previewInternals = {
   parseLastDeployedWorkerVersionId,
   parseCloudflarePreviewState,
   parseEnvironmentConfigLeaseData,
-  mergePreviewAppConfig,
   previewProvisionedIntegrationSecrets,
   readPlaywrightTestTelemetry,
   readPreviewAppConfig,
