@@ -121,3 +121,38 @@ it("stores orchestration timing separately from runner artifacts", () => {
   });
   rmSync(artifactDirectory, { recursive: true });
 });
+
+it("retains the preview slot when deployment fails after an app lane completes", () => {
+  const artifactDirectory = mkdtempSync(join(tmpdir(), "preview-e2e-telemetry-"));
+  const telemetry = new PreviewE2eTelemetryArtifact({
+    environment: { TEST_TELEMETRY_ARTIFACT_DIR: artifactDirectory },
+    headSha: "abcdef0123456789",
+    operation: "deploy",
+    pullRequestNumber: 42,
+    runUrl: null,
+  });
+  telemetry.deployRunStarted();
+  telemetry.deployAppFinished({
+    app: "os",
+    slot: "preview-3",
+    status: "failed",
+    durationMs: 12_000,
+  });
+  telemetry.deployRunFinished({
+    status: "failed",
+    durationMs: 12_500,
+    error: new Error("readiness failed"),
+  });
+  telemetry.runFinished({
+    status: "failed",
+    durationMs: 12_500,
+    error: new Error("readiness failed"),
+  });
+
+  expect(telemetry.artifactForTest().deployment).toMatchObject({
+    status: "failed",
+    previewSlot: "preview-3",
+    error: { message: "readiness failed" },
+  });
+  rmSync(artifactDirectory, { recursive: true });
+});

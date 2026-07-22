@@ -209,7 +209,20 @@ it("normalizes retained preview deployment evidence without reporter network I/O
 
 it("keeps raw and normalized JSON for replay while dry-run skips delivery", async () => {
   const root = mkdtempSync(join(tmpdir(), "test-telemetry-finalizer-"));
-  writeTestTelemetryArtifact(artifact, { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") });
+  writeTestTelemetryArtifact(
+    {
+      ...artifact,
+      deployment: {
+        deploymentKind: "cloudflare-preview",
+        status: "passed",
+        startedAt: "2026-07-21T09:58:00.000Z",
+        finishedAt: "2026-07-21T10:00:00.000Z",
+        durationMs: 120_000,
+        lanes: [],
+      },
+    },
+    { TEST_TELEMETRY_ARTIFACT_DIR: join(root, "raw") },
+  );
 
   const result = await finalizeTestTelemetry({ artifactRoot: root, dryRun: true });
 
@@ -218,7 +231,7 @@ it("keeps raw and normalized JSON for replay while dry-run skips delivery", asyn
     readFileSync(join(root, "normalized", "posthog-events.json"), "utf8"),
   ) as { schemaVersion: number; events: unknown[] };
   expect(normalized.schemaVersion).toBe(2);
-  expect(normalized.events).toHaveLength(10);
+  expect(normalized.events).toHaveLength(12);
   expect(normalized.events.at(-1)).toMatchObject({
     event: "ci test telemetry finalized",
     properties: { status: "passed", telemetry_incomplete: false, runner_event_count: 9 },

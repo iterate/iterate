@@ -112,13 +112,20 @@ export class PreviewE2eTelemetryArtifact {
   }) {
     const finishedAt = new Date().toISOString();
     const startedAtMs = this.deploymentStartedAtMs ?? Date.now() - input.durationMs;
+    const laneSlots = new Set(
+      this.deploymentLanes
+        .map(({ previewSlot }) => previewSlot)
+        .filter((previewSlot): previewSlot is string => previewSlot !== undefined),
+    );
+    const inferredSlot = laneSlots.size === 1 ? laneSlots.values().next().value : undefined;
+    const previewSlot = input.slot ?? inferredSlot;
     this.deploymentResult = {
       deploymentKind: "cloudflare-preview",
       status: input.status,
       startedAt: new Date(startedAtMs).toISOString(),
       finishedAt,
       durationMs: input.durationMs,
-      ...(input.slot ? { previewSlot: input.slot } : {}),
+      ...(previewSlot ? { previewSlot } : {}),
       ...(input.error ? { error: normalizeTestTelemetryError(input.error) } : {}),
       lanes: this.deploymentLanes,
     };
