@@ -575,10 +575,15 @@ export class RepoDurableObject extends DurableObject<Env> {
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
     }
     const decision = decideHeadResolution(this.#branchAuthority(branch), candidate!);
-    if (!decision.cache && stored !== null) {
-      // The remote is still serving something the authority calls stale;
-      // the endorsed snapshot we hold is not worse — serve it once.
-      return stored;
+    if (!decision.cache) {
+      // The remote is still serving something the authority calls stale.
+      if (stored !== null) return stored; // our endorsed snapshot is not worse — serve once
+      // COLD store (first lazy use after clone-lane history): installing a
+      // pre-floor head would serve stale reads AFTER our own commit —
+      // a read-your-write violation. The clone lanes own this window.
+      throw new Error(
+        `remote head ${candidate} is not endorsed by the branch authority and no lazy snapshot exists — deferring to the clone lane`,
+      );
     }
     const head = await reader.syncToHead(candidate!);
     if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
