@@ -58,6 +58,17 @@ beforeEach(() => {
 });
 
 describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
+  it("serves a zero-budget follower from the settled coordinator artifact", async () => {
+    const { records, setAlarm, value } = coordinator();
+
+    await expect(value.build(request)).resolves.toBe(artifact);
+    await expect(value.build(request, 0)).resolves.toBe(artifact);
+
+    expect(h.execute).toHaveBeenCalledOnce();
+    expect(records.size).toBe(0);
+    expect(setAlarm).not.toHaveBeenCalled();
+  });
+
   it("persists an alarm handoff before a budgeted build call returns", async () => {
     const { records, setAlarm, value } = coordinator();
     const build = Promise.withResolvers<WorkerBuildArtifact>();
