@@ -208,7 +208,14 @@ function inflateAt(pack: Uint8Array, offset: number): { consumed: number; out: U
     if (inflator.err !== 0) throw new Error(`zlib error in pack entry: ${inflator.msg}`);
   }
   if (!inflator.ended) throw new Error("truncated zlib stream in pack");
-  const strm = (inflator as unknown as { strm: { avail_in: number } }).strm;
+  // pako does not expose consumed-byte accounting publicly; we rely on its
+  // zlib-mirror `strm.avail_in`. Assert the shape so a pako upgrade fails
+  // HERE with a clear message (callers fall back to the clone lane) instead
+  // of corrupting pack cursor arithmetic silently.
+  const strm = (inflator as unknown as { strm?: { avail_in?: number } }).strm;
+  if (strm === undefined || typeof strm.avail_in !== "number") {
+    throw new Error("pako Inflate no longer exposes strm.avail_in — pack parsing cannot proceed");
+  }
   return { consumed: pushed - strm.avail_in, out: concat(chunks) };
 }
 
@@ -365,24 +372,30 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
     if (done !== undefined) return done;
     if (resolving.has(entry)) throw new Error("delta cycle in pack");
     resolving.add(entry);
-    let out: { payload: Uint8Array; type: GitObjectType };
-    if (entry.type !== undefined) {
-      out = { payload: entry.payload, type: entry.type };
-    } else if (entry.baseOffset !== undefined) {
-      const base = byEntryOffset.get(entry.baseOffset);
-      if (base === undefined) throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
-      const baseResolved = resolve(base);
-      out = { payload: applyDelta(baseResolved.payload, entry.payload), type: baseResolved.type };
-    } else {
-      const base = byOid.get(entry.baseOid!);
-      if (base === undefined) {
-        throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
+    try {
+      let out: { payload: Uint8Array; type: GitObjectType };
+      if (entry.type !== undefined) {
+        out = { payload: entry.payload, type: entry.type };
+      } else if (entry.baseOffset !== undefined) {
+        const base = byEntryOffset.get(entry.baseOffset);
+        if (base === undefined) {
+          throw new Error(`ofs-delta base at ${entry.baseOffset} not in pack`);
+        }
+        const baseResolved = resolve(base);
+        out = { payload: applyDelta(baseResolved.payload, entry.payload), type: baseResolved.type };
+      } else {
+        const base = byOid.get(entry.baseOid!);
+        if (base === undefined) {
+          // Retryable: a later pass may have hashed this base by then.
+          throw new Error(`thin pack: ref-delta base ${entry.baseOid} not in pack`);
+        }
+        out = { payload: applyDelta(base.payload, entry.payload), type: base.type };
       }
-      out = { payload: applyDelta(base.payload, entry.payload), type: base.type };
+      resolved.set(entry, out);
+      return out;
+    } finally {
+      resolving.delete(entry);
     }
-    resolving.delete(entry);
-    resolved.set(entry, out);
-    return out;
   };
   // Ref-delta bases are found by oid, so hash non-delta entries first, then
   // sweep deltas in passes (a ref-delta may target another delta's RESULT).
@@ -528,20 +541,22 @@ export function encodeReceivePackRequest(input: {
   return concat([pktLine(update), FLUSH, input.pack]);
 }
 
-export function parseReceivePackResponse(
-  body: Uint8Array,
-  expectedRef: string,
-): { ok: boolean; refErrors: string[] } {
+export type PushReport =
+  | { kind: "applied" }
+  | { detail: string; kind: "rejected" }
+  | { detail: string; kind: "indeterminate" };
+
+export function parseReceivePackResponse(body: Uint8Array, expectedRef: string): PushReport {
   // The report may arrive sidebanded (channel 1 wraps an inner pkt stream) or
   // plain; sniff the first frame. Channel 3 carries fatal detail.
   const frames = [...pktFrames(body)].filter((frame) => frame.kind === "line");
   const first = frames[0]?.payload ?? new Uint8Array(0);
-  const refErrors: string[] = [];
+  const notes: string[] = [];
   let report: Uint8Array;
   if (first.length > 0 && (first[0] === 1 || first[0] === 2 || first[0] === 3)) {
     for (const frame of frames) {
       if (frame.payload[0] === 3) {
-        refErrors.push(textDecoder.decode(frame.payload.subarray(1)).trim());
+        notes.push(textDecoder.decode(frame.payload.subarray(1)).trim());
       }
     }
     report = concat(
@@ -550,27 +565,32 @@ export function parseReceivePackResponse(
   } else {
     report = body;
   }
-  let unpackOk = false;
+  let unpackLine: string | undefined;
   let expectedRefOk = false;
+  let expectedRefNg: string | undefined;
   for (const frame of pktFrames(report)) {
     if (frame.kind !== "line") continue;
     const line = pktText(frame.payload);
-    if (line === "unpack ok") unpackOk = true;
-    else if (line.startsWith("unpack ")) refErrors.push(line);
+    if (line.startsWith("unpack ")) unpackLine = line;
     else if (line === `ok ${expectedRef}`) expectedRefOk = true;
-    else if (line.startsWith("ok ")) refErrors.push(`unexpected ref updated: ${line.slice(3)}`);
-    else if (line.startsWith("ng ")) {
-      const [, ref, ...reason] = line.split(" ");
-      refErrors.push(`${ref}: ${reason.join(" ")}`);
+    else if (line.startsWith(`ng ${expectedRef} `)) {
+      expectedRefNg = line.slice(`ng ${expectedRef} `.length);
+    } else if (line.startsWith("ok ") || line.startsWith("ng ")) {
+      notes.push(`unexpected ref in report: ${line}`);
     }
   }
-  // Success is EXACTLY: unpack ok + a status line confirming OUR ref. A
-  // truncated report (unpack ok, then nothing) must read as failure — the
-  // caller treats non-ok as rejected/unknown, never as applied.
-  if (unpackOk && !expectedRefOk && refErrors.length === 0) {
-    refErrors.push(`no status line for ${expectedRef} in the receive-pack report`);
+  // The classification contract: `rejected` is a PROOF the server did not
+  // move our ref (an explicit ng, or an unpack failure — nothing could have
+  // applied). `applied` is a proof it did. Everything else — truncated
+  // report, missing status line, someone else's ref — is `indeterminate`,
+  // and the caller must reconcile against the ref itself.
+  if (unpackLine !== undefined && unpackLine !== "unpack ok") {
+    return { detail: unpackLine, kind: "rejected" };
   }
-  return { ok: unpackOk && expectedRefOk && refErrors.length === 0, refErrors };
+  if (expectedRefNg !== undefined) return { detail: expectedRefNg, kind: "rejected" };
+  if (unpackLine === "unpack ok" && expectedRefOk) return { kind: "applied" };
+  notes.push(expectedRefOk ? "ok without unpack status" : `no status line for ${expectedRef}`);
+  return { detail: notes.join("; "), kind: "indeterminate" };
 }
 
 // -- transport ---------------------------------------------------------------------
@@ -583,10 +603,12 @@ export interface GitWireTransport {
     haves?: string[];
     wants: string[];
   }): Promise<RawGitObject[]>;
-  push(input: { newOid: string; oldOid: string; pack: Uint8Array; ref: string }): Promise<{
-    ok: boolean;
-    refErrors: string[];
-  }>;
+  push(input: {
+    newOid: string;
+    oldOid: string;
+    pack: Uint8Array;
+    ref: string;
+  }): Promise<PushReport>;
 }
 
 /**

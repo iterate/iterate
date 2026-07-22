@@ -8,6 +8,7 @@ import {
   parseCommit,
   parseTree,
   type GitWireTransport,
+  type PushReport,
   type RawGitObject,
   type TreeEntry,
 } from "./git-wire.ts";
@@ -29,6 +30,11 @@ import type { GitObjectStore, ManifestFile, StoredHead } from "./repo-object-sto
  * compare-and-swap, and return a TYPED outcome — a caller may fall back to
  * another write lane only on `rejected`, where the remote provably did not
  * move.
+ *
+ * Reads and installs share ONE serialization chain, so a read's head label,
+ * manifest rows, and object bytes always describe the same snapshot — never
+ * head A's oid over head B's content, and never a row whose object a
+ * concurrent install pruned mid-read.
  *
  * This module holds no freshness policy: WHICH head to sync to, and whether
  * a resolved candidate is trustworthy, is the caller's decision (the Durable
@@ -84,9 +90,17 @@ export function createLazyRepoReader(input: {
       if (packed.type !== "tree") throw new Error(`object ${oid} is a ${packed.type}, not a tree`);
       return parseTree(packed.payload);
     }
-    const stored = await store.getObject(oid);
+    let stored = await store.getObject(oid).catch(() => null);
+    if (stored === null) {
+      // Corrupt (now quarantined) or missing — the server excluded it via a
+      // have-closure while our copy rotted. Heal by exact oid; a tree that
+      // stays unavailable would otherwise wedge every future sync, because
+      // git_dir_trees keeps advertising it as a have.
+      await hydrate([oid]);
+      stored = await store.getObject(oid);
+    }
     if (stored === null || stored.type !== "tree") {
-      throw new Error(`tree ${oid} is in neither the sync pack nor the store`);
+      throw new Error(`tree ${oid} is unavailable from the pack, the store, and the remote`);
     }
     return parseTree(stored.payload);
   };
@@ -162,7 +176,8 @@ export function createLazyRepoReader(input: {
     return { commitOid: targetOid, rootTreeOid };
   };
 
-  const readPathBytes = async (paths: string[]): Promise<(Uint8Array | null)[]> => {
+  /** MUST run inside `serialized()` — head/manifest/object consistency. */
+  const readPathBytesLocked = async (paths: string[]): Promise<(Uint8Array | null)[]> => {
     const entries = store.manifestEntries(branch, paths);
     await hydrate(
       entries
@@ -188,34 +203,78 @@ export function createLazyRepoReader(input: {
     return out;
   };
 
+  /** The ref is the truth: after an ambiguous push, poll it a few times. */
+  const reconcilePush = async (
+    detail: string,
+    proposedOid: string,
+    parentOid: string,
+  ): Promise<PushReport> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const tip = await resolveRemoteHead();
+        if (tip === proposedOid) return { kind: "applied" };
+        if (tip === parentOid && attempt === 2) {
+          // Provably still at our parent after retries: never applied.
+          return { detail, kind: "rejected" };
+        }
+      } catch {
+        // the reconcile read itself failed; keep trying
+      }
+    }
+    return { detail, kind: "indeterminate" };
+  };
+
+  const resolveRemoteHead = async (): Promise<string> => {
+    const refs = await wire.lsRefs([`refs/heads/${branch}`]);
+    // gitty ignores ref-prefix filters (probed) — match by exact name.
+    const tip = refs.find((ref) => ref.name === `refs/heads/${branch}`)?.oid;
+    if (tip === undefined) throw new Error(`remote has no refs/heads/${branch}`);
+    return tip;
+  };
+
   return {
     head: (): StoredHead | null => store.head(branch),
 
-    /** Every file path at the synced head (gitlinks excluded, like a checkout walk). */
-    listPaths: (): string[] =>
-      store
-        .manifest(branch)
-        .filter((file) => file.mode !== GITLINK_MODE)
-        .map((file) => file.path),
-
-    /** The remote's current tip — a CANDIDATE the caller must validate
-     * against its authority before syncing to it. */
-    resolveRemoteHead: async (): Promise<string> => {
-      const refs = await wire.lsRefs([`refs/heads/${branch}`]);
-      // gitty ignores ref-prefix filters (probed) — match by exact name.
-      const tip = refs.find((ref) => ref.name === `refs/heads/${branch}`)?.oid;
-      if (tip === undefined) throw new Error(`remote has no refs/heads/${branch}`);
-      return tip;
-    },
+    resolveRemoteHead,
 
     /** Install a validated target head. Serialized; a no-op when current. */
     syncToHead: (targetOid: string): Promise<StoredHead> => serialized(() => syncOnce(targetOid)),
 
-    readPathBytes,
+    /**
+     * The synced head with every file path it holds — ONE consistent
+     * observation (gitlinks excluded, like a checkout walk).
+     */
+    listHead: (): Promise<{ head: StoredHead; paths: string[] }> =>
+      serialized(async () => {
+        const head = store.head(branch);
+        if (head === null) throw new Error("listHead requires a synced head");
+        return {
+          head,
+          paths: store
+            .manifest(branch)
+            .filter((file) => file.mode !== GITLINK_MODE)
+            .map((file) => file.path),
+        };
+      }),
 
+    /**
+     * The synced head with the requested paths' bytes — head label, manifest
+     * rows, and blob contents captured under one barrier, so an interleaved
+     * install can never mix snapshots inside a single response.
+     */
+    readHeadPaths: (paths: string[]): Promise<{ bytes: (Uint8Array | null)[]; head: StoredHead }> =>
+      serialized(async () => {
+        const head = store.head(branch);
+        if (head === null) throw new Error("readHeadPaths requires a synced head");
+        return { bytes: await readPathBytesLocked(paths), head };
+      }),
+
+    /** Contents at the synced head, unlabeled — probe/test convenience. */
     readPaths: async (paths: string[]): Promise<(string | null)[]> =>
-      (await readPathBytes(paths)).map((payload) =>
-        payload === null ? null : textDecoder.decode(payload),
+      serialized(async () =>
+        (await readPathBytesLocked(paths)).map((payload) =>
+          payload === null ? null : textDecoder.decode(payload),
+        ),
       ),
 
     /**
@@ -233,15 +292,6 @@ export function createLazyRepoReader(input: {
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
       const oldDirs = new Map(store.dirTrees(branch).map((dir) => [dir.path, dir.treeOid]));
 
-      // Apply changes to the manifest map, validating structure: a path may
-      // not be written where a DIRECTORY lives, nor under an existing FILE —
-      // the same shapes the clone lane's real filesystem rejects.
-      const dirsWithFiles = new Set<string>();
-      for (const file of manifest.keys()) {
-        for (let dir = parentDirOf(file); dir !== ""; dir = parentDirOf(dir)) {
-          dirsWithFiles.add(dir);
-        }
-      }
       const newBlobs = new Map<string, Uint8Array>();
       const removes: string[] = [];
       const upserts = new Map<string, ManifestFile>();
@@ -254,11 +304,6 @@ export function createLazyRepoReader(input: {
           }
           continue;
         }
-        if (dirsWithFiles.has(path)) throw new Error(`cannot write "${path}": it is a directory`);
-        for (let dir = parentDirOf(path); dir !== ""; dir = parentDirOf(dir)) {
-          if (manifest.has(dir)) throw new Error(`cannot write "${path}": "${dir}" is a file`);
-          dirsWithFiles.add(dir);
-        }
         const payload =
           "contentBase64" in change
             ? base64ToBytes(change.contentBase64)
@@ -268,6 +313,19 @@ export function createLazyRepoReader(input: {
         const file = { blobOid: oid, mode: manifest.get(path)?.mode ?? "100644", path };
         manifest.set(path, file);
         upserts.set(path, file);
+      }
+
+      // Validate the FINAL manifest, not intermediate states: a batch may
+      // delete a directory's last file and create a file of the same name in
+      // one commit. Sorted adjacency finds every file/directory collision (a
+      // path that is an ancestor of another path cannot be a file).
+      const sortedPaths = [...manifest.keys()].sort();
+      for (let index = 0; index + 1 < sortedPaths.length; index++) {
+        if (sortedPaths[index + 1]!.startsWith(`${sortedPaths[index]!}/`)) {
+          throw new Error(
+            `cannot commit: "${sortedPaths[index]}" is a file but "${sortedPaths[index + 1]}" nests under it`,
+          );
+        }
       }
 
       // Rebuild exactly the ancestor chains of the touched paths; every other
@@ -374,40 +432,27 @@ export function createLazyRepoReader(input: {
         packCandidates.filter((object) => !alreadyStored.has(object.oid)),
       );
 
-      let pushed: { ok: boolean; refErrors: string[] } | undefined;
+      // Push, then classify. `rejected` must be a PROOF the ref did not
+      // move; a dead transport or an ambiguous report reconciles against
+      // the ref itself before judging.
+      let report: PushReport;
       try {
-        pushed = await wire.push({
+        report = await wire.push({
           newOid: commitOid,
           oldOid: head.commitOid,
           pack,
           ref: `refs/heads/${branch}`,
         });
       } catch (transportError) {
-        // The request died in flight — the server may or may not have applied
-        // it. Reconcile against the ref itself before judging.
-        for (let attempt = 0; attempt < 3 && pushed === undefined; attempt++) {
-          try {
-            const tip = (await wire.lsRefs([`refs/heads/${branch}`])).find(
-              (ref) => ref.name === `refs/heads/${branch}`,
-            )?.oid;
-            if (tip === commitOid) pushed = { ok: true, refErrors: [] };
-            else if (tip === head.commitOid && attempt === 2) {
-              // Provably still at our parent after retries: never applied.
-              return { detail: String(transportError), kind: "rejected" };
-            }
-          } catch {
-            // the reconcile read itself failed; keep trying
-          }
-        }
-        if (pushed === undefined) {
-          return {
-            detail: `push transport failed and the ref state is unknown: ${String(transportError)}`,
-            kind: "indeterminate",
-            proposedCommitOid: commitOid,
-          };
-        }
+        report = { detail: String(transportError), kind: "indeterminate" };
       }
-      if (!pushed.ok) return { detail: pushed.refErrors.join("; "), kind: "rejected" };
+      if (report.kind === "indeterminate") {
+        report = await reconcilePush(report.detail, commitOid, head.commitOid);
+      }
+      if (report.kind === "rejected") return { detail: report.detail, kind: "rejected" };
+      if (report.kind === "indeterminate") {
+        return { detail: report.detail, kind: "indeterminate", proposedCommitOid: commitOid };
+      }
 
       // THE PUSH IS APPLIED. Local install failures degrade the outcome, not
       // the verdict — the caller must never re-run the mutation.

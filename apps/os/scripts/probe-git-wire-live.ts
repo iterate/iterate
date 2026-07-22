@@ -90,11 +90,13 @@ if (leftover) {
     pack: await buildPack([]),
     ref: branch,
   });
-  if (!cleaned.ok) throw new Error(`stale scratch branch cleanup failed: ${cleaned.refErrors}`);
+  if (cleaned.kind !== "applied") {
+    throw new Error(`stale scratch branch cleanup failed: ${JSON.stringify(cleaned)}`);
+  }
   ok("cleaned up a scratch branch left by a prior run");
 }
 const created = await wire.push({ newOid: newCommitOid, oldOid: ZERO, pack, ref: branch });
-if (!created.ok) throw new Error(`create push rejected: ${created.refErrors.join("; ")}`);
+if (created.kind !== "applied") throw new Error(`create push: ${JSON.stringify(created)}`);
 if ((await findRef(branch))?.oid !== newCommitOid) {
   throw new Error("branch did not land at the new commit");
 }
@@ -106,8 +108,12 @@ const casReject = await wire.push({
   pack: await buildPack([]),
   ref: branch,
 });
-if (casReject.ok) throw new Error("stale old-oid push was NOT rejected — CAS is broken");
-ok(`receive-pack: stale old-oid rejected (${casReject.refErrors.join("; ")})`);
+if (casReject.kind !== "rejected") {
+  throw new Error(
+    `stale old-oid push was NOT rejected — CAS is broken: ${JSON.stringify(casReject)}`,
+  );
+}
+ok(`receive-pack: stale old-oid rejected (${casReject.detail})`);
 
 // 5. The sync recipe: want new head, have every old directory tree.
 const oldDirTrees = trees.map((tree) => tree.oid);
@@ -138,7 +144,7 @@ const deleted = await wire.push({
   pack: await buildPack([]),
   ref: branch,
 });
-if (!deleted.ok) throw new Error(`branch delete rejected: ${deleted.refErrors.join("; ")}`);
+if (deleted.kind !== "applied") throw new Error(`branch delete: ${JSON.stringify(deleted)}`);
 ok("receive-pack: scratch branch deleted — remote left as found");
 
 console.log("git-wire live probe: ALL GREEN");

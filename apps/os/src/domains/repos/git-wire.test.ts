@@ -386,6 +386,45 @@ describe("pack validation", () => {
   });
 });
 
+describe("pack validation (round 2)", () => {
+  test("a ref-delta referencing a LATER ref-delta's result resolves (no false cycle)", async () => {
+    const base = text.encode("hello world\n");
+    const mid = text.encode("hello brave world\n");
+    const program1 = Uint8Array.from([
+      base.length,
+      mid.length,
+      0b10010000,
+      6,
+      6,
+      ...text.encode("brave "),
+      0b10010001,
+      6,
+      6,
+    ]); // base → mid
+    const program2 = Uint8Array.from([mid.length, mid.length, 0b10010001, 0, mid.length]); // identity copy of mid
+    const baseOid = await hashObject("blob", base);
+    const midOid = await hashObject("blob", mid);
+    const oidBytes = (oid: string) =>
+      Uint8Array.from(oid.match(/../g)!.map((pair) => Number.parseInt(pair, 16)));
+    const parts: Uint8Array[] = [
+      Uint8Array.from([0x50, 0x41, 0x43, 0x4b, 0, 0, 0, 2, 0, 0, 0, 3]),
+      // Entry order: FIRST the delta that needs the OTHER delta's result.
+      Uint8Array.from([(7 << 4) | program2.length]),
+      oidBytes(midOid),
+      deflate(program2),
+      Uint8Array.from([(7 << 4) | program1.length]),
+      oidBytes(baseOid),
+      deflate(program1),
+      Uint8Array.from([(3 << 4) | base.length]),
+      deflate(base),
+    ];
+    const body = concatBytes(parts);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", body as BufferSource));
+    const parsed = await parsePack(concatBytes([body, digest]));
+    expect(parsed.filter((object) => object.oid === midOid)).toHaveLength(2);
+  });
+});
+
 describe("receive-pack", () => {
   test("frames the ref update ahead of the pack", async () => {
     const pack = await buildPack([{ payload: text.encode("x"), type: "blob" }]);
@@ -401,24 +440,27 @@ describe("receive-pack", () => {
     expect(request.slice(-pack.length)).toEqual(pack);
   });
 
-  test("parses success and rejection reports, sidebanded or plain", () => {
+  test("classifies applied, rejected, and INDETERMINATE reports distinctly", () => {
     const REF = "refs/heads/main";
     const plain = pktConcat([
       pktLine("unpack ok"),
       pktLine("ok refs/heads/main"),
       text.encode("0000"),
     ]);
-    expect(parseReceivePackResponse(plain, REF)).toEqual({ ok: true, refErrors: [] });
+    expect(parseReceivePackResponse(plain, REF)).toEqual({ kind: "applied" });
 
-    const rejected = pktConcat([
-      pktLine("unpack ok"),
-      pktLine("ng refs/heads/main non-fast-forward"),
-      text.encode("0000"),
-    ]);
-    expect(parseReceivePackResponse(rejected, REF)).toEqual({
-      ok: false,
-      refErrors: ["refs/heads/main: non-fast-forward"],
-    });
+    // An explicit ng for OUR ref is the only refusal that is provably safe
+    // to retry through another lane.
+    const rejected = parseReceivePackResponse(
+      pktConcat([
+        pktLine("unpack ok"),
+        pktLine("ng refs/heads/main non-fast-forward"),
+        text.encode("0000"),
+      ]),
+      REF,
+    );
+    expect(rejected).toMatchObject({ kind: "rejected" });
+    expect((rejected as { detail: string }).detail).toMatch(/non-fast-forward/);
 
     const inner = pktConcat([
       pktLine("unpack ok"),
@@ -433,34 +475,44 @@ describe("receive-pack", () => {
       band,
       text.encode("0000"),
     ]);
-    expect(parseReceivePackResponse(sidebanded, REF)).toEqual({ ok: true, refErrors: [] });
+    expect(parseReceivePackResponse(sidebanded, REF)).toEqual({ kind: "applied" });
   });
 
-  test("success REQUIRES the expected ref's ok line — truncation is not success", () => {
+  test("truncated or ambiguous reports are INDETERMINATE — never rejected", () => {
     const REF = "refs/heads/main";
-    // unpack ok but NO command-status line for our ref (truncated report)
-    const truncated = pktConcat([pktLine("unpack ok"), text.encode("0000")]);
-    const verdict = parseReceivePackResponse(truncated, REF);
-    expect(verdict.ok).toBe(false);
-    expect(verdict.refErrors.join(" ")).toMatch(/no status/);
+    // unpack ok but NO command-status line for our ref: the server may have
+    // applied the update and the report died — unknown, not refusal.
+    const truncated = parseReceivePackResponse(
+      pktConcat([pktLine("unpack ok"), text.encode("0000")]),
+      REF,
+    );
+    expect(truncated).toMatchObject({ kind: "indeterminate" });
 
-    // ok for a DIFFERENT ref is not our success
-    const wrongRef = pktConcat([
-      pktLine("unpack ok"),
-      pktLine("ok refs/heads/other"),
-      text.encode("0000"),
-    ]);
-    expect(parseReceivePackResponse(wrongRef, REF).ok).toBe(false);
+    // ok for a DIFFERENT ref: something applied, but not provably ours.
+    const wrongRef = parseReceivePackResponse(
+      pktConcat([pktLine("unpack ok"), pktLine("ok refs/heads/other"), text.encode("0000")]),
+      REF,
+    );
+    expect(wrongRef).toMatchObject({ kind: "indeterminate" });
 
-    // sideband channel 3 surfaces as an error even alongside ok lines
+    // sideband channel 3 without a definite refusal is indeterminate detail.
     const err = text.encode("\u0003fatal: disk full");
-    const withBand3 = pktConcat([
-      text.encode(`${(4 + err.length).toString(16).padStart(4, "0")}`),
-      err,
-      text.encode("0000"),
-    ]);
-    const bandVerdict = parseReceivePackResponse(withBand3, REF);
-    expect(bandVerdict.ok).toBe(false);
-    expect(bandVerdict.refErrors.join(" ")).toMatch(/disk full/);
+    const withBand3 = parseReceivePackResponse(
+      pktConcat([
+        text.encode(`${(4 + err.length).toString(16).padStart(4, "0")}`),
+        err,
+        text.encode("0000"),
+      ]),
+      REF,
+    );
+    expect(withBand3).toMatchObject({ kind: "indeterminate" });
+    expect((withBand3 as { detail: string }).detail).toMatch(/disk full/);
+
+    // A definite unpack FAILURE is a rejection (nothing could have applied).
+    const unpackFailed = parseReceivePackResponse(
+      pktConcat([pktLine("unpack index-pack failed"), text.encode("0000")]),
+      REF,
+    );
+    expect(unpackFailed).toMatchObject({ kind: "rejected" });
   });
 });

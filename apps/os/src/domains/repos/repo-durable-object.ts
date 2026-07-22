@@ -290,12 +290,13 @@ export class RepoDurableObject extends DurableObject<Env> {
         // seed must cost its 75 files, not the 43MB tree.
         try {
           const paths = input.paths;
-          const head = await this.#lazyFreshHead();
-          const contents = await this.#lazyReader().readPaths(paths);
+          await this.#lazyFreshHead();
+          const { bytes, head } = await this.#lazyReader().readHeadPaths(paths);
           const files: Record<string, string> = {};
+          const decoder = new TextDecoder();
           paths.forEach((path, index) => {
-            const content = contents[index];
-            if (content !== null && content !== undefined) files[path] = content;
+            const content = bytes[index];
+            if (content !== null && content !== undefined) files[path] = decoder.decode(content);
           });
           return { commitOid: head.commitOid, files };
         } catch (error) {
@@ -580,9 +581,13 @@ export class RepoDurableObject extends DurableObject<Env> {
     const head = await reader.syncToHead(candidate!);
     // Publish the head record for worker builds (same raced/authority rules
     // as the clone lane) when the snapshot is small enough to hash cheaply.
+    // The endorsement is RE-CHECKED here: an observation that arrived while
+    // the sync's awaits ran may have outdated the pre-sync decision, and a
+    // now-rejected head must be served once, never published durably.
+    const endorsed = decideHeadResolution(this.#branchAuthority(branch), head.commitOid).cache;
     const raced = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (
-      decision.cache &&
+      endorsed &&
       !isRepoHeadRecord(raced) &&
       this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES
     ) {
@@ -597,7 +602,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** The whole-snapshot contentHash from store bytes (small manifests only). */
   async #lazyContentHash(): Promise<string> {
     const reader = this.#lazyReader();
-    const paths = reader.listPaths();
+    const { paths } = await reader.listHead();
     const contents = await reader.readPaths(paths);
     const files: Record<string, string> = {};
     paths.forEach((path, index) => {
@@ -682,18 +687,20 @@ export class RepoDurableObject extends DurableObject<Env> {
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
     if (branch === REPO_DEFAULT_BRANCH) {
-      // The lazy lane builds the commit from the synced snapshot and pushes a
-      // pack of just the new objects. Its outcome is TYPED: the clone lane
-      // below is legal only when the remote provably did not move (a thrown
-      // pre-push error, or an explicit `rejected` after conflict retries).
-      // An `indeterminate` outcome must surface as an error — retrying the
-      // mutation through ANY lane could double-commit.
-      try {
-        const lazy = await this.#commitFilesLazy(parsed);
-        if (lazy !== null) return lazy;
-      } catch (error) {
-        console.warn(`lazy commit failed before pushing; using the clone lane: ${String(error)}`);
+      // The lazy attempt's outcome is EXHAUSTIVE. Only "fallback-safe" — a
+      // proof the remote did not move (pre-push failure or a provably
+      // rejected CAS) — may enter the clone lane below. "indeterminate"
+      // surfaces as an error: retrying the mutation through ANY lane could
+      // apply it twice.
+      const attempt = await this.#commitFilesLazy(parsed);
+      if (attempt.kind === "completed") return attempt.result;
+      if (attempt.kind === "indeterminate") {
+        throw new Error(
+          `commit push is indeterminate (proposed ${attempt.proposedCommitOid}): ${attempt.detail} — ` +
+            "refusing to retry through any lane; re-issue the commit after the next read reconciles",
+        );
       }
+      console.warn(`lazy commit fell back to the clone lane (safe): ${attempt.detail}`);
     }
     const result = await commitFilesToArtifactRepo({
       author: parsed.author,
@@ -726,14 +733,21 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * The clone-free commit. Returns null when the CAS was rejected even after
-   * a resync retry — the remote provably did not apply anything, so the
-   * caller may use the clone lane. Every other completion is authoritative.
+   * The clone-free commit attempt. The boundary is a three-state proof:
+   * "completed" carries the public result, "fallback-safe" means the remote
+   * PROVABLY did not move (safe to re-run through the clone lane), and
+   * "indeterminate" means a push may have applied — the caller must refuse
+   * every retry path. Nothing here throws for outcome signaling.
    */
-  async #commitFilesLazy(parsed: CommitRepoFilesInput): Promise<CommitRepoFilesResult | null> {
+  async #commitFilesLazy(
+    parsed: CommitRepoFilesInput,
+  ): Promise<
+    | { kind: "completed"; result: CommitRepoFilesResult }
+    | { detail: string; kind: "fallback-safe" }
+    | { detail: string; kind: "indeterminate"; proposedCommitOid: string }
+  > {
     const branch = REPO_DEFAULT_BRANCH;
     const reader = this.#lazyReader();
-    await this.#lazyFreshHead();
     const command = {
       author: {
         date: new Date(),
@@ -746,53 +760,77 @@ export class RepoDurableObject extends DurableObject<Env> {
       })),
       message: parsed.message,
     };
-    let outcome = await reader.commitFiles(command);
-    if (outcome.kind === "rejected") {
-      // The ref moved under us (out-of-band writer): one resync + retry —
-      // the clone lane's visibility posture. Nothing was pushed.
-      await reader.syncToHead(await reader.resolveRemoteHead());
+    // Everything up to and including the reader call is allowed to fail into
+    // the clone lane ONLY through the reader's own classification: a thrown
+    // error here means the push was never sent (freshness resolution, input
+    // validation, pack building) — pre-push by construction.
+    let outcome: Awaited<ReturnType<typeof reader.commitFiles>>;
+    try {
+      await this.#lazyFreshHead();
       outcome = await reader.commitFiles(command);
+      if (outcome.kind === "rejected") {
+        // The ref moved under us (out-of-band writer): one resync + retry —
+        // the clone lane's visibility posture. A rejection is proof nothing
+        // was pushed.
+        await reader.syncToHead(await reader.resolveRemoteHead());
+        outcome = await reader.commitFiles(command);
+      }
+    } catch (error) {
+      return { detail: String(error), kind: "fallback-safe" };
     }
-    if (outcome.kind === "rejected") return null;
+    if (outcome.kind === "rejected") return { detail: outcome.detail, kind: "fallback-safe" };
     if (outcome.kind === "indeterminate") {
-      throw new Error(
-        `commit push is indeterminate (proposed ${outcome.proposedCommitOid}): ${outcome.detail} — ` +
-          "refusing to retry through any lane; re-issue the commit after the next read reconciles",
-      );
+      return {
+        detail: outcome.detail,
+        kind: "indeterminate",
+        proposedCommitOid: outcome.proposedCommitOid,
+      };
     }
     if (outcome.changedPaths.length === 0) {
-      return { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true };
+      return {
+        kind: "completed",
+        result: { branch, changedPaths: [], commitOid: outcome.commitOid, noChanges: true },
+      };
     }
 
-    // THE PUSH IS APPLIED. Record it exactly like the clone lane (floor +
-    // frontier + mirror; #recordPushedHead also drops the byte-tree sentinel
-    // and the in-memory snapshot, so the clone-backed lanes re-materialize).
-    this.#recordPushedHead({
-      branch,
-      commitOid: outcome.commitOid,
-      parentCommitOid: outcome.parentCommitOid,
-    });
-    this.#scheduleGithubMirrorPush(branch);
-    this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-    if (outcome.localInstallError !== undefined) {
-      // The remote HAS the commit but our snapshot could not install it; the
-      // next read re-syncs from the remote. Never re-run the mutation.
-      console.warn(
-        `lazy commit ${outcome.commitOid} pushed; local install failed: ${String(outcome.localInstallError)}`,
-      );
-    } else if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
-      // Keep worker builds hot after config-repo commits: publish the head
-      // record inline while the snapshot is cheap to hash.
-      this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+    // THE PUSH IS APPLIED. From here every failure is cache maintenance:
+    // degrade, log, and still return "completed" — never re-run the mutation.
+    try {
+      this.#recordPushedHead({
+        branch,
         commitOid: outcome.commitOid,
-        contentHash: await this.#lazyContentHash(),
+        parentCommitOid: outcome.parentCommitOid,
       });
+      this.#scheduleGithubMirrorPush(branch);
+      this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+      if (outcome.localInstallError !== undefined) {
+        // The remote HAS the commit but our snapshot could not install it;
+        // the next read re-syncs from the remote.
+        console.warn(
+          `lazy commit ${outcome.commitOid} pushed; local install failed: ${String(outcome.localInstallError)}`,
+        );
+      } else if (this.#gitObjectStore.manifestByteSize(branch) <= LAZY_CONTENT_HASH_MAX_BYTES) {
+        // Keep worker builds hot after config-repo commits: publish the head
+        // record inline while the snapshot is cheap to hash.
+        this.ctx.storage.kv.put(repoHeadStorageKey(branch), {
+          commitOid: outcome.commitOid,
+          contentHash: await this.#lazyContentHash(),
+        });
+      }
+    } catch (error) {
+      this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
+      console.warn(
+        `lazy commit ${outcome.commitOid} IS pushed; post-push bookkeeping failed and was dropped: ${String(error)}`,
+      );
     }
     return {
-      branch,
-      changedPaths: outcome.changedPaths,
-      commitOid: outcome.commitOid,
-      noChanges: false,
+      kind: "completed",
+      result: {
+        branch,
+        changedPaths: outcome.changedPaths,
+        commitOid: outcome.commitOid,
+        noChanges: false,
+      },
     };
   }
 
@@ -978,11 +1016,15 @@ export class RepoDurableObject extends DurableObject<Env> {
       // store bytes, no clone anywhere. Failures fall through to the
       // clone-backed byte-tree lane below, loudly.
       try {
-        const head = await this.#lazyFreshHead();
-        const [bytes] = await this.#lazyReader().readPathBytes([path]);
-        if (bytes === null || bytes === undefined) return null;
+        await this.#lazyFreshHead();
+        // Head label and bytes come from ONE reader observation — an
+        // interleaved install can never mix snapshots inside this response.
+        const { bytes, head } = await this.#lazyReader().readHeadPaths([path]);
+        if (bytes[0] === null || bytes[0] === undefined) return null;
         const content =
-          input.encoding === "base64" ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
+          input.encoding === "base64"
+            ? bytesToBase64(bytes[0])
+            : new TextDecoder().decode(bytes[0]);
         return { commitOid: head.commitOid, content, path };
       } catch (error) {
         console.warn(
@@ -1026,8 +1068,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** All committed file paths at HEAD (served from the lazy snapshot's manifest). */
   async listFiles(): Promise<{ commitOid: string; paths: string[] }> {
     try {
-      const head = await this.#lazyFreshHead();
-      return { commitOid: head.commitOid, paths: this.#lazyReader().listPaths().sort() };
+      await this.#lazyFreshHead();
+      const { head, paths } = await this.#lazyReader().listHead();
+      return { commitOid: head.commitOid, paths: paths.sort() };
     } catch (error) {
       console.warn(
         `repo listFiles via the lazy lane failed; falling back to the tree cache: ${String(error)}`,

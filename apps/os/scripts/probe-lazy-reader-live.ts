@@ -61,8 +61,8 @@ const readerA = createLazyRepoReader({ branch: "main", store: storeA, wire });
 const head = await timed("cold sync (one-time full ingest)", async () =>
   readerA.syncToHead(await readerA.resolveRemoteHead()),
 );
-const paths = readerA.listPaths();
-const taskFiles = paths.filter((path) => /(^|\/)tasks\/[^/]+\.md$/.test(path));
+const { paths } = await readerA.listHead();
+const taskFiles = paths.filter((path: string) => /(^|\/)tasks\/[^/]+\.md$/.test(path));
 console.log(
   `manifest: ${paths.length} files, ${taskFiles.length} task files, head ${head.commitOid.slice(0, 8)}`,
 );

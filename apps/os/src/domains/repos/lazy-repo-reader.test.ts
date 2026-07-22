@@ -9,6 +9,7 @@ import {
   parseTree,
   type GitWireTransport,
   type LsRefsEntry,
+  type PushReport,
   type RawGitObject,
 } from "./git-wire.ts";
 import { createLazyRepoReader } from "./lazy-repo-reader.ts";
@@ -103,15 +104,20 @@ function fakeRemote() {
     }
   };
 
-  const applyPush = async (pack: Uint8Array, ref: string, oldOid: string, newOid: string) => {
+  const applyPush = async (
+    pack: Uint8Array,
+    ref: string,
+    oldOid: string,
+    newOid: string,
+  ): Promise<PushReport> => {
     const current = refs.get(ref) ?? "0".repeat(40);
-    if (current !== oldOid) return { ok: false, refErrors: [`${ref}: stale ref`] };
+    if (current !== oldOid) return { detail: `${ref}: stale ref`, kind: "rejected" };
     const unpacked = await parsePack(pack);
     log.lastPushPackOids = unpacked.map((object) => object.oid);
     for (const object of unpacked) objects.set(object.oid, object);
     if (newOid === "0".repeat(40)) refs.delete(ref);
     else refs.set(ref, newOid);
-    return { ok: true, refErrors: [] };
+    return { kind: "applied" };
   };
 
   const wire: GitWireTransport = {
@@ -254,7 +260,7 @@ describe("sync", () => {
     const { reader } = subject(remote);
     const synced = await syncTip(reader);
     expect(synced.commitOid).toBe(head);
-    expect(reader.listPaths()).toEqual([
+    expect((await reader.listHead()).paths).toEqual([
       "big.bin",
       "sub/tasks/three.md",
       "tasks/one.md",
@@ -353,8 +359,8 @@ describe("verified reads", () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
     await syncTip(reader);
-    const [big] = await reader.readPathBytes(["big.bin"]);
-    expect(big?.length).toBe(700 * 1024);
+    const { bytes } = await reader.readHeadPaths(["big.bin"]);
+    expect(bytes[0]?.length).toBe(700 * 1024);
   });
 
   test("a mutated chunk is detected, quarantined, and rehydrated", async () => {
@@ -380,8 +386,8 @@ describe("verified reads", () => {
     const [entry] = store.manifestEntries("main", ["big.bin"]);
     storage.sql.exec(`DELETE FROM git_object_chunks WHERE oid = ? AND idx = 1`, entry!.blobOid);
     await expect(store.getObject(entry!.blobOid)).rejects.toThrow(/assembled/);
-    const [healed] = await reader.readPathBytes(["big.bin"]);
-    expect(healed?.length).toBe(700 * 1024);
+    const { bytes: healed } = await reader.readHeadPaths(["big.bin"]);
+    expect(healed[0]?.length).toBe(700 * 1024);
   });
 });
 
@@ -417,6 +423,86 @@ describe("lifecycle", () => {
   });
 });
 
+describe("resilience and reach (round 2)", () => {
+  test("a corrupt UNCHANGED subtree self-heals during the next sync", async () => {
+    const { remote } = await seededRemote();
+    const { reader, storage, store } = subject(remote);
+    await syncTip(reader);
+    // Rot the sub/ tree object at rest. Its oid stays advertised as a have,
+    // so the server will keep excluding that closure from sync packs.
+    const subTree = store.dirTrees("main").find((dir) => dir.path === "sub")!;
+    storage.sql.exec(`DELETE FROM git_object_chunks WHERE oid = ?`, subTree.treeOid);
+    storage.sql.exec(`UPDATE git_objects SET size = 1 WHERE oid = ?`, subTree.treeOid);
+
+    const newHead = await externalEdit(remote, "tasks/one.md", "# healed era\n");
+    await expect(reader.syncToHead(newHead)).resolves.toMatchObject({ commitOid: newHead });
+    await expect(reader.readPaths(["sub/tasks/three.md", "tasks/one.md"])).resolves.toEqual([
+      "# three\n",
+      "# healed era\n",
+    ]);
+  });
+
+  test("pruning is reachability across ALL branches — shared objects survive", async () => {
+    const { head, remote } = await seededRemote();
+    const { reader, store } = subject(remote);
+    await syncTip(reader);
+    // A second branch snapshot sharing every object with main's head.
+    store.installSnapshot("release", {
+      commitOid: head,
+      dirs: store.dirTrees("main"),
+      removes: [],
+      rootTreeOid: store.head("main")!.rootTreeOid,
+      upserts: store.manifest("main"),
+    });
+
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# main moved on\n", path: "tasks/one.md" }],
+      message: "main only",
+    });
+    expect(outcome.kind).toBe("applied");
+    // main's OLD one.md blob is still reachable from release's manifest.
+    const [releaseEntry] = store.manifestEntries("release", ["tasks/one.md"]);
+    await expect(store.getObject(releaseEntry!.blobOid)).resolves.not.toBeNull();
+  });
+
+  test("gitlinks survive sync and commits in the same directory", async () => {
+    const remote = fakeRemote();
+    const gitlinkOid = "1234567890123456789012345678901234567890";
+    const one = await remote.putBlob("# one\n");
+    const tasks = await remote.putTree([
+      { mode: "100644", name: "one.md", oid: one },
+      { mode: "160000", name: "vendored", oid: gitlinkOid },
+    ]);
+    const root = await remote.putTree([{ mode: "40000", name: "tasks", oid: tasks }]);
+    const head = await remote.putCommit(root, [], "seed with gitlink\n");
+    remote.refs.set("refs/heads/main", head);
+
+    const { reader } = subject(remote);
+    await syncTip(reader);
+    // The gitlink is not a readable file…
+    expect((await reader.listHead()).paths).toEqual(["tasks/one.md"]);
+    await expect(reader.readPaths(["tasks/vendored"])).resolves.toEqual([null]);
+
+    // …and a commit in the SAME directory carries it through untouched.
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [{ content: "# one v2\n", path: "tasks/one.md" }],
+      message: "edit next to the gitlink",
+    });
+    expect(outcome.kind).toBe("applied");
+    if (outcome.kind !== "applied") throw new Error("unreachable");
+    const newRoot = parseCommit(remote.objects.get(outcome.commitOid)!.payload).tree;
+    const tasksEntry = parseTree(remote.objects.get(newRoot)!.payload).find(
+      (entry) => entry.name === "tasks",
+    )!;
+    const vendored = parseTree(remote.objects.get(tasksEntry.oid)!.payload).find(
+      (entry) => entry.name === "vendored",
+    );
+    expect(vendored).toEqual({ mode: "160000", name: "vendored", oid: gitlinkOid });
+  });
+});
+
 describe("lazy commits", () => {
   test("commit builds locally, pushes CAS, and reads back with zero fetches", async () => {
     const { remote } = await seededRemote();
@@ -445,12 +531,12 @@ describe("lazy commits", () => {
       reader.readPaths(["tasks/one.md", "deep/new/tasks/fresh.md", "sub/tasks/three.md"]),
     ).resolves.toEqual(["# one edited\n", "# fresh\n", null]);
     expect(remote.log.fetches.length).toBe(fetchesBefore);
-    expect(reader.listPaths()).not.toContain("sub/tasks/three.md");
+    expect((await reader.listHead()).paths).not.toContain("sub/tasks/three.md");
 
     // A FRESH reader syncing from the remote converges on identical state.
     const fresh = subject(remote);
     await syncTip(fresh.reader);
-    expect(fresh.reader.listPaths()).toEqual(reader.listPaths());
+    expect((await fresh.reader.listHead()).paths).toEqual((await reader.listHead()).paths);
   });
 
   test("the pushed pack carries ONLY the changed ancestor chain", async () => {
@@ -511,7 +597,7 @@ describe("lazy commits", () => {
     expect(toolEntry?.mode).toBe("100755");
   });
 
-  test("rejects writing under a file or over a directory — classified input errors", async () => {
+  test("rejects FINAL-state file/dir collisions; permits same-batch replacements", async () => {
     const { remote } = await seededRemote();
     const { reader } = subject(remote);
     await syncTip(reader);
@@ -528,7 +614,20 @@ describe("lazy commits", () => {
         changes: [{ content: "x", path: "tasks" }],
         message: "over a directory",
       }),
-    ).rejects.toThrow(/is a directory/);
+    ).rejects.toThrow(/"tasks" is a file but "tasks\/one\.md" nests under it/);
+
+    // Validation judges the FINAL manifest: emptying a directory and writing
+    // a file of its name in ONE batch is a legal transition.
+    const outcome = await reader.commitFiles({
+      author: AUTHOR,
+      changes: [
+        { delete: true, path: "sub/tasks/three.md" },
+        { content: "# sub is a file now\n", path: "sub" },
+      ],
+      message: "directory becomes a file",
+    });
+    expect(outcome.kind).toBe("applied");
+    await expect(reader.readPaths(["sub"])).resolves.toEqual(["# sub is a file now\n"]);
   });
 
   test("deleting every file commits git's canonical empty tree", async () => {
@@ -537,11 +636,11 @@ describe("lazy commits", () => {
     await syncTip(reader);
     const outcome = await reader.commitFiles({
       author: AUTHOR,
-      changes: reader.listPaths().map((path) => ({ delete: true as const, path })),
+      changes: (await reader.listHead()).paths.map((path) => ({ delete: true as const, path })),
       message: "scorched earth",
     });
     expect(outcome.kind).toBe("applied");
-    expect(reader.listPaths()).toEqual([]);
+    expect((await reader.listHead()).paths).toEqual([]);
     const head = remote.refs.get("refs/heads/main")!;
     expect(parseCommit(remote.objects.get(head)!.payload).tree).toBe(
       "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
