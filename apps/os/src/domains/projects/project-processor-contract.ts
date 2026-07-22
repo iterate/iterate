@@ -281,14 +281,13 @@ export const ProjectProcessorContract = defineProcessorContract({
             encoding: z.enum(["utf8", "base64"]),
             content: z.string(),
             originalByteLength: z.number().int().nonnegative().optional(),
-            sha256: z.string().optional(),
+            sha256: z.string(),
             truncated: z.boolean().default(false),
           })
           .nullish()
           .meta({
             description:
-              "A bounded inspection prefix in placeholder form plus the complete body's SHA-256. " +
-              "Events written before the consolidated body contract may omit sha256.",
+              "A bounded inspection prefix in placeholder form plus the complete body's SHA-256.",
           }),
         secretPaths: z.array(z.string()).default([]).meta({
           description: 'Secret paths the request references — the "spends this secret" headline.',

@@ -1,7 +1,6 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
-  approvalBodyHash,
   approvalBodyForDisplay,
   deriveOpenRequests,
   deriveRecentResolvedRequests,
@@ -101,6 +100,7 @@ test("the approval view resolves the exact script event and complete request bod
       encoding: "utf8",
       content: '{"orderId":1234}',
       originalByteLength: 16,
+      sha256: "body-sha256",
       truncated: false,
     },
     streamContext: {
@@ -138,6 +138,7 @@ test("the approval view labels a capped request body as truncated", () => {
       encoding: "utf8",
       content: "readable prefix",
       originalByteLength: 100_000,
+      sha256: "body-sha256",
       truncated: true,
     },
   }).payload as RequestedPayload;
@@ -148,24 +149,6 @@ test("the approval view labels a capped request body as truncated", () => {
     text: "readable prefix",
     truncated: true,
   });
-});
-
-test("the approval view still reads pre-consolidation body fields", () => {
-  const payload = requested(10, "legacy").payload as RequestedPayload & {
-    bodyPreview?: string;
-    bodySha256?: string | null;
-  };
-  payload.body = undefined;
-  payload.bodyPreview = "legacy preview";
-  payload.bodySha256 = "legacy-sha256";
-
-  expect(approvalBodyForDisplay(payload)).toEqual({
-    language: "text",
-    originalByteLength: null,
-    text: "legacy preview",
-    truncated: true,
-  });
-  expect(approvalBodyHash(payload)).toBe("legacy-sha256");
 });
 
 function requested(

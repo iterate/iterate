@@ -45,20 +45,17 @@ export function safeHost(url: string): string {
   }
 }
 
-/** Readable body text for approval front-ends, including pre-consolidation events. */
+/** Readable body text for approval front-ends. */
 export function approvalBodyPreview(payload: RequestedPayload): string | null {
-  if (payload.body !== undefined && payload.body !== null) {
-    return payload.body.encoding === "base64"
-      ? `[base64] ${payload.body.content}`
-      : payload.body.content;
-  }
-  const legacyPreview = (payload as RequestedPayload & { bodyPreview?: unknown }).bodyPreview;
-  return typeof legacyPreview === "string" ? legacyPreview : null;
+  if (payload.body === undefined || payload.body === null) return null;
+  return payload.body.encoding === "base64"
+    ? `[base64] ${payload.body.content}`
+    : payload.body.content;
 }
 
-/** Complete-body hash for approval front-ends, including pre-consolidation events. */
+/** Complete-body hash for approval front-ends. */
 export function approvalBodyHash(payload: RequestedPayload): string | null {
-  return approvalBodySha256(payload as RequestedPayload & { bodySha256?: string | null });
+  return approvalBodySha256(payload);
 }
 
 /** The canonical bytes a grant for this request signs over. */

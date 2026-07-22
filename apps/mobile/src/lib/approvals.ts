@@ -44,18 +44,7 @@ export function approvalBodyForDisplay(payload: RequestedPayload): {
   text: string;
   truncated: boolean;
 } | null {
-  if (payload.body === null) return null;
-  if (payload.body === undefined) {
-    const legacyPreview = (payload as RequestedPayload & { bodyPreview?: unknown }).bodyPreview;
-    return typeof legacyPreview !== "string"
-      ? null
-      : {
-          language: "text",
-          originalByteLength: null,
-          text: legacyPreview,
-          truncated: true,
-        };
-  }
+  if (payload.body === null || payload.body === undefined) return null;
   const originalByteLength =
     payload.body.originalByteLength === undefined ? null : payload.body.originalByteLength;
   if (payload.body.encoding === "base64") {
@@ -84,9 +73,9 @@ export function approvalBodyForDisplay(payload: RequestedPayload): {
   }
 }
 
-/** Complete-body hash for display, including pre-consolidation approval events. */
+/** Complete-body hash for display. */
 export function approvalBodyHash(payload: RequestedPayload): string | null {
-  return approvalBodySha256(payload as RequestedPayload & { bodySha256?: string | null });
+  return approvalBodySha256(payload);
 }
 
 export function scriptCodeForApproval(

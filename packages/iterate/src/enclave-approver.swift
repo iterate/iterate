@@ -143,9 +143,6 @@ case "approve":
     let prefix = body["encoding"] as? String == "base64" ? "[base64] " : ""
     let preview = prefix + content
     lines.append("body: \(preview.count > 200 ? String(preview.prefix(200)) + "…" : preview)")
-  } else if let preview = request["bodyPreview"] as? String {
-    // Compatibility with approval events written before body metadata was consolidated.
-    lines.append("body: \(preview.count > 200 ? String(preview.prefix(200)) + "…" : preview)")
   }
   if let ruleKey = request["ruleKey"] as? String { lines.append("rule: \(ruleKey)") }
   if let expiresAt = request["expiresAt"] as? String { lines.append("expires: \(expiresAt)") }

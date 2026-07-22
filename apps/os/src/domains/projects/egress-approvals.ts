@@ -135,10 +135,7 @@ export function buildApprovalMessage(input: {
   requested: Pick<
     HumanApprovalRequestedPayload,
     "method" | "url" | "headers" | "body" | "secretPaths"
-  > & {
-    /** Compatibility with approval events written before body metadata was consolidated. */
-    bodySha256?: string | null;
-  };
+  >;
   decision: "granted" | "rejected";
 }): Uint8Array {
   return new TextEncoder().encode(
@@ -183,13 +180,11 @@ export function approvalRequestBody(
   }
 }
 
-/** Complete-body hash used by approval.v1; accepts the pre-consolidation event shape. */
+/** Complete-body hash used by approval.v1. */
 export function approvalBodySha256(
-  requested: Pick<HumanApprovalRequestedPayload, "body"> & { bodySha256?: string | null },
+  requested: Pick<HumanApprovalRequestedPayload, "body">,
 ): string | null {
-  const nestedHash = requested.body?.sha256;
-  if (nestedHash !== undefined) return nestedHash;
-  return requested.bodySha256 === undefined ? null : requested.bodySha256;
+  return requested.body?.sha256 || null;
 }
 
 function decodeUtf8InspectionBytes(bytes: Uint8Array, truncated: boolean): string {

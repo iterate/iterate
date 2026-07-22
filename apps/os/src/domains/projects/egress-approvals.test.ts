@@ -108,16 +108,12 @@ test("the approval request contract exposes one nullish body object", () => {
       truncated: false,
     },
   });
-  expect(
+  expect(() =>
     schema.parse({
       ...base,
-      body: { encoding: "utf8", content: "legacy #2231 body" },
-    }).body,
-  ).toEqual({
-    encoding: "utf8",
-    content: "legacy #2231 body",
-    truncated: false,
-  });
+      body: { encoding: "utf8", content: "missing hash" },
+    }),
+  ).toThrow();
 });
 
 const rule = (overrides: Partial<EgressRule> & Pick<EgressRule, "ruleKey">): EgressRule => ({
@@ -276,34 +272,6 @@ describe("canonical approval message", () => {
     expect(message({ requested: { ...requested, url: "https://evil.example" } })).not.toBe(
       message(),
     );
-  });
-
-  test("keeps approval.v1 signatures stable for pre-consolidation events", () => {
-    const legacy = buildApprovalMessage({
-      projectId: "prj_1",
-      approvalRequestEventOffset: 42,
-      requested: {
-        method: requested.method,
-        url: requested.url,
-        headers: requested.headers,
-        body: {
-          encoding: requested.body.encoding,
-          content: requested.body.content,
-          truncated: requested.body.truncated,
-        },
-        bodySha256: requested.body.sha256,
-        secretPaths: requested.secretPaths,
-      },
-      decision: "granted",
-    });
-    const consolidated = buildApprovalMessage({
-      projectId: "prj_1",
-      approvalRequestEventOffset: 42,
-      requested,
-      decision: "granted",
-    });
-
-    expect(legacy).toEqual(consolidated);
   });
 });
 
