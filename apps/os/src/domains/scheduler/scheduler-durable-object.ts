@@ -87,7 +87,6 @@ export class SchedulerDurableObject extends DurableObject<Env> {
         exports: this.ctx.exports,
         projectId: this.#name.projectId,
         scopePath: "/",
-        waitUntil: (promise) => this.ctx.waitUntil(promise),
       }),
       now: () => Date.now(),
       // Keep the incarnation alive while an execution attempt runs (the old
