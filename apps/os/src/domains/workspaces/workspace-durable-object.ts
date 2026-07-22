@@ -307,7 +307,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     await this.#assertCreated();
     if (paths.length > 10_000) throw new Error("readFiles caps at 10000 paths per call");
     const result: Record<string, string | null> = {};
-    const mounts = this.#currentConfig().mounts;
     // Live sessions and overlay copies first (local, concurrent); the mount
     // fall-through is grouped so each mount pays ONE snapshot RPC — fanning
     // per-file reads at a repo object is the documented overload.
@@ -331,7 +330,10 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     // mint two groups for one mount, and drop the first group's members. The
     // fall-through mirrors readFile exactly: whiteouts mask, virtual
     // directories are directories, and the ROUTED repo-relative key (not a
-    // string slice of the raw path) addresses the snapshot.
+    // string slice of the raw path) addresses the snapshot. The mount table
+    // is read HERE — after the awaits — so a configure landing during the
+    // local reads routes exactly as a fresh per-file readFile would.
+    const mounts = this.#currentConfig().mounts;
     const byMount = new Map<
       string,
       { entries: { path: string; repoRelativePath: string }[]; repoPath: string }
