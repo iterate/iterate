@@ -60,16 +60,16 @@ export function scriptCodeForApproval(
   payload: RequestedPayload,
   event: StreamEvent | undefined,
 ): string {
-  const source = payload.source;
-  if (source?.kind !== "script-execution") {
+  const streamContext = payload.streamContext;
+  if (streamContext?.kind !== "script-execution") {
     throw new Error("This approval was not triggered by a codemode script.");
   }
   if (
     event === undefined ||
     event.type !== "events.iterate.com/capability-host/script-run-requested" ||
-    event.path !== source.streamPath ||
-    event.offset !== source.scriptRunRequestedEventOffset ||
-    event.payload?.executionId !== source.executionId ||
+    event.path !== streamContext.streamPath ||
+    event.offset !== streamContext.scriptRunRequestedEventOffset ||
+    event.payload?.executionId !== streamContext.executionId ||
     typeof event.payload.code !== "string"
   ) {
     throw new Error("The approval's source script event could not be verified.");

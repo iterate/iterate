@@ -118,7 +118,7 @@ export async function linkRepoToGithub(
 
   const octokit = connectionOctokit({
     connection: input.connection,
-    egressSource: { kind: "scope", scopePath: repoPath },
+    streamContext: { kind: "scope", scopePath: repoPath },
     projectId: input.projectId,
   });
   let created = false;

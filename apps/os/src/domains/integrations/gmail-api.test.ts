@@ -1,15 +1,14 @@
 import { expect, test, vi } from "vitest";
 
-const captured: { projectDurableObjectName?: string; request?: Request; source?: unknown } = {};
+const captured: { projectDurableObjectName?: string; request?: Request } = {};
 
 vi.mock("../../env.ts", () => ({
   itxEnv: {
     PROJECT: {
       getByName: (name: string) => ({
-        egress: async (request: Request, source: unknown) => {
+        fetch: async (request: Request) => {
           captured.projectDurableObjectName = name;
           captured.request = request;
-          captured.source = source;
           return Response.json({ id: "message-123" });
         },
       }),
@@ -23,7 +22,7 @@ test("a Gmail API request enters project egress with its access-token placeholde
   const response = await callGmailApi({
     authorization:
       'Bearer getSecret("/secrets/integrations/google/alice", { field: "accessToken" })',
-    egressSource: { kind: "scope", scopePath: "/agents/gmail" },
+    streamContext: { kind: "scope", scopePath: "/agents/gmail" },
     projectId: "prj_1",
     request: {
       body: { raw: "base64url-mime" },
@@ -34,7 +33,10 @@ test("a Gmail API request enters project egress with its access-token placeholde
 
   expect(response).toMatchObject({ data: { id: "message-123" }, status: 200 });
   expect(captured.projectDurableObjectName).toContain("prj_1");
-  expect(captured.source).toEqual({ kind: "scope", scopePath: "/agents/gmail" });
+  expect(JSON.parse(captured.request!.headers.get("x-iterate-internal-stream-context")!)).toEqual({
+    kind: "scope",
+    scopePath: "/agents/gmail",
+  });
   expect(captured.request).toMatchObject({
     method: "POST",
     url: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",

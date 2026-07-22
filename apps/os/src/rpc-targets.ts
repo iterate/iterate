@@ -326,7 +326,7 @@ import type {
   DeviceEnrollInput,
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
-import type { EgressInvocationSource } from "./domains/projects/egress-invocation-source.ts";
+import { withStreamContext, type StreamContext } from "./domains/projects/stream-context.ts";
 import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
@@ -2843,7 +2843,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
     readonly props: {
       auth: ItxAuth;
       ctx: CfExecutionContext;
-      egressSource: EgressInvocationSource;
+      streamContext: StreamContext;
       projectId: string;
     },
   ) {
@@ -2914,7 +2914,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       egress: projectEgressFetcher(
         this.props.ctx.exports,
         this.props.projectId,
-        this.props.egressSource,
+        this.props.streamContext,
       ),
       parent: "a project itx (itx.integrations.parallel)",
     });
@@ -3075,7 +3075,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       const connectionPath = googleConnectionSecretPath(connection);
       return await callGmailApi({
         authorization: `Bearer getSecret("${connectionPath}", { field: "accessToken" })`,
-        egressSource: this.props.egressSource,
+        streamContext: this.props.streamContext,
         projectId: this.props.projectId,
         request: args[0] as GmailRequestInput,
       });
@@ -3103,7 +3103,7 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       // rides the connection secret's substituting egress (github-api.ts).
       const octokit = connectionOctokit({
         connection,
-        egressSource: this.props.egressSource,
+        streamContext: this.props.streamContext,
         projectId: this.props.projectId,
       });
       try {
@@ -4326,7 +4326,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
     readonly props: {
       auth: ItxAuth;
       ctx: CfExecutionContext;
-      egressSource: EgressInvocationSource;
+      streamContext: StreamContext;
       projectId: string;
     },
   ) {
@@ -4343,7 +4343,7 @@ class DynamicWorkerCollectionRpcTarget extends IterateRpcTarget<"DynamicWorkerCo
     return new DynamicWorkerRpcTarget({
       buildBudgetMs: options?.buildBudgetMs,
       ctx: this.props.ctx,
-      egressSource: this.props.egressSource,
+      streamContext: this.props.streamContext,
       flattenNestedPaths: options?.flattenNestedPaths === true,
       projectId: this.props.projectId,
       ref: parsed,
@@ -4364,7 +4364,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   readonly #flattenNestedPaths: boolean;
   readonly #props: {
     ctx: CfExecutionContext;
-    egressSource: EgressInvocationSource;
+    streamContext: StreamContext;
     projectId: string;
   };
   readonly #ref: DynamicWorkerRef;
@@ -4374,7 +4374,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   constructor(props: {
     buildBudgetMs?: number;
     ctx: CfExecutionContext;
-    egressSource: EgressInvocationSource;
+    streamContext: StreamContext;
     flattenNestedPaths?: boolean;
     projectId: string;
     ref: DynamicWorkerRef;
@@ -4385,7 +4385,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
     this.#flattenNestedPaths = props.flattenNestedPaths === true;
     this.#props = {
       ctx: props.ctx,
-      egressSource: props.egressSource,
+      streamContext: props.streamContext,
       projectId: props.projectId,
     };
     this.#ref = props.ref;
@@ -4398,7 +4398,7 @@ class DynamicWorkerRpcTarget extends IterateRpcRelay<"DynamicWorkerCapability"> 
   // binding and egress fetcher come from the HOSTING context, not the ref.
   get #runner(): DynamicWorkerRunner {
     this.#lazyRunner ??= new DynamicWorkerRunner({
-      egressSource: this.#props.egressSource,
+      streamContext: this.#props.streamContext,
       exports: this.#props.ctx.exports,
       projectId: this.#props.projectId,
       scopePath: this.#ref.path,
@@ -4560,7 +4560,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
-      egressSource: { kind: "scope", scopePath: "/" },
+      streamContext: { kind: "scope", scopePath: "/" },
       path: "/",
       projectId,
     });
@@ -4993,7 +4993,7 @@ type ExistingProjectRpcTargetProps = {
   // dotted-path calls (`itx.foo.bar(...)` → `capabilityHost.invokeCapability`).
   capabilityHost: CapabilityHostRpcTarget;
   ctx: CfExecutionContext;
-  egressSource: EgressInvocationSource;
+  streamContext: StreamContext;
   projectId: string;
 };
 
@@ -5072,8 +5072,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return this.#existingProps.projectId;
   }
 
-  get #egressSource(): EgressInvocationSource {
-    return this.#existingProps.egressSource;
+  get #streamContext(): StreamContext {
+    return this.#existingProps.streamContext;
   }
 
   /** The project this itx is scoped into. */
@@ -5134,7 +5134,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
-        egressSource: { kind: "scope", scopePath: "/" },
+        streamContext: { kind: "scope", scopePath: "/" },
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -5548,7 +5548,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get egress(): ProjectEgressRpcTarget {
     return new ProjectEgressRpcTarget({
       projectId: this.#projectId,
-      source: this.#egressSource,
+      streamContext: this.#streamContext,
     });
   }
 
@@ -5586,7 +5586,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new ProjectIntegrationsRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      egressSource: this.#egressSource,
+      streamContext: this.#streamContext,
       projectId: this.#projectId,
     });
   }
@@ -5594,7 +5594,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */
   get mcp(): McpClientCollectionRpcTarget {
     return new McpClientCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#egressSource),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#streamContext),
       projectId: this.#projectId,
       // Makes beginOAuth links notify the calling agent when the flow completes.
       scopePath: this.#capabilityHost.path,
@@ -5604,14 +5604,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** Ad-hoc OpenAPI clients: connect(spec). */
   get openapi(): OpenApiCollectionRpcTarget {
     return new OpenApiCollectionRpcTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#egressSource),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#streamContext),
     });
   }
 
   /** Parallel API, preconfigured with iterate's platform API key. */
   get parallel(): OpenApiRpc {
     return parallelOpenApiTarget({
-      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#egressSource),
+      egress: projectEgressFetcher(this.#props.ctx.exports, this.#projectId, this.#streamContext),
       parent: "a project itx (itx.parallel)",
     });
   }
@@ -5679,7 +5679,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new DynamicWorkerCollectionRpcTarget({
       auth: this.#props.auth,
       ctx: this.#props.ctx,
-      egressSource: this.#egressSource,
+      streamContext: this.#streamContext,
       projectId: this.#projectId,
     });
   }
@@ -5750,7 +5750,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get worker(): DynamicWorkerCapability<ProjectWorker> {
     return new DynamicWorkerRpcTarget({
       ctx: this.#props.ctx,
-      egressSource: this.#egressSource,
+      streamContext: this.#streamContext,
       flattenNestedPaths: true,
       projectId: this.#projectId,
       ref: defaultProjectWorkerRef(),
@@ -5782,7 +5782,7 @@ const ITX_SURFACE_MEMBER_NAMES: ReadonlySet<string> = new Set(
 export function itxForScope(props: {
   auth: ItxAuth;
   ctx: CfExecutionContext;
-  egressSource: EgressInvocationSource;
+  streamContext: StreamContext;
   path: string;
   projectId: string;
 }): ProjectRpcTarget {
@@ -5790,7 +5790,7 @@ export function itxForScope(props: {
     auth: props.auth,
     capabilityHost: new CapabilityHostRpcTarget(props),
     ctx: props.ctx,
-    egressSource: props.egressSource,
+    streamContext: props.streamContext,
     projectId: props.projectId,
   });
 }
@@ -6150,7 +6150,7 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
     });
   }
 
-  constructor(readonly props: { projectId: string; source: EgressInvocationSource }) {
+  constructor(readonly props: { projectId: string; streamContext: StreamContext }) {
     super();
   }
 
@@ -6158,7 +6158,9 @@ class ProjectEgressRpcTarget extends IterateRpcTarget<"ProjectEgress"> {
    * `x-iterate-secret-template: json` to replace exact `getSecret(...)` string
    * values in an `application/json` (or `+json`) body. */
   fetch(request: Request): Promise<EgressResponse> {
-    return projectStub(env.PROJECT, this.props.projectId).egress(request, this.props.source);
+    return projectStub(env.PROJECT, this.props.projectId).fetch(
+      withStreamContext(request, this.props.streamContext),
+    );
   }
 
   /** Install a live egress interceptor (last writer wins); returns a release handle. */

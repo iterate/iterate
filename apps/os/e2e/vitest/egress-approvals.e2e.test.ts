@@ -13,8 +13,13 @@ import {
   bytesToBase64,
   type HumanApprovalRequestedPayload,
 } from "../../src/domains/projects/egress-approvals.ts";
+import { STREAM_CONTEXT_HEADER } from "../../src/domains/projects/stream-context.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
-import { startEgressEcho } from "./itx-capability-fixtures.ts";
+import {
+  startEgressEcho,
+  startWebSocketEcho,
+  WEBSOCKET_ECHO_GREETING,
+} from "./itx-capability-fixtures.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RULES_CONFIGURED = "events.iterate.com/project/egress-rules-configured";
@@ -243,22 +248,22 @@ test("an agent codemode script carries one durable source through bare and scope
       },
       ruleDescription: "Refunds require confirmation",
       ruleKey: "refunds-need-confirmation",
-      source: {
+      streamContext: {
         kind: "script-execution",
         executionId: expect.any(String),
         scriptRunRequestedEventOffset: expect.any(Number),
         streamPath: agentPath,
       },
     });
-    if (barePayload.source?.kind !== "script-execution") {
+    if (barePayload.streamContext?.kind !== "script-execution") {
       throw new Error("expected script-execution approval provenance");
     }
     const scriptEvent = await agent.stream.getEvent({
-      offset: barePayload.source.scriptRunRequestedEventOffset,
+      offset: barePayload.streamContext.scriptRunRequestedEventOffset,
     });
     expect(scriptEvent).toMatchObject({
       type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { code, executionId: barePayload.source.executionId },
+      payload: { code, executionId: barePayload.streamContext.executionId },
     });
 
     await root.append({
@@ -275,7 +280,7 @@ test("an agent codemode script carries one durable source through bare and scope
         encoding: "utf8",
         content: JSON.stringify({ orderId: 1234, via: "itx egress" }),
       },
-      source: barePayload.source,
+      streamContext: barePayload.streamContext,
     });
     await root.append({
       type: GRANTED,
@@ -287,6 +292,81 @@ test("an agent codemode script carries one durable source through bare and scope
     await echo.close();
   }
 }, 120_000);
+
+test("approved worker WebSocket egress stays on the fetch-native transport", async () => {
+  await using echo = await startWebSocketEcho();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects
+    .get(`egress-approval-websocket-${crypto.randomUUID()}`)
+    .create({});
+  const root = project.streams.get("/");
+  const agent = await project.agents.get("/agents/websocket-agent").create();
+  const websocketUrl = new URL(echo.url);
+  websocketUrl.protocol = "wss:";
+
+  await root.append({
+    type: RULES_CONFIGURED,
+    payload: {
+      rules: [
+        {
+          ruleKey: "websockets-need-confirmation",
+          description: "WebSocket connections require confirmation",
+          match: { hosts: [websocketUrl.hostname], methods: ["GET"] },
+          verdict: "hold",
+          approvalTimeoutMs: 60_000,
+        },
+      ],
+    },
+  });
+  await waitForCondition(
+    async () => (await project.processor.snapshot()).state.egressRules.length === 1,
+    { description: "project processor to fold the WebSocket approval rule" },
+  );
+
+  const echoedMessage = `approved-websocket-${crypto.randomUUID()}`;
+  const execution = agent.capabilityHost.runScript(`async () => {
+    const socket = new WebSocket(${JSON.stringify(websocketUrl.href)});
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("WebSocket echo timed out")), 30_000);
+      socket.addEventListener("message", (event) => {
+        const message = String(event.data);
+        if (message === ${JSON.stringify(WEBSOCKET_ECHO_GREETING)}) {
+          socket.send(${JSON.stringify(echoedMessage)});
+        }
+        if (message === ${JSON.stringify(echoedMessage)}) {
+          clearTimeout(timeout);
+          socket.close(1000, "approval-proof-complete");
+          resolve(message);
+        }
+      });
+      socket.addEventListener("error", () => reject(new Error("WebSocket echo failed")));
+    });
+  }`);
+
+  const requested = await root.waitForEvent({
+    afterOffset: 0,
+    eventTypes: [REQUESTED],
+    timeoutMs: 30_000,
+  });
+  expect(requested.payload).toMatchObject({
+    method: "GET",
+    ruleKey: "websockets-need-confirmation",
+    streamContext: {
+      kind: "script-execution",
+      streamPath: "/agents/websocket-agent",
+    },
+  });
+  expect((requested.payload as HumanApprovalRequestedPayload).headers).not.toHaveProperty(
+    STREAM_CONTEXT_HEADER,
+  );
+  await root.append({
+    type: GRANTED,
+    payload: { approvalRequestEventOffset: requested.offset },
+  });
+
+  await expect(execution).resolves.toMatchObject({ result: echoedMessage });
+});
 
 test("enrolled approval keys make unsigned grants inert; a signed grant releases", async () => {
   const echo = await startEgressEcho();

@@ -248,29 +248,29 @@ function ApprovalCard({
     initialData: initialDetails,
     staleTime: Infinity,
   });
-  const source = request.payload.source;
+  const streamContext = request.payload.streamContext;
   const script = useQuery({
     queryKey:
-      source?.kind === "script-execution"
+      streamContext?.kind === "script-execution"
         ? [
             "approval-source-script",
             baseUrl,
             projectId,
-            source.streamPath,
-            source.scriptRunRequestedEventOffset,
+            streamContext.streamPath,
+            streamContext.scriptRunRequestedEventOffset,
           ]
         : ["approval-source-script", baseUrl, projectId, "none", request.offset],
     queryFn: async () => {
-      if (source?.kind !== "script-execution") {
+      if (streamContext?.kind !== "script-execution") {
         throw new Error("This approval has no codemode script source.");
       }
       const project = await getProjectItx(baseUrl, projectId);
-      const event = await project.streams.get(source.streamPath).getEvent({
-        offset: source.scriptRunRequestedEventOffset,
+      const event = await project.streams.get(streamContext.streamPath).getEvent({
+        offset: streamContext.scriptRunRequestedEventOffset,
       });
       return scriptCodeForApproval(request.payload, event);
     },
-    enabled: details.data.script && source?.kind === "script-execution",
+    enabled: details.data.script && streamContext?.kind === "script-execution",
     staleTime: Infinity,
   });
   const body = approvalBodyForDisplay(request.payload);
@@ -365,22 +365,23 @@ function ApprovalCard({
             </View>
           ) : null}
 
-          {source?.kind === "script-execution" ? (
+          {streamContext?.kind === "script-execution" ? (
             <View style={styles.detailSection}>
               <View style={styles.sourceHeader}>
                 <View style={styles.sourceCopy}>
                   <Text style={styles.detailLabel}>Triggered by codemode</Text>
                   <Text style={styles.sourceMeta} selectable>
-                    {source.streamPath} · script event #{source.scriptRunRequestedEventOffset}
+                    {streamContext.streamPath} · script event #
+                    {streamContext.scriptRunRequestedEventOffset}
                   </Text>
                 </View>
-                {source.streamPath.startsWith("/agents/") ? (
+                {streamContext.streamPath.startsWith("/agents/") ? (
                   <Pressable
                     accessibilityRole="link"
                     onPress={() =>
                       router.push({
                         pathname: "/project/[projectId]/chat",
-                        params: { path: source.streamPath, projectId, slug: projectSlug },
+                        params: { path: streamContext.streamPath, projectId, slug: projectSlug },
                       })
                     }
                     style={styles.threadLink}
@@ -407,8 +408,8 @@ function ApprovalCard({
                 )
               ) : null}
             </View>
-          ) : source ? (
-            <Text style={styles.sourceMeta}>Triggered from {source.scopePath}</Text>
+          ) : streamContext ? (
+            <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
           ) : (
             <Text style={styles.sourceMeta}>
               Source metadata unavailable for this older request.

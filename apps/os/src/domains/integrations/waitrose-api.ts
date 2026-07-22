@@ -16,6 +16,7 @@
 
 import { itxEnv } from "../../env.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext } from "../projects/stream-context.ts";
 import { waitroseSessionSecretPath } from "./utils.ts";
 
 /** The real Waitrose origin. */
@@ -234,6 +235,6 @@ export function connectionWaitroseClient(input: {
   const stub = projectStub(itxEnv.PROJECT, input.projectId);
   return waitroseClient({
     authorization: `Bearer getSecret("${waitroseSessionSecretPath(input.connection)}", { field: "accessToken" })`,
-    fetcher: (request) => stub.fetch(request),
+    fetcher: (request) => stub.fetch(withStreamContext(request, { kind: "scope", scopePath: "/" })),
   });
 }

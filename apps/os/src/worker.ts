@@ -36,6 +36,7 @@ import { runHttpWideLog } from "./observability/operation.ts";
 import { wideLogger } from "./observability/wide-log.ts";
 import { createItxRpcSessionOptions } from "./itx/itx-observability.ts";
 import { schedulePosthogException, withPosthogExceptionCapture } from "./observability/posthog.ts";
+import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 
 // Every Durable Object class in the product, plus the loopback entrypoints
 // (`ctx.exports`) shared by the itx runtime.
@@ -197,7 +198,7 @@ async function apiFetch(
     // worker (`itx.worker.*`) stays on RPC dispatch; HTTP never does.
     const ref = defaultProjectWorkerRef();
     const runner = new DynamicWorkerRunner({
-      egressSource: { kind: "scope", scopePath: ref.path },
+      streamContext: { kind: "scope", scopePath: ref.path },
       exports: ctx.exports,
       projectId: route.resolved.projectId,
       scopePath: ref.path,
@@ -327,6 +328,7 @@ function stripInternalHeaders(request: Request) {
   headers.delete("x-itx-project-id");
   headers.delete("x-iterate-url-prefix");
   headers.delete(WORKER_FETCH_DISPATCH_HEADER);
+  headers.delete(STREAM_CONTEXT_HEADER);
   headers.delete("x-forwarded-host");
   headers.delete("x-forwarded-proto");
   return new Request(request, { headers });

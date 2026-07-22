@@ -94,7 +94,7 @@ it("gives bare fetch and scoped ITX the same host-minted invocation source", () 
   };
 
   new DynamicWorkerRunner({
-    egressSource: source,
+    streamContext: source,
     exports: {} as ExecutionContext["exports"],
     projectId: "prj_private",
     scopePath: "/agents/refund-agent",
@@ -102,7 +102,7 @@ it("gives bare fetch and scoped ITX the same host-minted invocation source", () 
   });
 
   expect(h.itxEntrypointProps).toHaveBeenCalledWith({
-    egressSource: source,
+    streamContext: source,
     path: "/agents/refund-agent",
     projectId: "prj_private",
     purpose: "userspace",
@@ -128,7 +128,7 @@ describe("dynamic worker spans", () => {
         ? fixture.ref.source.createApp.files
         : fixture.ref.source.createWorker.files;
     const runner = new DynamicWorkerRunner({
-      egressSource: { kind: "scope", scopePath: `/${privateMarker}` },
+      streamContext: { kind: "scope", scopePath: `/${privateMarker}` },
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: `/${privateMarker}`,
@@ -192,7 +192,7 @@ describe("createApp asset dispatch", () => {
       }),
     );
     const runner = new DynamicWorkerRunner({
-      egressSource: { kind: "scope", scopePath: statefulAppRef.path },
+      streamContext: { kind: "scope", scopePath: statefulAppRef.path },
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,
@@ -212,7 +212,7 @@ describe("createApp asset dispatch", () => {
   it("sends a stateful app WebSocket upgrade directly to its Durable Object", async () => {
     h.statefulFetch.mockResolvedValue(new Response("upgrade lane"));
     const runner = new DynamicWorkerRunner({
-      egressSource: { kind: "scope", scopePath: statefulAppRef.path },
+      streamContext: { kind: "scope", scopePath: statefulAppRef.path },
       exports: {} as ExecutionContext["exports"],
       projectId: "prj_private",
       scopePath: statefulAppRef.path,

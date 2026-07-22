@@ -5,7 +5,7 @@ import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { CapabilityHost, Project } from "../../itx-api.generated.ts";
 import type { ScriptExecutionCheck } from "../typecheck/virtual-project.ts";
-import type { EgressInvocationSource } from "../projects/egress-invocation-source.ts";
+import type { StreamContext } from "../projects/stream-context.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
@@ -858,7 +858,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       const runPromise = this.deps.scriptExecutionEntrypoint.run(input.code, {
         emittedJs: checked.emittedJs,
         expiresAt: executionExpiresAt,
-        source: {
+        streamContext: {
           kind: "script-execution",
           streamPath: this.#scopePath,
           scriptRunRequestedEventOffset: input.requestedAtOffset,
@@ -1028,7 +1028,7 @@ type ScriptExecutionEntrypoint = {
     options: {
       emittedJs?: string;
       expiresAt: number;
-      source: Extract<EgressInvocationSource, { kind: "script-execution" }>;
+      streamContext: Extract<StreamContext, { kind: "script-execution" }>;
     },
   ): Promise<unknown>;
 };

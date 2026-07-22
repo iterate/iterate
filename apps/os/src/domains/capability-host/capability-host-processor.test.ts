@@ -18,7 +18,7 @@ import {
   type HarnessSubstrate,
 } from "iterate/processors/testing";
 import type { Project } from "../../itx-api.generated.ts";
-import type { EgressInvocationSource } from "../projects/egress-invocation-source.ts";
+import type { StreamContext } from "../projects/stream-context.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import {
   CapabilityHostProcessor,
@@ -65,7 +65,7 @@ function makeScriptedWorker() {
     options: {
       emittedJs?: string;
       expiresAt: number;
-      source: Extract<EgressInvocationSource, { kind: "script-execution" }>;
+      streamContext: Extract<StreamContext, { kind: "script-execution" }>;
     };
     resolve: (settlement: unknown) => void;
     reject: (error: Error) => void;
@@ -80,7 +80,7 @@ function makeScriptedWorker() {
       options: {
         emittedJs?: string;
         expiresAt: number;
-        source: Extract<EgressInvocationSource, { kind: "script-execution" }>;
+        streamContext: Extract<StreamContext, { kind: "script-execution" }>;
       },
     ) {
       return new Promise<unknown>((resolve, reject) => {
@@ -137,7 +137,7 @@ describe("CapabilityHostProcessor script runs", () => {
     expect(h.worker.calls).toHaveLength(1);
     expect(h.worker.calls[0]!.code).toBe("async () => 1");
     expect(h.worker.calls[0]!.options).toMatchObject({
-      source: {
+      streamContext: {
         kind: "script-execution",
         streamPath: "/capability-host-test",
         scriptRunRequestedEventOffset: 2,

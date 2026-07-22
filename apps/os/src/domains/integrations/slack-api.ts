@@ -14,6 +14,7 @@ import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { itxEnv } from "../../env.ts";
 import { isPathMissMessage } from "../../itx/path-proxy.ts";
 import { projectStub } from "../projects/egress.ts";
+import { withStreamContext } from "../projects/stream-context.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import {
   mintProjectFileUrl,
@@ -215,7 +216,9 @@ async function downloadProjectSlackFile(input: {
   const stub = projectStub(itxEnv.PROJECT, input.projectId);
   const buildRequest = (credential: string) =>
     new Request(input.url, { headers: { authorization: `Bearer ${credential}` } });
-  const primaryResponse = await stub.fetch(buildRequest(placeholder));
+  const primaryResponse = await stub.fetch(
+    withStreamContext(buildRequest(placeholder), { kind: "scope", scopePath: "/" }),
+  );
   const response = isSlackFileCredentialFailure(primaryResponse)
     ? await retrySlackRequestWithDeploymentCredential({
         buildRequest,
@@ -261,7 +264,12 @@ async function fetchSlackWithCredentialRecovery(input: {
   stub: SlackEgressStub;
 }): Promise<Response> {
   const primaryPlaceholder = `getSecret("${slackBotTokenSecretPath(input.connection)}")`;
-  const primaryResponse = await input.stub.fetch(input.buildRequest(primaryPlaceholder));
+  const primaryResponse = await input.stub.fetch(
+    withStreamContext(input.buildRequest(primaryPlaceholder), {
+      kind: "scope",
+      scopePath: "/",
+    }),
+  );
   if (!(await isSlackCredentialFailure(primaryResponse))) return primaryResponse;
   return await retrySlackRequestWithDeploymentCredential({ ...input, primaryResponse });
 }

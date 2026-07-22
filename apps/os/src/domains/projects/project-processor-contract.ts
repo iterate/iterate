@@ -22,7 +22,7 @@ import { CapabilityHostProcessorContract } from "../capability-host/capability-h
 import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-contract.ts";
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
-import { EgressInvocationSource } from "./egress-invocation-source.ts";
+import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
@@ -300,9 +300,9 @@ export const ProjectProcessorContract = defineProcessorContract({
         ruleDescription: z.string().default("").meta({
           description: "The matched rule's human-readable explanation, snapshotted at gate time.",
         }),
-        source: EgressInvocationSource.optional().meta({
+        streamContext: StreamContext.optional().meta({
           description:
-            "Host-minted provenance for the runtime invocation that attempted this request.",
+            "Host-minted durable stream context for the invocation that attempted this request.",
         }),
         expiresAt: z.string().meta({
           description: "ISO horizon after which the hold auto-rejects with reason expired.",

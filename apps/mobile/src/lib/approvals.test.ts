@@ -97,7 +97,7 @@ test("a notification-targeted approval is focused at the front of the queue", ()
 test("the approval view resolves the exact script event and complete request body", () => {
   const request = requested(10, "refund", {
     body: { encoding: "utf8", content: '{"orderId":1234}' },
-    source: {
+    streamContext: {
       kind: "script-execution",
       executionId: "agent-output:8",
       scriptRunRequestedEventOffset: 9,

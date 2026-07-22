@@ -24,7 +24,7 @@ import { scopeFromItxEntrypointProps, type ItxEntrypointProps } from "./utils.ts
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
   async get() {
-    const { egressSource, path, projectId, purpose } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { path, projectId, purpose, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
     const auth =
       purpose === "stream-delivery" ? streamDeliveryAuthContext() : trustedInternalAuthContext();
     if (projectId === null) {
@@ -35,7 +35,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
       // project stream's does.
       return deploymentItxForInternal({ auth, ctx: this.ctx });
     }
-    return itxForScope({ auth, ctx: this.ctx, egressSource, path, projectId });
+    return itxForScope({ auth, ctx: this.ctx, path, projectId, streamContext });
   }
 
   /**
@@ -68,14 +68,14 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxEntrypointProps> {
         { status: 400 },
       );
     }
-    const { egressSource, projectId } = scopeFromItxEntrypointProps(this.ctx.props);
+    const { projectId, streamContext } = scopeFromItxEntrypointProps(this.ctx.props);
     if (projectId === null) {
       return new Response("the global itx scope has no workers to dispatch to", { status: 400 });
     }
     // A worker reached through this lane runs in the itx scope of its own
     // path, mirroring project.workers.get (DynamicWorkerRpcTarget#runner).
     const runner = new DynamicWorkerRunner({
-      egressSource,
+      streamContext,
       exports: this.ctx.exports,
       projectId,
       scopePath: taken.dispatch.ref.path,

@@ -306,7 +306,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       : itxForScope({
           auth,
           ctx: this.ctx,
-          egressSource: { kind: "scope", scopePath: "/" },
+          streamContext: { kind: "scope", scopePath: "/" },
           path: "/",
           projectId: this.name.projectId,
         });

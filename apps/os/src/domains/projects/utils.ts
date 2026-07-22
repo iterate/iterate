@@ -1,4 +1,4 @@
-import type { EgressInvocationSource } from "./egress-invocation-source.ts";
+import type { StreamContext } from "./stream-context.ts";
 
 /**
  * Narrow structural view of the loopback export we need from
@@ -9,7 +9,7 @@ import type { EgressInvocationSource } from "./egress-invocation-source.ts";
  */
 type ProjectEgressLoopbackExports = Record<
   "ProjectEgressEntrypoint",
-  (options: { props: { projectId: string; source: EgressInvocationSource } }) => Fetcher
+  (options: { props: { projectId: string; streamContext: StreamContext } }) => Fetcher
 >;
 
 /**
@@ -21,9 +21,9 @@ type ProjectEgressLoopbackExports = Record<
 export function projectEgressFetcher(
   exports: ExecutionContext["exports"],
   projectId: string,
-  source: EgressInvocationSource,
+  streamContext: StreamContext,
 ): Fetcher {
   return (exports as unknown as ProjectEgressLoopbackExports).ProjectEgressEntrypoint({
-    props: { projectId, source },
+    props: { projectId, streamContext },
   });
 }

@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import type { EgressInvocationSource } from "./egress-invocation-source.ts";
+import { withStreamContext, type StreamContext } from "./stream-context.ts";
 
 /** Live replacement for project egress. It sees getSecret(...) placeholders, never material. */
 export type ProjectEgressInterceptor = (req: Request) => Promise<Response>;
@@ -38,12 +38,11 @@ export interface ProjectEgressIntercept extends Disposable {
  */
 export class ProjectEgressEntrypoint extends WorkerEntrypoint<
   Env,
-  { projectId: string; source: EgressInvocationSource }
+  { projectId: string; streamContext: StreamContext }
 > {
   fetch(request: Request): Promise<Response> {
-    return projectStub(this.env.PROJECT, this.ctx.props.projectId).egress(
-      request,
-      this.ctx.props.source,
+    return projectStub(this.env.PROJECT, this.ctx.props.projectId).fetch(
+      withStreamContext(request, this.ctx.props.streamContext),
     );
   }
 }
