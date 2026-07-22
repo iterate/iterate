@@ -1,7 +1,8 @@
 # Runs the complete preview critical path N times consecutively on Depot:
 # full-fleet deploy, then every e2e lane. It fails fast on the first functional
-# failure or run at/above five minutes. This is cloudflare-previews.yml repeated
-# on the same runner shape, not a warm test-only approximation.
+# failure, absorbed test retry, or run at/above five minutes. This is
+# cloudflare-previews.yml repeated on the same runner shape, not a warm
+# test-only approximation.
 #
 # On-demand only — dispatch the exact committed branch and name the PR:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
@@ -20,7 +21,7 @@ on:
         description: PR whose preview slot to marathon
         required: true
       runs:
-        description: consecutive green runs required (empty = the script's default)
+        description: consecutive zero-retry green runs required (empty = the script's default)
         required: false
       max-run-seconds:
         description: per-run proof ceiling (empty = PREVIEW_RUN_PROOF_BUDGET_SECS)
@@ -70,8 +71,8 @@ jobs:
           RUNS: ${{ inputs.runs }}
           MAX_RUN_DURATION_SECS: ${{ inputs.max-run-seconds }}
           LOG_DIR: /tmp/marathon
-        # The loop exits non-zero on the first deploy/test failure, skip,
-        # partial fleet, watchdog, or duration-budget breach.
+        # The loop exits non-zero on the first deploy/test failure, absorbed
+        # test retry, skip, partial fleet, watchdog, or duration-budget breach.
         run: ./scripts/preview/flake-hunt-loop.sh
       - name: Normalize and send marathon test telemetry
         if: always()

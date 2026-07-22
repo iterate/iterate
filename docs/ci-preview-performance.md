@@ -123,9 +123,10 @@ audit matching Cloudflare errors before calling an operational change proven.
 For a release-level stability proof, dispatch `preview-e2e-marathon.yml`. Each
 counted run repeats the complete critical path (full-fleet deploy, then all test
 lanes), records duration and retry count in `summary.tsv`, and fails fast on a
-functional failure or a duration at or above five minutes. The acceptance bar
-is 25 consecutive accepted runs; environment ownership refusals are recorded
-but uncounted because the guard fires before any tests run.
+functional failure, an absorbed test retry, or a duration at or above five
+minutes. The acceptance bar is 25 consecutive zero-retry accepted runs;
+environment ownership refusals are recorded but uncounted because the guard
+fires before any tests run.
 
 ## Cost
 

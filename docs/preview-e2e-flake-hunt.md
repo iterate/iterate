@@ -7,8 +7,9 @@
 
 Current goal: run the complete preview pipeline against a real preview
 environment 25 times in a row without a single failure, with every full-fleet
-deploy plus e2e run completing in under five minutes. Fix and document every
-failure or tail encountered along the way.
+deploy plus e2e run completing in under five minutes and without an absorbed
+test retry. Fix and document every failure, retry, or tail encountered along
+the way.
 
 Round 1 (PR #1644) found and fixed nine root causes and merged them to main.
 Round 2 (PR #1653, merged) added flakes 16–17 and the `preview.ts` lease/retry
@@ -19,10 +20,16 @@ base revision, run IDs, and findings below.
 
 Method: loop a full-fleet `pnpm preview deploy --all-apps` followed by
 `pnpm preview test`, failing fast on the first functional failure or run at or
-above five minutes. Every failure gets a root-cause diagnosis and the smallest
-reliable fix, recorded below; a failure resets the consecutive-green counter.
+above five minutes. The current strict campaign also rejects any absorbed test
+retry. Every failure, retry, or tail gets a root-cause diagnosis and the
+smallest reliable fix, recorded below; any of them resets the consecutive-clean
+counter.
 `scripts/preview/flake-hunt-loop.sh` drives the loop and writes a machine-readable
 per-run duration and retry ledger.
+
+This zero-retry acceptance rule applies to new proof runs from 2026-07-22
+onward. Historical ledgers below retain the semantics and retry counts they
+recorded at the time; they are evidence, not retroactively relabelled runs.
 
 Once a failing test is isolated, use `pnpm preview test-target` to run its
 Vitest file or Playwright spec repeatedly against the PR's already-deployed

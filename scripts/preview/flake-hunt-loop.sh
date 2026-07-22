@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Prove the real preview critical path repeatedly: deploy the full fleet, run
-# every e2e lane, and fail on the first test failure or five-minute tail.
+# every e2e lane, and fail on the first test failure, absorbed retry, or
+# five-minute tail.
 set -uo pipefail
 
 PR_NUMBER="${PR_NUMBER:?PR_NUMBER is required}"
@@ -165,6 +166,16 @@ while [ "$run" -le "$RUNS" ]; do
     exit 1
   fi
 
+  # A retry remains green in ordinary PR CI so an unrelated intermittent test
+  # does not block delivery. This loop is stricter: its purpose is to prove a
+  # genuinely clean streak, so a passed retry is evidence to diagnose rather
+  # than an accepted run.
+  if [ "$retries" -gt 0 ]; then
+    record_result "$run" "$attempt" RETRIED "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
+    echo "run $run: RETRIED (${duration}s, retries=$retries); streak rejected — $test_log"
+    exit 6
+  fi
+
   if [ "$duration" -ge "$MAX_RUN_DURATION_SECS" ]; then
     record_result "$run" "$attempt" SLOW "$duration" "$retries" "$started_at" "$finished_at" "$deploy_log" "$test_log"
     echo "run $run: SLOW (${duration}s, budget <${MAX_RUN_DURATION_SECS}s, retries=$retries)"
@@ -177,4 +188,4 @@ while [ "$run" -le "$RUNS" ]; do
   attempt=1
 done
 
-echo "all $RUNS full preview runs green and each completed in <${MAX_RUN_DURATION_SECS}s"
+echo "all $RUNS full preview runs passed without retries and each completed in <${MAX_RUN_DURATION_SECS}s"

@@ -173,6 +173,12 @@ describe("watchdogs the shell can't import stay in sync", () => {
     expect(source).toContain(
       `MAX_RUN_DURATION_SECS="\${MAX_RUN_DURATION_SECS:-${PREVIEW_RUN_PROOF_BUDGET_SECS}}"`,
     );
+    const retryGate = 'if [ "$retries" -gt 0 ]; then';
+    const passRecord = 'record_result "$run" "$attempt" PASS';
+    expect(source).toContain(retryGate);
+    expect(source).toContain('record_result "$run" "$attempt" RETRIED');
+    expect(source).toContain("streak rejected");
+    expect(source.indexOf(retryGate)).toBeLessThan(source.indexOf(passRecord));
 
     const marathonWorkflow = readFileSync(
       resolve(repoRoot, ".depot/workflows/preview-e2e-marathon.yml"),

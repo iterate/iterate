@@ -57,9 +57,10 @@ away from.
 4. **One retry, watchdogs above, telemetry always.** Retries live in
    exactly one layer (the individual test, CI only); everything above is
    a fail-never-retry watchdog sized to ~2× healthy p99; every absorbed
-   retry surfaces in the PR table but does not make an otherwise-green run
-   fail. A recurring or pathologically slow unrelated flake is explicitly
-   quarantined and tracked instead of repeatedly taxing the critical path.
+   retry surfaces in the PR table but does not make an otherwise-green
+   ordinary PR run fail. A recurring or pathologically slow unrelated flake
+   is explicitly quarantined and tracked instead of repeatedly taxing the
+   critical path.
    Budgets are evidence, not vibes — see [Retries and
    timeouts](#retries-and-timeouts) and the marathon audit.
 
@@ -446,8 +447,10 @@ watchdog does not budget for the lane doing that twice.
 ### Retry telemetry
 
 An attempt that fails and then passes on its one permitted retry does **not**
-make the run fail or block an unrelated PR. It remains useful reliability
-telemetry and must stay visible:
+make the ordinary PR run fail or block an unrelated PR. It remains useful
+reliability telemetry and must stay visible. A stability marathon has a
+different acceptance contract: any absorbed retry stops the streak so it can
+be diagnosed, even though the same test outcome remains green in normal CI.
 
 - **Run log**: Vitest and TUI lanes print `[retry-telemetry] N test(s) needed
 retries: ...` (the Vitest `RetryTelemetryReporter` lives in
@@ -464,8 +467,8 @@ retries: ...` (the Vitest `RetryTelemetryReporter` lives in
 - **Volume**: probabilistic regressions need run volume to detect — that is
   what the on-demand marathon is for
   (`.depot/workflows/preview-e2e-marathon.yml`, N consecutive runs of the
-  full preview lane on Depot). Watch the retry counts across a marathon, not
-  just the pass/fail streak.
+  full preview lane on Depot). The marathon records the retry and exits
+  non-zero immediately; only zero-retry runs advance its accepted streak.
 
 When telemetry trends up without failures, investigate it. If the test is
 repeatedly flaky or adds disproportionate tail latency, use the quarantine
