@@ -191,7 +191,9 @@ export function createLazyRepoReader(input: {
       const head = store.head(branch);
       if (head === null) throw new Error("lazy commit requires a synced head");
       const manifest = new Map(store.manifest(branch).map((file) => [file.path, file]));
-      const newBlobs: { oid: string; payload: Uint8Array }[] = [];
+      // Keyed by oid: identical contents (or a re-write of an existing blob)
+      // must appear in the pack exactly once.
+      const newBlobs = new Map<string, Uint8Array>();
       for (const change of input.changes) {
         const path = change.path.replace(/^\/+/, "");
         if ("delete" in change) {
@@ -203,7 +205,7 @@ export function createLazyRepoReader(input: {
             ? textEncoder.encode(change.content)
             : Uint8Array.from(atob(change.contentBase64), (c) => c.charCodeAt(0));
         const oid = await hashObject("blob", payload);
-        newBlobs.push({ oid, payload });
+        newBlobs.set(oid, payload);
         manifest.set(path, { blobOid: oid, mode: manifest.get(path)?.mode ?? "100644", path });
       }
 
@@ -229,7 +231,7 @@ export function createLazyRepoReader(input: {
         if (list === undefined) filesByDir.set(dir, (list = []));
         list.push(file);
       }
-      const newTrees: { oid: string; payload: Uint8Array }[] = [];
+      const newTrees = new Map<string, Uint8Array>(); // oid-keyed like newBlobs
       const buildDir = async (dir: string): Promise<string | null> => {
         const entries: TreeEntry[] = [];
         for (const child of childDirs.get(dir) ?? []) {
@@ -252,7 +254,7 @@ export function createLazyRepoReader(input: {
         if (entries.length === 0) return null; // git prunes empty directories
         const payload = encodeTree(entries);
         const oid = await hashObject("tree", payload);
-        newTrees.push({ oid, payload });
+        newTrees.set(oid, payload);
         return oid;
       };
       const newRootOid = await buildDir("");
@@ -269,12 +271,12 @@ export function createLazyRepoReader(input: {
       });
       const commitOid = await hashObject("commit", commitPayload);
       const packObjects: { payload: Uint8Array; type: "blob" | "commit" | "tree" }[] = [
-        ...newBlobs
-          .filter((blob) => !store.hasObject(blob.oid))
-          .map((blob) => ({ payload: blob.payload, type: "blob" as const })),
-        ...newTrees
-          .filter((tree) => !store.hasObject(tree.oid))
-          .map((tree) => ({ payload: tree.payload, type: "tree" as const })),
+        ...[...newBlobs.entries()]
+          .filter(([oid]) => !store.hasObject(oid))
+          .map(([, payload]) => ({ payload, type: "blob" as const })),
+        ...[...newTrees.entries()]
+          .filter(([oid]) => !store.hasObject(oid))
+          .map(([, payload]) => ({ payload, type: "tree" as const })),
         { payload: commitPayload, type: "commit" as const },
       ];
       const pushed = await wire.push({
@@ -287,14 +289,14 @@ export function createLazyRepoReader(input: {
 
       // Prime the store: read-your-write without a single fetch.
       store.putObjects([
-        ...newBlobs.map((blob) => ({
-          oid: blob.oid,
-          payload: blob.payload,
+        ...[...newBlobs.entries()].map(([oid, payload]) => ({
+          oid,
+          payload,
           type: "blob" as const,
         })),
-        ...newTrees.map((tree) => ({
-          oid: tree.oid,
-          payload: tree.payload,
+        ...[...newTrees.entries()].map(([oid, payload]) => ({
+          oid,
+          payload,
           type: "tree" as const,
         })),
         { oid: commitOid, payload: commitPayload, type: "commit" as const },

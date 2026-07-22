@@ -333,32 +333,31 @@ export async function parsePack(pack: Uint8Array): Promise<RawGitObject[]> {
       byOffset.set(entryOffset, { payload: inflated.out, type: kind });
     }
   }
-  // Ref-deltas may point at any in-pack object; resolve after hashing bases.
-  const oidByOffset = new Map<number, string>();
+  // Ref-deltas may point at any in-pack object (including other ref-deltas);
+  // resolve in passes against an oid index — linear per pass, and delta
+  // chains are shallow in practice.
   const objects: RawGitObject[] = [];
-  for (const [offset, object] of byOffset) {
-    const oid = await hashObject(object.type, object.payload);
-    oidByOffset.set(offset, oid);
-    objects.push({ oid, payload: object.payload, type: object.type });
+  const byOid = new Map<string, RawGitObject>();
+  for (const object of byOffset.values()) {
+    const resolved = { oid: await hashObject(object.type, object.payload), ...object };
+    objects.push(resolved);
+    byOid.set(resolved.oid, resolved);
   }
   let remaining = pendingRef;
   while (remaining.length > 0) {
     const next: typeof remaining = [];
-    let progressed = false;
     for (const entry of remaining) {
-      const base = objects.find((object) => object.oid === entry.baseOid);
+      const base = byOid.get(entry.baseOid);
       if (base === undefined) {
         next.push(entry);
         continue;
       }
       const payload = applyDelta(base.payload, entry.program);
-      const oid = await hashObject(base.type, payload);
-      oidByOffset.set(entry.offset, oid);
-      byOffset.set(entry.offset, { payload, type: base.type });
-      objects.push({ oid, payload, type: base.type });
-      progressed = true;
+      const resolved = { oid: await hashObject(base.type, payload), payload, type: base.type };
+      objects.push(resolved);
+      byOid.set(resolved.oid, resolved);
     }
-    if (!progressed) {
+    if (next.length === remaining.length) {
       throw new Error(
         `thin pack: ${next.length} ref-delta(s) reference bases outside the pack (first: ${next[0]!.baseOid})`,
       );

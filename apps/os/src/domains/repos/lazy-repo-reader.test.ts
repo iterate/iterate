@@ -53,7 +53,11 @@ const text = new TextEncoder();
 function fakeRemote() {
   const objects = new Map<string, RawGitObject>();
   const refs = new Map<string, string>();
-  const log = { fetches: [] as { haves: string[]; wants: string[] }[], pushes: 0 };
+  const log = {
+    fetches: [] as { haves: string[]; wants: string[] }[],
+    lastPushPackOids: [] as string[],
+    pushes: 0,
+  };
 
   const closure = (oid: string, out: Set<string>, cutParents: boolean) => {
     if (out.has(oid)) return;
@@ -96,7 +100,9 @@ function fakeRemote() {
       log.pushes += 1;
       const current = refs.get(ref) ?? "0".repeat(40);
       if (current !== oldOid) return { ok: false, refErrors: [`${ref}: stale ref`] };
-      for (const object of await parsePack(pack)) objects.set(object.oid, object);
+      const unpacked = await parsePack(pack);
+      log.lastPushPackOids = unpacked.map((object) => object.oid);
+      for (const object of unpacked) objects.set(object.oid, object);
       if (newOid === "0".repeat(40)) refs.delete(ref);
       else refs.set(ref, newOid);
       return { ok: true, refErrors: [] };
@@ -281,6 +287,30 @@ describe("lazy commits", () => {
       "# fresh\n",
     ]);
     expect(fresh.reader.listPaths()).toEqual(reader.listPaths());
+  });
+
+  test("two changes with identical content pack ONE blob object", async () => {
+    const { remote } = await seededRemote();
+    const { reader } = subject(remote);
+    await reader.syncToHead();
+    const committed = await reader.commitFiles({
+      author: { date: new Date(1767323045000), email: "probe@iterate.com", name: "probe" },
+      changes: [
+        { content: "# twins\n", path: "tasks/alpha.md" },
+        { content: "# twins\n", path: "tasks/beta.md" },
+      ],
+      message: "identical twins",
+    });
+    expect(committed.noChanges).toBe(false);
+    await expect(reader.readPaths(["tasks/alpha.md", "tasks/beta.md"])).resolves.toEqual([
+      "# twins\n",
+      "# twins\n",
+    ]);
+    // The push's pack must not carry the shared blob twice — parsePack in the
+    // fake remote yields one object per entry, so a duplicate would surface
+    // as two identical oids.
+    const pushedOids = remote.log.lastPushPackOids;
+    expect(new Set(pushedOids).size).toBe(pushedOids.length);
   });
 
   test("preserves executable modes and reports no-op commits", async () => {
