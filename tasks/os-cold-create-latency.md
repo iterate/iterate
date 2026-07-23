@@ -24,6 +24,21 @@ three admin-lane creates):
 | wait-project-birth (both root processors through the birth frame) | 1.5–2.4s | 14s |
 | whole create, ready lane | ~6–8s | ~20s |
 
+Full-suite preview evidence on 2026-07-23 exposed the bounded tail that the
+warm/cold samples missed. One config-repo processor was still completing its
+terminal stream appends about 65 seconds after `Project.create` began. The
+then-current 15-second public deadline abandoned that project and Vitest's
+whole-test retry created a second one; the abandoned birth later hit its
+60-second sibling barrier. Trace
+`4d603e1afeb62f5f959255504b895244` records the exact sequence, including
+`waitUntilProcessed timed out after 59517ms waiting for offset 7`.
+
+The correctness budgets now reflect the actual nesting without changing
+healthy latency: 75 seconds for sibling birth, 90 seconds for the Project
+processor acknowledgement, and 100 seconds entry-to-ready. This is bounded
+headroom for the original project, not a latency target. Reducing the
+config-repo/stream tail below those ceilings remains the work of this task.
+
 Leads, roughly by leverage:
 
 - **Secret create pays a full per-secret processor birth** (fresh DO + fresh

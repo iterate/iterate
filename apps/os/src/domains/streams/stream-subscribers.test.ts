@@ -10,6 +10,7 @@ import type {
   StreamEventBatch,
   StreamPushEventBatch,
   StreamSubscriberWakeRequest,
+  StreamWakeEventBatch,
   StreamWebhookDelivery,
 } from "iterate/processors";
 import {
@@ -106,6 +107,14 @@ class FakeCursorStore implements SubscriptionCursorStore {
     if (row === undefined) return;
     row.attempt = args.attempt;
     row.nextAttemptAt = args.nextAttemptAt;
+    row.lastError = args.error.slice(0, 2_000);
+  }
+
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined) return;
+    row.attempt = args.attempt;
+    row.nextAttemptAt = null;
     row.lastError = args.error.slice(0, 2_000);
   }
 
@@ -368,9 +377,12 @@ function makeSink() {
   const sink = Object.assign(
     (batch: StreamEventBatch) => {
       batches.push(batch);
+      if ("settleDelivery" in batch) {
+        (batch as StreamWakeEventBatch).settleDelivery({ outcome: "ok" });
+      }
     },
     { [Symbol.dispose]: () => {} },
-  ) as RetainedProcessEventBatch;
+  ) as RetainedProcessEventBatch<StreamEventBatch>;
   return { sink, batches };
 }
 
@@ -530,6 +542,15 @@ describe("StreamSubscribers", () => {
       error: "still down",
     });
     expect(h.configured["k"].parkedAtOffset).toBe(0);
+    // The row mirrors the park fact — retry schedule cleared (a parked row
+    // must not drive the alarm) but the failure evidence kept, so runtime
+    // state can say WHY it parked without digging the fact out of the log.
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: MAX_DELIVERY_ATTEMPTS,
+      nextAttemptAt: null,
+      lastError: "still down",
+    });
 
     // Parked means parked: further wakes make no dial calls.
     h.subscribers.wake();
@@ -679,8 +700,14 @@ describe("StreamSubscribers", () => {
     expect(parkedFacts).toHaveLength(1);
     expect(parkedFacts[0].idempotencyKey).toBeUndefined();
     expect(parkedFacts[0].payload).toMatchObject({ subscriptionKey: "k", atOffset: 2 });
-    // NOT all events were skipped: offsets 3 and 4 are still owed delivery.
-    expect(h.row("k")?.ackedOffset).toBe(2);
+    // NOT all events were skipped: offsets 3 and 4 are still owed delivery,
+    // and the row keeps the parking error for runtime state to display.
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 2,
+      attempt: SKIP_CONFIRM_ATTEMPTS,
+      nextAttemptAt: null,
+      lastError: "receiver is down",
+    });
     expect(h.configured["k"].parkedAtOffset).toBe(2);
   });
 
@@ -952,6 +979,42 @@ describe("StreamSubscribers", () => {
     });
   });
 
+  it("a late wake settlement from a replaced connection cannot close its successor", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    const batches: StreamWakeEventBatch[] = [];
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: Object.assign(
+        (batch: StreamWakeEventBatch) => {
+          batches.push(batch);
+        },
+        { [Symbol.dispose]: () => {} },
+      ),
+    });
+
+    h.subscribers.wake();
+    await h.settle();
+    expect(batches).toHaveLength(1);
+
+    h.configure(wakePayload(), 2);
+    h.subscribers.onSubscriptionConfigured(wakePayload(), 2);
+    await h.settle();
+    expect(batches).toHaveLength(2);
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+
+    batches[0]!.settleDelivery({
+      outcome: "error",
+      error: { name: "Error", message: "obsolete connection failed late" },
+    });
+    await h.settle();
+
+    expect(h.subscribers.hasConnection("k")).toBe(true);
+    expect(h.row("k")?.attempt).toBe(0);
+    batches[1]!.settleDelivery({ outcome: "ok" });
+  });
+
   it("m. removal deletes the cursor row and closes the connection", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);
@@ -1168,16 +1231,29 @@ describe("StreamSubscribers", () => {
     h.append(evt(1, "a"));
 
     let checkpoint = 0;
-    h.dialImpl.poke = async () => ({ checkpointOffset: checkpoint, sink: makeSink().sink });
+    let latestBatch: StreamWakeEventBatch | undefined;
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: checkpoint,
+      sink: Object.assign(
+        (batch: StreamWakeEventBatch) => {
+          latestBatch = batch;
+        },
+        { [Symbol.dispose]: () => {} },
+      ),
+    });
     h.subscribers.wake();
     await h.settle();
     expect(h.pokes).toHaveLength(1);
+    expect(latestBatch).toBeDefined();
 
-    // A post-poke sink delivery failure must run the failure machine: nack'd
-    // row, closed connection, and NO immediate re-poke — the bug this pins is
-    // the close→wake→re-poke hot loop that never backed off and never parked
-    // (each poke's ack used to reset the attempt counter too).
-    h.subscribers.onDurableDeliveryError("k", new Error("ingest rejects deterministically"));
+    // A processor's independent error settlement must run the failure
+    // machine: nack'd row, closed connection, and NO immediate re-poke — the
+    // bug this pins is the close→wake→re-poke hot loop that never backed off
+    // and never parked (each poke's ack used to reset the attempt counter).
+    latestBatch!.settleDelivery({
+      outcome: "error",
+      error: { name: "Error", message: "ingest rejects deterministically" },
+    });
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(false);
     expect(h.row("k")?.attempt).toBe(1);
@@ -1194,7 +1270,10 @@ describe("StreamSubscribers", () => {
 
     // Sustained deterministic failure parks at the shared threshold.
     for (let round = 0; round < 400 && h.factsOfType(PARKED).length === 0; round += 1) {
-      h.subscribers.onDurableDeliveryError("k", new Error("still failing"));
+      latestBatch!.settleDelivery({
+        outcome: "error",
+        error: { name: "Error", message: "still failing" },
+      });
       await h.settle();
       const next = h.store.minNextAttemptAt();
       if (next === null) break;
@@ -1212,6 +1291,7 @@ describe("StreamSubscribers", () => {
     await h.settle();
     expect(h.subscribers.hasConnection("k")).toBe(true);
     expect(h.row("k")?.attempt).toBe(0);
+    latestBatch!.settleDelivery({ outcome: "ok" });
   });
 
   it("classifies a Durable Object lifecycle reset as availability, not a delivery error", async () => {
@@ -1237,6 +1317,56 @@ describe("StreamSubscribers", () => {
       expect(h.subscribers.hasConnection("k")).toBe(false);
       expect(h.row("k")?.attempt).toBe(1);
       expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
+  });
+
+  it("backs off an RPC-broken wake sink before reconciling instead of hot re-poking", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+
+    let reportBroken: ((error: unknown) => void) | undefined;
+    const dispose = vi.fn();
+    const sink = Object.assign((_batch: StreamWakeEventBatch) => undefined, {
+      [Symbol.dispose]: dispose,
+      onRpcBroken: (handler: (error: unknown) => void) => {
+        reportBroken = handler;
+      },
+    }) as RetainedProcessEventBatch<StreamWakeEventBatch>;
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pokes).toHaveLength(1);
+    expect(reportBroken).toBeDefined();
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const broken = new Error("remote capability disconnected");
+      reportBroken!(broken);
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({
+          subscriptionKey: "k",
+          reason: "rpc-broken",
+          error: broken,
+        }),
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")?.attempt).toBe(1);
+      expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+      expect(h.pokes).toHaveLength(1);
+      expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+        subscriptionKey: "k",
+        reason: "rpc-broken",
+      });
     } finally {
       errorLog.mockRestore();
       warningLog.mockRestore();
@@ -1779,7 +1909,7 @@ describe("StreamSubscribers runtime metrics", () => {
     expect(h.egress).toEqual([{ count: 3, bytes: subscription.bytesSent }]);
   });
 
-  it("wake-lane settle latency: the pulled batch result settling records commit→consumed", async () => {
+  it("wake-lane settle latency: the independent settlement records commit→consumed", async () => {
     const h = makeHarness();
     h.append(evt(1, "a"), evt(2, "b")); // createdAt = epoch 1..2ms
     h.advanceTo(500);
@@ -1788,15 +1918,11 @@ describe("StreamSubscribers runtime metrics", () => {
     let settleBatch: (() => void) | undefined;
     h.dialImpl.poke = async () => ({
       checkpointOffset: 0,
-      // Retained exactly like the real dial does (durable lane pulls results),
-      // so the spine's onSettled option is exercised for real.
-      sink: retainProcessEventBatch(
-        () =>
-          new Promise<void>((resolve) => {
-            settleBatch = resolve;
-          }),
-        { onDeliveryError: () => {} },
-      ),
+      // Retained exactly like the real dial does: the sink result stays
+      // unpulled and the processor reports completion out of band.
+      sink: retainProcessEventBatch((batch: StreamWakeEventBatch) => {
+        settleBatch = () => batch.settleDelivery({ outcome: "ok" });
+      }),
     });
 
     h.subscribers.wake();

@@ -112,7 +112,7 @@ webhook is the same cursor machinery pointed at plain HTTP:
 | stream-side row         | none                                                                        | observational watermark (poke coalescing, lag)                      | authoritative cursor                                                   | authoritative cursor                             |
 | sink arrives as         | `subscribe()` parameter                                                     | returned from the expression-named poke                             | named by a persisted itx expression                                    | the configured URL                               |
 | warm transport          | retained one-way callback                                                   | retained one-way sink                                               | fresh awaited call per batch                                           | one `fetch` POST per event                       |
-| return frames per batch | **zero** (result disposed unpulled)                                         | one, non-gating (pulled as the liveness signal)                     | one, awaited (**the ack** that advances the cursor)                    | the 2xx response (**the ack**), per event        |
+| result frames per batch | **zero** (result disposed unpulled)                                         | **zero**; one explicit, non-gating settlement message               | one, awaited (**the ack** that advances the cursor)                    | the 2xx response (**the ack**), per event        |
 | retry / failure         | client's problem                                                            | spine: backoff rows + alarm → parked fact                           | same spine, same machine (+ `onPoison: park \| skip`)                  | same spine, same machine, per-event granularity  |
 | replay                  | durable rows after `replayAfterOffset`; ephemeral rows only live after open | subscriber's checkpoint decides                                     | `deliver: "all" \| "new" \| {afterOffset}` + `cursor-set`              | same as push                                     |
 | filter                  | `selector` / `eventTypes` on subscribe                                      | processor `contract.consumes` (announced on the poke)               | `selector: {eventTypes?, condition?}` in config                        | same selector shape                              |
@@ -181,13 +181,17 @@ types delivers nothing, silently — there is nothing durable to deliver.
 
 The pump never awaits a delivery on the ephemeral and wake lanes — that is
 what keeps warm append→processed latency in single-digit milliseconds (voice
-rides this). Batch results on the ephemeral lane are disposed **unpulled**, so
-those subscriptions generate zero subscriber-originated return frames (a
-`ReadableStream` could never do this: its per-chunk acks ARE its flow
-control — see the `FlowController` in
-[capnweb](https://github.com/cloudflare/capnweb)); durable batch results are
-pulled — never awaited — purely as the prompt dead-connection signal
-([stub lifecycle rules](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)).
+rides this). Both batch-call results are disposed **unpulled**, so neither
+lane emits a result frame (a `ReadableStream` could never do this: its
+per-chunk acks ARE its flow control — see the `FlowController` in
+[capnweb](https://github.com/cloudflare/capnweb)). Wake batches instead carry
+a one-shot settlement capability. The subscriber sends one explicit,
+non-gating success/failure message after its durable processor attempt and
+disposes that call's result unpulled too. Keeping the settlement out of the
+batch call's result is load-bearing: processors routinely append back to the
+delivering stream, and a pulled result would make that nested append part of a
+cyclic actor-drain tree. `onRpcBroken` remains the prompt best-effort transport
+hint ([stub lifecycle rules](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/)).
 
 ## The spine: durable delivery bookkeeping
 
@@ -379,7 +383,7 @@ by a compatibility vector over all members) are mirror-level.
 | `core-processor-contract.ts` | Core contract: reduced-state schema (v11) + the `events.iterate.com/stream/*` event catalog                                         |
 | `stream-storage.ts`          | Chunked SQLite event log (2 MB cell limit → JS chunking) + the spine's `subscriptions` cursor rows                                  |
 | `stream-subscribers.ts`      | Every subscriber, one module: sink table, connection pump, the durable spine (ports-only; no RPC, no clock)                         |
-| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, pulled-vs-disposed results)                                            |
+| `subscriber-sinks.ts`        | The RPC quarantine: stub retention (dup/dispose/onRpcBroken, one-way result ownership)                                              |
 | `subscriber-math.ts`         | Pure spine math: backoff, initial cursors, bisect, delivery ids (table-tested)                                                      |
 | `event-selector.ts`          | `EventSelector` — THE filter shape on every lane; shared JSONata compile cache                                                      |
 | `processor-contracts.ts`     | `defineProcessorContract` + event-type → payload-schema resolution machinery                                                        |

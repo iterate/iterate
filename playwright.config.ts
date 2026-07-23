@@ -46,11 +46,12 @@ export default defineConfig({
   // (docs/testing.md#retries-and-timeouts). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
-  // Eight workers start the isolated catalogue promptly while keeping total
-  // preview pressure bounded as Vitest and the other OS lanes overlap it.
-  // Higher combined lane pressure did not shorten the measured preview and
-  // caused transient canceled ITX/Durable Object RPCs under full-fleet load.
-  workers: process.env.CI ? 8 : 1,
+  // Sixteen workers put the isolated catalogue at its measured longest-case
+  // floor: the latest zero-retry run carried ~1,554s of aggregate work while
+  // its longest case took ~117s, so 1,554 / 16 no longer sets the critical
+  // path. More workers should not shorten the suite and would only add local
+  // browser pressure to the 16-core preview runner.
+  workers: process.env.CI ? 16 : 1,
   outputDir: "test-results/playwright-output",
   reporter: [
     ["list"],

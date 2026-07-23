@@ -52,6 +52,425 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 14 (2026-07-23, post-#2275)
+
+PR #2275 made preview worker builds fail closed when the dependency installer
+returns warnings instead of an executable bundle, and made deployment wait in
+parallel for the exact SHA-pinned `pkg.pr.new` SDK package. Its final exact-head
+preview check ran every runnable suite in 240 seconds, and PostHog's finalizer
+matched all 6/6 expected sources. One OS Vitest case nevertheless passed only
+after retry, so the run is rejected and the strict counter remains 0/25.
+
+The retry was `Project worker processEventBatch receives events from every
+project stream and can cross-post`. Its first project failed the public
+15-second create deadline after 14.308 seconds of the remaining ready budget;
+the whole-test retry created a different project and passed. This was not a
+near-miss followed by harmless background completion. Exact-version trace
+`4d603e1afeb62f5f959255504b895244` shows the abandoned first project's config
+repository processor still waiting at offset 7 and eventually reporting
+`waitUntilProcessed timed out after 59517ms`. Its terminal stream appends
+completed around 65 seconds after `Project.create` began.
+
+PR #2273 had introduced an inconsistent timeout hierarchy: a 15-second public
+project-create deadline wrapped a 60-second sibling-birth barrier inside a
+75-second processor acknowledgement, and explicitly expected a whole-test
+retry to redial. The corrective change removes that retry-dependent contract.
+Sibling birth now owns one shared 75-second budget, the Project processor owns
+90 seconds, and the public entry-to-ready operation owns 100 seconds. Healthy
+creates still return immediately; the original caller now observes either the
+original fully ready project or one bounded failure. The existing
+`os-cold-create-latency` task retains the separate obligation to eliminate this
+tail rather than treating the upper bounds as latency targets.
+
+The corrective PR's first exact-head preview check was technically green but
+is also rejected. It took 314 seconds and
+`catalogue example "provide-live-flattened" runs identically across runtimes`
+passed only on Vitest's second attempt. The first attempt's spawned CLI exited
+with `WebSocket connection failed`; the exact-version Cloudflare trace set has
+no corresponding accepted `/api` request or server error. That localizes the
+failure before the server accepted the WebSocket upgrade, not in the named
+catalogue example.
+
+PostHog bounds both recurrence and scope. The named case ran 191 times in the
+available window and retried once, but the matrix as a whole recorded 38
+retries spread across unrelated examples. PR #2169 recorded the same spawned
+CLI signature on `repo-read-file`. The example names are incidental: every CLI
+case inherited one unobserved, one-shot initial transport dial.
+
+The fix is below the test and above user code. The Node client can wait for the
+initial WebSocket `open` event and, when explicitly requested by the CLI, make
+exactly one fresh dial after a failed upgrade. This boundary ends before a
+Cap'n Web session, authentication call, or user operation exists, so it cannot
+replay side effects. The CLI emits a structured
+`[itx-initial-connection-retry]` record with the original transport error and
+timings; the matrix turns that into a PostHog `e2e-phase` retry annotation.
+Application and RPC failures after connection are never retried.
+
+Local transport tests prove first-upgrade failure then success, no retry after
+an application failure, and a hard two-dial ceiling. Against the rejected
+run's exact OS Worker version, all 27 catalogue examples passed with
+`--retry=0` in 67.68 seconds and emitted no connection-retry record. The
+probe-based draft took 74.93 seconds; it was discarded because an extra RPC
+round trip was unnecessary. The strict full-pipeline counter remains 0/25
+until a new immutable head completes without any framework or transport retry
+and below the five-minute ceiling.
+
+## Round 13 (2026-07-23, post-#2271 and #2273)
+
+PR #2271 removed a cyclic Durable Object RPC lifetime from durable stream wake
+delivery. Wake batches are now one-way and carry an independent one-shot
+settlement capability. Missing settlement leaves the durable checkpoint
+authoritative, delivery failure and broken transport share the same bounded
+backoff/park machine, and late signals are fenced to the connection that
+created them.
+
+Its final exact-head preview ran every canonical suite in 227 seconds with zero
+failures or absorbed retries: Depot workflow `1w2np2p7w2`, job `2xswh11402`,
+attempt `6kl9w6n7m7`. PostHog recorded 3,342 passing final test records, seven
+pre-existing explicit skips, and no failed or retried records. The formerly
+65-second `journal-is-the-record` Playwright case completed in 11.232 seconds;
+its Vitest equivalent completed in 7.639 seconds.
+
+The first post-merge proof head `31f072d6…` then produced two clean runs (285
+and 230 seconds) before run 3 absorbed one retry in `workspace.itx.e2e.test.ts`
+after Cloudflare returned opaque internal reference
+`jofnmc53etthqc74kfntuo36`. The harness rejected that otherwise-green
+234-second run. A fresh proof produced two more clean runs (245 and 231
+seconds), then run 3 failed in 311 seconds with 13 retries and three hard
+project-creation failures.
+
+PostHog and exact-version Cloudflare traces localized that failure to the
+Artifacts create/read consistency boundary. Three independent config
+repositories reported an internal create error, then `ALREADY_EXISTS`, while
+immediate reads still returned repository-not-found. Failed-run
+`artifact-get-or-create` p95 was 39.54 seconds versus 2.59–3.16 seconds in the
+adjacent clean deployments, and 30 downstream durable stream deliveries failed.
+
+PR #2273 removed that race. The authoritative initial write token returned by
+`ARTIFACTS.create()` now seeds the repository directly; the normal path no
+longer performs an immediate `get()` plus `createToken()`. Only the ambiguous
+`ALREADY_EXISTS` case uses one explicit, bounded recovery barrier. Public
+project creation now has one 15-second entry-to-ready deadline, allowing the
+framework's single test retry to redial while already-committed durable work
+finishes.
+
+The final #2273 exact-head preview was genuinely green in 247 seconds: all five
+apps deployed, all 310 tests ran, and none failed. Two explicit
+`stream-wait-timeout` outcomes recovered on the single test retry, so that run
+accepted the product fix but does not count toward the zero-retry streak.
+PostHog's finalizer matched all 9/9 expected sources. Exact-version Cloudflare
+traces showed 20/20 successful `artifact-get-or-create` operations (p95 2.237
+seconds, max 4.527 seconds), no normal-path `artifact-token` call, no durable
+sink delivery failure, and no Artifacts error.
+
+The strict consecutive counter now restarts at 0/25 on a fresh immutable proof
+head based exactly on merged `origin/main` at
+`b5fbfdee44234c69226cad52b14fb0440c142e13`.
+
+## Round 12 (2026-07-23, post-#2269)
+
+This round starts from `origin/main` at
+`c5d51cf02e0c1acf9a36bec903ecf956ae9469ae`. PR #2269 paid off three
+independent sources of preview tail latency and absorbed retries:
+
+- project-directory registration now retries only the missing slug or
+  project-index write, so a partial KV failure cannot replay a successful
+  sibling write;
+- onboarding smoke consumes the deployment-wide rollout deadline immediately
+  before project creation instead of beginning a second rollout wait; and
+- stream-backed read-your-writes paths no longer perform an unbounded,
+  redundant processor catch-up before entering the existing offset wait that
+  owns the explicit 15-second deadline.
+
+The final exact-head check for #2269 ran all five app suites in 231 seconds with
+zero retries: Depot run `b2jwhtx6q4`, attempt `nvg49cr0jp`. OS Playwright passed
+63/63 and the formerly retrying repository-edit and secret write-fence cases
+both passed on their first attempts. PostHog recorded 310 preview logical-test
+outcomes and 3,046 unit outcomes with zero failures or retries, and both
+telemetry finalizers reported complete expected source coverage. Cloudflare
+traces showed no wall-time exhaustion, resource exhaustion, or unexplained
+Durable Object reset in the test window.
+
+That run was PR acceptance evidence before the squash merge, not part of this
+post-merge consecutive proof. The round-12 counter therefore starts at 0/25 on
+this new immutable PR head.
+
+### Round 12 rejected attempt: self-alarm readback races a due alarm
+
+Run 1 on the initial proof head was clean in 281 seconds (Depot run
+`zq6s3vngt8`, attempt `sslv41jkrl`). Run 2 completed in 250 seconds but
+`stateful-worker-alarm.e2e.test.ts` failed once and passed on Vitest's single
+retry (Depot run `fgl4xv672n`, attempt `pf1mx7sj0s`). The harness rejected the
+run and reset the streak to 0/25 even though GitHub's ordinary check was green.
+
+The failing assertion expected `armSelf(3_000)` to return an armed timestamp
+but received `null`. This was a test race, not a missing alarm: the worker
+computes the due time before `ctx.storage.setAlarm` crosses the facet, project
+itx, and outer `StatefulWorkerDurableObject`; its following
+`ctx.storage.getAlarm` is another traversal. Cloudflare traces show the
+self-arm invocation already in flight by `04:09:16.843Z`, while the outer
+Durable Object did not receive `setAlarm` until `04:09:19.318Z`. About 2.5 of
+the test's 3 seconds had therefore elapsed before the real alarm was armed,
+leaving its readback free to race normal alarm consumption.
+
+PostHog shows 131 executions of this test since 2026-07-22: 129 passed first
+try and 2 absorbed a retry. The normal duration was 38.7 seconds at p50 and
+45.8 seconds at p95; the earlier retried execution took 142.4 seconds and this
+one took 75.3 seconds. The fix separates the two contracts already present in
+the test. The first alarm continues to prove delivery, deliberate handler
+failure, and native retry. Self-addressed arming now uses a safely non-due
+alarm, proves the worker-side and host-side readbacks equal the exact scheduled
+time, and immediately disarms it. A second near-term fire added no distinct
+platform coverage and made a due timer the synchronization primitive.
+
+### Round 12 proof restart after #2270
+
+PR #2270 merged that alarm-test fix to `main` at
+`78ba8ad61b3eeeba0cbdd77193510061f8466865`. Its final exact-head preview check
+ran all five app suites with zero failures and zero retries in a 254-second
+Depot run envelope: run `gdkz9dw86w`, attempt `c7zv439zvz`. The changed alarm
+test passed first try in 33.4 seconds.
+
+PostHog recorded 310 preview outcomes and 3,046 unit outcomes on that head with
+zero failures or retries. Both finalizers were complete: the preview job found
+all 9 expected artifact sources, and the unit job found all 10 expected
+workspaces. The `depot`, `github-actions`, and `github-reviews` source syncs
+were all fresh and healthy.
+
+That run accepted the fix before its squash merge; it is not part of the
+post-merge consecutive proof. The strict counter restarts at 0/25 on a fresh
+PR head based exactly on `78ba8ad61b3eeeba0cbdd77193510061f8466865`.
+
+## Round 11 (2026-07-23, post-#2265)
+
+This round starts from `origin/main` at
+`56fdbd4e447ab53f3011a60417349f76223db30d`. PR #2265's final exact-head
+canonical check ran all five suites successfully in 291 seconds from pickup to
+finish (the GitHub check itself reported 4m40s): Depot run
+[`79jc4l57lt`](https://depot.dev/orgs/0p91s0lz49/workflows/37tr66gdxx?job=nk8k8jvb81),
+attempt `c2mnb0ph28`. Playwright had zero retries, but OS Vitest absorbed one,
+so this is a useful ordinary green and a rejected formal proof; the accepted
+counter remains 0/25.
+
+The retry was `itx expression replacement records the recipe without
+evaluating it`. Its first attempt failed during fresh-project creation with
+`stream-unavailable: Durable Object is overloaded. Requests queued for too
+long.`; the full-test retry created a second project and passed. PostHog records
+153 executions of this exact case over the preceding 30 days and only this one
+retry (0.65%). Duration was normally 9.0s at p50 and 14.9s at p95; the retried
+run took 19.3s. That history does not justify quarantine, serialization, or
+project reuse.
+
+Cloudflare traces locate the first failure in project
+`prj_d2cb39d19139488fba1c5236b17d61da`, not in deployment-global state. Its
+root Project Durable Object repeatedly rejected delivery while
+`ProjectProcessor.#createSiblingProcessors` waited for the root capability-host
+birth. The stream sink durably backed off and re-poked the subscription, and
+the same project subsequently reached ready about nine seconds after
+registration. The caller nevertheless failed earlier: the processor relay
+performed its one immediate lifecycle retry, received another availability
+rejection, and threw even though `waitUntilProcessed` still had most of its
+75-second public deadline available.
+
+The round-11 fix makes only that idempotent wait operation reacquire a fresh
+processor facade after repeated availability failures. It retains one caller
+deadline, applies exponential backoff capped at one second, disposes every
+transient facade, and fails when the deadline expires. Application errors still
+propagate immediately, and non-wait processor calls keep their existing single
+retry. Focused tests cover recovery after more than two availability failures,
+decreasing timeout propagation, application-error fail-fast behavior, and
+bounded exhaustion. This pays off the product-layer wait contract instead of
+adding a test retry, longer timeout, quarantine, or global Vitest throttle.
+
+## Round 10 (2026-07-23, post-#2263)
+
+This round starts from `origin/main` at
+`7b41300708f49146603fea09766fca64a07f1eb8`, including the lazy repository lane
+from PR #2262. PR #2263 fixed the false-green
+boundary exposed by PR #2262: a head that selected no deployment work reused an
+older head's test result and returned success in six seconds. Deployment reuse
+is still allowed, but every triggered PR head now executes every runnable app
+suite against the exact recorded Worker versions. An empty runnable set fails
+loudly with `E2e was NOT run` instead of becoming a skipped success.
+
+The repaired #2262 check at head `1ef0f722…` performed all five app suites and
+passed in 3m37s with zero retries. Its later head `6f1d610f…` then provided an
+important real failure rather than another false green: Playwright and all
+non-OS suites passed, while six OS Vitest cases retried and one still failed.
+The failures spanned unrelated project, agent, MCP, egress, worker-readiness,
+and sandbox cases. One error explicitly said `Durable Object reset because its
+code was updated`; another script execution was orphaned because its
+incarnation disappeared. All affected tests owned distinct projects.
+
+PostHog places the OS deploy-phase finish at `23:05:30.758Z` and the Vitest
+start at `23:05:51.367Z`: only 20.6 seconds separated edge readiness from the
+full fan-out. Exact-version readiness itself took 58ms. The explicit reset
+arrived about 51 seconds after Wrangler uploaded the version. Cloudflare's
+[known-issues documentation](https://developers.cloudflare.com/durable-objects/platform/known-issues/)
+says Worker/DO code propagation is globally eventually consistent for seconds
+to minutes, while the
+[Durable Object lifecycle](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/)
+documents that a code update shuts an object down and can terminate in-flight
+RPC. Exact edge-version health is therefore necessary but cannot certify every
+future Durable Object placement.
+
+A control on the next #2262 head, `410c1774…`, was genuinely green in 3m48s:
+all five suites ran, OS Playwright passed 63/63, OS Vitest passed all 170
+reported cases, and raw telemetry recorded zero retries. On that run OS
+readiness naturally consumed 31.1 seconds before the smoke's 22.6-second path
+to Vitest, giving the deployment about 53.7 seconds of age before fan-out. That
+does not prove 54 seconds is a safe boundary, but the contrast localizes the
+failure cluster to the fresh global-rollout window rather than shared project
+state or one victim test.
+
+Round-10 preflight ledger:
+
+| Proof                     | Revision                                   | Accepted runs | Retries | Outcome                                      |
+| ------------------------- | ------------------------------------------ | ------------: | ------: | -------------------------------------------- |
+| Repaired #2262 full check | `1ef0f722…`                                |          0/25 |       0 | Real five-suite pass in 3m37s                |
+| Fresh-rollout failure     | `6f1d610fdea1521ca93a6e5c4a3bcdee203e5dc0` |          0/25 |       6 | OS Vitest failed after rollout-reset cluster |
+| Natural-readiness control | `410c1774d8b0a614096d89dcfe39c1e44359a9b6` |          0/25 |       0 | Real five-suite pass in 3m48s                |
+
+The smallest deterministic CI boundary is a 90-second minimum age from the
+successful OS deploy command to high-fanout Vitest. The clock starts before
+exact-version readiness and runs concurrently with readiness, onboarding
+smoke, Chromium installation, Playwright, TUI, and every other app suite;
+reused older deployments wait zero seconds. Playwright remains on the critical
+path in the observed runs, so the clock should add little or no wall time. This
+is a visible bounded lifecycle gate, not a retry, test quarantine, synthetic
+Durable Object sampler, or serial deployment barrier. The accepted counter
+remains 0/25 until the new immutable PR head completes the canonical marathon.
+
+The first formal head then passed four consecutive full runs in 231–241
+seconds with zero retries. Run 5 took 361 seconds and was rejected because two
+Playwright cases needed their permitted retry. Both failed before their named
+stimulus: one fresh onboarding feed never painted its greeting, and one REPL
+case timed out inside project creation. Cloudflare telemetry for the first
+project records successful birth/readiness followed by `durableObjectReset`
+warnings on its stream sink at `00:05:00Z` and `00:05:04Z`. Its creation began
+before the 90-second clock expired, because only Vitest consumed that boundary.
+
+The follow-up keeps the Playwright process parallel but passes the absolute
+rollout deadline into its project helpers. Forged-session creation and the real
+email-signup form wait only immediately before creating a project; Chromium,
+page setup, authentication, browser-only specs, smoke, TUI, and other app suites
+continue to overlap the rollout. The rejected 4/25 streak remains diagnostic
+evidence only; the accepted counter restarts at 0/25 on the new head.
+
+PR #2265's first formal head, `e5e9990986834b9c3c340e746b626ba0974e96bb`,
+then passed one complete run in 285 seconds with zero retries. The next run was
+rejected at 372 seconds after three permitted test retries exposed two distinct
+defects:
+
+- Semaphore and Streams addressed old Durable Object versions after their new
+  edge Workers were ready. Semaphore traces contained both the prior and new
+  code versions; Streams reported an explicit code-update reset. The 90-second
+  gate had covered only OS, so the fix applies the same
+  per-deployment boundary to every live suite that calls Durable Objects. The
+  short app commands wait at their own boundaries while all app lanes remain
+  concurrent; OS still overlaps browser/auth setup internally.
+- Playwright's empty-agent-feed case timed out while creating project
+  `prj_ddc2a50bba2941878bed307b207417ea`. Trace
+  `eb26b8dc5ae96c5da9373abef6e8606d` shows `Project.create` alive until the
+  90-second caller watchdog canceled it. The durable event history is
+  conclusive: config-repo creation began, Cloudflare Artifacts returned
+  `INTERNAL_ERROR` after 32.7 seconds, and the repo processor journaled
+  `repos/create-failed`. No `repos/created` or `project/ready` fact followed,
+  even after later wakes. The Playwright retry created a different project and
+  passed, masking the permanently poisoned first project.
+
+`INTERNAL_ERROR` and `UPSTREAM_UNAVAILABLE` are Artifacts service-availability
+outcomes, not invalid repo requests. Repo creation now leaves its existing
+idempotent durable obligation open for redelivery on those two codes, exactly
+as it already does for a Durable Object lifecycle reset or an Artifact that is
+still materializing. Input/domain errors still append terminal
+`repos/create-failed` and remain fail-closed. Focused processor tests prove both
+classifications and the failed-attempt → redelivery → one `repos/created`
+recovery path. These fixes change the immutable head, so neither formal run is
+counted and the accepted streak restarts at 0/25.
+
+## Round 9 (2026-07-22, post-#2260)
+
+This proof starts from `origin/main` at
+`7ad6d92037663ac2aba0d0b15ba9550c2a0f685b`, after deploy-phase telemetry
+(#2254), the zero-budget worker-build cache race fix (#2256), sandbox RPC
+settlement lifetime hardening (#2257), and the bundled REPL TypeScript runtime
+(#2260). PR #2261 carries the immutable proof head. The accepted counter starts
+at zero.
+
+Round-9 run ledger:
+
+| Proof              | Revision                                   | Accepted runs | Retries | Outcome                                 |
+| ------------------ | ------------------------------------------ | ------------: | ------: | --------------------------------------- |
+| Round-9 marathon 1 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       4 | Functional pass; rejected at 363s       |
+| Round-9 marathon 2 | `6a7e1d0956e0fc64c8913167318442752df975ba` |          0/25 |       0 | Clean functional pass; rejected at 350s |
+| Round-9 marathon 3 | `64bc519b4d68d3d8fad6c4337d0ad8a137aa2332` |          0/25 |       9 | Failed OS Vitest during rollout at 270s |
+
+The first attempt was [Depot run
+`nfwh10j558`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=v96gml6mn4).
+All apps eventually passed, but four unrelated cases retried: agent delegation
+lost its CapabilityHost incarnation, direct MCP lost its connection, a project
+stream subscription exhausted its 120-second outer watchdog, and the browser
+half-open test did not paint an already-durable assistant event before its
+30-second UI wait. Running each exact case five more times against the unchanged
+warm deployment produced 20/20 first-attempt passes. That control does not count
+toward the streak; it localizes the shared cluster to the fresh-deployment
+window rather than four deterministic victim-test defects.
+
+The second attempt was [Depot run
+`bj3zqplkn6`](https://depot.dev/orgs/0p91s0lz49/workflows/jc0n8v979h?job=fvhg7qc9bn&attempt=whs8hfhl30).
+Every test passed on its first attempt, but the strict loop rejected the
+350-second wall time. The normalized phase evidence accounts for the whole
+critical path: roughly 40 seconds of pickup/setup, 158 seconds to the global
+deployment barrier, 143 seconds of tests, and 7 seconds of finalization. OS
+readiness alone took 72.3 seconds; streams readiness took 136.6 seconds. During
+those waits the active probes received Cloudflare 1101/HTTP 500 responses and
+later 503 `probe-timeout` responses even after all ten waves had previously
+reported ready.
+
+The readiness implementation was stale relative to the contract already
+documented in `ci-preview-performance.md`. OS created 25 synthetic Durable
+Object identities per wave across ten waves, then slept ten seconds and checked
+the complete set again: up to 500 Durable Object RPCs per deploy. Streams did
+the same with eight identities per wave: up to 160 more RPCs. Besides dominating
+the deploy tail, this finite placement sample cannot prove the rest of the fleet
+and did not prevent attempt 1's real project identities from encountering
+lifecycle transitions.
+
+PostHog confirms this was a fleet-wide tail rather than one bad runner. Across
+the preceding 24 hours, 30 OS deploy lanes spent a median 61.3 seconds in
+readiness (p90 93.9 seconds; max 118.8 seconds), while 22 streams deploy lanes
+spent a median 56.0 seconds (p90 93.5 seconds; max 136.6 seconds).
+
+PR #2261 therefore removes the synthetic Durable Object gate, its authenticated
+probe protocol, and its orchestration/test machinery. Readiness is once again a
+cheap public request that must report wrangler's exact `CF_VERSION_METADATA`
+version; the first exact match releases the test barrier with no artificial
+dwell. Product operations remain responsible for explicit Durable Object
+lifecycle outcomes, as the existing performance contract requires. This change
+resets the accepted streak to 0/25; only a canonical Depot run on its new
+immutable head can restart it.
+
+The first canonical run after removing the probes, [Depot run
+`69ccf2rkj7`](https://depot.dev/orgs/0p91s0lz49/workflows/jj6p9xkh2z?job=tqpx1h1kwr&attempt=5cj8k7kk2d),
+made the remaining boundary precise. All five deploys passed and every non-OS
+suite passed. OS Playwright passed 63/63 and the onboarding smoke completed on
+its first attempt in 26 seconds, but nine OS Vitest cases entered retry; eight
+recovered and the preview-smoke case failed both attempts. Every affected test
+was scheduled within the first second of Vitest. The errors were rollout-wide
+(`Durable Object reset because its code was updated`, failed WebSocket
+connections, and internal references), while files scheduled later had no
+retry. This is a fresh-deployment fan-out race, not nine independent test
+defects.
+
+The minimal boundary is now the existing production-shaped onboarding smoke,
+not a synthetic fleet sampler. Chromium installation, the smoke, and TUI start
+immediately; Playwright starts as soon as Chromium is ready; high-fanout Vitest
+starts only after the smoke has successfully created a real project and served
+its project/agent/stream flow. The 26-second propagation window remains hidden
+under the 139-second Playwright critical path, adds no arbitrary sleep or retry,
+and fails fast if the real canary cannot complete.
+
 ## Round 8 (2026-07-22, post-#2251)
 
 This is a fresh proof from `origin/main` at

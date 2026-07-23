@@ -226,12 +226,12 @@ describe("ProjectProcessor bootstrap", () => {
 
     // The frame waited for each sibling to reduce its complete birth batch
     // (offset = the batch's last event), against ONE shared shrinking budget:
-    // 60s total, minus the 10s + 5s + 5s the earlier waits consumed.
+    // 75s total, minus the 10s + 5s + 5s the earlier waits consumed.
     expect(h.siblingWaits).toEqual([
-      { offset: 6, processor: "capability-host", timeoutMs: 60_000 },
-      { offset: 2, processor: "scheduler", timeoutMs: 50_000 },
-      { offset: 3, processor: "repo", timeoutMs: 45_000 },
-      { offset: 3, processor: "email", timeoutMs: 40_000 },
+      { offset: 6, processor: "capability-host", timeoutMs: 75_000 },
+      { offset: 2, processor: "scheduler", timeoutMs: 65_000 },
+      { offset: 3, processor: "repo", timeoutMs: 60_000 },
+      { offset: 3, processor: "email", timeoutMs: 55_000 },
     ]);
 
     expect(h.state()).toMatchObject({

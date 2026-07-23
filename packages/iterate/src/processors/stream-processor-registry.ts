@@ -38,6 +38,10 @@
 //      time);
 //   3. building each runner's `durability` adapters from `ctx`
 //      (durable-object-processor-durability.ts);
+//   4. the DO transport boundary — wake sink calls return immediately and
+//      their eventual runner outcome crosses an independent one-way
+//      settlement capability. This must remain transport adaptation only;
+//      frame semantics stay in the runner.
 //
 // plus the two responsibilities that live ABOVE any single runner and so
 // cannot move into one: the node's LIVE-STATE assembly and the catch-up door.
@@ -70,10 +74,16 @@
 // retry-forever.
 
 import * as cloudflareWorkers from "cloudflare:workers";
+import { disposeIgnoredRpcResult, retainCallback } from "../sdk/capnweb/live-state/retain.ts";
 import { LiveState } from "../sdk/capnweb/live-state/engine.ts";
 import type { ProcessorStream } from "./stream-handle.ts";
 import type { StreamEvent } from "./schemas.ts";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "./rpc-types.ts";
+import type {
+  StreamSubscriberWakeRequest,
+  StreamSubscriberWakeResponse,
+  StreamWakeDeliveryError,
+  StreamWakeDeliverySettlement,
+} from "./rpc-types.ts";
 import type { ProcessorState } from "./processor-contracts.ts";
 import type { ProcessorReads, StreamProcessor } from "./stream-processor.ts";
 import { StreamProcessorRunner } from "./stream-processor-runner.ts";
@@ -158,6 +168,54 @@ type RegistryEntry = {
   processor: RegisterableProcessor;
   runner: StreamProcessorRunner<any>;
 };
+
+function serializeWakeDeliveryError(error: unknown): StreamWakeDeliveryError {
+  const candidate =
+    typeof error === "object" && error !== null
+      ? (error as {
+          durableObjectReset?: unknown;
+          message?: unknown;
+          name?: unknown;
+          overloaded?: unknown;
+          retryable?: unknown;
+        })
+      : undefined;
+  return {
+    name: typeof candidate?.name === "string" ? candidate.name : "Error",
+    message:
+      typeof candidate?.message === "string"
+        ? candidate.message
+        : String(error) || "unknown delivery failure",
+    ...(candidate?.durableObjectReset === true ? { durableObjectReset: true as const } : {}),
+    ...(candidate?.overloaded === true ? { overloaded: true as const } : {}),
+    ...(candidate?.retryable === true ? { retryable: true as const } : {}),
+  };
+}
+
+/**
+ * Report one terminal wake-delivery outcome without pulling the report call's
+ * result. The report itself is the message; waiting for its return value would
+ * merely move the actor-drain cycle to the acknowledgement lane.
+ */
+function reportWakeDeliverySettlement(
+  settleDelivery: (settlement: StreamWakeDeliverySettlement) => unknown,
+  settlement: StreamWakeDeliverySettlement,
+): void {
+  let result: unknown;
+  try {
+    result = settleDelivery(settlement);
+  } catch (error) {
+    console.warn("stream wake delivery settlement could not be dispatched", { error });
+    return;
+  }
+  try {
+    disposeIgnoredRpcResult(result);
+  } catch (error) {
+    // The message was already dispatched. Cleanup failure must not turn a
+    // completed processor attempt into a second, contradictory failure.
+    console.warn("stream wake delivery settlement result disposal failed", { error });
+  }
+}
 
 export type StreamProcessorRegistry<Live extends object = Record<string, unknown>> = {
   readonly stream: ProcessorStream;
@@ -579,11 +637,17 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       }
       const name = resolveProcessorName(args);
       const entry = requireEntry(name);
-      // The runner's sink IS the handshake sink: it already serializes and
-      // offset-dedupes frames, tracks the WHOLE attempt on the keepalive, and
-      // runs the trailing type-unfiltered pull behind a consumes-filtered
-      // batch left short of the raw head (codex review #1) — the registry
-      // must not wrap it in a second copy of any of that.
+      // The runner owns all frame semantics: serialization, offset dedupe,
+      // whole-attempt keepalive, and the trailing unfiltered catch-up. The
+      // registry adds only the transport boundary: the stream's sink call
+      // returns immediately, while this DO reports the eventual attempt
+      // outcome through the batch's independent one-shot capability.
+      //
+      // That separation is load-bearing. Processor blockers routinely append
+      // back to the same stream that delivered them. Returning `attempt` from
+      // this RPC makes the stream pull a result that cannot settle until the
+      // nested append reaches the stream again — a cyclic actor-drain tree
+      // that workerd can retain until idle teardown.
       const opened = await entry.runner.openDelivery();
       // The capability assembles runtime state from its two honest sources:
       // the SNAPSHOT from the runner (the cursor owner) and the runtime bag +
@@ -599,7 +663,60 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         // watermark, and a reduction-pinned offset could skip events whose
         // effects were never acknowledged (codex review §2).
         checkpointOffset: opened.checkpointOffset,
-        sink: opened.sink,
+        sink: (batch) => {
+          const { settleDelivery, ...frame } = batch;
+          let retainedSettlement;
+          try {
+            // This callback parameter must outlive the one-way sink call. One
+            // retained duplicate is owned by exactly this frame and released
+            // immediately after its terminal report.
+            retainedSettlement = retainCallback<StreamWakeDeliverySettlement>(settleDelivery);
+          } catch (error) {
+            // Do not process a frame whose result can never be reported. The
+            // stream keeps it pending and its bounded idle recovery re-pokes
+            // from the processor's unchanged durable checkpoint.
+            console.error("stream wake delivery settlement capability could not be retained", {
+              error,
+            });
+            return;
+          }
+
+          let attempt: Promise<void>;
+          try {
+            attempt = opened.sink(frame);
+          } catch (error) {
+            attempt = Promise.reject(error);
+          }
+          const report = attempt.then(
+            () =>
+              reportWakeDeliverySettlement(retainedSettlement, {
+                outcome: "ok",
+              }),
+            (error: unknown) =>
+              reportWakeDeliverySettlement(retainedSettlement, {
+                outcome: "error",
+                error: serializeWakeDeliveryError(error),
+              }),
+          );
+          // The sink response is already complete, but the subscriber
+          // incarnation must survive long enough to send its independent
+          // terminal report. The runner separately tracks the actual attempt
+          // and its crash-recovery alarm.
+          ctx.waitUntil(
+            report.finally(() => {
+              try {
+                retainedSettlement[Symbol.dispose]();
+              } catch (error) {
+                // The terminal report was already dispatched. A cleanup
+                // failure is observable, but cannot rewrite its verdict or
+                // reject the hosting waitUntil continuation.
+                console.warn("stream wake delivery settlement capability disposal failed", {
+                  error,
+                });
+              }
+            }),
+          );
+        },
         subscriber: {
           processor: { announcement: announceContract(entry.processor.contract) },
         },

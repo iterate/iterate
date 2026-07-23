@@ -11,7 +11,7 @@ import {
   repoArtifactPushFromEventPayload,
   repoGithubPushFromWebhookPayload,
 } from "./repo-push-events.ts";
-import { isRepoNotSeededError } from "./utils.ts";
+import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from "./utils.ts";
 
 /**
  * The repo processor: one stream per repo, projecting its lifecycle and Git
@@ -32,9 +32,10 @@ import { isRepoNotSeededError } from "./utils.ts";
  * redelivery or revival cannot rotate them and double-birth. A vendor/domain
  * error settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed
  * repo's stream never reacts to anything again. A still-materializing
- * Artifact (RepoNotSeededError) or Durable Object lifecycle interruption is
- * not a domain failure: no terminal fact is journaled and the durable
- * obligation remains open for redelivery/revival.
+ * Artifact (RepoNotSeededError), an Artifacts service-availability failure,
+ * or a Durable Object lifecycle interruption is not a domain failure: no
+ * terminal fact is journaled and the durable obligation remains open for
+ * redelivery/revival.
  *
  * Commit facts come from ONE source: the Cloudflare Artifacts event queue.
  * Each `repo/cloudflare-artifact-event-received` push on the default branch
@@ -238,9 +239,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    * private GitHub repo starts from an empty Artifact, links, and pulls the
    * default branch through the Worker at depth one. Any vendor error settles
    * the saga as `repos/create-failed` — EXCEPT a still-materializing Artifact
-   * (RepoNotSeededError) or a Durable Object lifecycle interruption. Those
-   * keep the obligation open for redelivery/revival instead of permanently
-   * failing a repo because infrastructure restarted underneath it.
+   * (RepoNotSeededError), a retryable Artifacts service failure, or a Durable
+   * Object lifecycle interruption. Those keep the obligation open for
+   * redelivery/revival instead of permanently failing a repo because
+   * infrastructure restarted underneath it.
    */
   async #createRepoTerminal(
     request: RepoCreateRequest,
@@ -253,7 +255,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         payload: { ...artifact, request },
       };
     } catch (error) {
-      if (isRepoNotSeededError(error) || isRetryableDurableObjectAvailabilityError(error)) {
+      if (
+        isRepoNotSeededError(error) ||
+        isRetryableArtifactsInfrastructureError(error) ||
+        isRetryableDurableObjectAvailabilityError(error)
+      ) {
         throw error;
       }
       return {

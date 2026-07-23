@@ -126,6 +126,7 @@ import {
 } from "./domains/secrets/utils.ts";
 import {
   completeConnect,
+  confirmGithubSteal,
   connectTelegram,
   disconnectProvider,
   getConnectionStatus,
@@ -422,6 +423,13 @@ const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // A wedged processor must fail the caller loudly instead of parking an RPC
 // forever; the durable birth events remain committed for ordinary redelivery.
 const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
+// Project birth is heavier than the other creation barriers: it includes the
+// config repository's Artifacts write and terminal cross-post. Keep explicit
+// headroom between the nested sibling barrier (75s), the Project processor
+// acknowledgement, and the caller's end-to-ready deadline. Healthy creates
+// still resolve immediately; these values only bound an unhealthy tail.
+const PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 90_000;
+const PROJECT_CREATE_READY_TIMEOUT_MS = 100_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -2159,9 +2167,22 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   }
 
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
-   * snapshot when past the retained floor, or ended after a destructive op. */
-  wait(path: string, epoch: string, afterVersion: number, clientId?: string) {
-    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId);
+   * snapshot when past the retained floor, or ended after a destructive op.
+   * With afterPresence given, also resolves when cursors moved past that
+   * generation (delivered on the result's `presence`). */
+  wait(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+    afterPresence?: number,
+  ) {
+    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId, afterPresence);
+  }
+
+  /** Announce (or clear, with null) this client's cursor for one session. */
+  present(path: string, clientId: string, selection: { anchor: number; head: number } | null) {
+    return this.durableObjectStub.collabPresent(path, clientId, selection);
   }
 
   /** Head versions of every live session (a cheap board change cursor). */
@@ -2172,6 +2193,11 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   /** Attributed tracked changes since the last commit (redline segments). */
   changes(path: string): Promise<CollabChangesResult> {
     return this.durableObjectStub.collabChanges(path);
+  }
+
+  /** Fresh caret presence per live session — "who has this file open". */
+  presenceSummary(): Promise<Record<string, string[]>> {
+    return this.durableObjectStub.collabPresenceSummary();
   }
 }
 
@@ -3392,6 +3418,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        confirmGithubSteal:
+          "Move a GitHub installation after explicit confirmation: { state } — state is the signed user/project/installation proof returned by completeConnect.",
         connectTelegram:
           "Connect a Telegram bot by BotFather token: { botToken } — no OAuth, no redirect.",
         disconnect: "Disconnect one connection: { provider, connection }.",
@@ -3530,6 +3558,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       provider: input.provider,
       state: input.state,
       userId: input.userId,
+    });
+  }
+
+  /** Move a GitHub installation after a signed, user-bound OAuth proof has
+   * been returned to the dashboard for explicit confirmation. */
+  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) {
+      throw new Error("Confirming a GitHub installation move requires a signed-in user.");
+    }
+    return confirmGithubSteal({
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      state: input.state,
+      userId: user.userId,
     });
   }
 
@@ -5211,6 +5254,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     args: { organizationSlug?: string; projectId?: string } = {},
     options?: { waitUntilReady?: boolean },
   ): Promise<ProjectRpcTarget> {
+    const projectCreateDeadline = Date.now() + PROJECT_CREATE_READY_TIMEOUT_MS;
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -5315,20 +5359,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           },
         );
     // Both lanes drive processor birth through the same wait; they differ
-    // only in who pays for it. A create must never leave its caller parked
-    // behind a wedged processor indefinitely: one project birth frame has a
-    // shared 60s sibling-barrier deadline; 75s leaves 15s for
-    // durable-delivery backoff and transport redial.
+    // only in who pays for it. Project birth owns a wider bounded recovery
+    // window than ordinary processor births because its config repository
+    // performs an Artifacts write. The birth facts remain committed for
+    // ordinary durable redelivery if this acknowledgement fails.
     const driveBirth = (step: string) =>
       timedStep("create-timing", timing, step, () =>
         Promise.all([
           this.processor.waitUntilProcessed({
             offset: maxOffset,
-            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+            timeoutMs: PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
           this.notificationProcessor.waitUntilProcessed({
             offset: maxOffset,
-            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+            timeoutMs: PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
         ]),
       );
@@ -5344,14 +5388,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       return this;
     }
 
-    // Ready lane: the birth events are already committed and durable delivery
-    // is already driving both processors, so the seed's own barrier and the
-    // birth wait overlap safely — sequencing them would only add latency.
+    // Ready lane: start the terminal project/ready wait alongside the sibling
+    // work. Its deadline is measured from entry to create() and owns the whole
+    // public operation. It deliberately exceeds the nested Project-processor
+    // deadline: the original caller observes either one fully ready project or
+    // one bounded failure, never a short timeout that relies on a whole-call
+    // retry creating a replacement project.
+    const remainingReadyTimeoutMs = Math.max(1, projectCreateDeadline - Date.now());
     await Promise.all([
       timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
       driveBirth("wait-project-birth"),
+      timedStep("create-timing", timing, "wait-project-ready", () =>
+        this.waitUntilReady({ timeoutMs: remainingReadyTimeoutMs }),
+      ),
     ]);
-    await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
     return this;
   }
 
@@ -5436,10 +5486,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     await rootStream({ auth: this.#props.auth, projectId: this.#projectId }).waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/project/ready"],
-      // Tight on purpose: the saga should complete in seconds (see
-      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-      // be fixed, not waited out). Preview CI warms slots before the suites.
-      timeoutMs: args?.timeoutMs ?? 60_000,
+      // The default covers the complete project birth saga, including the
+      // config repository's bounded Artifacts tail. Healthy calls still
+      // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
+      // the tail without making this correctness boundary dishonest.
+      timeoutMs: args?.timeoutMs ?? PROJECT_CREATE_READY_TIMEOUT_MS,
     });
   }
 
@@ -6694,6 +6745,8 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
 };
 
 const PROCESSOR_WAIT_REACQUIRE_MS = 10_000;
+const PROCESSOR_WAIT_AVAILABILITY_BACKOFF_INITIAL_MS = 100;
+const PROCESSOR_WAIT_AVAILABILITY_BACKOFF_MAX_MS = 1_000;
 
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
@@ -6851,6 +6904,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       new Error(
         `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
       );
+    let consecutiveAvailabilityFailures = 0;
     while (Date.now() < deadline) {
       // A remote RpcTarget call can be orphaned when its hosting DO is
       // replaced without workerd rejecting the caller. Bound the LOCAL
@@ -6866,7 +6920,34 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
           : processor.waitUntilProcessed({ ...input, timeoutMs });
       }, attemptDeadline);
       if (outcome.status === "fulfilled") return outcome.value;
-      if (outcome.status === "rejected") throw outcome.error;
+      if (outcome.status === "rejected") {
+        if (!isRetryableDurableObjectAvailabilityError(outcome.error)) throw outcome.error;
+
+        // Waiting for durable progress is idempotent. A short run of overload
+        // or lifecycle resets must therefore reacquire the processor facade
+        // under the SAME caller deadline, just like an orphaned remote waiter.
+        // Exponential backoff caps the retry rate; the public deadline caps
+        // both total attempts and elapsed recovery time.
+        consecutiveAvailabilityFailures += 1;
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        const backoffMs = Math.min(
+          PROCESSOR_WAIT_AVAILABILITY_BACKOFF_INITIAL_MS *
+            2 ** Math.min(consecutiveAvailabilityFailures - 1, 4),
+          PROCESSOR_WAIT_AVAILABILITY_BACKOFF_MAX_MS,
+          remainingMs,
+        );
+        console.info("processor relay re-acquiring after transient availability failure", {
+          offset: input.offset,
+          consecutiveAvailabilityFailures,
+          backoffMs,
+          remainingMs,
+          error: outcome.error,
+        });
+        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+      consecutiveAvailabilityFailures = 0;
       if (attemptDeadline >= deadline) break;
       console.info("processor relay re-acquiring after bounded wait slice", {
         offset: input.offset,

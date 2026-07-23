@@ -40,6 +40,7 @@ export const Route = createFileRoute("/login")({
     // `login_hint=email` doubles as the deep-linkable "email code" mode of
     // this page; `login_hint=google` auto-starts the Google flow once.
     login_hint: z.enum(["email", "google"]).optional().catch(undefined),
+    account_chooser_method: z.literal("email").optional().catch(undefined),
     sig: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
@@ -83,7 +84,7 @@ function RouteComponent() {
             </h1>
             <p className="text-sm text-muted-foreground">
               {signedInUser
-                ? "Continue with an iterate account or sign in as someone else."
+                ? "Continue with an iterate account or use another sign-in method."
                 : "Sign in to your iterate account"}
             </p>
           </div>
@@ -96,13 +97,21 @@ function RouteComponent() {
               window.location.assign(window.location.pathname + window.location.search);
             }}
           >
-            <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
+            <LoginActions
+              redirectTo={redirectTo}
+              emailOtpEnabled={emailOtpEnabled}
+              loginHint={search.account_chooser_method}
+              emailModeSearchKey="account_chooser_method"
+              methodDivider="before"
+            />
           </AccountChooser>
         ) : (
           <LoginActions
             redirectTo={redirectTo}
             emailOtpEnabled={emailOtpEnabled}
             loginHint={loginHint}
+            emailModeSearchKey="login_hint"
+            methodDivider="between"
           />
         )}
       </main>
@@ -114,10 +123,14 @@ function LoginActions({
   redirectTo,
   emailOtpEnabled,
   loginHint,
+  emailModeSearchKey,
+  methodDivider,
 }: {
   redirectTo: string;
   emailOtpEnabled: boolean;
   loginHint?: "email" | "google";
+  emailModeSearchKey: "login_hint" | "account_chooser_method";
+  methodDivider: "before" | "between";
 }) {
   const navigate = Route.useNavigate();
   // The email step is part of the URL (login_hint=email) so a refresh or a
@@ -142,14 +155,16 @@ function LoginActions({
     },
   });
 
-  const setEmailMode = (expanded: boolean) =>
-    navigate({
-      search: (previous) => ({
-        ...previous,
-        login_hint: expanded ? ("email" as const) : undefined,
-      }),
+  const setEmailMode = (expanded: boolean) => {
+    const emailMode = expanded ? ("email" as const) : undefined;
+    return navigate({
+      search: (previous) =>
+        emailModeSearchKey === "account_chooser_method"
+          ? { ...previous, account_chooser_method: emailMode }
+          : { ...previous, login_hint: emailMode },
       replace: true,
     });
+  };
 
   useEffect(() => {
     setIsHydrated(true);
@@ -186,6 +201,8 @@ function LoginActions({
 
   return (
     <div className="space-y-4" data-hydrated={isHydrated}>
+      {methodDivider === "before" ? <LoginMethodDivider /> : null}
+
       {emailOtpEnabled ? (
         <EmailOtpSignIn
           redirectTo={redirectTo}
@@ -197,13 +214,7 @@ function LoginActions({
 
       {!emailMode ? (
         <>
-          {emailOtpEnabled ? (
-            <div className="flex items-center gap-3">
-              <Separator className="flex-1" />
-              <span className="text-xs tracking-[0.2em] text-muted-foreground uppercase">or</span>
-              <Separator className="flex-1" />
-            </div>
-          ) : null}
+          {emailOtpEnabled && methodDivider === "between" ? <LoginMethodDivider /> : null}
           <Button
             className="w-full"
             variant="outline"
@@ -217,6 +228,16 @@ function LoginActions({
           </Button>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function LoginMethodDivider() {
+  return (
+    <div className="flex items-center gap-3">
+      <Separator className="flex-1" />
+      <span className="text-xs tracking-[0.2em] text-muted-foreground uppercase">or</span>
+      <Separator className="flex-1" />
     </div>
   );
 }
@@ -401,6 +422,16 @@ function getPostLoginRedirectUrl(fallbackRedirect: string) {
   const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
   searchParams.delete("exp");
   searchParams.delete("sig");
+  searchParams.delete("account_chooser_method");
+  const remainingPrompts = searchParams
+    .get("prompt")
+    ?.split(" ")
+    .filter((prompt) => prompt && prompt !== "select_account");
+  if (remainingPrompts?.length) {
+    searchParams.set("prompt", remainingPrompts.join(" "));
+  } else {
+    searchParams.delete("prompt");
+  }
   redirectUrl.search = searchParams.toString();
   return redirectUrl.toString();
 }

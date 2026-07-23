@@ -331,7 +331,7 @@ function ApprovalCard({
             <Text style={styles.secretLine}>spends {request.payload.secretPaths.join(", ")}</Text>
           ) : null}
           <Text style={styles.meta} selectable>
-            body sha256: {request.payload.bodySha256 || "none"}
+            body sha256: {request.payload.body?.sha256 || "none"}
           </Text>
 
           {body ? (
@@ -343,11 +343,7 @@ function ApprovalCard({
               >
                 <Text style={styles.chevron}>{details.data.body ? "▾" : "▸"}</Text>
                 <Text style={styles.detailTitle}>
-                  {request.payload.body === undefined
-                    ? "Request body preview"
-                    : body.truncated
-                      ? "Request body prefix"
-                      : "Request body"}
+                  {body.truncated ? "Request body prefix" : "Request body"}
                 </Text>
                 {request.payload.body?.encoding === "base64" || body.truncated ? (
                   <Text style={styles.detailHint}>

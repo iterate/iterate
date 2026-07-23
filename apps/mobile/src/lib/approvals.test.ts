@@ -100,6 +100,7 @@ test("the approval view resolves the exact script event and complete request bod
       encoding: "utf8",
       content: '{"orderId":1234}',
       originalByteLength: 16,
+      sha256: "body-sha256",
       truncated: false,
     },
     streamContext: {
@@ -137,6 +138,7 @@ test("the approval view labels a capped request body as truncated", () => {
       encoding: "utf8",
       content: "readable prefix",
       originalByteLength: 100_000,
+      sha256: "body-sha256",
       truncated: true,
     },
   }).payload as RequestedPayload;
@@ -163,9 +165,7 @@ function requested(
       method: "POST",
       url: "https://api.stripe.com/v1/transfers",
       headers: {},
-      bodySha256: null,
-      bodyPreview: null,
-      body: undefined,
+      body: null,
       secretPaths: [],
       ruleKey,
       ruleDescription: "",

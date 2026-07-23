@@ -68,8 +68,17 @@ export type CollabPushResult =
   /** Batch or resulting document exceeds the size policy. */
   | { status: "too-large"; maxBytes: number };
 
+/** Ephemeral cursor presence for one session: who has a caret where, in the
+ * sender's head coordinates. In-memory only — an eviction loses it and
+ * clients re-announce on their next throttle tick — delivered on the wait()
+ * long-poll when the generation advanced past the client's cursor. */
+export type CollabPresence = {
+  clients: { anchor: number; at: number; clientId: string; head: number }[];
+  generation: number;
+};
+
 export type CollabPull =
-  | { ops: { changes: unknown; clientId: string }[]; status: "ops" }
+  | { ops: { changes: unknown; clientId: string }[]; presence?: CollabPresence; status: "ops" }
   /** ackedSeq: the highest clientSeq the server accepted from the REQUESTING
    * client (-1 = none) — snapshot recovery drops exactly the acked prefix
    * instead of guessing. */

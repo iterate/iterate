@@ -129,9 +129,13 @@ vi.mock("./build-backend.ts", () => ({
   executeWorkerBuild: h.executeWorkerBuild,
 }));
 
-const { isWorkerBuildFailedError } = await import("./artifact-store.ts");
+const { isWorkerBuildFailedError, WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } =
+  await import("./artifact-store.ts");
 const { isWorkerBuildInProgressError, loadResolvedWorker, resolveWorkerSource } =
   await import("./worker-loader.ts");
+const artifactKeyPattern = new RegExp(
+  `^worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}/complete/.+\\.json$`,
+);
 
 const repoSource = (repoPath: string): DynamicWorkerSource => ({
   createWorker: {
@@ -176,9 +180,7 @@ describe("resolveWorkerSource", () => {
     expect(h.state.artifactDisposals).toBe(1);
     expect(h.state.headDisposals).toBe(1);
     expect(h.state.snapshotDisposals).toBe(1);
-    expect([...h.kv.data.keys()]).toEqual([
-      expect.stringMatching(/^worker-build\/v9\/complete\/.+\.json$/),
-    ]);
+    expect([...h.kv.data.keys()]).toEqual([expect.stringMatching(artifactKeyPattern)]);
 
     const second = await resolveWorkerSource({
       projectId: "prj_a",
@@ -273,9 +275,7 @@ describe("resolveWorkerSource", () => {
     }
     expect(h.state.buildCalls).toEqual(["SLOW"]);
     expect(h.state.snapshotDisposals).toBe(1);
-    expect([...h.kv.data.keys()]).toEqual([
-      expect.stringMatching(/^worker-build\/v9\/complete\/.+\.json$/),
-    ]);
+    expect([...h.kv.data.keys()]).toEqual([expect.stringMatching(artifactKeyPattern)]);
 
     const ready = await resolveWorkerSource({
       projectId: "prj_slow",

@@ -95,11 +95,10 @@ test("hold → grant releases, hold → reject refuses, short timeouts expire", 
         originalByteLength: 14,
         truncated: false,
       },
-      bodyPreview: "please approve",
       secretPaths: [],
     });
     expect(requestedPayload.headers["x-approval-proof"]).toBe("hold-me");
-    expect(requestedPayload.bodySha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(requestedPayload.body?.sha256).toMatch(/^[0-9a-f]{64}$/);
 
     await stream.append({
       type: GRANTED,

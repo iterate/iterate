@@ -799,6 +799,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        confirmGithubSteal: string;
         connectTelegram: string;
         disconnect: string;
         getConnection: string;
@@ -860,6 +861,9 @@ export interface ProjectIntegrations {
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
+  /** Move a GitHub installation after a signed, user-bound OAuth proof has
+   * been returned to the dashboard for explicit confirmation. */
+  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }>;
   /** Disconnect one connection: { provider, connection }. */
   disconnect(input: {
     connection: string;
@@ -1577,14 +1581,23 @@ export interface WorkspaceCollab {
     | (Promise<{ status: "too-large"; maxBytes: number } & Disposable> &
         Pick<{ status: Promise<"too-large">; maxBytes: Promise<number> }, "maxBytes" | "status">);
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
-   * snapshot when past the retained floor, or ended after a destructive op. */
+   * snapshot when past the retained floor, or ended after a destructive op.
+   * With afterPresence given, also resolves when cursors moved past that
+   * generation (delivered on the result's `presence`). */
   wait(
     path: string,
     epoch: string,
     afterVersion: number,
     clientId?: string,
+    afterPresence?: number,
   ):
-    | Promise<{ ops: { changes: unknown; clientId: string }[]; status: "ops" } & Disposable>
+    | Promise<
+        {
+          ops: { changes: unknown; clientId: string }[];
+          presence?: CollabPresence;
+          status: "ops";
+        } & Disposable
+      >
     | (Promise<
         {
           snapshot: { ackedSeq: number; content: string; epoch: string; version: number };
@@ -1610,10 +1623,18 @@ export interface WorkspaceCollab {
           "snapshot" | "status"
         >)
     | (Promise<{ status: "ended" } & Disposable> & Pick<{ status: Promise<"ended"> }, "status">);
+  /** Announce (or clear, with null) this client's cursor for one session. */
+  present(
+    path: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): Promise<void>;
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>>;
   /** Attributed tracked changes since the last commit (redline segments). */
   changes(path: string): Promise<CollabChangesResult>;
+  /** Fresh caret presence per live session — "who has this file open". */
+  presenceSummary(): Promise<Record<string, string[]>>;
 }
 
 /**
@@ -2052,8 +2073,12 @@ export type StreamSubscriberWakeRequest = {
 export type StreamSubscriberWakeResponse = {
   /** The processor's durable checkpoint offset — replay resumes after it. */
   checkpointOffset: number;
-  /** The live delivery callback the stream retains and invokes per batch. */
-  sink: ProcessEventBatch;
+  /**
+   * The live delivery callback the stream retains and invokes per batch.
+   * Calls are one-way; each batch reports completion through its independent
+   * `settleDelivery` capability.
+   */
+  sink: ProcessStreamWakeEventBatch;
   /**
    * Serializable subscriber identity (validated against
    * `StreamSubscriberDescriptor` by the stream) appended as the
@@ -2772,6 +2797,12 @@ export type OAuthProviderSlug = "github" | "google" | "slack";
  * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
+  | {
+      callbackUrl: string | null;
+      error: "github_installation_already_claimed";
+      githubStealState: string;
+      ok: false;
+    }
   | { callbackUrl: string | null; error: string; ok: false };
 
 /** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional
@@ -3254,6 +3285,9 @@ export type ProcessorSnapshot<State> = {
   state: State;
 };
 
+/** Durable wake-mode sink. Its call result is always disposed unpulled. */
+export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
+
 /**
  * A structural patch turning a previous JSON value into the next one. Two
  * shapes, discriminated by whether the `set` key is present:
@@ -3627,10 +3661,10 @@ export type ConnectionRuntimeState = {
   lastDeliveredAt?: string;
   /**
    * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
+   * event in a batch → the subscriber's explicit settlement callback.
+   * Durable (wake) lane only — ephemeral results are disposed unpulled, so
+   * ephemeral consumption is self-reported by the host through
+   * `getRuntimeState` instead. Absent until a sample exists.
    */
   settleLatencyMs?: LatencyStats;
   /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
@@ -3643,7 +3677,7 @@ export type ConnectionRuntimeState = {
    */
   subscriber?: StreamSubscriberDescriptor;
   /**
-   * True while the last batch handed to this connection's sink is unsettled —
+   * True while any batch handed to this connection's sink is unsettled —
    * exactly the signal idle teardown consults to classify a sink as wedged.
    */
   hasPendingDelivery: boolean;
@@ -3716,6 +3750,11 @@ export type StreamPingInput = { t0: number };
  * ping failures drop the sample and never affect delivery or liveness.
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
+
+/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
+export type StreamWakeEventBatch = StreamEventBatch & {
+  settleDelivery: SettleStreamWakeDelivery;
+};
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
@@ -3820,6 +3859,15 @@ export type DynamicWorkerRefBase = {
    */
   path: string;
   source: DynamicWorkerSource;
+};
+
+/** Ephemeral cursor presence for one session: who has a caret where, in the
+ * sender's head coordinates. In-memory only — an eviction loses it and
+ * clients re-announce on their next throttle tick — delivered on the wait()
+ * long-poll when the generation advanced past the client's cursor. */
+export type CollabPresence = {
+  clients: { anchor: number; at: number; clientId: string; head: number }[];
+  generation: number;
 };
 
 /** Per-mount changes plus the unmounted local scratch (never committable). */
@@ -3927,6 +3975,15 @@ export type ThroughputReport = {
   series: ThroughputSeries;
 };
 
+/**
+ * One-shot acknowledgement capability owned by a single durable wake batch.
+ *
+ * It is deliberately independent of the sink call's return value. A
+ * processor may append back to the stream that delivered the batch; making
+ * the stream pull that sink result creates a cyclic actor-drain dependency.
+ */
+export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
+
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = { [x: string]: unknown };
@@ -3994,6 +4051,11 @@ export type ThroughputSeries = {
   bytes: number[];
 };
 
+/** The subscriber's terminal verdict for one durable wake delivery. */
+export type StreamWakeDeliverySettlement =
+  | { outcome: "ok" }
+  | { outcome: "error"; error: StreamWakeDeliveryError };
+
 /** Serializable `createApp` input. The generated browser bundles and explicit
  * text assets are retained in the host and served by worker-bundler's own
  * asset handler. ArrayBuffer assets and the esbuild plugin callback are the
@@ -4014,6 +4076,22 @@ export type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {
   files: WorkerFileSource;
   entryPoint?: string;
   virtualModules?: Record<string, string>;
+};
+
+/**
+ * Serializable failure reported after a durable wake delivery finishes.
+ *
+ * The settlement crosses an independent one-way RPC hop, so preserve the
+ * lifecycle flags the stream uses to distinguish a dead Durable Object from
+ * an application failure. Error prototypes and arbitrary properties do not
+ * survive that hop reliably.
+ */
+export type StreamWakeDeliveryError = {
+  name: string;
+  message: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
 };
 
 /**

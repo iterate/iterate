@@ -51,6 +51,15 @@ export function createFakeItxEnv(options?: {
   /** Shift-and-run before each secret write — the seam for injecting a
    * concurrent actor exactly between claim-check and record. */
   const secretUpdateHooks: Array<() => Promise<void>> = [];
+  /** Shift-and-run after a stream append — the seam for injecting a
+   * concurrent actor exactly between a committed batch and its verification.
+   * A hook can return false to wait for a later append matching its scenario. */
+  const streamAppendHooks: Array<
+    (input: {
+      events: Array<{ idempotencyKey?: string; payload: unknown; type: string }>;
+      name: string;
+    }) => Promise<boolean | void>
+  > = [];
 
   function streamEvents(name: string): FakeStreamEvent[] {
     let events = streams.get(name);
@@ -92,7 +101,7 @@ export function createFakeItxEnv(options?: {
             ...inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>
           ) {
             appendBatches.push({ name, types: inputs.map((input) => input.type) });
-            return inputs.map((input) => {
+            const appended = inputs.map((input) => {
               options?.onAppend?.({ event: input, name });
               const existing =
                 input.idempotencyKey === undefined
@@ -107,6 +116,14 @@ export function createFakeItxEnv(options?: {
               stored.push(event);
               return event;
             });
+            const streamAppendHook = streamAppendHooks.shift();
+            if (
+              streamAppendHook !== undefined &&
+              (await streamAppendHook({ events: inputs, name })) === false
+            ) {
+              streamAppendHooks.unshift(streamAppendHook);
+            }
+            return appended;
           },
           async getEvents(
             input: {
@@ -137,6 +154,7 @@ export function createFakeItxEnv(options?: {
     getEventsCalls,
     secrets,
     secretUpdateHooks,
+    streamAppendHooks,
     streams,
     seedStream(name: string, ...events: Array<{ payload: unknown; type: string }>) {
       const stored = streamEvents(name);
@@ -150,6 +168,7 @@ export function createFakeItxEnv(options?: {
       appendBatches.length = 0;
       getEventsCalls.length = 0;
       secretUpdateHooks.length = 0;
+      streamAppendHooks.length = 0;
     },
   };
 }

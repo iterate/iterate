@@ -16,8 +16,9 @@
 // anything incarnation-shaped through the optional `keepAlive` hook.
 //
 // Delivery: `openDelivery()` answers the wake handshake — a resume cursor plus
-// a `sink`. The sink IS the `processEventBatch` wire callback the transport
-// invokes per delivered frame; transport batching stays entirely inside it.
+// a frame-attempt `sink`. A host transport may wrap that sink (production
+// wake RPC does so to return one-way and report settlement independently),
+// but transport batching stays entirely inside it.
 // The runner reduces/processes ONE EVENT AT A TIME, so batch division is
 // invisible to processor semantics (the harness pins this: one batch,
 // singletons, or random partitions of the same journal must produce identical
@@ -300,9 +301,10 @@ export class StreamProcessorRunner<
    * its delivery watermark, and resuming from a reduction-pinned snapshot
    * offset could skip events whose effects were never acknowledged.
    *
-   * The sink is the internal `processEventBatch` wire callback — the ONLY
-   * place transport batching exists; inside it the runner reduces and
-   * processes one event at a time.
+   * The sink is the internal frame-attempt callback — the ONLY place
+   * transport batching exists; inside it the runner reduces and processes
+   * one event at a time. A hosting transport may adapt how its promise is
+   * observed, but must not duplicate these semantics.
    */
   async openDelivery(): Promise<{
     checkpointOffset: number;

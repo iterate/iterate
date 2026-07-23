@@ -222,7 +222,8 @@ export class DeviceDurableObject extends DurableObject<Env> {
   }
 
   async #waitUntilProcessed(offset: number) {
-    await this.#registry.catchUp(DeviceProcessorContract.slug);
+    // The offset wait self-pulls and owns the complete read-your-writes
+    // timeout. Do not put an unbounded catch-up RPC in front of it.
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
   }
 

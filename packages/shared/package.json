@@ -18,6 +18,7 @@
     "./test-support/ci-telemetry": "./src/test-support/ci-telemetry.ts",
     "./test-support/measure-e2e-phase": "./src/test-support/measure-e2e-phase.ts",
     "./test-support/cloudflare-worker-version-overrides": "./src/test-support/cloudflare-worker-version-overrides.ts",
+    "./test-support/preview-rollout-gate": "./src/test-support/preview-rollout-gate.ts",
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
     "./request-logging": "./src/request-logging.ts",
