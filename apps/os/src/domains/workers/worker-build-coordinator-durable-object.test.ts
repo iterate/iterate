@@ -139,5 +139,9 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
     });
     expect(h.execute).not.toHaveBeenCalled();
     expect(nextIncarnation.setAlarm).not.toHaveBeenCalled();
+    expect(records.size).toBe(0);
+
+    await expect(nextIncarnation.value.build(request)).resolves.toBe(artifact);
+    expect(h.execute).toHaveBeenCalledOnce();
   });
 });

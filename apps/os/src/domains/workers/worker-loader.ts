@@ -4,6 +4,7 @@ import { StreamContext } from "../projects/stream-context.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
+  isWorkerBuildFailedError,
   KvWorkerBuildArtifactStore,
   type WorkerBuildArtifact,
   type WorkerBuildModule,
@@ -102,6 +103,12 @@ async function resolveArtifact(
   try {
     built = await operation;
     return memoizeArtifact(built);
+  } catch (error) {
+    // Workers RPC preserves the error name but not arbitrary properties. Add
+    // the stream delivery verdict after the coordinator hop so a deterministic
+    // source failure parks its subscriber instead of entering backoff.
+    if (isWorkerBuildFailedError(error)) Object.assign(error, { retryable: false });
+    throw error;
   } finally {
     // RPC adds a disposal group to object results even when they contain only
     // data today. Memoization copied the fields we retain, so release it now.

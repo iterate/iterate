@@ -3,7 +3,7 @@ size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: The runtime-schema failure is fixed, but Misha's production smoke exposed a second blocker: worker-bundler requires a physical entry point and does not treat virtual modules as files. A red production-derived bundler spec now captures the exact failure; the physical package entry point and terminal build-failure propagation remain.
+Status: Both Misha failures now have green regressions: the package ships a physical worker entry point, and alarm-observed source failures survive long enough to park subscribers with the exact error. Package/OS typechecks and 79 focused tests pass; the production workerd smoke remains.
 
 ## Plan
 
@@ -17,7 +17,7 @@ Status: The runtime-schema failure is fixed, but Misha's production smoke expose
 - [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
 - [x] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Changed the invalid colon to a hyphen, bumped the subscription config revision to v2, and verified the emitted ref through the OS runtime schema.*
 - [ ] Make the packaged worker build through the real worker-bundler contract. *The package now emits a physical configured-worker entry point and worker-bundler accepts the installed path locally; the production workerd smoke remains.*
-- [ ] Preserve terminal source-build errors for subscribers and stop retrying them. *Misha currently retains the generic build-timeout error and retries after Cloudflare has already classified the build as `source-failed`.*
+- [x] Preserve terminal source-build errors for subscribers and stop retrying them. *The keyed coordinator stores a bounded one-shot failure receipt across actor eviction; the loader marks it non-retryable and the stream parks immediately with the exact error.*
 
 ## Approved decisions
 
@@ -45,3 +45,4 @@ Status: The runtime-schema failure is fixed, but Misha's production smoke expose
 - 2026-07-23: Misha's next smoke reached worker-bundler, which rejected the virtual entry point because virtual modules are import aliases rather than files. Added a real-bundler regression that fails with the exact production error before changing the package layout.
 - 2026-07-23: Added `dist/github-ai-linter/configured-worker.mjs` as the physical entry point, kept only the per-install config virtual, and bumped subscription config to v3 so Misha replaces the temporary smoke subscription.
 - 2026-07-23: Cloudflare traces showed each build settling as `source-failed` in about 0.6 seconds while the subscriber retained `This worker is still building.` and retried. The follow-up must durably expose that terminal compiler error and park the subscription.
+- 2026-07-23: Added a one-shot durable terminal-failure receipt to the keyed build coordinator. The next foreground call consumes it, the loader restores the non-retryable verdict after Workers RPC, and the stream parks on the first exact source error without another alarm; explicit resume can still retry a potentially transient package-install failure.

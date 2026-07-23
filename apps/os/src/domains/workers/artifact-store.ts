@@ -51,7 +51,9 @@ export class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";
 }
 
-export function isWorkerBuildFailedError(error: unknown): boolean {
+export function isWorkerBuildFailedError(
+  error: unknown,
+): error is { name: "WorkerBuildFailedError" } {
   return (error as { name?: string } | null)?.name === "WorkerBuildFailedError";
 }
 

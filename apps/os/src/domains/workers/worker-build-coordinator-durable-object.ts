@@ -1,6 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { workerVersion, type Env } from "../../env.ts";
-import { isWorkerBuildFailedError, type WorkerBuildArtifact } from "./artifact-store.ts";
+import {
+  buildFailureMessageFromError,
+  isWorkerBuildFailedError,
+  WorkerBuildFailedError,
+  type WorkerBuildArtifact,
+} from "./artifact-store.ts";
 import {
   WorkerBuildCoordinator,
   type WorkerBuildCoordinatorEvent,
@@ -11,11 +16,24 @@ import {
 } from "./worker-build-capability.ts";
 
 const QUEUED_BUILD_STORAGE_KEY = "worker-build:queued-request";
+const TERMINAL_BUILD_FAILURE_STORAGE_KEY = "worker-build:terminal-failure";
+
+type StoredTerminalBuildFailure = {
+  message: string;
+  name: "WorkerBuildFailedError";
+};
 
 /** One globally addressed coordinator per immutable worker build key. */
 export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
   readonly #coordinator = new WorkerBuildCoordinator(
-    (request) => executeCoordinatedWorkerBuild(request, this.env),
+    async (request) => {
+      try {
+        return await executeCoordinatedWorkerBuild(request, this.env);
+      } catch (error) {
+        if (isWorkerBuildFailedError(error)) this.#rememberTerminalFailure(error);
+        throw error;
+      }
+    },
     { observe: observeCoordinatorEvent },
   );
 
@@ -29,6 +47,8 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     if (buildBudgetMs !== undefined && (!Number.isFinite(buildBudgetMs) || buildBudgetMs < 0)) {
       throw new TypeError("worker build budget must be a non-negative finite number");
     }
+    const terminalFailure = this.#takeTerminalFailure();
+    if (terminalFailure !== undefined) throw terminalFailure;
 
     const operation = this.#coordinator.build(request);
     if (buildBudgetMs === undefined) return await operation;
@@ -60,15 +80,42 @@ export class WorkerBuildCoordinatorDurableObject extends DurableObject<Env> {
     const request = this.ctx.storage.kv.get<WorkerBuildRequest>(QUEUED_BUILD_STORAGE_KEY);
     if (request === undefined) return;
     this.#assertRequest(request);
+    if (this.#hasTerminalFailure()) {
+      this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
+      return;
+    }
     try {
       await this.#coordinator.build(request);
       this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
     } catch (error) {
       if (!isWorkerBuildFailedError(error)) throw error;
       // Immutable source failure is a modeled terminal result, not an alarm
-      // retry. A later foreground call still receives the exact build error.
+      // retry. The coordinator execution stored the exact bounded error for
+      // foreground callers, including callers in a later actor incarnation.
       this.ctx.storage.kv.delete(QUEUED_BUILD_STORAGE_KEY);
     }
+  }
+
+  #rememberTerminalFailure(error: unknown): void {
+    this.ctx.storage.kv.put(TERMINAL_BUILD_FAILURE_STORAGE_KEY, {
+      message: buildFailureMessageFromError(error),
+      name: "WorkerBuildFailedError",
+    } satisfies StoredTerminalBuildFailure);
+  }
+
+  #hasTerminalFailure(): boolean {
+    return (
+      this.ctx.storage.kv.get<StoredTerminalBuildFailure>(TERMINAL_BUILD_FAILURE_STORAGE_KEY) !==
+      undefined
+    );
+  }
+
+  #takeTerminalFailure(): WorkerBuildFailedError | undefined {
+    const failure = this.ctx.storage.kv.get<StoredTerminalBuildFailure>(
+      TERMINAL_BUILD_FAILURE_STORAGE_KEY,
+    );
+    if (failure !== undefined) this.ctx.storage.kv.delete(TERMINAL_BUILD_FAILURE_STORAGE_KEY);
+    return failure === undefined ? undefined : new WorkerBuildFailedError(failure.message);
   }
 
   #assertRequest(request: WorkerBuildRequest): void {
