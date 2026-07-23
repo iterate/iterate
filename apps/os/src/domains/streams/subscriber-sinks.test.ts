@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type {
   GetProcessorRuntimeState,
-  ProcessEventBatch,
+  ProcessStreamWakeEventBatch,
   StreamPushEventBatch,
   StreamSubscriberPing,
+  StreamWakeEventBatch,
 } from "iterate/processors";
 
 const dialMocks = vi.hoisted(() => ({
@@ -187,8 +188,46 @@ describe("push delivery RPC ownership", () => {
 });
 
 describe("wake-handshake RPC ownership", () => {
+  test("disposes durable batch results without pulling their resolution", () => {
+    const disposeCallResult = vi.fn();
+    let thenReads = 0;
+    const callResult = {
+      [Symbol.dispose]: disposeCallResult,
+      get then() {
+        thenReads += 1;
+        return () => {
+          throw new Error("durable sink result must stay unpulled");
+        };
+      },
+    };
+    const sink = remoteCallback<StreamWakeEventBatch, unknown>(() => callResult);
+    const retained = retainWakeHandshakeResponse({
+      onDeliveryError: vi.fn(),
+      value: {
+        checkpointOffset: 0,
+        sink: sink.raw as ProcessStreamWakeEventBatch,
+        [Symbol.dispose]: vi.fn(),
+      },
+    });
+
+    retained.sink({
+      events: [],
+      path: "/",
+      projectId: "prj_test",
+      scannedAfterOffset: 0,
+      scannedThroughOffset: 0,
+      state: {},
+      streamMaxOffset: 0,
+      settleDelivery: () => undefined,
+    });
+
+    expect(disposeCallResult).toHaveBeenCalledOnce();
+    expect(thenReads).toBe(0);
+    retained.sink[Symbol.dispose]();
+  });
+
   test("retains every returned capability and disposes the original RPC result", async () => {
-    const sink = remoteCallback<Parameters<ProcessEventBatch>[0], void>(() => {});
+    const sink = remoteCallback<Parameters<ProcessStreamWakeEventBatch>[0], void>(() => {});
     const getRuntimeState = remoteCallback<void, { snapshot: { offset: number; state: object } }>(
       () => ({ snapshot: { offset: 17, state: {} } }),
     );
@@ -208,7 +247,7 @@ describe("wake-handshake RPC ownership", () => {
       onDeliveryError: vi.fn(),
       value: {
         checkpointOffset: 17,
-        sink: sink.raw as ProcessEventBatch,
+        sink: sink.raw as ProcessStreamWakeEventBatch,
         getRuntimeState: getRuntimeState.raw as GetProcessorRuntimeState,
         ping: ping.raw as StreamSubscriberPing,
         [Symbol.dispose]: disposeResult,
@@ -231,6 +270,7 @@ describe("wake-handshake RPC ownership", () => {
       scannedThroughOffset: 17,
       state: {},
       streamMaxOffset: 17,
+      settleDelivery: () => undefined,
     });
     expect(await retained.getRuntimeState?.()).toEqual({
       snapshot: { offset: 17, state: {} },

@@ -114,6 +114,44 @@ export type StreamEventBatch = {
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 /**
+ * Serializable failure reported after a durable wake delivery finishes.
+ *
+ * The settlement crosses an independent one-way RPC hop, so preserve the
+ * lifecycle flags the stream uses to distinguish a dead Durable Object from
+ * an application failure. Error prototypes and arbitrary properties do not
+ * survive that hop reliably.
+ */
+export type StreamWakeDeliveryError = {
+  name: string;
+  message: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
+};
+
+/** The subscriber's terminal verdict for one durable wake delivery. */
+export type StreamWakeDeliverySettlement =
+  | { outcome: "ok" }
+  | { outcome: "error"; error: StreamWakeDeliveryError };
+
+/**
+ * One-shot acknowledgement capability owned by a single durable wake batch.
+ *
+ * It is deliberately independent of the sink call's return value. A
+ * processor may append back to the stream that delivered the batch; making
+ * the stream pull that sink result creates a cyclic actor-drain dependency.
+ */
+export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
+
+/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
+export type StreamWakeEventBatch = StreamEventBatch & {
+  settleDelivery: SettleStreamWakeDelivery;
+};
+
+/** Durable wake-mode sink. Its call result is always disposed unpulled. */
+export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
+
+/**
  * The batch a PUSH subscription's receiver is invoked with: the delivery
  * coordinates and events, plus the fields an at-least-once stateless receiver
  * needs to dedupe and self-configure. Deliberately NOT the live lanes'
@@ -247,8 +285,12 @@ export type StreamSubscriberWakeRequest = {
 export type StreamSubscriberWakeResponse = {
   /** The processor's durable checkpoint offset — replay resumes after it. */
   checkpointOffset: number;
-  /** The live delivery callback the stream retains and invokes per batch. */
-  sink: ProcessEventBatch;
+  /**
+   * The live delivery callback the stream retains and invokes per batch.
+   * Calls are one-way; each batch reports completion through its independent
+   * `settleDelivery` capability.
+   */
+  sink: ProcessStreamWakeEventBatch;
   /**
    * Serializable subscriber identity (validated against
    * `StreamSubscriberDescriptor` by the stream) appended as the
