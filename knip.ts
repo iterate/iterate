@@ -107,9 +107,6 @@ function makeTanstackTodoWorkspace(): WorkspaceConfig {
 
 function makeTasksWorkspace(): WorkspaceConfig {
   return {
-    // Vendored shadcn/base-ui kit keeps its stock export surface — the same
-    // posture as the **/components/ui/ exemptions in .oxlintrc/.oxfmtrc.
-    ignore: ["src/components/ui/**"],
     entry: [
       "vite.config.ts",
       "vitest.config.ts",
@@ -119,10 +116,10 @@ function makeTasksWorkspace(): WorkspaceConfig {
     ],
     project: ["src/**/*.{ts,tsx}!", "scripts/**/*.mjs", "!dist/**!"],
     vite: false,
-    // tailwindcss + tw-animate-css are reached only from styles.css @imports;
-    // `cloudflare:workers` parses as the "cloudflare" package — same posture
-    // as the other app workspaces.
-    ignoreDependencies: ["cloudflare", "tailwindcss", "tw-animate-css"],
+    // tailwindcss backs the @tailwindcss/vite plugin and the ui package's
+    // globals.css; nothing imports it from TS. `cloudflare:workers` parses as
+    // the "cloudflare" package — same posture as the other app workspaces.
+    ignoreDependencies: ["cloudflare", "tailwindcss"],
   };
 }
 

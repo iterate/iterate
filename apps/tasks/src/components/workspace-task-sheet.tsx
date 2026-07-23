@@ -1,18 +1,16 @@
 import { lazy, Suspense, useState } from "react";
 import { RotateCcwIcon, Trash2Icon } from "lucide-react";
-import type { TaskChangeStatus } from "../state.ts";
-import { stateLabel, type BoardTask } from "../lib/board-model.ts";
-import { Input } from "./ui/input.tsx";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "./ui/sheet.tsx";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
-import { Button } from "./ui/button.tsx";
+import { Input } from "@iterate-com/ui/components/input";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "./ui/select.tsx";
+} from "@iterate-com/ui/components/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +21,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "./ui/alert-dialog.tsx";
+} from "@iterate-com/ui/components/alert-dialog";
+import { stateLabel, type BoardTask } from "../lib/board-model.ts";
+import type { TaskChangeStatus } from "../state.ts";
 import { TaskStateIcon } from "./board.tsx";
 import { TagPicker } from "./tag-picker.tsx";
 

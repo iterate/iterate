@@ -1,12 +1,12 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ClockIcon, FolderGit2Icon, Loader2Icon, PlusIcon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { newCheckoutId } from "../lib/checkout-shared.ts";
 import { listCheckouts, listRepos } from "../lib/use-checkout.ts";
 import type { CheckoutIndexEntry } from "../lib/tasks-api.ts";
 import { CheckoutBreadcrumbs } from "../components/checkout-header.tsx";
-import { Button } from "../components/ui/button.tsx";
-import { SidebarTrigger } from "../components/ui/sidebar.tsx";
 
 export const Route = createFileRoute("/")({ component: Home });
 

@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { SidebarInset, SidebarProvider } from "@iterate-com/ui/components/sidebar";
+import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import appCss from "../styles.css?url";
 import { getAppShellContext } from "../lib/sidebar-state.ts";
 import { ProjectLabelContext } from "../lib/project-label.ts";
-import { SidebarInset, SidebarProvider } from "../components/ui/sidebar.tsx";
-import { TooltipProvider } from "../components/ui/tooltip.tsx";
 import { AppSidebar } from "../components/app-sidebar.tsx";
 
 export const Route = createRootRoute({

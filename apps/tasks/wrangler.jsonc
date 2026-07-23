@@ -1,5 +1,5 @@
 // Checked in (unlike the fleet apps' generated configs): this app deploys
-// manually to tasks.iterate.workers.dev (`pnpm deploy` with
+// manually to tasks.iterate.workers.dev (`pnpm run deploy` with
 // CLOUDFLARE_ACCOUNT_ID set) and is not wired into envs.ts / the deploy
 // fleet. No routes: per-project access goes through each project's config
 // worker proxy (tasks--<slug>.iterate.app), never a domain on this worker.
@@ -10,12 +10,8 @@
   "compatibility_date": "2026-06-17",
   "compatibility_flags": ["nodejs_compat"],
   "exports": {
-    // Tombstone: the pre-checkout board DO, retired (superseded by
-    // checkouts + the checkout index).
-    "TasksBoardDurableObject": {
-      "type": "durable-object",
-      "state": "deleted",
-    },
+    // (The TasksBoardDurableObject tombstone that used to sit here is fully
+    // reconciled — the 2026-07-23 deploy reported no namespace remains.)
     "TasksCheckoutDurableObject": {
       "type": "durable-object",
       "storage": "sqlite",

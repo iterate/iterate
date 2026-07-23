@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { ChevronDownIcon, GitCommitVerticalIcon, SparklesIcon, Undo2Icon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Input } from "@iterate-com/ui/components/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
+import { cn } from "@iterate-com/ui/lib/utils";
 import type { TaskChangeStatus, TaskChangeSummary } from "../state.ts";
-import { Button } from "./ui/button.tsx";
-import { Checkbox } from "./ui/checkbox.tsx";
-import { Input } from "./ui/input.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
-import { cn } from "./ui/utils.ts";
 
 const STATUS_LETTER: Record<TaskChangeStatus, string> = {
   added: "A",
