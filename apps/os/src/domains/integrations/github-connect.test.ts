@@ -87,13 +87,22 @@ describe("completeConnect (github App installation)", () => {
     });
     expect(result).toEqual({ callbackUrl: null, ok: true });
 
-    // The installation id names the connection (install-<id>) and — being
-    // public — lives in the strategy config, not in material. Material starts
-    // empty: the Secret DO's strategy mints the token on first use, signing
-    // with the first-party App key resolved from deployment config.
+    // The public installation id is part of the fenced connection name and
+    // lives in the strategy config, not in material. Material starts empty:
+    // the Secret DO's strategy mints the token on first use, signing with the
+    // first-party App key resolved from deployment config.
+    const claim = [...network.streams.values()]
+      .flat()
+      .find((event) => event.type === "events.iterate.com/integration/connection-claimed");
+    expect(claim?.payload).toMatchObject({
+      connection: expect.stringMatching(/^install-789-[a-z0-9_-]+$/),
+      externalId: "789",
+      slug: "github",
+    });
+    const connection = (claim!.payload as { connection: string }).connection;
     const secretName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: githubConnectionSecretPath("install-789"),
+      path: githubConnectionSecretPath(connection),
     });
     const stored = network.secrets.get(secretName);
     expect(stored?.material).toEqual({});
@@ -109,26 +118,15 @@ describe("completeConnect (github App installation)", () => {
     // Connected fact on the connection stream.
     const journalName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: "/integrations/github/install-789",
+      path: `/integrations/github/${connection}`,
     });
     const connected = network.streams
       .get(journalName)
       ?.find((event) => event.type === "events.iterate.com/github/connected");
     expect(connected?.payload).toMatchObject({
-      connection: "install-789",
+      connection,
       externalId: "789",
       installationId: "789",
-    });
-
-    // Directory claim (installation_id → project + connection) so the generic
-    // webhook door can route inbound App webhooks.
-    const claim = [...network.streams.values()]
-      .flat()
-      .find((event) => event.type === "events.iterate.com/integration/connection-claimed");
-    expect(claim?.payload).toMatchObject({
-      connection: "install-789",
-      externalId: "789",
-      slug: "github",
     });
   });
 
@@ -308,14 +306,16 @@ describe("completeConnect (github App installation)", () => {
       throw new Error("expected a GitHub steal confirmation state");
     }
 
-    await expect(
-      confirmGithubSteal({
-        config: testConfig(),
-        projectId: PROJECT_ID,
-        state: conflict.githubStealState,
-        userId: "user_1",
-      }),
-    ).resolves.toEqual({ connection: "install-789", ok: true });
+    const moved = await confirmGithubSteal({
+      config: testConfig(),
+      projectId: PROJECT_ID,
+      state: conflict.githubStealState,
+      userId: "user_1",
+    });
+    expect(moved).toMatchObject({
+      connection: expect.stringMatching(/^install-789-[a-z0-9_-]+$/),
+      ok: true,
+    });
 
     expect(network.secrets.get(oldSecretName)).toMatchObject({ egress: { urls: [] } });
     const oldJournalName = DurableObjectNameCodec.stringify({
@@ -343,7 +343,7 @@ describe("completeConnect (github App installation)", () => {
       {
         type: "events.iterate.com/integration/connection-claimed",
         payload: {
-          connection: "install-789",
+          connection: moved.connection,
           externalId: "789",
           projectId: PROJECT_ID,
           slug: "github",
@@ -352,7 +352,7 @@ describe("completeConnect (github App installation)", () => {
     ]);
     const newSecretName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: githubConnectionSecretPath("install-789"),
+      path: githubConnectionSecretPath(moved.connection),
     });
     expect(network.secrets.get(newSecretName)).toMatchObject({
       egress: {
@@ -374,7 +374,7 @@ describe("completeConnect (github App installation)", () => {
         state: conflict.githubStealState,
         userId: "user_1",
       }),
-    ).resolves.toEqual({ connection: "install-789", ok: true });
+    ).resolves.toEqual(moved);
     expect(network.streams.get(directoryName)).toHaveLength(directoryEventCount!);
     expect(network.streams.get(oldJournalName)).toHaveLength(oldJournalEventCount!);
   });
@@ -463,18 +463,20 @@ describe("completeConnect (github App installation)", () => {
       type: "events.iterate.com/integration/connection-unclaimed",
     });
 
-    await expect(
-      confirmGithubSteal({
-        config: testConfig(),
-        projectId: PROJECT_ID,
-        state,
-        userId: "user_1",
-      }),
-    ).resolves.toEqual({ connection: "install-789", ok: true });
+    const moved = await confirmGithubSteal({
+      config: testConfig(),
+      projectId: PROJECT_ID,
+      state,
+      userId: "user_1",
+    });
+    expect(moved).toMatchObject({
+      connection: expect.stringMatching(/^install-789-[a-z0-9_-]+$/),
+      ok: true,
+    });
     expect(network.streams.get(directoryName)?.at(-1)).toMatchObject({
       type: "events.iterate.com/integration/connection-claimed",
       payload: {
-        connection: "install-789",
+        connection: moved.connection,
         externalId: "789",
         projectId: PROJECT_ID,
       },
@@ -509,14 +511,7 @@ describe("completeConnect (github App installation)", () => {
       projectId: "prj_c",
       path: githubConnectionSecretPath("project-c-installation"),
     });
-    const targetSecretName = DurableObjectNameCodec.stringify({
-      projectId: PROJECT_ID,
-      path: githubConnectionSecretPath("install-789"),
-    });
-    const targetJournalName = DurableObjectNameCodec.stringify({
-      projectId: PROJECT_ID,
-      path: "/integrations/github/install-789",
-    });
+    let displacedTargetConnection = "";
     await network.SECRET.getByName(projectASecretName).create({
       egress: { urls: ["https://api.github.com"] },
       material: {},
@@ -550,10 +545,17 @@ describe("completeConnect (github App installation)", () => {
       ) {
         return false;
       }
+      displacedTargetConnection = (
+        events.find(
+          (event) =>
+            event.type === "events.iterate.com/integration/connection-claimed" &&
+            (event.payload as { projectId?: string }).projectId === PROJECT_ID,
+        )!.payload as { connection: string }
+      ).connection;
       await directory.append(
         {
           payload: {
-            connection: "install-789",
+            connection: displacedTargetConnection,
             externalId: "789",
             projectId: PROJECT_ID,
             slug: "github",
@@ -572,10 +574,20 @@ describe("completeConnect (github App installation)", () => {
       );
       // Project C's successful steal dispossesses the target before this
       // confirmation retries and wins ownership back.
-      await network.SECRET.getByName(targetSecretName).update({ egress: { urls: [] } });
-      await network.STREAM.getByName(targetJournalName).append({
+      await network.SECRET.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: PROJECT_ID,
+          path: githubConnectionSecretPath(displacedTargetConnection),
+        }),
+      ).update({ egress: { urls: [] } });
+      await network.STREAM.getByName(
+        DurableObjectNameCodec.stringify({
+          projectId: PROJECT_ID,
+          path: `/integrations/github/${displacedTargetConnection}`,
+        }),
+      ).append({
         payload: {
-          connection: "install-789",
+          connection: displacedTargetConnection,
           projectId: PROJECT_ID,
           reason: "stolen-by-another-project",
         },
@@ -583,50 +595,140 @@ describe("completeConnect (github App installation)", () => {
       });
     });
 
-    await expect(
-      confirmGithubSteal({
-        config: testConfig(),
-        projectId: PROJECT_ID,
-        state,
-        userId: "user_1",
-      }),
-    ).resolves.toEqual({ connection: "install-789", ok: true });
+    const moved = await confirmGithubSteal({
+      config: testConfig(),
+      projectId: PROJECT_ID,
+      state,
+      userId: "user_1",
+    });
+    expect(moved).toMatchObject({
+      connection: expect.stringMatching(/^install-789-[a-z0-9_-]+$/),
+      ok: true,
+    });
 
     expect(network.secrets.get(projectASecretName)).toMatchObject({ egress: { urls: [] } });
     expect(network.secrets.get(projectCSecretName)).toMatchObject({ egress: { urls: [] } });
+    const displacedTargetSecretName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: githubConnectionSecretPath(displacedTargetConnection),
+    });
+    expect(network.secrets.get(displacedTargetSecretName)).toMatchObject({ egress: { urls: [] } });
+    const targetSecretName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: githubConnectionSecretPath(moved.connection),
+    });
     expect(network.secrets.get(targetSecretName)).toMatchObject({
       egress: {
         urls: expect.arrayContaining(["https://api.github.com", "https://uploads.github.com"]),
       },
+    });
+    const targetJournalName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: `/integrations/github/${moved.connection}`,
     });
     expect(network.streams.get(targetJournalName)?.at(-1)?.type).toBe(
       "events.iterate.com/github/connected",
     );
+  });
 
-    // A displaced stealer can finish cleanup after this project has reclaimed
-    // ownership. Replaying the same confirmation must repair both the bricked
-    // secret and the disconnected lifecycle projection.
-    await network.SECRET.getByName(targetSecretName).update({ egress: { urls: [] } });
-    await network.STREAM.getByName(targetJournalName).append({
+  test("late cleanup cannot brick a project that reclaimed and returned success", async () => {
+    const directoryName = DurableObjectNameCodec.stringify(
+      { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
+      { allowNullProjectId: true },
+    );
+    await network.STREAM.getByName(directoryName).append({
       payload: {
-        connection: "install-789",
-        projectId: PROJECT_ID,
-        reason: "stolen-by-another-project",
+        connection: "project-a-installation",
+        externalId: "789",
+        projectId: "prj_a",
+        slug: "github",
       },
-      type: "events.iterate.com/github/disconnected",
+      type: "events.iterate.com/integration/connection-claimed",
     });
+    await network.SECRET.getByName(
+      DurableObjectNameCodec.stringify({
+        projectId: "prj_a",
+        path: githubConnectionSecretPath("project-a-installation"),
+      }),
+    ).create({
+      egress: { urls: ["https://api.github.com"] },
+      material: {},
+    });
+    const targetState = await createOAuthState(
+      {
+        githubInstallationAuthorized: true,
+        githubInstallationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    const projectCState = await createOAuthState(
+      {
+        githubInstallationAuthorized: true,
+        githubInstallationId: "789",
+        projectId: "prj_c",
+        provider: "github",
+        userId: "user_c",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    let targetConnection = "";
+    let targetSuccesses = 0;
+
+    // Project C loses every claim to the target before it can clean the owner
+    // observed at the start of that attempt. On C's final retry, its stale
+    // cleanup lands after the target has reclaimed and returned success.
+    network.streamAppendHooks.push(async ({ events, name }) => {
+      if (
+        name !== directoryName ||
+        !events.some(
+          (event) =>
+            event.type === "events.iterate.com/integration/connection-claimed" &&
+            (event.payload as { projectId?: string }).projectId === "prj_c",
+        )
+      ) {
+        return false;
+      }
+      const result = await confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state: targetState,
+        userId: "user_1",
+      });
+      targetConnection = result.connection;
+      targetSuccesses += 1;
+      return false;
+    });
+
     await expect(
       confirmGithubSteal({
         config: testConfig(),
-        projectId: PROJECT_ID,
-        state,
-        userId: "user_1",
+        projectId: "prj_c",
+        state: projectCState,
+        userId: "user_c",
       }),
-    ).resolves.toEqual({ connection: "install-789", ok: true });
+    ).rejects.toThrow("GitHub installation ownership changed repeatedly; please try again.");
+
+    expect(targetSuccesses).toBe(3);
+    expect(network.streams.get(directoryName)?.at(-1)?.payload).toMatchObject({
+      connection: targetConnection,
+      externalId: "789",
+      projectId: PROJECT_ID,
+    });
+    const targetSecretName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: githubConnectionSecretPath(targetConnection),
+    });
     expect(network.secrets.get(targetSecretName)).toMatchObject({
       egress: {
         urls: expect.arrayContaining(["https://api.github.com", "https://uploads.github.com"]),
       },
+    });
+    const targetJournalName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: `/integrations/github/${targetConnection}`,
     });
     expect(network.streams.get(targetJournalName)?.at(-1)?.type).toBe(
       "events.iterate.com/github/connected",
@@ -694,14 +796,22 @@ describe("completeConnect (github App installation)", () => {
       ok: false,
     });
 
+    const losingClaim = network.streams
+      .get(directoryName)
+      ?.find(
+        (event) =>
+          event.type === "events.iterate.com/integration/connection-claimed" &&
+          (event.payload as { projectId?: string }).projectId === PROJECT_ID,
+      );
+    const losingConnection = (losingClaim!.payload as { connection: string }).connection;
     const secretName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: githubConnectionSecretPath("install-789"),
+      path: githubConnectionSecretPath(losingConnection),
     });
     expect(network.secrets.get(secretName)?.egress?.urls).toEqual([]);
     const journalName = DurableObjectNameCodec.stringify({
       projectId: PROJECT_ID,
-      path: "/integrations/github/install-789",
+      path: `/integrations/github/${losingConnection}`,
     });
     expect(network.streams.get(journalName)?.map((event) => event.type)).toContain(
       "events.iterate.com/github/disconnected",

@@ -8,9 +8,9 @@ size: medium
 ## Status
 
 Done. The signed confirmation flow, authenticated RPC, atomic claim move, old-connection cleanup,
-race-safe cleanup, dialog, docs, generated API, full local checks, headed preview proof, and green
-preview rerun are complete. Bugbot's concurrent-steal finding has a deterministic regression test
-and fix. Each review update is covered by the PR's required CI checks.
+generation-fenced cleanup, dialog, docs, generated API, full local checks, headed preview proof,
+and green preview rerun are complete. Bugbot's concurrent-steal findings have deterministic
+regression tests and fixes. Each review update is covered by the PR's required CI checks.
 
 ## Goal
 
@@ -33,8 +33,9 @@ existing Telegram steal experience.
   confirming user from the authenticated itx principal; callers cannot supply the user identity.
 - Prepare the new project connection before routing moves. Commit the old unclaim and new claim in
   one directory append, then brick every owner displaced across retries with reason
-  `stolen-by-another-project`. If another steal briefly bricks the eventual winner, restore its
-  secret and re-verify directory ownership before returning success.
+  `stolen-by-another-project`. Give every fresh GitHub claim a fenced connection name so delayed
+  cleanup can only brick the ownership generation it displaced; restore and re-verify the current
+  winner before returning success.
 - Do not name the old project in the result or dialog. It may belong to another organization.
 - Replaying a successfully used confirmation state is idempotent when the installation is already
   owned by the target project.
@@ -58,8 +59,9 @@ existing Telegram steal experience.
       the error/state and confirm connects without repeating OAuth. *Headed preview-5 verification
       exercised both buttons and captured the dialog for the PR.*
 - [x] Add focused red-green tests for conflict proof, authorization checks, transfer side effects,
-      replay, released-claim behavior, and concurrent steal retries. *Ten GitHub connect tests
-      pass, including an A → target → C → target ownership interleaving.*
+      replay, released-claim behavior, and concurrent steal retries. *Eleven GitHub connect tests
+      pass, including an A → target → C → target interleaving and a late-cleanup race after the
+      winner returns success.*
 - [x] Update the GitHub integration docs and generated public itx API artifacts.
       *The design doc describes OAuth proof and claim moves; both generated itx API copies and the
       graph include `confirmGithubSteal`.*
@@ -93,3 +95,6 @@ existing Telegram steal experience.
   its signed-state query parameters.
 - 2026-07-23: The dialog now ignores Escape/close requests while confirmation is pending, so it
   cannot look cancelled while the move continues or discard proof needed to retry a failed move.
+- 2026-07-23: A final high-severity race spec showed stale cleanup bricking a project after it
+  reclaimed and returned success. Fresh GitHub claims now use generation-fenced connection names;
+  delayed cleanup can only disable the exact generation it displaced. All 2,302 OS unit tests pass.
