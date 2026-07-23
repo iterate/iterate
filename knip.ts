@@ -105,6 +105,27 @@ function makeTanstackTodoWorkspace(): WorkspaceConfig {
   };
 }
 
+function makeTasksWorkspace(): WorkspaceConfig {
+  return {
+    // Vendored shadcn/base-ui kit keeps its stock export surface — the same
+    // posture as the **/components/ui/ exemptions in .oxlintrc/.oxfmtrc.
+    ignore: ["src/components/ui/**"],
+    entry: [
+      "vite.config.ts",
+      "vitest.config.ts",
+      "src/worker.ts!",
+      // Operational probe/dev scripts, run by hand against live deployments.
+      "scripts/**/*.mjs",
+    ],
+    project: ["src/**/*.{ts,tsx}!", "scripts/**/*.mjs", "!dist/**!"],
+    vite: false,
+    // tailwindcss + tw-animate-css are reached only from styles.css @imports;
+    // `cloudflare:workers` parses as the "cloudflare" package — same posture
+    // as the other app workspaces.
+    ignoreDependencies: ["cloudflare", "tailwindcss", "tw-animate-css"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "scripts/router.ts", "scripts/**/*.ts", "src/worker.ts!"],
@@ -191,6 +212,7 @@ const config: KnipConfig = {
     "!apps/semaphore",
     "!apps/streams-example-app",
     "!apps/tanstack",
+    "!apps/tasks",
     "packages/*",
     "!packages/shared",
     "!packages/ui",
@@ -208,12 +230,14 @@ const config: KnipConfig = {
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/tanstack/src/router.tsx": ["exports"],
+    "apps/tasks/src/router.tsx": ["exports"],
   },
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
     "apps/tanstack": makeTanstackTodoWorkspace(),
+    "apps/tasks": makeTasksWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
     "packages/iterate": makeIterateCliWorkspace(),
