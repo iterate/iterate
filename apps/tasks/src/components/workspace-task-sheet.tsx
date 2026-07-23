@@ -114,6 +114,7 @@ export function WorkspaceTaskSheet({
             onChangeLabels={onChangeLabels}
             onRevert={onRevert}
             onDelete={onDelete}
+            onRequestClose={onClose}
           />
         )}
       </SheetContent>
@@ -139,6 +140,7 @@ function SheetBody({
   onChangeLabels,
   onRevert,
   onDelete,
+  onRequestClose,
 }: {
   task: BoardTask;
   checkoutId: string;
@@ -162,6 +164,8 @@ function SheetBody({
   onChangeLabels: (labels: string[]) => void;
   onRevert: () => void;
   onDelete: () => void;
+  /** Cmd/Ctrl+Enter inside the editor: done editing — close the sheet. */
+  onRequestClose: () => void;
 }) {
   const [status, setStatus] = useState("connecting…");
   // The path is editable in place; SheetBody is keyed by task.path, so a
@@ -312,6 +316,7 @@ function SheetBody({
           apiRef={editorApiRef}
           onLiveContent={onLiveContent}
           onStatus={setStatus}
+          onRequestClose={onRequestClose}
         />
       </Suspense>
         </TabsContent>

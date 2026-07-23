@@ -1,10 +1,11 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { FolderGit2Icon, PlusIcon } from "lucide-react";
+import { ChevronsLeft, FolderGit2Icon, PlusIcon } from "lucide-react";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarRail,
   SidebarGroup,
   SidebarGroupAction,
@@ -14,10 +15,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { DEFAULT_REPO_PATH, newCheckoutId } from "../lib/checkout-shared.ts";
 import { listCheckouts, listRepos } from "../lib/use-checkout.ts";
 import type { CheckoutIndexEntry } from "../lib/tasks-api.ts";
+import { CloseMobileSidebarOnNavigate } from "~/components/close-mobile-sidebar-on-navigate.tsx";
 
 /**
  * The two-stage navigation: repos are the top-level hierarchy, checkouts the
@@ -94,22 +97,29 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/" />} tooltip="Tasks home">
-              <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
-                <IterateLogo className="size-6 rounded-sm" />
-              </span>
-              <span className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">iterate</span>
-                <span className="truncate text-xs text-muted-foreground">tasks</span>
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
+    <>
+      {/* Outside <Sidebar>: on mobile the children live in a Sheet that
+          remounts when opened (see the os AppSidebar). */}
+      <CloseMobileSidebarOnNavigate />
+      <Sidebar collapsible="icon">
+        {/* Collapsed: nudge the logo down so its center lines up with the h-11
+            page header row — the same transition the os sidebar uses so the
+            padding offset and the button's height change move together. */}
+        <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton size="lg" render={<Link to="/" />} tooltip="Tasks home">
+                <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
+                  <IterateLogo className="size-6" />
+                </span>
+                <span className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">iterate</span>
+                  <span className="truncate text-xs text-muted-foreground">tasks</span>
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarHeader>
       <SidebarContent>
         {groups.map(([repoPath, entries]) => (
           <SidebarGroup key={repoPath} className="group-data-[collapsible=icon]:hidden">
@@ -163,8 +173,34 @@ export function AppSidebar() {
           </SidebarGroup>
         ))}
       </SidebarContent>
-      <SidebarRail />
-    </Sidebar>
+        <SidebarFooter>
+          <AppSidebarCollapseButton />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+    </>
+  );
+}
+
+function AppSidebarCollapseButton() {
+  const { state, toggleSidebar } = useSidebar();
+  const isCollapsed = state === "collapsed";
+
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          type="button"
+          size="sm"
+          className="text-sidebar-foreground/70"
+          tooltip={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={toggleSidebar}
+        >
+          <ChevronsLeft className={isCollapsed ? "rotate-180" : undefined} />
+          <span>Collapse sidebar</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
