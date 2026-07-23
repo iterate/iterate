@@ -10,7 +10,7 @@ Four candidate designs were each prototyped independently against the real code
 (by parallel Claude subagents), and a Codex `gpt-5.6-sol` xhigh pass audited the
 same surface. The candidates and the evidence that decided between them:
 
-## TL;DR — the minimal fix (net ≈ −228 lines, less complexity, more robust)
+## TL;DR — the minimal fix (measured net −277 LOC, less complexity, more robust)
 
 The first draft of this doc grew a 7-step plan. That was over-built. Re-examined
 for _smallest change / least complexity / most robustness_ — grounded in
@@ -206,7 +206,7 @@ owner-and-removal-criterion quarantine if C2 is judged too risky to land at once
 
 ## The fuller version (optional — only if you want more than the minimal fix)
 
-> **Read the [TL;DR minimal fix](#tldr--the-minimal-fix-net--228-lines-less-complexity-more-robust)
+> **Read the [TL;DR minimal fix](#tldr--the-minimal-fix-measured-net-277-loc-less-complexity-more-robust)
 > first.** The two-change minimal fix above is the recommendation. The steps
 > below are the same ideas expanded, plus the _optional_ extras (explicit create
 > contract, fixture consolidation, canary, concurrency sweep). Treat them as a
