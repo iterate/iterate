@@ -24,6 +24,7 @@ import {
 } from "@iterate-com/ui/components/alert-dialog";
 import { stateLabel, type BoardTask } from "../lib/board-model.ts";
 import type { TaskChangeStatus } from "../state.ts";
+import { projectSlug } from "../lib/project-label.ts";
 import { TaskStateIcon } from "./board.tsx";
 import { TagPicker } from "./tag-picker.tsx";
 
@@ -220,6 +221,24 @@ function SheetBody({
           }
         />
         {pathError !== null && <p className="text-xs text-red-700">{pathError}</p>}
+        {task.createdBy !== null && (
+          <p className="text-xs text-muted-foreground">
+            created by{" "}
+            {task.createdBy.startsWith("/") ? (
+              // A /-prefixed creator is a STREAM PATH (an agent) — link it.
+              <a
+                className="font-mono underline underline-offset-2 hover:text-foreground"
+                href={`https://os.iterate.com/projects/${projectSlug()}/agents/streams${task.createdBy}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {task.createdBy}
+              </a>
+            ) : (
+              task.createdBy
+            )}
+          </p>
+        )}
       </SheetHeader>
       <Tabs defaultValue="editor" className="flex min-h-0 flex-1 flex-col gap-0">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">

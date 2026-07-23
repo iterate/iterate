@@ -1493,10 +1493,6 @@ export interface Workspace {
   collab: WorkspaceCollab;
   /** A path's mount content at HEAD — the base uncommitted work diffs against. */
   readBase(path: string): Promise<string | null>;
-  /** Announce (or clear, with null) this client's mouse pointer on the board. */
-  pointerPresent(clientId: string, payload: unknown): Promise<void>;
-  /** Long-poll for board pointer movement past a generation. */
-  pointerWait(afterGeneration: number): Promise<PointerSnapshot & Disposable>;
   /** Batched file reads (board seeds): one RPC, missing paths map to null. */
   readFiles(paths: string[]): Promise<Record<string, string | null>>;
   /** One file's raw bytes from the merged view; null when missing. */
@@ -1635,6 +1631,13 @@ export interface WorkspaceCollab {
   versions(): Promise<Record<string, number>>;
   /** Attributed tracked changes since the last commit (redline segments). */
   changes(path: string): Promise<CollabChangesResult>;
+  /** Fresh caret presence per live session — "who has this file open". */
+  presenceSummary(): Promise<CollabPresenceFlat>;
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
+  boardViewers(): Promise<{ [x: string]: string } & Disposable> &
+    Pick<{ [x: string]: Promise<string> }, string>;
+  /** Announce (or clear, with null name) one client viewing the board. */
+  boardPresent(clientId: string, name: string | null): Promise<void>;
 }
 
 /**
@@ -1665,6 +1668,14 @@ export interface CollabChangesResult {
   deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
   headVersion: number;
   inserted: { clientId: string; createdAt?: number; from: number; to: number }[];
+}
+
+/** Fresh caret presence as index-matched flat arrays (one entry per
+ * path+client pair) — named so the generated capnweb surface references it
+ * instead of structurally promise-mapping raw string arrays (illegal). */
+export interface CollabPresenceFlat {
+  clientIds: string[];
+  paths: string[];
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -3631,13 +3642,6 @@ export type WorkspaceConfigPatch = {
         } | null
       >
     | undefined;
-};
-
-/** One read of the pointer map: every fresh client's opaque payload plus the
- * generation a long-poll compares against. */
-export type PointerSnapshot = {
-  clients: { at: number; clientId: string; payload: unknown }[];
-  generation: number;
 };
 
 /** Input to `Workspace.edit` — a safe single-occurrence string replacement. */

@@ -61,6 +61,14 @@ export interface CollabSessionStore extends CollabStore {
   endSession(path: string): void;
 }
 
+/** Fresh caret presence as index-matched flat arrays (one entry per
+ * path+client pair) — named so the generated capnweb surface references it
+ * instead of structurally promise-mapping raw string arrays (illegal). */
+export interface CollabPresenceFlat {
+  clientIds: string[];
+  paths: string[];
+}
+
 /** Attributed tracked changes since the last commit: author-tagged inserted
  * spans and deleted-text markers in current-head coordinates, plus the ONE
  * baseline both redline layers render against. */
@@ -347,6 +355,20 @@ export class CollabHost {
         }, PRESENCE_WAKE_COALESCE_MS),
       );
     }
+  }
+
+  /** Fresh caret presence per live path — the board's "who has this open". */
+  presenceSummary(): Record<string, string[]> {
+    const now = Date.now();
+    const summary: Record<string, string[]> = {};
+    for (const [path, clients] of this.#presence) {
+      const fresh = [...clients]
+        .filter(([, cursor]) => now - cursor.at <= PRESENCE_STALE_MS)
+        .map(([clientId]) => clientId)
+        .sort();
+      if (fresh.length > 0) summary[path] = fresh;
+    }
+    return summary;
   }
 
   #presenceFor(path: string): CollabPresence {

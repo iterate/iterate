@@ -349,6 +349,7 @@ import type {
   WorkspaceMount,
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
+import type { CollabPresenceFlat } from "./domains/workspaces/collab-host.ts";
 import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
   DynamicWorkerRunner,
@@ -1972,16 +1973,6 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.durableObjectStub.readBase(path);
   }
 
-  /** Announce (or clear, with null) this client's mouse pointer on the board. */
-  pointerPresent(clientId: string, payload: unknown) {
-    return this.durableObjectStub.pointerPresent(clientId, payload);
-  }
-
-  /** Long-poll for board pointer movement past a generation. */
-  pointerWait(afterGeneration: number) {
-    return this.durableObjectStub.pointerWait(afterGeneration);
-  }
-
   /** Batched file reads (board seeds): one RPC, missing paths map to null. */
   readFiles(paths: string[]): Promise<Record<string, string | null>> {
     return this.durableObjectStub.readFiles(paths);
@@ -2192,6 +2183,21 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   /** Attributed tracked changes since the last commit (redline segments). */
   changes(path: string): Promise<CollabChangesResult> {
     return this.durableObjectStub.collabChanges(path);
+  }
+
+  /** Fresh caret presence per live session — "who has this file open". */
+  presenceSummary(): Promise<CollabPresenceFlat> {
+    return this.durableObjectStub.collabPresenceSummary();
+  }
+
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
+  boardViewers() {
+    return this.durableObjectStub.collabBoardViewers();
+  }
+
+  /** Announce (or clear, with null name) one client viewing the board. */
+  boardPresent(clientId: string, name: string | null) {
+    return this.durableObjectStub.boardPresent(clientId, name);
   }
 }
 

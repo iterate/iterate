@@ -698,9 +698,14 @@ describe("clean-session commit stamping", () => {
       if (afterLeave.status !== "ops") throw new Error(`expected ops, got ${afterLeave.status}`);
       expect(afterLeave.presence!.clients).toEqual([]);
 
+      // The board's summary sees the caret again once re-announced.
+      host.present(PATH, "u-ada-abc123", { anchor: 1, head: 1 });
+      expect(host.presenceSummary()).toEqual({ [PATH]: ["u-ada-abc123"] });
+
       // Destructive end wipes presence state with the session.
       host.endSessions([PATH]);
       expect(() => host.present(PATH, "u-ada-abc123", { anchor: 0, head: 0 })).not.toThrow();
+      expect(host.presenceSummary()).toEqual({});
     } finally {
       vi.useRealTimers();
     }

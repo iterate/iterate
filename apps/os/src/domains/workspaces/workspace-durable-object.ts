@@ -39,8 +39,7 @@ import {
 } from "./workspace-core.ts";
 import { normalizeWorkspaceMountKeys } from "./utils.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
-import { PointerPresence, type PointerSnapshot } from "./pointer-presence.ts";
-import { CollabHost } from "./collab-host.ts";
+import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
@@ -483,21 +482,6 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#collab.wait(path, epoch, afterVersion, clientId, afterPresence);
   }
 
-  // Board-level mouse-pointer presence (not tied to any file session).
-  readonly #pointers = new PointerPresence();
-
-  /** Announce (or clear, with null) one client's mouse pointer. */
-  async pointerPresent(clientId: string, payload: unknown): Promise<void> {
-    await this.#assertCreated();
-    this.#pointers.present(clientId, payload);
-  }
-
-  /** Long-poll for pointer movement past a generation (~25s park). */
-  async pointerWait(afterGeneration: number): Promise<PointerSnapshot> {
-    await this.#assertCreated();
-    return this.#pointers.wait(afterGeneration);
-  }
-
   /** Announce (or clear, with null) one client's cursor — quiet decoration,
    * fanned out to session waiters coalesced. */
   async collabPresent(
@@ -519,6 +503,50 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   async collabChanges(path: string) {
     await this.#assertCreated();
     return this.#collab.changes(path);
+  }
+
+  // Board-level viewer presence: who has the BOARD open (sheet or not),
+  // heartbeat-refreshed, in-memory (rebuilds from heartbeats after eviction).
+  readonly #boardClients = new Map<string, { at: number; name: string }>();
+
+  /** Announce (or clear, with null name) one client viewing the board. */
+  async boardPresent(clientId: string, name: string | null): Promise<void> {
+    await this.#assertCreated();
+    if (name === null) this.#boardClients.delete(clientId);
+    else this.#boardClients.set(clientId, { at: Date.now(), name: name.slice(0, 80) });
+  }
+
+  /** Fresh caret presence per live session — "who has this file open".
+   * Index-matched flat arrays on the wire (one entry per path+client pair):
+   * Record-of-array values break the generated capnweb promise-mapped
+   * types, the same family of rule CollabChanges documents. */
+  async collabPresenceSummary(): Promise<CollabPresenceFlat> {
+    await this.#assertCreated();
+    const paths: string[] = [];
+    const clientIds: string[] = [];
+    for (const [path, ids] of Object.entries(this.#collab.presenceSummary())) {
+      for (const clientId of ids) {
+        paths.push(path);
+        clientIds.push(clientId);
+      }
+    }
+    return { clientIds, paths };
+  }
+
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name.
+   * A flat Record on the wire — nesting breaks the generated capnweb
+   * promise-mapped types (same family of rule as CollabChanges). */
+  async collabBoardViewers(): Promise<Record<string, string>> {
+    await this.#assertCreated();
+    const now = Date.now();
+    for (const [clientId, client] of this.#boardClients) {
+      if (now - client.at > 45_000) this.#boardClients.delete(clientId);
+    }
+    return Object.fromEntries(
+      [...this.#boardClients]
+        .map(([clientId, client]) => [clientId, client.name] as const)
+        .sort(([left], [right]) => left.localeCompare(right)),
+    );
   }
 
   // -- git -------------------------------------------------------------------------

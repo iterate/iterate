@@ -17,8 +17,8 @@ import { StreamEventsSheet } from "../components/stream-events-sheet.tsx";
 import { WithTooltip } from "../components/checkout-header.tsx";
 import { WorkspaceTaskSheet } from "../components/workspace-task-sheet.tsx";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
-import { usePointerPresence } from "../lib/pointer-presence.ts";
-import { PointerOverlay } from "../components/pointer-overlay.tsx";
+import { authorColor, authorLabel } from "../lib/collab-redline.ts";
+import { whoami } from "../lib/use-checkout.ts";
 import { useTaskCommit } from "../lib/use-task-commit.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import { taskPathInFolder, unclaimedPath, type BoardTask, type RowField } from "../lib/board-model.ts";
@@ -57,19 +57,47 @@ export const Route = createFileRoute("/w/$checkoutId")({
   component: WorkspaceBoardPage,
 });
 
+/** The corner presence strip: everyone with this board open — yourself
+ * included, ringed in your own author color, even when alone. */
+function BoardPresence({
+  self,
+  clients,
+}: {
+  self: { clientId: string; name: string } | null;
+  clients: { clientId: string; name: string }[];
+}) {
+  const everyone = [
+    ...(self !== null && !clients.some((client) => client.clientId === self.clientId)
+      ? [self]
+      : []),
+    ...clients,
+  ];
+  if (everyone.length === 0) return null;
+  return (
+    <div className="mr-1 flex items-center -space-x-1.5">
+      {everyone.slice(0, 6).map((client) => (
+        <span
+          key={client.clientId}
+          title={client.name}
+          style={{ borderColor: authorColor(client.clientId, 1) }}
+          className="flex size-6 items-center justify-center rounded-full border-2 bg-background text-[10px] font-semibold uppercase"
+        >
+          {client.name.trim().slice(0, 1) || "?"}
+        </span>
+      ))}
+      {everyone.length > 6 ? (
+        <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
+      ) : null}
+    </div>
+  );
+}
+
 function WorkspaceBoardPage() {
   const { checkoutId } = Route.useParams();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const repoPath = normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH;
   const board = useWorkspaceBoard(checkoutId, repoPath);
-  // Everyone's mouse pointer, Figma-style (only ready boards announce —
-  // presence on a workspace that is still creating would force-create it).
-  const pointers = usePointerPresence(checkoutId, repoPath, {
-    group: search.group,
-    q: search.q,
-    task: search.task,
-  });
   // Auto-commit defaults OFF on the workspace board: every commit advances
   // the redline baseline, and a 60s autosave would wipe "what everyone did"
   // minute by minute. Committing is an explicit act here.
@@ -117,11 +145,21 @@ function WorkspaceBoardPage() {
   // Warm the editor + preview stacks while the board renders: the CM6 and
   // markdown chunks and the whoami identity round trip come off the first
   // sheet-open's critical path.
+  // Durable attribution for cards created here: "Name <email>".
+  const createdByRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     void import("../lib/use-collab-editor.ts").then(
       (module) => void module.ensureCollabIdentity(),
     );
     void import("../components/workspace-task-preview.tsx");
+    void whoami()
+      .then((me) => {
+        createdByRef.current =
+          me.name && me.email
+            ? `${me.name} <${me.email}>`
+            : (me.email ?? me.name ?? me.userId ?? undefined);
+      })
+      .catch(() => {});
   }, []);
   /** Prune expired claims and answer whether a path is spoken for. */
   const isTaken = useCallback((path: string): boolean => {
@@ -197,6 +235,21 @@ function WorkspaceBoardPage() {
     () => board.tasks.find((task) => task.path === search.task) ?? null,
     [board.tasks, search.task],
   );
+  /** Who has which card open, as the Board's presence dots. */
+  const viewersByPath = useMemo(
+    () =>
+      new Map(
+        [...board.viewers].map(([path, clientIds]) => [
+          path,
+          clientIds.map((clientId) => ({
+            color: authorColor(clientId, 1),
+            name: authorLabel(clientId),
+          })),
+        ]),
+      ),
+    [board.viewers],
+  );
+
   const deletedChanges = useMemo(
     () => board.taskChanges.filter((change) => change.status === "deleted"),
     [board.taskChanges],
@@ -314,11 +367,11 @@ function WorkspaceBoardPage() {
       // the path, the heading, and the later title-trailing rename all
       // stay distinct.
       let title = "New task";
-      let file = newTaskFile({ state, title });
+      let file = newTaskFile({ createdBy: createdByRef.current, state, title });
       let target = taskPathInFolder(file.path, folder ?? "tasks");
       for (let suffix = 2; isTaken(target); suffix++) {
         title = `New task ${suffix}`;
-        file = newTaskFile({ state, title });
+        file = newTaskFile({ createdBy: createdByRef.current, state, title });
         target = taskPathInFolder(file.path, folder ?? "tasks");
       }
       claimedRef.current.set(target, Date.now());
@@ -428,6 +481,7 @@ function WorkspaceBoardPage() {
         <SidebarTrigger className="-ml-1 md:hidden" />
         <CheckoutBreadcrumbs repoPath={repoPath} checkoutId={checkoutId} />
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <BoardPresence self={board.self} clients={board.boardClients} />
           <div className="hidden items-center gap-1.5 sm:flex">
             <WithTooltip label="Stream events">
               <Button
@@ -502,7 +556,7 @@ function WorkspaceBoardPage() {
         <Board
           projection={projection}
           taskChangeByPath={board.changes}
-          presenceByPath={new Map()}
+          presenceByPath={viewersByPath}
           recentByPath={new Map()}
           onMove={moveTask}
           onAdd={addTask}
@@ -514,12 +568,6 @@ function WorkspaceBoardPage() {
         streamPath={`/workspaces/tasks/${checkoutId}~${repoPath.replace(/^\/+/, "").replaceAll("/", "--")}`}
         subscribe={board.subscribeEvents}
         onClose={() => setEventsOpen(false)}
-      />
-      <PointerOverlay
-        pointers={pointers}
-        onJumpToView={(view) =>
-          patchSearch({ group: view.group === "none" || view.group === "label" ? view.group : "folder", q: view.q, task: view.task })
-        }
       />
       <WorkspaceTaskSheet
         task={openTask}

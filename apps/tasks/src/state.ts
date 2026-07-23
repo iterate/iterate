@@ -10,6 +10,8 @@ export type TaskCard = {
   state: string;
   labels: string[];
   agent: string | null;
+  /** Durable attribution: "Name <email>", or a /stream path (linked). */
+  createdBy: string | null;
   /** Full markdown source of the file (frontmatter included) for the detail editor. */
   source: string;
   /** True when the file HAS a frontmatter block but its YAML fails to
