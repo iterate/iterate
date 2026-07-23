@@ -15,23 +15,60 @@ const record: ProjectDirectoryRecord = {
   name: "Alpha",
 };
 
-function directoryWithPut(put: ReturnType<typeof vi.fn>): KVNamespace {
-  return { put } as unknown as KVNamespace;
+function directoryWithPut(
+  put: ReturnType<typeof vi.fn>,
+  deleteKey = vi.fn().mockResolvedValue(undefined),
+): KVNamespace {
+  return { delete: deleteKey, put } as unknown as KVNamespace;
 }
 
 describe("primeProjectDirectory", () => {
   beforeEach(() => auth.getProjectBySlug.mockReset());
 
-  it("writes both durable lookup keys", async () => {
+  it("writes both durable lookup keys and clears a stale shared miss", async () => {
     const put = vi.fn().mockResolvedValue(undefined);
+    const deleteKey = vi.fn().mockResolvedValue(undefined);
 
-    await primeProjectDirectory(directoryWithPut(put), record);
+    await primeProjectDirectory(directoryWithPut(put, deleteKey), record);
 
     const body = JSON.stringify(record);
     expect(put.mock.calls).toEqual([
       ["slug:alpha", body],
       ["project:prj_alpha", body],
     ]);
+    expect(deleteKey).toHaveBeenCalledExactlyOnceWith("missing-slug:alpha");
+  });
+
+  it("bounds stale-miss cleanup without failing the required writes", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      let rejectLate!: (error: Error) => void;
+      const deleteKey = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectLate = reject;
+          }),
+      );
+      const put = vi.fn().mockResolvedValue(undefined);
+      const primed = primeProjectDirectory(directoryWithPut(put, deleteKey), record);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(primed).resolves.toBeUndefined();
+      expect(put.mock.calls.map(([key]) => key)).toEqual(["slug:alpha", "project:prj_alpha"]);
+      expect(deleteKey).toHaveBeenCalledExactlyOnceWith("missing-slug:alpha");
+      expect(warn).toHaveBeenCalledWith(
+        "[project-directory] stale negative marker cleanup failed; positive write remains authoritative",
+        expect.objectContaining({ reason: expect.stringContaining("timed out after 1000ms") }),
+      );
+
+      rejectLate(new Error("late platform cancellation"));
+      await Promise.resolve();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("retries only the timed-out key and observes its late rejection", async () => {

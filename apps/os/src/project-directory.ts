@@ -9,8 +9,9 @@
  * create overwrites its keys, and admin-lane projects have no auth-side row
  * so the cache is their only directory), then the auth worker behind a
  * short in-isolate negative memo plus a bounded shared negative marker. A
- * visible positive KV key is ALWAYS checked first, so it outranks an older
- * miss marker (which expires by itself). That shared marker matters for
+ * visible positive KV key is ALWAYS checked first, and every authoritative
+ * prime separately makes a bounded best-effort deletion of an older marker.
+ * That shared marker matters for
  * canonical `<app>--<project>` hosts: the whole label is a legitimate
  * project-slug candidate, but its expected miss must not make each fresh
  * ingress isolate round-trip through the auth worker. Hits are written back,
@@ -40,8 +41,8 @@ export type ProjectIdentity = {
 
 const MEMO_TTL_MS = 15_000;
 // Cloudflare KV requires expirationTtl >= 60s. Reads check the separate
-// positive `slug:` key first, so this marker cannot mask a visible positive;
-// it exists only to suppress repeated authoritative misses.
+// positive `slug:` key first, and positive primes best-effort delete this
+// marker; it exists only to suppress repeated authoritative misses.
 const SHARED_NEGATIVE_TTL_SECONDS = 60;
 const SHARED_NEGATIVE_MARKER = "missing";
 // These writes are exact and idempotent. Each key retries independently: a
@@ -191,10 +192,13 @@ export async function primeProjectDirectory(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
 ): Promise<void> {
-  await writeThrough(directory, record, {
-    attemptTimeoutMs: REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS,
-    maxAttempts: REQUIRED_WRITE_MAX_ATTEMPTS,
-  });
+  await Promise.all([
+    writeThrough(directory, record, {
+      attemptTimeoutMs: REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS,
+      maxAttempts: REQUIRED_WRITE_MAX_ATTEMPTS,
+    }),
+    clearStaleNegativeMarker(directory, record.slug),
+  ]);
   memoize(record.slug, record);
 }
 
@@ -210,9 +214,7 @@ async function writeThrough(
   // No expiration: slugs are immutable and `projects.get(slug).create` overwrites the
   // keys it primes, so entries never go stale — and admin-lane projects
   // (auth mints only an id, no directory row) have NO auth fallback, so an
-  // expiring cache would break their slug ingress after the TTL. A stale
-  // negative marker needs no explicit delete: reads always check this positive
-  // slug key first, and the marker expires after 60 seconds in any case.
+  // expiring cache would break their slug ingress after the TTL.
   const body = JSON.stringify(record);
   await Promise.all([
     writeDirectoryKey(directory, slugKey(record.slug), "slug", body, policy),
@@ -257,20 +259,49 @@ async function writeDirectoryKeyAttempt(
   body: string,
   timeoutMs: number,
 ): Promise<void> {
-  const write = directory.put(key, body);
+  await waitForDirectoryOperation(
+    directory.put(key, body),
+    timeoutMs,
+    "Project directory KV write",
+  );
+}
+
+async function clearStaleNegativeMarker(directory: KVNamespace, slug: string): Promise<void> {
+  try {
+    // This remains independent of the two required positive writes. A stuck
+    // optional delete may add at most the ordinary cache-fill bound, but can
+    // neither fail project creation nor cause either positive key to replay.
+    await waitForDirectoryOperation(
+      directory.delete(missingSlugKey(slug)),
+      CACHE_FILL_TIMEOUT_MS,
+      "Project directory KV delete",
+    );
+  } catch (error) {
+    console.warn(
+      "[project-directory] stale negative marker cleanup failed; positive write remains authoritative",
+      { reason: errorMessage(error) },
+    );
+  }
+}
+
+async function waitForDirectoryOperation(
+  operation: Promise<void>,
+  timeoutMs: number,
+  description: string,
+): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      write,
+      operation,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Project directory KV write timed out after ${timeoutMs}ms`)),
+          () => reject(new Error(`${description} timed out after ${timeoutMs}ms`)),
           timeoutMs,
         );
       }),
     ]);
   } finally {
-    // Promise.race keeps rejection handlers attached to the write after a
+    // Promise.race keeps rejection handlers attached to the operation after a
     // timeout, so a late platform rejection remains observed.
     clearTimeout(timer);
   }
