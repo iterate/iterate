@@ -105,6 +105,9 @@ async function handleOAuthCallback(input: {
     if (result.error.endsWith("_invalid_state")) {
       return Response.json({ error: "Invalid or expired OAuth state." }, { status: 400 });
     }
+    if (result.error === "github_installation_already_claimed" && "githubStealState" in result) {
+      return redirectWithGithubSteal(result.callbackUrl ?? callbackUrl, result.githubStealState);
+    }
     return redirectWithError(result.callbackUrl ?? callbackUrl, result.error);
   }
   return redirectResponse(result.callbackUrl ?? callbackUrl ?? "/");
@@ -209,6 +212,14 @@ function redirectWithError(callbackUrl: string | null, error: string) {
   const url = new URL(callbackUrl);
   url.searchParams.set("error", error);
   return redirectResponse(url.toString());
+}
+
+function redirectWithGithubSteal(callbackUrl: string | null, state: string) {
+  const location = callbackUrl || "/";
+  const url = new URL(location, "https://os.iterate.com");
+  url.searchParams.set("error", "github_installation_already_claimed");
+  url.searchParams.set("githubSteal", state);
+  return redirectResponse(callbackUrl ? url.toString() : `${url.pathname}${url.search}`);
 }
 
 // Response.redirect rejects relative URLs, and the app's own origin is not
