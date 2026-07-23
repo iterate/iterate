@@ -10,7 +10,7 @@ size: medium
 Done. The signed confirmation flow, authenticated RPC, atomic claim move, old-connection cleanup,
 race-safe cleanup, dialog, docs, generated API, full local checks, headed preview proof, and green
 preview rerun are complete. Bugbot's concurrent-steal finding has a deterministic regression test
-and fix; final CI is pending.
+and fix. Each review update is covered by the PR's required CI checks.
 
 ## Goal
 

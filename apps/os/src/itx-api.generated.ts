@@ -799,6 +799,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        confirmGithubSteal: string;
         connectTelegram: string;
         disconnect: string;
         getConnection: string;
