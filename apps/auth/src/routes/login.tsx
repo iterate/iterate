@@ -83,7 +83,7 @@ function RouteComponent() {
             </h1>
             <p className="text-sm text-muted-foreground">
               {signedInUser
-                ? "Continue with an iterate account or sign in as someone else."
+                ? "Continue with an iterate account or use another sign-in method."
                 : "Sign in to your iterate account"}
             </p>
           </div>
@@ -96,13 +96,21 @@ function RouteComponent() {
               window.location.assign(window.location.pathname + window.location.search);
             }}
           >
-            <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
+            <LoginActions
+              redirectTo={redirectTo}
+              emailOtpEnabled={emailOtpEnabled}
+              loginHint={
+                search.login_hint === "email" && emailOtpEnabled ? search.login_hint : undefined
+              }
+              methodDivider="before"
+            />
           </AccountChooser>
         ) : (
           <LoginActions
             redirectTo={redirectTo}
             emailOtpEnabled={emailOtpEnabled}
             loginHint={loginHint}
+            methodDivider="between"
           />
         )}
       </main>
@@ -114,10 +122,12 @@ function LoginActions({
   redirectTo,
   emailOtpEnabled,
   loginHint,
+  methodDivider,
 }: {
   redirectTo: string;
   emailOtpEnabled: boolean;
   loginHint?: "email" | "google";
+  methodDivider: "before" | "between";
 }) {
   const navigate = Route.useNavigate();
   // The email step is part of the URL (login_hint=email) so a refresh or a
@@ -186,6 +196,8 @@ function LoginActions({
 
   return (
     <div className="space-y-4" data-hydrated={isHydrated}>
+      {methodDivider === "before" ? <LoginMethodDivider /> : null}
+
       {emailOtpEnabled ? (
         <EmailOtpSignIn
           redirectTo={redirectTo}
@@ -197,13 +209,7 @@ function LoginActions({
 
       {!emailMode ? (
         <>
-          {emailOtpEnabled ? (
-            <div className="flex items-center gap-3">
-              <Separator className="flex-1" />
-              <span className="text-xs tracking-[0.2em] text-muted-foreground uppercase">or</span>
-              <Separator className="flex-1" />
-            </div>
-          ) : null}
+          {emailOtpEnabled && methodDivider === "between" ? <LoginMethodDivider /> : null}
           <Button
             className="w-full"
             variant="outline"
@@ -217,6 +223,16 @@ function LoginActions({
           </Button>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function LoginMethodDivider() {
+  return (
+    <div className="flex items-center gap-3">
+      <Separator className="flex-1" />
+      <span className="text-xs tracking-[0.2em] text-muted-foreground uppercase">or</span>
+      <Separator className="flex-1" />
     </div>
   );
 }

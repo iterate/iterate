@@ -1,5 +1,5 @@
 ---
-status: complete
+status: in-progress
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-Complete. OS requests one-shot account selection for Google sign-in; tests,
-typechecks, preview e2e, and the cross-host browser flow all pass.
+The email path and one-screen chooser update are implemented and local checks
+pass. A fresh preview browser proof and PR media update remain.
 
 ## Problem
 
@@ -37,6 +37,10 @@ current behavior.
 - [x] Run focused tests, typecheck, lint, and formatting checks for the touched packages. _Auth's 72 tests, Auth/OS typechecks, and touched-file lint/format checks pass._
 - [x] Prove the account chooser flow in a browser against a production-shaped environment. _Preview 14 showed the current Auth account and “Log in as someone else”; continuing did not repeat the chooser._
 - [x] Update the draft PR with the user-visible behavior and proof. _PR #2281 includes the preview URLs, verification notes, and an inline chooser screenshot._
+- [x] Require the same account-selection opportunity for OS email sign-in. _Both OS method buttons send the one-shot `select_account` prompt._
+- [x] Remove the “Current” badge from account rows. _The account's actions already convey which session is active._
+- [x] Show the email and Google alternatives directly below an “or” divider without an extra reveal step. _The chooser has no reveal state or “Log in as someone else” button._
+- [ ] Re-run checks and replace the preview browser proof.
 
 ## Implementation notes
 
@@ -48,3 +52,5 @@ current behavior.
 - The chooser prompt is removed when `/login` resumes the signed authorization
   query. This keeps account selection one-shot and prevents both "continue"
   and Google reauthentication from returning to the chooser.
+- Preview review found that OS's email button did not send the prompt, so an
+  existing Auth session could still silently authorize its Google identity.
