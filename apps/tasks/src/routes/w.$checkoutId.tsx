@@ -17,6 +17,8 @@ import { StreamEventsSheet } from "../components/stream-events-sheet.tsx";
 import { WithTooltip } from "../components/checkout-header.tsx";
 import { WorkspaceTaskSheet } from "../components/workspace-task-sheet.tsx";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
+import { usePointerPresence } from "../lib/pointer-presence.ts";
+import { PointerOverlay } from "../components/pointer-overlay.tsx";
 import { useTaskCommit } from "../lib/use-task-commit.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import { taskPathInFolder, unclaimedPath, type BoardTask, type RowField } from "../lib/board-model.ts";
@@ -61,6 +63,13 @@ function WorkspaceBoardPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const repoPath = normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH;
   const board = useWorkspaceBoard(checkoutId, repoPath);
+  // Everyone's mouse pointer, Figma-style (only ready boards announce —
+  // presence on a workspace that is still creating would force-create it).
+  const pointers = usePointerPresence(checkoutId, repoPath, {
+    group: search.group,
+    q: search.q,
+    task: search.task,
+  });
   // Auto-commit defaults OFF on the workspace board: every commit advances
   // the redline baseline, and a 60s autosave would wipe "what everyone did"
   // minute by minute. Committing is an explicit act here.
@@ -505,6 +514,12 @@ function WorkspaceBoardPage() {
         streamPath={`/workspaces/tasks/${checkoutId}~${repoPath.replace(/^\/+/, "").replaceAll("/", "--")}`}
         subscribe={board.subscribeEvents}
         onClose={() => setEventsOpen(false)}
+      />
+      <PointerOverlay
+        pointers={pointers}
+        onJumpToView={(view) =>
+          patchSearch({ group: view.group === "none" || view.group === "label" ? view.group : "folder", q: view.q, task: view.task })
+        }
       />
       <WorkspaceTaskSheet
         task={openTask}
