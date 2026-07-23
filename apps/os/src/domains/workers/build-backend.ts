@@ -15,18 +15,100 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
 export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
-// worker-bundler currently reports dependency-install failures as warnings
-// and can still return an esbuild output containing unresolved bare imports.
-// Such output is not a usable artifact: Worker Loader rejects it only when
-// the first request tries to instantiate the module graph. Keep ordinary
+// worker-bundler reports dependency-install failures as warnings, and (via
+// our patch — see patches/@cloudflare__worker-bundler@0.2.1.patch) warns when
+// its resolver keeps an unresolvable import external. Either way the output
+// is not a usable artifact: Worker Loader rejects it only when the first
+// request tries to instantiate the module graph, which surfaces as a cryptic
+// `No such module` delivery failure instead of a build error. Keep ordinary
 // compiler warnings, but fail the build boundary on every install-warning
-// shape emitted by worker-bundler's installer.
+// shape emitted by worker-bundler's installer and on unresolved imports
+// (below).
 const DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS = [
   /^Failed to parse package\.json\b/,
   /^Could not resolve version for\b/,
   /^Version .+ not found for\b/,
   /^Failed to install\b/,
 ] as const;
+
+/**
+ * Bare node builtins nodejs_compat provides at runtime (WORKER_COMPATIBILITY_FLAGS
+ * above): imports of these legitimately stay external, everything else external
+ * is a startup failure. Base names only — subpath imports like `stream/web` or
+ * `fs/promises` share their base's entry.
+ */
+const NODE_BUILTIN_BASE_NAMES = new Set([
+  "assert",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "domain",
+  "events",
+  "fs",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "module",
+  "net",
+  "os",
+  "path",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "repl",
+  "stream",
+  "string_decoder",
+  "sys",
+  "timers",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+]);
+
+/**
+ * The warnings that mean the artifact cannot instantiate: unresolved imports
+ * kept external (`Failed to resolve '<specifier>' from <importer>` — emitted
+ * by our worker-bundler patch in the esbuild lane and by the stock transform
+ * lane) and files the transform lane could not read at all. Scheme'd
+ * specifiers (`node:*`, `cloudflare:*`) and bare node builtins are exempt —
+ * the runtime provides those.
+ */
+function unresolvedImportFailures(warnings: readonly string[]): string[] {
+  const failures: string[] = [];
+  for (const warning of warnings) {
+    if (warning.startsWith("File not found: ")) {
+      failures.push(warning);
+      continue;
+    }
+    const match = /^Failed to resolve '([^']+)' from /.exec(warning);
+    if (match === null) continue;
+    const specifier = match[1]!;
+    if (/^[a-zA-Z][\w+.-]*:/.test(specifier)) continue;
+    const base = specifier.startsWith("@")
+      ? specifier.split("/").slice(0, 2).join("/")
+      : specifier.split("/")[0]!;
+    if (NODE_BUILTIN_BASE_NAMES.has(base)) continue;
+    failures.push(warning);
+  }
+  return failures;
+}
 
 const PACKAGE_DEPENDENCY_FIELDS = [
   "dependencies",
@@ -141,14 +223,27 @@ function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
     "warnings" in built &&
     Array.isArray(built.warnings)
   ) {
-    const dependencyInstallFailures = built.warnings.filter(
-      (warning): warning is string =>
-        typeof warning === "string" &&
-        DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
+    const warnings = built.warnings.filter(
+      (warning): warning is string => typeof warning === "string",
+    );
+    const dependencyInstallFailures = warnings.filter((warning) =>
+      DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
     );
     if (dependencyInstallFailures.length > 0) {
       throw new WorkerBuildFailedError(
         buildFailureMessageFromError(dependencyInstallFailures.join("\n")),
+      );
+    }
+    const unresolvedImports = unresolvedImportFailures(warnings);
+    if (unresolvedImports.length > 0) {
+      throw new WorkerBuildFailedError(
+        buildFailureMessageFromError(
+          [
+            "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:",
+            ...unresolvedImports.map((warning) => `  ${warning}`),
+            "Declare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
+          ].join("\n"),
+        ),
       );
     }
   }

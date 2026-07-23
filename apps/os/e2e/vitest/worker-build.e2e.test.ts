@@ -96,3 +96,87 @@ test("Worker builds let worker-bundler install and bundle package dependencies",
 
   await expect(worker.format("hello worker bundler")).resolves.toBe("helloWorkerBundler");
 });
+
+// An import the bundler cannot resolve must fail at BUILD time with the
+// specifier named — not ship an artifact that dies at instantiation with a
+// cryptic `No such module`, parking every subscription that pushes into it
+// (the 2026-07-23 config-worker-stalled incident: 22 prod projects).
+test("Worker build fails loudly on unresolved imports", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await itx.projects
+    .get(`unresolved-import-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
+
+  using broken = project.workers.get({
+    entrypoint: "Broken",
+    path: "/",
+    source: {
+      createWorker: {
+        entryPoint: "worker.ts",
+        files: {
+          files: {
+            "worker.ts": [
+              'import { WorkerEntrypoint } from "cloudflare:workers";',
+              'import { missing } from "this-package-is-not-installed";',
+              "export class Broken extends WorkerEntrypoint { poke() { return missing; } }",
+              `// build salt ${crypto.randomUUID()}`,
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+      },
+    },
+    type: "stateless",
+  }) as unknown as { poke(): Promise<unknown> } & Disposable;
+
+  const error = await (broken.poke() as Promise<unknown>).then(
+    () => Promise.reject(new Error("build unexpectedly succeeded")),
+    (thrown: Error) => thrown,
+  );
+  expect(error.message).toContain("Failed to resolve 'this-package-is-not-installed'");
+  expect(error.message).toContain("No such module");
+});
+
+// The runtime provides node builtins (nodejs_compat) and scheme'd modules, so
+// those imports legitimately stay external and must keep building and running.
+test("Worker builds keep runtime-provided imports working", async () => {
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await itx.projects
+    .get(`builtin-import-${crypto.randomUUID().slice(0, 8)}`)
+    .create({});
+
+  using worker = project.workers.get({
+    entrypoint: "Builtins",
+    path: "/",
+    source: {
+      createWorker: {
+        entryPoint: "worker.ts",
+        files: {
+          files: {
+            "worker.ts": [
+              'import { WorkerEntrypoint } from "cloudflare:workers";',
+              'import { Buffer } from "node:buffer";',
+              // Bare (unprefixed) builtin on purpose: it resolves to nothing at
+              // build time and only exists in the runtime's module registry.
+              'import path from "path";',
+              'export class Builtins extends WorkerEntrypoint { greet() { return `${path.join("a", "b")}:${Buffer.from("ok").toString()}`; } }',
+              `// build salt ${crypto.randomUUID()}`,
+            ].join("\n"),
+          },
+          type: "inline",
+        },
+      },
+    },
+    type: "stateless",
+  }) as unknown as { greet(): Promise<string> } & Disposable;
+
+  await expect(worker.greet()).resolves.toBe("a/b:ok");
+});

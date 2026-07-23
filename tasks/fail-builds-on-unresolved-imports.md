@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done-pending-review
 size: medium
 ---
 
@@ -7,11 +7,11 @@ size: medium
 
 ## Status summary
 
-Diagnosed; prod remediated (all 22 parked config-worker feeds fixed and
-drained). Code fix in progress: make the build fail loudly when the bundle
-contains an import that cannot resolve, instead of shipping an artifact that
-dies at instantiation with a cryptic `No such module` and parks the config
-feed.
+Done, pending review (PR #2292). Prod remediated (all 22 parked config-worker
+feeds fixed and drained). The build now fails loudly when the bundle contains
+an import that cannot resolve, instead of shipping an artifact that dies at
+instantiation with a cryptic `No such module` and parks the config feed.
+Verified end-to-end against the real bundler in workerd (new e2e tests).
 
 ## Incident (2nd "Config worker stalled", 2026-07-23)
 
@@ -56,33 +56,33 @@ No such module "iterate/live-state".
 
 The build boundary must refuse artifacts that cannot instantiate. Design:
 
-- [ ] Extend `patches/@cloudflare__worker-bundler@0.2.1.patch`: in the
-      esbuild virtual-fs plugin's bare-specifier `onResolve`, when
-      `resolveModule` THROWS (installed package with an unmatched subpath,
-      invalid package.json, unresolvable relative path), attach an esbuild
-      warning `Failed to resolve '<specifier>' from <importer>: <reason>` to
-      the external fallback instead of staying silent. Scheme'd specifiers
-      (`cloudflare:*`, `node:*`) never reach the throw path; dynamic imports
-      stay silent (a guarded `await import()` is a legitimate pattern).
-      Also warn (`package not installed`) for static bare imports of packages
-      that are simply absent from `node_modules` — schemes excluded.
-- [ ] `build-backend.ts`: fail the build (`WorkerBuildFailedError`) on
-      `Failed to resolve '...'` warnings — from the patched esbuild lane and
-      the transform lane (`bundle: false`), which already emits them — and on
-      `File not found:` warnings. Exempt bare node builtins (`fs`,
-      `stream/web`, …) since nodejs_compat provides them at runtime; keep the
-      exemption list in reviewable TS, not in the patch.
-- [ ] Clear, actionable failure message: name each unresolved specifier and
-      its importer, say the worker would fail at startup with
-      `No such module`, and hint at the causes (package not declared in
-      package.json; the installed package no longer provides that entry —
-      update the import; node builtins may use the `node:` prefix).
-- [ ] Tests: build-backend failure/exemption table (mocked bundler warnings);
-      real worker-bundler run over in-memory files (prebuilt fake
-      `node_modules`, no network) proving the patch emits the warning for a
-      removed subpath and stays quiet for `node:*`/`cloudflare:*`/dynamic
-      imports — if esbuild-wasm cooperates in vitest; otherwise the mocked
-      table stands alone.
+- [x] Extend `patches/@cloudflare__worker-bundler@0.2.1.patch`: the esbuild
+      virtual-fs plugin's bare-specifier `onResolve` now attaches a
+      `Failed to resolve '<specifier>' from <importer>: <reason>` warning to
+      the external fallback — distinguishing "the installed '<pkg>' package
+      does not provide this entry" (the incident shape) from "package '<pkg>'
+      is not installed" — and the relative-path fallthrough warns
+      "file does not exist". Scheme'd specifiers (`cloudflare:*`, `node:*`)
+      and dynamic imports stay silent (a guarded `await import()` is
+      legitimate). _Regenerated via `pnpm patch`/`patch-commit`; installer
+      hunks preserved._
+- [x] `build-backend.ts`: `unresolvedImportFailures` fails the build
+      (`WorkerBuildFailedError`) on those warnings — from the patched esbuild
+      lane and the stock transform lane (`bundle: false`) — and on
+      `File not found:` warnings. Bare node builtins (`fs`, `stream/web`, …)
+      exempt via `NODE_BUILTIN_BASE_NAMES` in reviewable TS.
+- [x] Clear, actionable failure message: names each unresolved specifier and
+      importer, says the worker would fail at startup with `No such module`,
+      and hints at the fixes (declare the dependency; update the import;
+      `node:` prefix for builtins).
+- [x] Tests: build-backend failure/exemption tables (mocked warnings), plus
+      two new e2e tests in `worker-build.e2e.test.ts` running the REAL
+      patched bundler in workerd: an unresolved bare import fails the build
+      with the specifier named, and bare `path` + `node:buffer` +
+      `cloudflare:workers` keep building and running. _worker-bundler cannot
+      run under plain node (wasm module import), so the in-memory unit-test
+      idea was replaced by the e2e lane; also re-ran the overlay and
+      itx-workers e2e suites green as template regression cover._
 
 ## Explicitly out of scope
 
