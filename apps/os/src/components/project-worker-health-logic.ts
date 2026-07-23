@@ -5,10 +5,11 @@ import type { StreamEventInput } from "../itx-api.generated.ts";
  * stream's own runtime state. `parked` = delivery gave up and stopped;
  * `backoff` = delivery is failing and retrying (not stopped yet).
  *
- * `attempt` / `lastError` are only meaningful for `backoff`: parking `ack`s the
- * spine row, which zeroes `attempt` and clears `last_error` (the count and
- * reason survive only in the `subscription-parked` fact, not in runtime state),
- * so the UI must not show them for a parked row.
+ * `attempt` / `lastError` are meaningful for both states: parking keeps the
+ * failure evidence on the spine row (mirroring the `subscription-parked`
+ * fact), so the UI can show WHY delivery stopped. Rows parked before that
+ * behavior shipped carry `attempt: 0` / `lastError: null` — display must
+ * fall back gracefully when they are absent.
  */
 export type SubscriptionHealth = {
   subscriptionKey: string;

@@ -242,7 +242,11 @@ describe("reconcileSubscriptionCursorRows", () => {
     store.ensure("orphan", 2);
     store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
 
-    reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
+    reconcileSubscriptionCursorRows(
+      store,
+      new Set(["survivor-clean", "survivor-backing-off"]),
+      new Set(),
+    );
 
     // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
     expect(store.get("orphan")).toBeUndefined();
@@ -256,6 +260,36 @@ describe("reconcileSubscriptionCursorRows", () => {
       nextAttemptAt: null,
       lastError: null,
     });
+  });
+
+  it("keeps a parked survivor's failure evidence — the fold keeps it parked, so there is no fresh try", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("parked", 7);
+    store.nack("parked", { attempt: 14, nextAttemptAt: 55_555, error: "still down" });
+    store.park("parked", { attempt: 15, error: "still down" });
+
+    reconcileSubscriptionCursorRows(store, new Set(["parked"]), new Set(["parked"]));
+
+    // The stalled-warning sheet's "why" must survive the rebuild.
+    expect(store.get("parked")).toMatchObject({
+      ackedOffset: 7,
+      attempt: 15,
+      nextAttemptAt: null,
+      lastError: "still down",
+    });
+  });
+
+  it("still clears a parked row holding a stray retry schedule — no eternally re-armed alarm", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("parked-stray", 4);
+    // A parked row's next_attempt_at should be null (park guarantees it);
+    // simulate corrupted storage where it is not.
+    store.nack("parked-stray", { attempt: 9, nextAttemptAt: 77_777, error: "still down" });
+
+    reconcileSubscriptionCursorRows(store, new Set(["parked-stray"]), new Set(["parked-stray"]));
+
+    expect(store.get("parked-stray")).toMatchObject({ attempt: 0, nextAttemptAt: null });
+    expect(store.minNextAttemptAt()).toBeNull();
   });
 });
 
@@ -423,6 +457,24 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(row.attempt).toBe(3); // a reachable host is not a healthy one
     expect(row.lastError).toBe("ingest failing");
     expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
+  });
+
+  it("park clears the retry schedule but keeps the cursor and failure evidence", () => {
+    const store = makeStore();
+    store.ensure("k", 5);
+    store.nack("k", { attempt: 14, nextAttemptAt: 12345, error: "still down" });
+
+    store.park("k", { attempt: 15, error: "still down" });
+    expect(store.get("k")).toMatchObject({
+      ackedOffset: 5,
+      attempt: 15, // mirrors the park fact, not the last nack
+      nextAttemptAt: null, // a parked row must not drive the alarm
+      lastError: "still down",
+    });
+
+    // Resume acks at the unmoved cursor: the evidence clears for a fresh start.
+    store.ack("k", 5);
+    expect(store.get("k")).toMatchObject({ attempt: 0, nextAttemptAt: null, lastError: null });
   });
 });
 

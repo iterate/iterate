@@ -71,6 +71,14 @@ class FailingAckCursorStore implements SubscriptionCursorStore {
     row.lastError = args.error;
   }
 
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined) return;
+    row.attempt = args.attempt;
+    row.nextAttemptAt = null;
+    row.lastError = args.error;
+  }
+
   setCursor(subscriptionKey: string, ackedOffset: number): void {
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;

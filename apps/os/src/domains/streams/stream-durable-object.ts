@@ -1085,10 +1085,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       // row; a row's backoff may blame code the new version replaced). Drop
       // rows with no surviving config; keep progress (ackedOffset is
       // monotonic truth about the same immutable log) but clear failure state
-      // so every survivor gets an immediate fresh try under the new fold.
+      // so every survivor gets an immediate fresh try under the new fold —
+      // except parked survivors, which stay parked through the replay and
+      // keep their row's failure evidence for the stalled-warning sheet.
+      const configured = Object.entries(state.configuredSubscribersByKey);
       reconcileSubscriptionCursorRows(
         this.#subscriptionCursorStore,
-        new Set(Object.keys(state.configuredSubscribersByKey)),
+        new Set(configured.map(([key]) => key)),
+        new Set(
+          configured.filter(([, entry]) => entry.parkedAtOffset !== undefined).map(([key]) => key),
+        ),
       );
     }
 
