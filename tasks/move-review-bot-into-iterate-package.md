@@ -33,3 +33,4 @@ Status: The implementation and config migration are ported onto current `main`. 
 - 2026-07-22: Ported the implementation onto current `main`; the packaged worker now uses the SDK's newer shared `createProcessorHost` rather than duplicating its host lifecycle.
 - 2026-07-22: Full monorepo typecheck, lint, format check, and tests pass on the worktree branch; package build and focused GitHub/template tests also pass.
 - 2026-07-22: The first preview exposed one stale E2E fixture assertion for the deleted seeded bot path. Removed that assertion, added the inverse check, and updated the GitHub-agent guide to describe the packaged runtime and Markdown rules; preview rerun pending.
+- 2026-07-23: Opened draft PRs iterate/iterate#2259 and iterate/config#18; the config PR consumes #2259's pkg.pr.new artifact until the package change reaches `main`.
