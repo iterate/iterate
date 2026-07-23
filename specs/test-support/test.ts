@@ -114,7 +114,7 @@ export const test = base.extend<{
     }
   },
   previewRolloutTimeoutBudget: [
-    async (_fixtures, use, testInfo) => {
+    async ({ browserName: _browserName }, use, testInfo) => {
       // The project-create gate is intentional harness time, not product test
       // time. Preserve every test's configured execution budget while still
       // making the wait visible inside its trace and wall-clock telemetry.
