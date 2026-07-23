@@ -926,7 +926,7 @@ describe("preview test commands", () => {
     );
   });
 
-  test("waits at most 90 seconds from a fresh OS deployment and only gates OS", () => {
+  test("waits at most 90 seconds for fresh deployments whose live suites call Durable Objects", () => {
     const deployedAt = "2026-07-22T23:05:30.000Z";
     const now = Date.parse(deployedAt);
 
@@ -947,13 +947,13 @@ describe("preview test commands", () => {
         nowMs: now + 90_000,
       }),
     ).toBe(0);
-    expect(
-      resolvePreviewRolloutRemainingSeconds({
-        appSlug: "auth",
-        deployedAt,
-        nowMs: now,
-      }),
-    ).toBe(0);
+    for (const appSlug of ["semaphore", "streams-example-app", "dummy-petshop"] as const) {
+      expect(resolvePreviewRolloutRemainingSeconds({ appSlug, deployedAt, nowMs: now })).toBe(90);
+      expect(resolvePreviewRolloutReadyAtMs({ appSlug, deployedAt })).toBe(now + 90_000);
+    }
+    expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "auth", deployedAt, nowMs: now })).toBe(
+      0,
+    );
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", nowMs: now })).toBe(0);
     expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(now + 90_000);
     expect(resolvePreviewRolloutReadyAtMs({ appSlug: "auth", deployedAt })).toBe(0);
@@ -970,11 +970,16 @@ describe("preview test commands", () => {
     expect(cloudflarePreviewApps.os).toMatchObject({
       previewDeployBudgetMs: 90_000,
       previewReadyWorkerVersion: true,
+      previewTestRolloutGate: "inside-suite",
       previewTestBudgetMs: 100_000,
     });
     expect(cloudflarePreviewApps["streams-example-app"]).toMatchObject({
       previewReadyWorkerVersion: true,
+      previewTestRolloutGate: "before-suite",
     });
+    expect(cloudflarePreviewApps.semaphore.previewTestRolloutGate).toBe("before-suite");
+    expect(cloudflarePreviewApps["dummy-petshop"].previewTestRolloutGate).toBe("before-suite");
+    expect(cloudflarePreviewApps.auth.previewTestRolloutGate).toBeUndefined();
 
     const workflow = parseYaml(
       readFileSync(resolve(repoRoot, ".depot/workflows/cloudflare-previews.yml"), "utf8"),

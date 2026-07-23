@@ -67,11 +67,11 @@ const draftPreviewNotice = [
 // consistent after the new edge Worker version is serving. A newly addressed
 // Durable Object can therefore still be assigned the prior code for seconds
 // to minutes, and an in-flight RPC is reset when that assignment changes.
-// Keep project-backed DO creation and the dense OS fan-out behind a bounded
-// deployment-age gate. Browser/auth setup, smoke, installation, and every
-// other app keep running while this clock elapses, so it normally stays off
-// the critical path.
-const osPreviewMinimumDeploymentAgeMs = 90_000;
+// Keep live e2e work that creates or calls Durable Objects behind a bounded
+// deployment-age gate. Apps still start concurrently; long suites can overlap
+// independent setup with this clock while short DO suites wait at their own
+// boundary, so the gate does not serialize the fleet.
+const previewMinimumDeploymentAgeMs = 90_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
 /**
@@ -851,14 +851,14 @@ function resolvePreviewRolloutReadyAtMs(input: {
   appSlug: CloudflarePreviewAppSlugType;
   deployedAt?: string | null;
 }) {
-  if (input.appSlug !== "os" || !input.deployedAt) return 0;
+  if (!cloudflarePreviewApps[input.appSlug].previewTestRolloutGate || !input.deployedAt) return 0;
 
   const deployedAtMs = Date.parse(input.deployedAt);
   if (!Number.isFinite(deployedAtMs)) {
     throw new Error(`Invalid preview deployment timestamp: ${input.deployedAt}`);
   }
 
-  return deployedAtMs + osPreviewMinimumDeploymentAgeMs;
+  return deployedAtMs + previewMinimumDeploymentAgeMs;
 }
 
 async function testPreviewApps({
@@ -1021,10 +1021,17 @@ async function testPreviewApps({
     const telemetryArtifactDirectory = runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR
       ? resolve(runtime.repositoryRoot, runtime.commandEnvironment.TEST_TELEMETRY_ARTIFACT_DIR)
       : undefined;
+    telemetry.appStarted(app.previewTestArtifactSources);
+    if (app.previewTestRolloutGate === "before-suite" && rolloutRemainingSeconds > 0) {
+      logPreview(
+        `rollout settle start: ${app.slug} (${rolloutRemainingSeconds}s remaining from deployment)`,
+      );
+      await sleep(rolloutRemainingSeconds * 1_000, runtime.signal);
+      logPreview(`rollout settle finish: ${app.slug}`);
+    }
     logPreview(
       `test start: ${app.slug} against ${existingEntry.publicUrl} (doppler config ${environmentConfigLease.dopplerConfig})`,
     );
-    telemetry.appStarted(app.previewTestArtifactSources);
     // One attempt, deliberately: retries live in the individual test
     // (docs/testing.md#retries-and-timeouts) — everything above only
     // watches and fails.
@@ -1038,7 +1045,7 @@ async function testPreviewApps({
         "--",
         "env",
         `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
-        ...(app.slug === "os"
+        ...(app.previewTestRolloutGate === "inside-suite"
           ? [
               `${previewRolloutRemainingSecondsEnvironment}=${rolloutRemainingSeconds}`,
               `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${rolloutReadyAtMs}`,
@@ -1826,6 +1833,13 @@ export type CloudflarePreviewApp = {
    * finite sample of Durable Objects cannot prove the whole fleet.
    */
   previewReadyWorkerVersion?: true;
+  /**
+   * Cloudflare Worker and Durable Object code propagation is eventually
+   * consistent after deploy. Live suites that call a DO either wait before
+   * their short command starts, or consume the absolute boundary inside a
+   * longer command so independent setup can overlap it.
+   */
+  previewTestRolloutGate?: "before-suite" | "inside-suite";
   previewTestBaseUrlEnvVar: string;
   /** Every canonical artifact the app-level test command must produce once. */
   previewTestArtifactSources: readonly TestTelemetryArtifactSource[];
@@ -2174,6 +2188,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // preview deploy waits the full 10min readiness timeout on a 404 and fails.
     previewReadyUrlPath: "/api/health",
     previewReadyWorkerVersion: true,
+    previewTestRolloutGate: "inside-suite",
     paths: [
       "apps/os/**",
       // The root Playwright suite is part of OS preview e2e. A test or
@@ -2306,6 +2321,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
+    previewTestRolloutGate: "before-suite",
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/semaphore")],
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
@@ -2388,6 +2404,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewDependencies: ["auth"],
     previewReadyUrlPath: "/api/__internal/health",
     previewReadyWorkerVersion: true,
+    previewTestRolloutGate: "before-suite",
     previewTestBaseUrlEnvVar: "WORKER_URL",
     previewTestArtifactSources: [
       previewVitestArtifactSource("@iterate-com/streams-example-app"),
@@ -2463,6 +2480,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     // it decides the generated wrangler routes.
     contentFingerprintPaths: ["apps/dummy-petshop", "envs.ts"],
     previewReadyUrlPath: "/",
+    previewTestRolloutGate: "before-suite",
     previewTestBaseUrlEnvVar: "PETSHOP_BASE_URL",
     previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/dummy-petshop")],
     previewTestCommandArgs: [

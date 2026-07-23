@@ -127,6 +127,38 @@ page setup, authentication, browser-only specs, smoke, TUI, and other app suites
 continue to overlap the rollout. The rejected 4/25 streak remains diagnostic
 evidence only; the accepted counter restarts at 0/25 on the new head.
 
+PR #2265's first formal head, `e5e9990986834b9c3c340e746b626ba0974e96bb`,
+then passed one complete run in 285 seconds with zero retries. The next run was
+rejected at 372 seconds after three permitted test retries exposed two distinct
+defects:
+
+- Semaphore and Streams addressed old Durable Object versions after their new
+  edge Workers were ready. Semaphore traces contained both the prior and new
+  code versions; Streams reported an explicit code-update reset. The 90-second
+  gate had covered only OS, so the fix applies the same
+  per-deployment boundary to every live suite that calls Durable Objects. The
+  short app commands wait at their own boundaries while all app lanes remain
+  concurrent; OS still overlaps browser/auth setup internally.
+- Playwright's empty-agent-feed case timed out while creating project
+  `prj_ddc2a50bba2941878bed307b207417ea`. Trace
+  `eb26b8dc5ae96c5da9373abef6e8606d` shows `Project.create` alive until the
+  90-second caller watchdog canceled it. The durable event history is
+  conclusive: config-repo creation began, Cloudflare Artifacts returned
+  `INTERNAL_ERROR` after 32.7 seconds, and the repo processor journaled
+  `repos/create-failed`. No `repos/created` or `project/ready` fact followed,
+  even after later wakes. The Playwright retry created a different project and
+  passed, masking the permanently poisoned first project.
+
+`INTERNAL_ERROR` and `UPSTREAM_UNAVAILABLE` are Artifacts service-availability
+outcomes, not invalid repo requests. Repo creation now leaves its existing
+idempotent durable obligation open for redelivery on those two codes, exactly
+as it already does for a Durable Object lifecycle reset or an Artifact that is
+still materializing. Input/domain errors still append terminal
+`repos/create-failed` and remain fail-closed. Focused processor tests prove both
+classifications and the failed-attempt → redelivery → one `repos/created`
+recovery path. These fixes change the immutable head, so neither formal run is
+counted and the accepted streak restarts at 0/25.
+
 ## Round 9 (2026-07-22, post-#2260)
 
 This proof starts from `origin/main` at

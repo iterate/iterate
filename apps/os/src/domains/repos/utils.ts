@@ -68,6 +68,11 @@ const ARTIFACTS_REPO_NOT_READY_NUMERIC_CODES = new Set([10200, 10302, 10303]);
 const ARTIFACTS_REPO_NOT_READY_MESSAGE =
   /^Repository "[^"]+" is currently being (?:created|imported|forked)\. The repository is not yet available\. Retry after \d+ seconds\.$/;
 
+const RETRYABLE_ARTIFACTS_INFRASTRUCTURE_CODES = new Set([
+  "INTERNAL_ERROR",
+  "UPSTREAM_UNAVAILABLE",
+]);
+
 function isArtifactsRepoNotReadyError(error: unknown) {
   if (typeof error !== "object" || error === null) return false;
   const code = "code" in error ? error.code : undefined;
@@ -88,6 +93,31 @@ export function isRepoNotSeededError(error: unknown): boolean {
     (error as { name?: string } | null)?.name === RepoNotSeededError.NAME ||
     isArtifactsRepoNotReadyError(error)
   );
+}
+
+/**
+ * Whether Cloudflare Artifacts rejected an idempotent repo operation because
+ * its service was temporarily unavailable, rather than because the requested
+ * repo was invalid. Inspect causes because domain helpers may wrap the binding
+ * error with operation context before it reaches the repo processor.
+ */
+export function isRetryableArtifactsInfrastructureError(error: unknown): boolean {
+  const seen = new Set<object>();
+  let candidate = error;
+  while (typeof candidate === "object" && candidate !== null) {
+    if (seen.has(candidate)) return false;
+    seen.add(candidate);
+    const artifactError = candidate as { cause?: unknown; code?: unknown; name?: unknown };
+    if (
+      artifactError.name === "ArtifactsError" &&
+      typeof artifactError.code === "string" &&
+      RETRYABLE_ARTIFACTS_INFRASTRUCTURE_CODES.has(artifactError.code)
+    ) {
+      return true;
+    }
+    candidate = artifactError.cause;
+  }
+  return false;
 }
 
 /**

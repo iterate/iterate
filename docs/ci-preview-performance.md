@@ -15,12 +15,13 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-OS starts its onboarding smoke, explicit TUI quarantine marker, Chromium setup,
-Playwright, and a bounded deployment-age clock together. Browser and auth setup
-continue immediately, while project-backed Playwright fixture creation and
-high-fanout Vitest respect the rollout boundary. The gate normally finishes
-under Playwright's longer critical path. Therefore, healthy wall time should
-approach:
+Every freshly deployed live suite that addresses Durable Objects respects one
+bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
+at their own command boundary. OS starts its onboarding smoke, explicit TUI
+quarantine marker, Chromium setup, and Playwright immediately; browser and auth
+setup continue while project-backed Playwright fixture creation and high-fanout
+Vitest wait for the same absolute boundary. The clock normally finishes under
+Playwright's longer critical path. Therefore, healthy wall time should approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -37,6 +38,9 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
+- The short Semaphore, Streams, and Petshop commands wait independently at
+  their own rollout boundary; this does not serialize them with OS or with one
+  another. Auth has no live Durable Object suite and starts immediately.
 - OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
   the rollout-age clock run concurrently. Playwright workers may perform
   browser/auth setup immediately, but their shared project-creation helpers
@@ -80,14 +84,15 @@ serially because they intentionally share one warm container.
 - **Global Durable Object rollout gets a bounded age gate.** Cloudflare
   documents that Worker/DO updates are globally eventually consistent even
   after the new edge Worker answers, and changing an object's assigned version
-  resets that object. For a newly deployed OS version, the dense Vitest fan-out
-  therefore waits until 90 seconds after the successful deploy command. Root
-  Playwright receives that absolute deadline too: its process and non-project
-  work begin immediately, while forged-session and real-signup helpers wait at
-  the project-create operation. The clock overlaps exact-version readiness,
-  onboarding smoke, Chromium setup, Playwright setup, TUI, and every other app
-  suite. Reused old deployments wait zero seconds. This is one visible
-  lifecycle boundary, not a retry or a synthetic placement sample.
+  resets that object. Every freshly deployed app whose live suite calls Durable
+  Objects therefore waits until 90 seconds after its successful deploy command.
+  Short suites wait immediately before their command. Root Playwright receives
+  OS's absolute deadline instead: its process and non-project work begin
+  immediately, while forged-session and real-signup helpers wait at the
+  project-create operation; OS Vitest waits at its fan-out boundary. All app
+  lanes remain concurrent, and reused old deployments wait zero seconds. This
+  is one visible lifecycle boundary per deployment, not a retry or a synthetic
+  placement sample.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests
@@ -132,6 +137,8 @@ serially because they intentionally share one warm container.
   in the run log show phase wall times.
 - `[preview:os] lane start/finish` lines show the overlapping OS work, including
   the visible `rollout-settle` clock and when Vitest was released.
+- `[preview] rollout settle start/finish` lines expose the independent boundary
+  for each short Durable Object-backed app suite.
 - The managed preview block in the PR body records per-app deploy duration,
   test duration, and consumed retries.
 - The reporting tail remains part of the end-to-end budget. Test events are

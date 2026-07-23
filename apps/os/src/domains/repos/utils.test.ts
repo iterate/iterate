@@ -10,6 +10,7 @@ import {
   classifyRepoAccessError,
   gitBranchContainsCommit,
   isRepoNotSeededError,
+  isRetryableArtifactsInfrastructureError,
 } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
@@ -141,6 +142,50 @@ describe("classifyRepoAccessError", () => {
       name: "ArtifactsError",
     });
     expect(isRepoNotSeededError(internal)).toBe(false);
+  });
+});
+
+describe("isRetryableArtifactsInfrastructureError", () => {
+  test.each(["INTERNAL_ERROR", "UPSTREAM_UNAVAILABLE"])(
+    "matches the retryable Artifacts service code %s",
+    (code) => {
+      expect(
+        isRetryableArtifactsInfrastructureError(
+          Object.assign(new Error("Artifacts service unavailable"), {
+            code,
+            name: "ArtifactsError",
+          }),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  test("walks a wrapped error cause", () => {
+    const artifactError = Object.assign(new Error("An internal error occurred."), {
+      code: "INTERNAL_ERROR",
+      name: "ArtifactsError",
+    });
+    expect(
+      isRetryableArtifactsInfrastructureError(
+        new Error("Could not create config repo", { cause: artifactError }),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects domain errors and lookalike codes", () => {
+    expect(
+      isRetryableArtifactsInfrastructureError(
+        Object.assign(new Error("invalid repo"), {
+          code: "INVALID_REPO_NAME",
+          name: "ArtifactsError",
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableArtifactsInfrastructureError(
+        Object.assign(new Error("different service"), { code: "INTERNAL_ERROR" }),
+      ),
+    ).toBe(false);
   });
 });
 
