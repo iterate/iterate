@@ -60,7 +60,7 @@ struct HeldRequest: Identifiable, Equatable {
   let url: String
   let secretPaths: [String]
   let ruleKey: String
-  let bodyPreview: String?
+  let body: String?
   var submitting = false
   var id: Int { offset }
 }
@@ -252,14 +252,20 @@ final class ApprovalController: ObservableObject {
       }
     case "requested":
       guard let offset = event["offset"] as? Int else { return }
+      let url = event["url"] as? String ?? ""
+      let body = event["body"] as? [String: Any]
+      var bodyContent = body?["content"] as? String
+      if body?["encoding"] as? String == "base64", let content = bodyContent {
+        bodyContent = "[base64] \(content)"
+      }
       var request = HeldRequest(
         offset: offset,
         method: event["method"] as? String ?? "?",
-        host: event["host"] as? String ?? "?",
-        url: event["url"] as? String ?? "",
+        host: event["host"] as? String ?? url,
+        url: url,
         secretPaths: event["secretPaths"] as? [String] ?? [],
         ruleKey: event["ruleKey"] as? String ?? "",
-        bodyPreview: event["bodyPreview"] as? String
+        body: bodyContent
       )
       // A backlog request that already has a grant is shown awaiting the door
       // (spinner), not as a fresh Approve prompt.
@@ -689,8 +695,8 @@ struct RequestRow: View {
         Text("spends \(request.secretPaths.joined(separator: ", "))")
           .font(.caption).foregroundStyle(.orange)
       }
-      if let preview = request.bodyPreview, !preview.isEmpty {
-        Text(preview).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+      if let body = request.body, !body.isEmpty {
+        Text(body).font(.caption).foregroundStyle(.secondary).lineLimit(2)
       }
       HStack {
         Text("rule: \(request.ruleKey)").font(.caption2).foregroundStyle(.secondary)
