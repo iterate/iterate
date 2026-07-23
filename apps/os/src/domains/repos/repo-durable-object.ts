@@ -72,7 +72,11 @@ import {
 import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
-import { getOrCreateArtifact } from "./artifact-creation.ts";
+import {
+  getOrCreateArtifact,
+  stripArtifactTokenExpiry,
+  type GetOrCreateArtifactResult,
+} from "./artifact-creation.ts";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
@@ -1735,7 +1739,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   private async createEmptyArtifactRepo() {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
-    const { lastPushAt } = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+    const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
       this.getOrCreateArtifact(artifactName),
     );
     const defaultBranch = REPO_DEFAULT_BRANCH;
@@ -1744,11 +1748,18 @@ export class RepoDurableObject extends DurableObject<Env> {
     // A prior push is authoritative evidence that an existing Artifact is
     // already seeded. Recovery only needs to journal repos/created; cloning the
     // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
-    if (lastPushAt !== null) return { artifactName, defaultBranch, remote };
+    if (artifact.lastPushAt !== null) return { artifactName, defaultBranch, remote };
 
-    const token = await timedStep("create-timing", timing, "artifact-token", () =>
-      artifactToken(this.requireArtifacts(), artifactName),
-    );
+    // create() already minted the initial write token. Using it avoids an
+    // immediate get()+createToken() against a repository whose create result
+    // is authoritative but whose read replica may not have caught up. A
+    // recovered ALREADY_EXISTS drive has no access to that one-time token, so
+    // only that path mints a replacement after its readiness barrier.
+    const token =
+      artifact.initialWriteToken ??
+      (await timedStep("create-timing", timing, "artifact-token", () =>
+        artifactToken(this.requireArtifacts(), artifactName),
+      ));
 
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
@@ -1804,9 +1815,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     };
   }
 
-  private async getOrCreateArtifact(
-    name: string,
-  ): Promise<{ created: boolean; lastPushAt: string | null }> {
+  private async getOrCreateArtifact(name: string): Promise<GetOrCreateArtifactResult> {
     return await getOrCreateArtifact(this.requireArtifacts(), name, {
       defaultBranch: REPO_DEFAULT_BRANCH,
     });
@@ -1831,7 +1840,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 async function artifactToken(artifacts: Artifacts, name: string) {
   const repo = await artifacts.get(name);
   const { plaintext } = await repo.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS);
-  return plaintext.split("?expires=")[0] ?? plaintext;
+  return stripArtifactTokenExpiry(plaintext);
 }
 
 async function seedArtifactRepo(input: {
