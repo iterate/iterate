@@ -273,6 +273,19 @@ describe("canonical approval message", () => {
       message(),
     );
   });
+
+  test("keeps the body hash field explicit for a bodyless request", () => {
+    const message = new TextDecoder().decode(
+      buildApprovalMessage({
+        projectId: "prj_1",
+        approvalRequestEventOffset: 42,
+        requested: { ...requested, body: null },
+        decision: "granted",
+      }),
+    );
+
+    expect(JSON.parse(message)).toMatchObject({ bodySha256: null });
+  });
 });
 
 describe("verifyApprovalSignature", () => {

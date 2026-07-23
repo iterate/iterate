@@ -261,7 +261,7 @@ final class ApprovalController: ObservableObject {
       var request = HeldRequest(
         offset: offset,
         method: event["method"] as? String ?? "?",
-        host: URL(string: url)?.host ?? url,
+        host: event["host"] as? String ?? url,
         url: url,
         secretPaths: event["secretPaths"] as? [String] ?? [],
         ruleKey: event["ruleKey"] as? String ?? "",

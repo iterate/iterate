@@ -146,7 +146,7 @@ export function buildApprovalMessage(input: {
       method: input.requested.method,
       url: input.requested.url,
       headers: input.requested.headers,
-      bodySha256: input.requested.body?.sha256,
+      bodySha256: input.requested.body?.sha256 || null,
       secretPaths: input.requested.secretPaths,
       decision: input.decision,
     }),

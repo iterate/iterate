@@ -43,6 +43,7 @@ import {
   grant,
   reconcileBacklog,
   reject,
+  safeHost,
   type RequestedPayload,
 } from "./approve-core.ts";
 
@@ -298,6 +299,7 @@ function emitRequested(offset: number, payload: RequestedPayload, submitted: boo
     type: "requested",
     offset,
     ...payload,
+    host: safeHost(payload.url),
     submitted, // a grant already exists — awaiting the door, not fresh
   });
 }
