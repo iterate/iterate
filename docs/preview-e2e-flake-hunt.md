@@ -52,6 +52,121 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 14 (2026-07-23, post-#2275)
+
+PR #2275 made preview worker builds fail closed when the dependency installer
+returns warnings instead of an executable bundle, and made deployment wait in
+parallel for the exact SHA-pinned `pkg.pr.new` SDK package. Its final exact-head
+preview check ran every runnable suite in 240 seconds, and PostHog's finalizer
+matched all 6/6 expected sources. One OS Vitest case nevertheless passed only
+after retry, so the run is rejected and the strict counter remains 0/25.
+
+The retry was `Project worker processEventBatch receives events from every
+project stream and can cross-post`. Its first project failed the public
+15-second create deadline after 14.308 seconds of the remaining ready budget;
+the whole-test retry created a different project and passed. This was not a
+near-miss followed by harmless background completion. Exact-version trace
+`4d603e1afeb62f5f959255504b895244` shows the abandoned first project's config
+repository processor still waiting at offset 7 and eventually reporting
+`waitUntilProcessed timed out after 59517ms`. Its terminal stream appends
+completed around 65 seconds after `Project.create` began.
+
+PR #2273 had introduced an inconsistent timeout hierarchy: a 15-second public
+project-create deadline wrapped a 60-second sibling-birth barrier inside a
+75-second processor acknowledgement, and explicitly expected a whole-test
+retry to redial. The corrective change removes that retry-dependent contract.
+Sibling birth now owns one shared 75-second budget, the Project processor owns
+90 seconds, and the public entry-to-ready operation owns 100 seconds. Healthy
+creates still return immediately; the original caller now observes either the
+original fully ready project or one bounded failure. The existing
+`os-cold-create-latency` task retains the separate obligation to eliminate this
+tail rather than treating the upper bounds as latency targets.
+
+The corrective PR's first exact-head preview check was technically green but
+is also rejected. It took 314 seconds and
+`catalogue example "provide-live-flattened" runs identically across runtimes`
+passed only on Vitest's second attempt. The first attempt's spawned CLI exited
+with `WebSocket connection failed`; the exact-version Cloudflare trace set has
+no corresponding accepted `/api` request or server error. That localizes the
+failure before the server accepted the WebSocket upgrade, not in the named
+catalogue example.
+
+PostHog bounds both recurrence and scope. The named case ran 191 times in the
+available window and retried once, but the matrix as a whole recorded 38
+retries spread across unrelated examples. PR #2169 recorded the same spawned
+CLI signature on `repo-read-file`. The example names are incidental: every CLI
+case inherited one unobserved, one-shot initial transport dial.
+
+The fix is below the test and above user code. The Node client can wait for the
+initial WebSocket `open` event and, when explicitly requested by the CLI, make
+exactly one fresh dial after a failed upgrade. This boundary ends before a
+Cap'n Web session, authentication call, or user operation exists, so it cannot
+replay side effects. The CLI emits a structured
+`[itx-initial-connection-retry]` record with the original transport error and
+timings; the matrix turns that into a PostHog `e2e-phase` retry annotation.
+Application and RPC failures after connection are never retried.
+
+Local transport tests prove first-upgrade failure then success, no retry after
+an application failure, and a hard two-dial ceiling. Against the rejected
+run's exact OS Worker version, all 27 catalogue examples passed with
+`--retry=0` in 67.68 seconds and emitted no connection-retry record. The
+probe-based draft took 74.93 seconds; it was discarded because an extra RPC
+round trip was unnecessary. The strict full-pipeline counter remains 0/25
+until a new immutable head completes without any framework or transport retry
+and below the five-minute ceiling.
+
+## Round 13 (2026-07-23, post-#2271 and #2273)
+
+PR #2271 removed a cyclic Durable Object RPC lifetime from durable stream wake
+delivery. Wake batches are now one-way and carry an independent one-shot
+settlement capability. Missing settlement leaves the durable checkpoint
+authoritative, delivery failure and broken transport share the same bounded
+backoff/park machine, and late signals are fenced to the connection that
+created them.
+
+Its final exact-head preview ran every canonical suite in 227 seconds with zero
+failures or absorbed retries: Depot workflow `1w2np2p7w2`, job `2xswh11402`,
+attempt `6kl9w6n7m7`. PostHog recorded 3,342 passing final test records, seven
+pre-existing explicit skips, and no failed or retried records. The formerly
+65-second `journal-is-the-record` Playwright case completed in 11.232 seconds;
+its Vitest equivalent completed in 7.639 seconds.
+
+The first post-merge proof head `31f072d6…` then produced two clean runs (285
+and 230 seconds) before run 3 absorbed one retry in `workspace.itx.e2e.test.ts`
+after Cloudflare returned opaque internal reference
+`jofnmc53etthqc74kfntuo36`. The harness rejected that otherwise-green
+234-second run. A fresh proof produced two more clean runs (245 and 231
+seconds), then run 3 failed in 311 seconds with 13 retries and three hard
+project-creation failures.
+
+PostHog and exact-version Cloudflare traces localized that failure to the
+Artifacts create/read consistency boundary. Three independent config
+repositories reported an internal create error, then `ALREADY_EXISTS`, while
+immediate reads still returned repository-not-found. Failed-run
+`artifact-get-or-create` p95 was 39.54 seconds versus 2.59–3.16 seconds in the
+adjacent clean deployments, and 30 downstream durable stream deliveries failed.
+
+PR #2273 removed that race. The authoritative initial write token returned by
+`ARTIFACTS.create()` now seeds the repository directly; the normal path no
+longer performs an immediate `get()` plus `createToken()`. Only the ambiguous
+`ALREADY_EXISTS` case uses one explicit, bounded recovery barrier. Public
+project creation now has one 15-second entry-to-ready deadline, allowing the
+framework's single test retry to redial while already-committed durable work
+finishes.
+
+The final #2273 exact-head preview was genuinely green in 247 seconds: all five
+apps deployed, all 310 tests ran, and none failed. Two explicit
+`stream-wait-timeout` outcomes recovered on the single test retry, so that run
+accepted the product fix but does not count toward the zero-retry streak.
+PostHog's finalizer matched all 9/9 expected sources. Exact-version Cloudflare
+traces showed 20/20 successful `artifact-get-or-create` operations (p95 2.237
+seconds, max 4.527 seconds), no normal-path `artifact-token` call, no durable
+sink delivery failure, and no Artifacts error.
+
+The strict consecutive counter now restarts at 0/25 on a fresh immutable proof
+head based exactly on merged `origin/main` at
+`b5fbfdee44234c69226cad52b14fb0440c142e13`.
+
 ## Round 12 (2026-07-23, post-#2269)
 
 This round starts from `origin/main` at

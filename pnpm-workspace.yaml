@@ -59,6 +59,11 @@ onlyBuiltDependencies:
 
 overrides:
   '@babel/parser': ^7.28.0
+  # CodeMirror resolves StateFields by module identity: two copies of
+  # state/view in one graph break typecheck AND runtime ("Field is not
+  # present in this state"). Force a single resolution for the whole repo.
+  '@codemirror/state': ^6.7.1
+  '@codemirror/view': ^6.43.6
   '@orpc/client': 1.13.14
   '@orpc/contract': 1.13.14
   '@orpc/json-schema': 1.13.14
