@@ -49,6 +49,7 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "github-ai-linter/configured-worker": "src/github-ai-linter/configured-worker.ts",
       "github-ai-linter/index": "src/github-ai-linter/index.ts",
       "github-ai-linter/worker": "src/github-ai-linter/worker.ts",
       processors: "src/processors/index.ts",

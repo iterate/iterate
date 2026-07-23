@@ -27,7 +27,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
       path: "/integrations/github/iterate-installation",
       events: [
         {
-          idempotencyKey: "review-bot/subscription:v2",
+          idempotencyKey: "review-bot/subscription:v3",
           payload: {
             delivery: {
               mode: "wake",
@@ -59,7 +59,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   expect(ref).toMatchObject({
     source: {
       createWorker: {
-        entryPoint: "github-ai-linter-worker.ts",
+        entryPoint: "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs",
         files: {
           include: ["package.json"],
           repoPath: "/repos/config",
@@ -68,10 +68,10 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
       },
     },
   });
-  const entrypoint = ref.source.createWorker.virtualModules["github-ai-linter-worker.ts"];
-  expect(entrypoint).toContain('"policyVersion":"2"');
-  expect(entrypoint).toContain('"glob":"rules/**/*.md"');
-  expect(entrypoint).toContain('"repoPath":"/repos/iterate"');
+  const virtualConfig = ref.source.createWorker.virtualModules["iterate:github-ai-linter-config"];
+  expect(virtualConfig).toContain('"policyVersion":"2"');
+  expect(virtualConfig).toContain('"glob":"rules/**/*.md"');
+  expect(virtualConfig).toContain('"repoPath":"/repos/iterate"');
 });
 
 function githubLinkConfigured(connection: string): StreamEvent {

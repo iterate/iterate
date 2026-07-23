@@ -29,7 +29,7 @@ test("re-linking the packaged linter replaces Misha's rejected subscription with
   });
 });
 
-test("the packaged linter ref builds after worker-bundler installs iterate", async () => {
+test("worker-bundler accepts the packaged linter's installed entry point", async () => {
   const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
   const app = GithubAiLinter.create({
     policyVersion: "misha-smoke-1",
@@ -47,6 +47,10 @@ test("the packaged linter ref builds after worker-bundler installs iterate", asy
   const installedEntrypoint = "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs";
   const result = await createWorker({
     ...createWorkerOptions,
+    // Node can exercise worker-bundler's dependency-install and entry-point
+    // contract, but the real bundle requires its workerd-only WebAssembly
+    // loader. The production smoke exercises that final stage.
+    bundle: false,
     files: {
       "package.json": "{}",
       [installedEntrypoint]: [
@@ -64,8 +68,8 @@ test("the packaged linter ref builds after worker-bundler installs iterate", asy
     mainModule: result.mainModule,
     moduleSource: result.modules[result.mainModule],
   }).toMatchObject({
-    mainModule: "bundle.js",
-    moduleSource: expect.stringContaining("misha-smoke-1"),
+    mainModule: installedEntrypoint,
+    moduleSource: expect.stringContaining('from "iterate:github-ai-linter-config"'),
   });
 });
 

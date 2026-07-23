@@ -6,7 +6,9 @@ export type GithubAiLinterConfig = {
   rules: GithubAiLinterRuleSource;
 };
 
-const reviewBotSubscriptionConfigVersion = 2;
+const reviewBotSubscriptionConfigVersion = 3;
+const configuredWorkerEntrypoint =
+  "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs";
 
 export const GithubAiLinter = {
   create(config: GithubAiLinterConfig) {
@@ -57,7 +59,7 @@ function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
     durableWorkerKey: `app-review-bot-${connection}`,
     source: {
       createWorker: {
-        entryPoint: "github-ai-linter-worker.ts",
+        entryPoint: configuredWorkerEntrypoint,
         files: {
           type: "repo",
           repoPath: "/repos/config",
@@ -65,10 +67,7 @@ function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
         },
         minify: true,
         virtualModules: {
-          "github-ai-linter-worker.ts": [
-            'import { createGithubAiLinterWorker } from "iterate/github-ai-linter/worker";',
-            `export const ReviewBotApp = createGithubAiLinterWorker(${JSON.stringify(config)});`,
-          ].join("\n"),
+          "iterate:github-ai-linter-config": `export default ${JSON.stringify(config)};`,
         },
       },
     },
