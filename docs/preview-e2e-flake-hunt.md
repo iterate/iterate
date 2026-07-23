@@ -252,6 +252,58 @@ format checks, and the full OS unit suite are green locally. This is diagnostic
 and regression evidence only; a new immutable head must restart the canonical
 25-run proof.
 
+### Round 15 orphaned wake settlement and false root-append deadline
+
+Canonical exact-head run `mf4v6fm81q` (attempt `xswl4x4d5w`) on
+`420eac47ba9c853f5cad15a429aa6a59eada4909` completed in 331 seconds and all
+tests eventually passed, but the run is rejected because it used three
+framework retries. The accepted streak remains 0/25.
+
+The worker-alarm retry exposed a mistake in the preceding keyed-append
+hardening. Its first project continued through birth and became ready, while
+the public root append exhausted two artificial 10-second acknowledgement
+deadlines. Root birth is a larger durable saga whose callers already own
+explicit 90–100-second end-to-ready bounds; imposing the ordinary stream
+append deadline inside that saga creates a false failure under load. Keyed
+root appends are therefore excluded from deadline replay. Keyed non-root
+appends retain the bounded recovery, and unkeyed appends remain non-replayable.
+
+The repo-commit retry was not a slow commit. On its first pooled project,
+`prj_66837522b9fd4a71bb551fb96a7c9205`, durable execution
+`494d2b81-4750-4e59-b6d1-ae75209c6501` was requested at
+`16:52:08.683Z`, but the capability-host processor did not record
+`script-run-started` until `17:01:42.665Z`; it settled successfully at
+`17:01:46.475Z`. That is a 9-minute-34-second delivery gap before user work
+began. The retry used replacement project
+`prj_f906e62453b949d6b669724b90addc45`, started in 838 milliseconds, and
+settled in about 4.4 seconds.
+
+The gap came from an unbounded transport state in the wake lane. Wake delivery
+is deliberately one-way and reports its acknowledgement through an independent
+`settleDelivery` capability. A lost settlement callback that also failed to
+raise `onRpcBroken` left the predecessor connection authoritative until the
+roughly ten-minute idle teardown, so its durable cursor could not be
+redelivered. Each pending settlement now arms the Stream Durable Object's
+native alarm for 20 seconds. Expiry is an observable
+`StreamReceiverUnavailableError`: the cursor stays put, bounded backoff is
+recorded, the orphaned connection is closed, and a successor re-pokes from the
+durable checkpoint. Late predecessor settlements are fenced. The deadline uses
+the native alarm rather than an actor timer, so it does not retain the current
+JS-RPC turn.
+
+The third retry was a dynamic-worker runtime failure with platform reference
+`efqgrnq1347q3bs8in6q386a`. Durable execution
+`9578a99f-b22b-42e5-bf7b-5ea8d9ec00dc` started normally and settled failed
+about 2.1 seconds later; its replacement test project passed. This is not
+silently reclassified or generically replayed because `runScript` may contain
+mutations. It remains a proof target: recurrence in the restarted marathon
+must be localized below the user-code boundary before any recovery is added.
+
+The two new regressions pass with the complete 33-file Streams unit set
+(381 passed, one expected failure), the affected app typecheck, targeted lint,
+and formatting checks. This rejected run resets the proof to 0/25; only a new
+immutable head can restart it.
+
 ## Round 14 (2026-07-23, post-#2275)
 
 PR #2275 made preview worker builds fail closed when the dependency installer

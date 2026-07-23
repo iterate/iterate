@@ -284,6 +284,49 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("never deadline-replays a keyed root append", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const result = [
+      {
+        createdAt: new Date(0).toISOString(),
+        idempotencyKey: "root-birth",
+        offset: 3,
+        path: "/",
+        type: "events.iterate.com/test/root-birth",
+      } satisfies StreamEvent,
+    ];
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { append: () => firstAppend.promise } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({
+      idempotencyKey: result[0]!.idempotencyKey,
+      type: result[0]!.type,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(acquisitions).toBe(1);
+
+      firstAppend.resolve(result);
+      await expect(appending).resolves.toEqual(result);
+    } finally {
+      firstAppend.reject(new Error("late keyed root append rejection"));
+      await appending.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();
