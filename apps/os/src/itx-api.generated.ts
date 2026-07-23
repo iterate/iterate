@@ -3870,6 +3870,8 @@ export type CollabPresence = {
   generation: number;
 };
 
+/** One read of the pointer map: every fresh client's opaque payload plus the
+ * generation a long-poll compares against. */
 export type PointerSnapshot = {
   clients: { at: number; clientId: string; payload: unknown }[];
   generation: number;

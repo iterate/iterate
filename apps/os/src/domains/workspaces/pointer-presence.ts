@@ -15,6 +15,8 @@ const STALE_MS = 45_000;
 const WAIT_TIMEOUT_MS = 25_000;
 const MAX_PAYLOAD_BYTES = 2_048;
 
+/** One read of the pointer map: every fresh client's opaque payload plus the
+ * generation a long-poll compares against. */
 export type PointerSnapshot = {
   clients: { at: number; clientId: string; payload: unknown }[];
   generation: number;

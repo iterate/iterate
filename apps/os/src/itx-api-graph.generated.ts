@@ -2356,8 +2356,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "PointerSnapshot",
     kind: "typeAlias",
     sourceText:
-      "export type PointerSnapshot = {\n  clients: { at: number; clientId: string; payload: unknown }[];\n  generation: number;\n};",
-    summary: "",
+      "/** One read of the pointer map: every fresh client's opaque payload plus the\n * generation a long-poll compares against. */\nexport type PointerSnapshot = {\n  clients: { at: number; clientId: string; payload: unknown }[];\n  generation: number;\n};",
+    summary:
+      "One read of the pointer map: every fresh client's opaque payload plus the generation a long-poll compares against.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
