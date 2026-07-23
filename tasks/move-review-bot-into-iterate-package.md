@@ -1,9 +1,9 @@
-status: fixing-production-repro
+status: ready-for-review
 size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: End-to-end testing exposed an invalid `:` in the packaged linter's durable worker key and a stale-subscription migration hazard. A production-derived regression now covers both; the implementation fix and renewed verification are in progress.
+Status: The production-derived Misha failure is fixed: packaged linter refs now satisfy the runtime schema and a v2 subscription replaces stale v1 config. Focused regressions, the full package suite, and package/OS typechecks pass.
 
 ## Plan
 
@@ -15,7 +15,7 @@ Status: End-to-end testing exposed an invalid `:` in the packaged linter's durab
 - [x] Update the seeded config template and generated seed to import/register the package app; keep unrelated app routing and schedules out of scope. *The real template and generated file now contain the declaration.*
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
 - [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
-- [ ] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Regression added for the runtime worker-ref schema and subscription idempotency revision; implementation fix pending.*
+- [x] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Changed the invalid colon to a hyphen, bumped the subscription config revision to v2, and verified the emitted ref through the OS runtime schema.*
 
 ## Approved decisions
 
@@ -39,3 +39,4 @@ Status: End-to-end testing exposed an invalid `:` in the packaged linter's durab
 - 2026-07-23: Replaced iterate/iterate#2259 with #2277 after pkg.pr.new lost the reopened PR's workflow mapping. Carried the resolved human review into the replacement PR and updated config#18 to consume its branch artifact.
 - 2026-07-23: Preview-10 deployed the exact implementation SHA for all five apps; every E2E lane passed, including OS Playwright and 47 OS Vitest files.
 - 2026-07-23: Misha's end-to-end trial exposed `app-review-bot:<connection>` being rejected by the runtime durable-worker-key schema. The existing v1 config event would also conflict with a changed replacement event, so the production-derived regression covers both failures.
+- 2026-07-23: Replaced the colon with a runtime-safe hyphen and bumped the subscription event to v2. The production-derived repro, all 162 package tests, and package/OS typechecks pass.

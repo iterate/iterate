@@ -6,7 +6,7 @@ export type GithubAiLinterConfig = {
   rules: GithubAiLinterRuleSource;
 };
 
-const reviewBotSubscriptionConfigVersion = 1;
+const reviewBotSubscriptionConfigVersion = 2;
 
 export const GithubAiLinter = {
   create(config: GithubAiLinterConfig) {
@@ -54,7 +54,7 @@ function reviewBotAppRef(connection: string, config: GithubAiLinterConfig) {
     type: "stateful",
     path: "/",
     className: "ReviewBotApp",
-    durableWorkerKey: `app-review-bot:${connection}`,
+    durableWorkerKey: `app-review-bot-${connection}`,
     source: {
       createWorker: {
         entryPoint: "github-ai-linter-worker.ts",

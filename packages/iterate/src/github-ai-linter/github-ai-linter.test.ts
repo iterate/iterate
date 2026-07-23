@@ -27,7 +27,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
       path: "/integrations/github/iterate-installation",
       events: [
         {
-          idempotencyKey: "review-bot/subscription:v1",
+          idempotencyKey: "review-bot/subscription:v2",
           payload: {
             delivery: {
               mode: "wake",
@@ -37,7 +37,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
                   "get",
                   {
                     className: "ReviewBotApp",
-                    durableWorkerKey: "app-review-bot:iterate-installation",
+                    durableWorkerKey: "app-review-bot-iterate-installation",
                     path: "/",
                     type: "stateful",
                   },
