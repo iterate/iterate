@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-Implementation is complete and package checks pass. The remaining work is a
-browser proof against a production-shaped environment and the final PR update.
+Complete. OS requests one-shot account selection for Google sign-in; tests,
+typechecks, preview e2e, and the cross-host browser flow all pass.
 
 ## Problem
 
@@ -35,8 +35,8 @@ current behavior.
 - [x] Thread the account-selection request from the OS sign-in button through the shared relying-party client and server. _OS sends the standard OIDC `prompt=select_account`; Auth renders its existing `/login` chooser._
 - [x] Verify existing login hints and non-forced sign-in callers keep their behavior. _The server forwards only the supported one-shot prompt and Auth's chooser hook otherwise returns false._
 - [x] Run focused tests, typecheck, lint, and formatting checks for the touched packages. _Auth's 72 tests, Auth/OS typechecks, and touched-file lint/format checks pass._
-- [ ] Prove the account chooser flow in a browser against a production-shaped environment.
-- [ ] Update the draft PR with the user-visible behavior and proof.
+- [x] Prove the account chooser flow in a browser against a production-shaped environment. _Preview 14 showed the current Auth account and “Log in as someone else”; continuing did not repeat the chooser._
+- [x] Update the draft PR with the user-visible behavior and proof. _PR #2281 includes the preview URLs, verification notes, and an inline chooser screenshot._
 
 ## Implementation notes
 
