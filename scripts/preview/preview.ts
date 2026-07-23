@@ -2244,11 +2244,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
         // Smoke and TUI own isolated state, so start them with the Chromium
-        // install. Playwright starts as soon as Chromium is ready; its
-        // project-creation helpers use the absolute rollout boundary passed
-        // above, so browser/auth setup continues while fresh project-backed
-        // DO work waits. The high-fanout Vitest lane waits for both the
-        // production-shaped onboarding smoke and the same bounded age.
+        // install. Playwright starts as soon as Chromium is ready; both its
+        // project-creation helpers and the smoke consume the absolute rollout
+        // boundary passed above, so unrelated setup continues while fresh
+        // project-backed DO work waits. The high-fanout Vitest lane waits for
+        // both the production-shaped onboarding smoke and the same bounded age.
         // Edge readiness cannot prove global Durable Object code propagation:
         // Cloudflare may reset an object when its assigned version changes.
         // The age clock starts when deploy completes and overlaps every lane

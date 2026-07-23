@@ -52,6 +52,62 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 12 (2026-07-23, post-#2269)
+
+This round starts from `origin/main` at
+`c5d51cf02e0c1acf9a36bec903ecf956ae9469ae`. PR #2269 paid off three
+independent sources of preview tail latency and absorbed retries:
+
+- project-directory registration now retries only the missing slug or
+  project-index write, so a partial KV failure cannot replay a successful
+  sibling write;
+- onboarding smoke consumes the deployment-wide rollout deadline immediately
+  before project creation instead of beginning a second rollout wait; and
+- stream-backed read-your-writes paths no longer perform an unbounded,
+  redundant processor catch-up before entering the existing offset wait that
+  owns the explicit 15-second deadline.
+
+The final exact-head check for #2269 ran all five app suites in 231 seconds with
+zero retries: Depot run `b2jwhtx6q4`, attempt `nvg49cr0jp`. OS Playwright passed
+63/63 and the formerly retrying repository-edit and secret write-fence cases
+both passed on their first attempts. PostHog recorded 310 preview logical-test
+outcomes and 3,046 unit outcomes with zero failures or retries, and both
+telemetry finalizers reported complete expected source coverage. Cloudflare
+traces showed no wall-time exhaustion, resource exhaustion, or unexplained
+Durable Object reset in the test window.
+
+That run was PR acceptance evidence before the squash merge, not part of this
+post-merge consecutive proof. The round-12 counter therefore starts at 0/25 on
+this new immutable PR head.
+
+### Round 12 rejected attempt: self-alarm readback races a due alarm
+
+Run 1 on the initial proof head was clean in 281 seconds (Depot run
+`zq6s3vngt8`, attempt `sslv41jkrl`). Run 2 completed in 250 seconds but
+`stateful-worker-alarm.e2e.test.ts` failed once and passed on Vitest's single
+retry (Depot run `fgl4xv672n`, attempt `pf1mx7sj0s`). The harness rejected the
+run and reset the streak to 0/25 even though GitHub's ordinary check was green.
+
+The failing assertion expected `armSelf(3_000)` to return an armed timestamp
+but received `null`. This was a test race, not a missing alarm: the worker
+computes the due time before `ctx.storage.setAlarm` crosses the facet, project
+itx, and outer `StatefulWorkerDurableObject`; its following
+`ctx.storage.getAlarm` is another traversal. Cloudflare traces show the
+self-arm invocation already in flight by `04:09:16.843Z`, while the outer
+Durable Object did not receive `setAlarm` until `04:09:19.318Z`. About 2.5 of
+the test's 3 seconds had therefore elapsed before the real alarm was armed,
+leaving its readback free to race normal alarm consumption.
+
+PostHog shows 131 executions of this test since 2026-07-22: 129 passed first
+try and 2 absorbed a retry. The normal duration was 38.7 seconds at p50 and
+45.8 seconds at p95; the earlier retried execution took 142.4 seconds and this
+one took 75.3 seconds. The fix separates the two contracts already present in
+the test. The first alarm continues to prove delivery, deliberate handler
+failure, and native retry. Self-addressed arming now uses a safely non-due
+alarm, proves the worker-side and host-side readbacks equal the exact scheduled
+time, and immediately disarms it. A second near-term fire added no distinct
+platform coverage and made a due timer the synchronization primitive.
+
 ## Round 11 (2026-07-23, post-#2265)
 
 This round starts from `origin/main` at

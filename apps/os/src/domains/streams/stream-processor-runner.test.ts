@@ -149,6 +149,7 @@ function makeJournal(homePath = HOME) {
   const attempts: { path: string; event: StreamEventInput; deduped: boolean }[] = [];
   const failNext = new Map<string, Error>();
   let failNextRead: Error | undefined;
+  let hangNextRead = false;
   let createdAtClock = 0;
 
   const rowsFor = (path: string): StreamEvent[] => {
@@ -202,6 +203,10 @@ function makeJournal(homePath = HOME) {
         const limit = args?.limit ?? 500;
         return {
           next: () => {
+            if (hangNextRead) {
+              hangNextRead = false;
+              return new Promise<StreamEvent[]>(() => {});
+            }
             if (failNextRead !== undefined) {
               const error = failNextRead;
               failNextRead = undefined;
@@ -245,6 +250,9 @@ function makeJournal(homePath = HOME) {
     },
     failNextReadWith(error: Error) {
       failNextRead = error;
+    },
+    hangNextRead() {
+      hangNextRead = true;
     },
   };
 }
@@ -1367,6 +1375,18 @@ describe("StreamProcessorRunner.waitUntilEvent", () => {
       controller.abort();
       consoleError.mockRestore();
     }
+  });
+
+  it("offset form's timeout bounds a silently orphaned self-pull", async () => {
+    const harness = makeHarness();
+    harness.journal.hangNextRead();
+
+    await expect(
+      harness.runner.waitUntilEvent({
+        offset: 8,
+        timeoutMs: 20,
+      }),
+    ).rejects.toThrow("waitUntilEvent timed out after 20ms");
   });
 });
 
