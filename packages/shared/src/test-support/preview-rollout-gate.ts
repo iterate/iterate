@@ -34,6 +34,7 @@ export function resolvePreviewRolloutWaitMs(input: {
  * overlap Cloudflare's global code propagation window.
  */
 export async function waitForPreviewRolloutBeforeProjectCreation(input?: {
+  beforeWait?: (waitMs: number) => void | Promise<void>;
   environment?: PreviewRolloutGateEnvironment;
   log?: (message: string) => void;
   nowMs?: number;
@@ -44,6 +45,7 @@ export async function waitForPreviewRolloutBeforeProjectCreation(input?: {
   if (waitMs === 0) return;
 
   const readyAtMs = Number(environment[PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV]);
+  await input?.beforeWait?.(waitMs);
   (input?.log ?? console.log)(
     `[preview-rollout] project creation waits ${waitMs}ms until ${new Date(readyAtMs).toISOString()}`,
   );
