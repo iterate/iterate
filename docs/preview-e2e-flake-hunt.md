@@ -52,6 +52,58 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 13 (2026-07-23, post-#2271 and #2273)
+
+PR #2271 removed a cyclic Durable Object RPC lifetime from durable stream wake
+delivery. Wake batches are now one-way and carry an independent one-shot
+settlement capability. Missing settlement leaves the durable checkpoint
+authoritative, delivery failure and broken transport share the same bounded
+backoff/park machine, and late signals are fenced to the connection that
+created them.
+
+Its final exact-head preview ran every canonical suite in 227 seconds with zero
+failures or absorbed retries: Depot workflow `1w2np2p7w2`, job `2xswh11402`,
+attempt `6kl9w6n7m7`. PostHog recorded 3,342 passing final test records, seven
+pre-existing explicit skips, and no failed or retried records. The formerly
+65-second `journal-is-the-record` Playwright case completed in 11.232 seconds;
+its Vitest equivalent completed in 7.639 seconds.
+
+The first post-merge proof head `31f072d6…` then produced two clean runs (285
+and 230 seconds) before run 3 absorbed one retry in `workspace.itx.e2e.test.ts`
+after Cloudflare returned opaque internal reference
+`jofnmc53etthqc74kfntuo36`. The harness rejected that otherwise-green
+234-second run. A fresh proof produced two more clean runs (245 and 231
+seconds), then run 3 failed in 311 seconds with 13 retries and three hard
+project-creation failures.
+
+PostHog and exact-version Cloudflare traces localized that failure to the
+Artifacts create/read consistency boundary. Three independent config
+repositories reported an internal create error, then `ALREADY_EXISTS`, while
+immediate reads still returned repository-not-found. Failed-run
+`artifact-get-or-create` p95 was 39.54 seconds versus 2.59–3.16 seconds in the
+adjacent clean deployments, and 30 downstream durable stream deliveries failed.
+
+PR #2273 removed that race. The authoritative initial write token returned by
+`ARTIFACTS.create()` now seeds the repository directly; the normal path no
+longer performs an immediate `get()` plus `createToken()`. Only the ambiguous
+`ALREADY_EXISTS` case uses one explicit, bounded recovery barrier. Public
+project creation now has one 15-second entry-to-ready deadline, allowing the
+framework's single test retry to redial while already-committed durable work
+finishes.
+
+The final #2273 exact-head preview was genuinely green in 247 seconds: all five
+apps deployed, all 310 tests ran, and none failed. Two explicit
+`stream-wait-timeout` outcomes recovered on the single test retry, so that run
+accepted the product fix but does not count toward the zero-retry streak.
+PostHog's finalizer matched all 9/9 expected sources. Exact-version Cloudflare
+traces showed 20/20 successful `artifact-get-or-create` operations (p95 2.237
+seconds, max 4.527 seconds), no normal-path `artifact-token` call, no durable
+sink delivery failure, and no Artifacts error.
+
+The strict consecutive counter now restarts at 0/25 on a fresh immutable proof
+head based exactly on merged `origin/main` at
+`b5fbfdee44234c69226cad52b14fb0440c142e13`.
+
 ## Round 12 (2026-07-23, post-#2269)
 
 This round starts from `origin/main` at
