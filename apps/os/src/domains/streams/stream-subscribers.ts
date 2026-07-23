@@ -176,6 +176,8 @@ type Connection = {
   isLive(): boolean;
   /** `true` while a durable sink delivery is dispatched but unsettled. */
   hasPendingDelivery(): boolean;
+  /** Earliest deadline for an unsettled wake delivery, or null when caught up. */
+  nextSettlementDeadlineAt(): number | null;
   /** Stop the pump, dispose the sink, append the disconnect fact, drop from the table. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
@@ -369,6 +371,7 @@ export class StreamSubscribers {
 
   /** The DO alarm handler body: retry whatever is due, then re-arm. */
   onAlarm(): void {
+    this.#expireWakeDeliveryDeadlines();
     if (this.#idleTeardownAtMs !== null && this.#idleTeardownAtMs <= this.#hooks.now()) {
       this.runIdleTeardownNow();
     }
@@ -932,6 +935,10 @@ export class StreamSubscribers {
       if (this.#pushDrains.has(key) || this.#pokesInFlight.has(key)) continue;
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
+    for (const connection of this.#connections.values()) {
+      const deadlineAt = connection.nextSettlementDeadlineAt();
+      if (deadlineAt !== null && (next === null || deadlineAt < next)) next = deadlineAt;
+    }
     if (next !== null) this.#hooks.armAlarm(next);
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
   }
@@ -1073,7 +1080,7 @@ export class StreamSubscribers {
     let initialBatchPending = true;
     let draining = false;
     let open = true;
-    const pendingDeliveries = new Set<symbol>();
+    const pendingDeliveries = new Map<symbol, number>();
     let connection!: Connection;
 
     const pump = async () => {
@@ -1156,7 +1163,9 @@ export class StreamSubscribers {
           } satisfies StreamEventBatch;
           if (args.subscriptionType === "configured") {
             const delivery = Symbol("stream wake delivery");
-            pendingDeliveries.add(delivery);
+            const settlementDeadlineAt = this.#hooks.now() + DELIVERY_TIMEOUT_MS;
+            pendingDeliveries.set(delivery, settlementDeadlineAt);
+            this.#hooks.armAlarm(settlementDeadlineAt);
             // Publish the pending state BEFORE dispatch. A local sink can
             // settle synchronously, and debug state must still observe the
             // real pending → settled transition.
@@ -1213,6 +1222,13 @@ export class StreamSubscribers {
       wake: () => void pump(),
       isLive: () => open,
       hasPendingDelivery: () => pendingDeliveries.size > 0,
+      nextSettlementDeadlineAt: () => {
+        let next: number | null = null;
+        for (const deadlineAt of pendingDeliveries.values()) {
+          if (next === null || deadlineAt < next) next = deadlineAt;
+        }
+        return next;
+      },
       close: (reason) => {
         if (!open) return;
         open = false;
@@ -1282,6 +1298,29 @@ export class StreamSubscribers {
     this.#onDurableSinkFailure(subscriptionKey, error, "delivery-failed");
   }
 
+  /**
+   * A wake sink call is deliberately one-way, so its independent settlement
+   * callback is the only acknowledgement. If workerd silently orphans that
+   * callback without reporting onRpcBroken, the connection must not remain
+   * authoritative until the much longer idle teardown. The native DO alarm
+   * owns this deadline: actor timers would retain the append invocation that
+   * dispatched the batch.
+   */
+  #expireWakeDeliveryDeadlines(): void {
+    const now = this.#hooks.now();
+    for (const [subscriptionKey, connection] of [...this.#connections]) {
+      const deadlineAt = connection.nextSettlementDeadlineAt();
+      if (deadlineAt === null || deadlineAt > now) continue;
+      this.#onDurableSinkFailure(
+        subscriptionKey,
+        new StreamReceiverUnavailableError(
+          `wake ${subscriptionKey} settlement timed out after ${DELIVERY_TIMEOUT_MS}ms`,
+        ),
+        "delivery-failed",
+      );
+    }
+  }
+
   #onDurableSinkFailure(
     subscriptionKey: string,
     error: unknown,
@@ -1290,7 +1329,11 @@ export class StreamSubscribers {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
     const details = { subscriptionKey, reason, error };
-    if (reason === "rpc-broken" || isDurableObjectLifecycleError(error)) {
+    if (
+      reason === "rpc-broken" ||
+      isDurableObjectLifecycleError(error) ||
+      isStreamReceiverUnavailableError(error)
+    ) {
       // A killed, evicted, deployed, or overloaded subscriber is a modelled
       // availability transition. `onRpcBroken` is itself the transport's
       // authoritative availability signal even when its Error lost workerd's
@@ -1495,15 +1538,16 @@ export class StreamSubscribers {
 }
 
 /**
- * Bounds one delivery/poke attempt. Without it a wedged receiver (the worst
- * real case: a cold worker build that never completes) holds the drain slot
- * and pins the DO unboundedly, with no nack, no backoff, and no park. On
- * timeout the receiver is classified as unavailable — the spine backs off
- * and retries the WHOLE batch without allowing `onPoison: "skip"` to turn a
- * transport stall into a verdict about healthy events. The bound deliberately
- * wins before the platform's roughly 30-second nested-RPC cancellation window;
- * a build that was merely slow continues server-side via waitUntil, so the
- * retry hits the warm cache (the same shape #1761's build budget had).
+ * Bounds one delivery/poke attempt or independent wake settlement. Without it
+ * a wedged receiver (the worst real case: a cold worker build that never
+ * completes) holds the drain slot or leaves a wake connection authoritative
+ * unboundedly, with no nack, no backoff, and no park. On timeout the receiver
+ * is classified as unavailable — the spine backs off and retries the WHOLE
+ * batch without allowing `onPoison: "skip"` to turn a transport stall into a
+ * verdict about healthy events. The bound deliberately wins before the
+ * platform's roughly 30-second nested-RPC cancellation window; a build that
+ * was merely slow continues server-side via waitUntil, so the retry hits the
+ * warm cache (the same shape #1761's build budget had).
  */
 const DELIVERY_TIMEOUT_MS = 20_000;
 

@@ -72,6 +72,13 @@ const RETRYABLE_ARTIFACTS_INFRASTRUCTURE_CODES = new Set([
   "INTERNAL_ERROR",
   "UPSTREAM_UNAVAILABLE",
 ]);
+const RETRYABLE_ARTIFACTS_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+// The Artifacts binding can flatten a service response into a plain Error
+// without ArtifactsError's code/name (live-observed as
+// `HTTP Error: 503 Service Unavailable`). The helper is only called around
+// Artifacts operations, so an exact transient HTTP status remains enough to
+// classify the failure as infrastructure rather than poison a repo forever.
+const ARTIFACTS_HTTP_ERROR_MESSAGE = /^HTTP Error: (\d{3})(?:\s|$)/;
 
 function isArtifactsRepoNotReadyError(error: unknown) {
   if (typeof error !== "object" || error === null) return false;
@@ -107,7 +114,14 @@ export function isRetryableArtifactsInfrastructureError(error: unknown): boolean
   while (typeof candidate === "object" && candidate !== null) {
     if (seen.has(candidate)) return false;
     seen.add(candidate);
-    const artifactError = candidate as { cause?: unknown; code?: unknown; name?: unknown };
+    const artifactError = candidate as {
+      cause?: unknown;
+      code?: unknown;
+      message?: unknown;
+      name?: unknown;
+      status?: unknown;
+      statusCode?: unknown;
+    };
     if (
       artifactError.name === "ArtifactsError" &&
       typeof artifactError.code === "string" &&
@@ -115,6 +129,15 @@ export function isRetryableArtifactsInfrastructureError(error: unknown): boolean
     ) {
       return true;
     }
+    const status =
+      typeof artifactError.status === "number"
+        ? artifactError.status
+        : typeof artifactError.statusCode === "number"
+          ? artifactError.statusCode
+          : typeof artifactError.message === "string"
+            ? Number(ARTIFACTS_HTTP_ERROR_MESSAGE.exec(artifactError.message)?.[1])
+            : Number.NaN;
+    if (RETRYABLE_ARTIFACTS_HTTP_STATUS_CODES.has(status)) return true;
     candidate = artifactError.cause;
   }
   return false;
