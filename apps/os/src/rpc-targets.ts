@@ -190,6 +190,7 @@ import {
   isStreamWaitTimeoutError,
   rethrowStreamUnavailable,
   retryIdempotentDurableObjectOperation,
+  STREAM_UNAVAILABLE_MESSAGE_PREFIX,
   STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
 } from "./domains/streams/stream-unavailable.ts";
 import {
@@ -459,6 +460,11 @@ function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): Op
 }
 
 const STREAM_WAIT_REACQUIRE_MS = 10_000;
+// Keyed appends are safe to replay after an acknowledgement is lost. Bound
+// each DO invocation below the outer e2e/client watchdog so a half-open native
+// RPC cannot park the public call forever; two attempts still fit comfortably
+// inside the standard 30-second operation budget.
+const KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS = 10_000;
 
 function detachPlainRpcResult<T>(result: T[]): T[];
 function detachPlainRpcResult<T extends object>(result: T): T;
@@ -566,14 +572,35 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    const append = () => Promise.resolve(this.durableObjectStub.append(...events));
+    const isKeyed = events.every(
+      (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
+    );
+    const append = async () => {
+      const invocation = Promise.resolve(this.durableObjectStub.append(...events));
+      if (!isKeyed) return await invocation;
+
+      const outcome = await settleByDeadline(
+        invocation,
+        Date.now() + KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS,
+        Date.now,
+      );
+      if (outcome.status === "fulfilled") return outcome.value;
+      if (outcome.status === "rejected") throw outcome.error;
+
+      // The late invocation may have committed and may eventually return a
+      // native disposable. Observe and release it; the replay uses the same
+      // idempotency keys, so either completion order yields one durable batch.
+      void invocation.then(disposeIgnoredRpcResult, () => undefined);
+      throw new Error(
+        `${STREAM_UNAVAILABLE_MESSAGE_PREFIX}keyed stream append received no response within ` +
+          `${KEYED_STREAM_APPEND_ATTEMPT_TIMEOUT_MS}ms`,
+      );
+    };
     const result = await (
-      events.every(
-        (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
-      )
+      isKeyed
         ? retryLoggedIdempotentOperation({
             context: { path: this.props.path, projectId: this.props.projectId },
-            message: "keyed stream append retrying after Durable Object reset",
+            message: "keyed stream append retrying after Durable Object unavailability",
             operation: append,
           })
         : append()

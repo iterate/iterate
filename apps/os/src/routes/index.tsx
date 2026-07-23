@@ -27,7 +27,12 @@ export const Route = createFileRoute("/")({
       throw redirect({
         to: "/projects/$projectSlug",
         params: { projectSlug: decision.project.slug },
-        search: decision.welcome ? { welcome: true } : {},
+        search: decision.welcome
+          ? {
+              welcome: true,
+              ...(decision.ensureBirth ? { ensureBirth: true } : {}),
+            }
+          : {},
         replace: true,
       });
     }

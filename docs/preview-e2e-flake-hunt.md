@@ -202,6 +202,56 @@ timings. Those records flow through the canonical artifact into PostHog, while
 the marathon ledger explicitly counts the structured marker and rejects the
 run. A second dial failure and every post-session failure remain authoritative.
 
+### Round 15 orphaned append, Artifacts 503, and signup recovery
+
+Canonical exact-head run `hrtfl6plzr` (attempt `dhkmkf2p26`) on
+`865060fa5644bf2703130611cb9a0d3bf6ee4431` completed in 302 seconds, but is
+rejected with three framework retries. The accepted streak remains 0/25.
+Artifacts and exact-version Cloudflare telemetry separate the three causes;
+none was fixed by increasing a test or project-creation timeout.
+
+The Streams Example relative-path case lost the native Durable Object RPC
+acknowledgement for its first append. The call stayed unresolved for the
+test's full 30-second budget, then completed after Vitest had already timed out
+and continued leaking the abandoned attempt's later appends. The append was
+not CPU-bound and the retry completed the complete case in about six seconds.
+Every path-resolution append now carries an idempotency key, and the shared
+Stream RPC target gives keyed native append attempts a 10-second
+acknowledgement deadline. A silent attempt is observed and disposed if it
+eventually returns, while the existing availability boundary performs exactly
+one replay with the same keys. Unkeyed appends are never deadline-replayed.
+
+The clean-close Playwright case never reached its named assertion. Its fixture
+project `prj_e8fece330f4b46b49f812ab0ade21804` completed identity, root birth,
+and every sibling birth barrier, then waited 99.201 seconds for
+`project/ready`. The retained journal supplies the durable explanation:
+`/repos/config` recorded `repos/create-failed` with
+`HTTP Error: 503 Service Unavailable` at offset 9. The Artifacts client had
+flattened the transient response into a plain Error, so the repo processor's
+code/name-only classifier permanently poisoned the repository and no
+`repos/created` certificate could make the project ready. The classifier now
+recognizes only transient Artifacts HTTP statuses (including the live 503
+shape) through wrapped causes and re-enters ordinary durable redelivery.
+Domain HTTP failures such as 404 still settle fail-closed. Focused recovery
+tests prove that the 503 writes no failure fact and a successor attempt writes
+one terminal `repos/created` fact.
+
+The new-user UI case exposed a separate navigation defect. The root
+deployment-status probe returned `unknown`, so the root decision sent the user
+to `/projects`. That page successfully created project
+`prj_445316f275f34223b49486ebf5f8346b` and made it ready in about 4.9 seconds,
+but remained on the list until the 60-second composer assertion expired. A
+single unknown project now follows the same welcome destination as a missing
+project. Server-side nonblocking birth is attempted first; if its probe or
+birth call fails, an explicit `ensureBirth` handoff lets the authenticated
+welcome page issue the same idempotent nonblocking create once. The user is no
+longer stranded after successful recovery.
+
+Focused tests (65 cases), both affected package typechecks, targeted lint and
+format checks, and the full OS unit suite are green locally. This is diagnostic
+and regression evidence only; a new immutable head must restart the canonical
+25-run proof.
+
 ## Round 14 (2026-07-23, post-#2275)
 
 PR #2275 made preview worker builds fail closed when the dependency installer
