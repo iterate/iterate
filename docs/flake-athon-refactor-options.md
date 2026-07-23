@@ -196,6 +196,60 @@ clutter (three failure representations) is real but its cleanup is a separate
 careful task, not a quick cut — bundling it would trade the "little faff" the ask
 wants for churn that doesn't move robustness.
 
+## Round 4 — two higher-altitude escape hatches tested; the floor holds
+
+Round 4 deliberately did **not** re-map the retry sites (done twice). It tested
+the two "make the problem disappear" ideas that would beat the lean fix — and both
+bottom out, with Cloudflare's own docs as the deciding evidence. Reporting this
+plainly rather than manufacturing a marginal cut.
+
+- **Can the reset be avoided _by construction_ (so we don't need the +12 fix)?
+  No.** The reset fires on _version reassignment of a placement_, and Cloudflare
+  states it directly: _"The Durable Object will only be reset when it is assigned
+  a different version"_
+  ([gradual deployments](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/)).
+  A plain `wrangler deploy` reassigns the whole fleet, and — decisively — a
+  brand-new per-test DO can be _created on a placement still serving old code_ and
+  reset lazily when that placement flips; "fresh slug ⇒ cold start, never a reset"
+  is **false**. The request version-pin
+  (`cloudflare-worker-version-overrides.ts`) is an **asset/HTML** routing fix and
+  does not touch DOs ("only one version of each Durable Object runs at a time").
+  Deploying each run to a **fresh worker name** (no prior version ⇒ no reset) is
+  _far more_ faff — unbounded worker/namespace/container accumulation, one-way
+  container-class enablement, and it breaks the slot/lease model
+  (`scripts/lib/do-reset.ts`). **You cannot deploy your way out; a bounded
+  reset-classified retry is the irreducible answer.**
+
+- **Is async-by-construction `create()` net-simpler? No — it's a wash that
+  relocates complexity.** Making the default non-blocking deletes ~11 lines from
+  `create()` but adds ~4 across the **2** bundled callers, and it (a) moves the
+  from-entry single-deadline fail-fast guarantee _into_ callers (or re-introduces
+  the same arithmetic there), (b) weakens the e2e helper's fail-fast, and (c)
+  turns a safe-by-default into a footgun for out-of-tree "create-then-use"
+  scripts. The fast path _already exists_ and **3 of 5 callers already use it**, so
+  flipping the default buys no product-path robustness. The 7 saga steps are each
+  load-bearing (the one "duplicate" — `driveBirth` in both lanes — is intentional).
+  **Confirmed round-3: leave the shape; the clear escape-error message is the
+  right, minimal fix for the ambiguity.**
+
+**One genuinely new low-faff win surfaced:** the API-key **secret-seed failure is
+swallowed to a bare `console.warn`** (`rpc-targets.ts:5301-5307`) that, on the
+fast path, runs inside `ctx.waitUntil` with **no observer at all** — a real
+silent-failure hole (violates "no silent failure"). Turn it into a telemetry
+event (keep the non-throwing control flow — it self-heals on reveal). **~+2 LOC,
+pure observability upside**, folded into the lean fix.
+
+### Verdict: this is the floor
+
+Four rounds converge. The lean fix — **delete the gate (−305), reuse the one-retry
+helper on the one uncovered wait (+12/−7), a clear "retry later" error (+6), two
+freebies (−32), the seed-telemetry line (+2)** ≈ **−300 LOC net, validated** — is
+the floor for "less code + less clutter + more robustness + little faff." Further
+cuts either (a) can't beat Cloudflare's eventual-consistency model, (b) relocate
+complexity rather than remove it, or (c) are the separate medium-faff
+[DO-failure-signal unification](../tasks/unify-durable-object-failure-signal.md)
+that doesn't move robustness. Recommendation: **ship the lean fix; stop cutting.**
+
 ---
 
 The detailed candidate analysis and the fuller (optional) version follow.
