@@ -19,7 +19,7 @@
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
     "test:oxlint-plugin": "pnpm --dir lint test",
-    "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace apps/tanstack --workspace packages/shared --workspace packages/ui --workspace packages/iterate",
+    "knip": "knip --workspace apps/os --workspace apps/semaphore --workspace apps/streams-example-app --workspace apps/tanstack --workspace apps/tasks --workspace packages/shared --workspace packages/ui --workspace packages/iterate",
     "prepare": "is-ci || husky",
     "spec": "playwright test --config playwright.config.ts",
     "e2e": "pnpm --dir apps/os e2e",
