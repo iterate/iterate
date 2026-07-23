@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-The error notice and regression tests are implemented. Package checks and
-production-shaped preview proof remain.
+The error notice, regression tests, package checks, and Preview 2 browser proof
+are complete.
 
 ## Problem
 
@@ -36,8 +36,8 @@ normal visits without an error remain unchanged.
 - [x] Render `error_description`, falling back to a humanized `error` code. _The signed-in home validates both search fields and renders a destructive alert._
 - [x] Verify arbitrary query text is rendered as text and the no-error state is unchanged. _The regression test covers escaped markup and the empty render._
 - [x] Run Auth tests, typecheck, lint, and formatting checks. _All 75 Auth tests pass, including the three new UI cases; Auth typecheck and touched-file lint/format checks pass._
-- [ ] Verify the error notice against a production-shaped preview.
-- [ ] Update the draft PR with browser proof.
+- [x] Verify the error notice against a production-shaped preview. _Auth Preview 2 renders the screenshot error and prefers a supplied `error_description`._
+- [x] Update the draft PR with browser proof. _PR #2291 includes the exact preview URL and an inline screenshot._
 
 ## Implementation notes
 
@@ -47,3 +47,6 @@ normal visits without an error remain unchanged.
   values and may also supply `error_description`.
 - The root cause was the Auth home route having no search validation or
   rendering path for Better Auth's redirect error fields.
+- The original clipboard URL used Preview 14; PR #2291 was assigned Preview 2.
+  Verifying the allocated slot avoided mistaking Preview 14's old build for a
+  regression in the new route.
