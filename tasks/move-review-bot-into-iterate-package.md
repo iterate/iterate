@@ -3,7 +3,7 @@ size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: Misha now reaches the physical v3 worker entry point, but its production workerd smoke exposed a bare `yaml` import in the published runtime graph. A package-build gate now reproduces the incomplete artifact; making the configured worker standalone remains.
+Status: Misha's bare-module failure is fixed locally: the configured worker is now a standalone workerd-targeted artifact, and the package build rejects any future consumer-supplied imports. Package verification and a second production smoke remain.
 
 ## Plan
 
@@ -16,7 +16,7 @@ Status: Misha now reaches the physical v3 worker entry point, but its production
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
 - [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
 - [x] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Changed the invalid colon to a hyphen, bumped the subscription config revision to v2, and verified the emitted ref through the OS runtime schema.*
-- [ ] Make the packaged worker build through the real worker-bundler contract. *The package now emits a physical configured-worker entry point and worker-bundler accepts the installed path locally; the production workerd smoke remains.*
+- [ ] Make the packaged worker build through the real worker-bundler contract. *The physical configured worker now bundles `yaml`, `zod`, and Cap'n Web and passes the package graph gate; a second production workerd smoke remains.*
 - [x] Preserve terminal source-build errors for subscribers and stop retrying them. *The keyed coordinator stores a bounded one-shot failure receipt across actor eviction; the loader marks it non-retryable and the stream parks immediately with the exact error.*
 
 ## Approved decisions
@@ -47,3 +47,4 @@ Status: Misha now reaches the physical v3 worker entry point, but its production
 - 2026-07-23: Cloudflare traces showed each build settling as `source-failed` in about 0.6 seconds while the subscriber retained `This worker is still building.` and retried. The follow-up must durably expose that terminal compiler error and park the subscription.
 - 2026-07-23: Added a one-shot durable terminal-failure receipt to the keyed build coordinator. The next foreground call consumes it, the loader restores the non-retryable verdict after Workers RPC, and the stream parks on the first exact source error without another alarm; explicit resume can still retry a potentially transient package-install failure.
 - 2026-07-23: Misha successfully emitted the v3 subscription from config commit `5247613a`, then workerd rejected the packaged graph with `No such module "yaml"`. Added a post-build module-graph check so a configured worker with consumer-supplied bare imports cannot publish again.
+- 2026-07-23: Split the configured worker into its own workerd-targeted tsdown build, bundling `yaml`, `zod`, and `@iterate-com/capnweb` while leaving only `cloudflare:*` and `iterate:github-ai-linter-config` external. The emitted 508 kB module passes the graph gate.
