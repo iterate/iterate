@@ -234,7 +234,10 @@ The seeded worker keeps project-owned desired state in the config repo. Its
 literal `project/create-requested` switch case is the creation-only hook.
 Delivery is at least once, so subscriptions and appends there still need stable
 idempotency keys. The root `project-worker` key is platform-owned; creation
-hooks add their own literal subscription events under distinct keys.
+hooks add their own literal subscription events under distinct keys. Its
+configuration and the terminal creation facts use the reserved `platform:`
+idempotency namespace, so project code cannot squat a key or alter the
+creation-delivery fence while the worker is building.
 `reconcileProject()` is the repeatable hook, run at creation, on root-stream wake
 (including OS upgrades), after config-repo commits (including dynamic worker
 rebuilds), and from scheduler heartbeats. The editable

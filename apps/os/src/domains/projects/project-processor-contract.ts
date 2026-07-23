@@ -525,7 +525,7 @@ export function parseProjectCreationTerminal(input: {
   switch (event.type) {
     case "events.iterate.com/project/created": {
       if (
-        event.idempotencyKey !== `project-created:${projectId}` ||
+        event.idempotencyKey !== `platform:project-created:${projectId}` ||
         processor.whileProcessing?.type !== "events.iterate.com/repos/created"
       ) {
         return null;
@@ -541,7 +541,7 @@ export function parseProjectCreationTerminal(input: {
     }
     case "events.iterate.com/project/create-failed": {
       if (
-        event.idempotencyKey !== `${ProjectProcessorContract.slug}/create-failed` ||
+        event.idempotencyKey !== "platform:project/create-failed" ||
         (processor.whileProcessing?.type !== "events.iterate.com/repos/created" &&
           processor.whileProcessing?.type !== "events.iterate.com/repos/create-failed")
       ) {

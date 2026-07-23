@@ -32,7 +32,7 @@ export const PROJECT_CREATE_REQUESTED = {
 
 export const PROJECT_CREATED = {
   type: "events.iterate.com/project/created",
-  idempotencyKey: "project-created:prj_test",
+  idempotencyKey: "platform:project-created:prj_test",
   payload: {
     ...PROJECT_CREATE_REQUESTED.payload,
     createRequestedAtOffset: 1,

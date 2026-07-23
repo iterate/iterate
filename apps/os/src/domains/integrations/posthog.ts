@@ -90,7 +90,7 @@ function projectBirthEvents(args: {
       event.path !== "/" ||
       event.ephemeral === true ||
       event.type !== "events.iterate.com/project/created" ||
-      event.idempotencyKey !== `project-created:${projectId}`
+      event.idempotencyKey !== `platform:project-created:${projectId}`
     ) {
       return false;
     }

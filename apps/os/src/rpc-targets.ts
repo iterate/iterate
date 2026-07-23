@@ -584,20 +584,49 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     const prepared = events.map((event) => {
       const processor = event.source?.processor;
+      let preparedEvent = event;
       if (this.props.platformProcessorHost === true) {
-        if (processor === undefined) return event;
-        return {
-          ...event,
-          source: {
-            ...event.source,
-            processor: { ...processor, authority: "platform" as const },
-          },
-        };
-      }
-      if (processor?.authority === "platform") {
+        if (processor !== undefined) {
+          preparedEvent = {
+            ...event,
+            source: {
+              ...event.source,
+              processor: { ...processor, authority: "platform" as const },
+            },
+          };
+        }
+      } else if (processor?.authority === "platform") {
         throw new Error("source.processor.authority is reserved for platform processor hosts");
       }
-      return event;
+      // Project access is already live while bootstrap waits on the config
+      // worker. Keep its late idempotency keys and root delivery fence outside
+      // that userspace authority.
+      if (preparedEvent.source?.processor?.authority !== "platform") {
+        if (preparedEvent.idempotencyKey?.startsWith("platform:")) {
+          throw new Error("platform: idempotency keys are reserved for platform processor hosts");
+        }
+        if (this.props.projectId !== null && this.props.path === "/") {
+          switch (preparedEvent.type) {
+            case "events.iterate.com/stream/subscription-configured":
+            case "events.iterate.com/stream/subscription-removed":
+            case "events.iterate.com/stream/subscription-parked":
+            case "events.iterate.com/stream/subscription-resumed":
+            case "events.iterate.com/stream/subscription-cursor-set":
+              if (
+                typeof preparedEvent.payload === "object" &&
+                preparedEvent.payload !== null &&
+                !Array.isArray(preparedEvent.payload) &&
+                preparedEvent.payload.subscriptionKey === "project-worker"
+              ) {
+                throw new Error(
+                  'the root "project-worker" subscription is reserved for platform processor hosts',
+                );
+              }
+              break;
+          }
+        }
+      }
+      return preparedEvent;
     });
     const append = () => Promise.resolve(this.durableObjectStub.append(...prepared));
     const result = await (

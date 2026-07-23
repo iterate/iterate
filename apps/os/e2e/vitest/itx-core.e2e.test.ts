@@ -151,10 +151,12 @@ test("Authenticated internal auth itx can create project and append to stream", 
   );
   const creationWorkerConfiguration = workerConfigurations.find(
     (event) =>
-      event.idempotencyKey === `project-worker-creation-subscription:${description.projectId}`,
+      event.idempotencyKey ===
+      `platform:project-worker-creation-subscription:${description.projectId}`,
   );
   const permanentWorkerConfiguration = workerConfigurations.find(
-    (event) => event.idempotencyKey === `project-worker-subscription:${description.projectId}`,
+    (event) =>
+      event.idempotencyKey === `platform:project-worker-subscription:${description.projectId}`,
   );
   expect(creationWorkerConfiguration).toMatchObject({
     payload: {

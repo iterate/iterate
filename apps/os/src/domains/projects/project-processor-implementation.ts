@@ -134,7 +134,7 @@ export class ProjectProcessor extends StreamProcessor<
           blockProcessorWhile(() =>
             append({
               type: "events.iterate.com/project/create-failed",
-              idempotencyKey: this.idempotencyKey("create-failed"),
+              idempotencyKey: "platform:project/create-failed",
               payload: {
                 createRequestedAtOffset,
                 error: `Config repo creation failed: ${event.payload.error}`,
@@ -145,7 +145,7 @@ export class ProjectProcessor extends StreamProcessor<
           break;
         }
         blockProcessorWhile(async () => {
-          const projectCreatedIdempotencyKey = `project-created:${this.deps.itx.projectId}`;
+          const projectCreatedIdempotencyKey = `platform:project-created:${this.deps.itx.projectId}`;
           const existingProjectCreated = await this.stream.getEvent({
             idempotencyKey: projectCreatedIdempotencyKey,
           });
@@ -180,7 +180,7 @@ export class ProjectProcessor extends StreamProcessor<
               () =>
                 append({
                   type: "events.iterate.com/stream/subscription-configured",
-                  idempotencyKey: `project-worker-creation-subscription:${this.deps.itx.projectId}`,
+                  idempotencyKey: `platform:project-worker-creation-subscription:${this.deps.itx.projectId}`,
                   payload: {
                     subscriptionKey: "project-worker",
                     description:
@@ -213,12 +213,12 @@ export class ProjectProcessor extends StreamProcessor<
             await append(
               {
                 type: "events.iterate.com/stream/subscription-removed",
-                idempotencyKey: `project-worker-subscription-removed:${this.deps.itx.projectId}`,
+                idempotencyKey: `platform:project-worker-subscription-removed:${this.deps.itx.projectId}`,
                 payload: { subscriptionKey: "project-worker" },
               },
               {
                 type: "events.iterate.com/project/create-failed",
-                idempotencyKey: this.idempotencyKey("create-failed"),
+                idempotencyKey: "platform:project/create-failed",
                 payload: {
                   createRequestedAtOffset,
                   error: `Default project worker bootstrap failed: ${errorMessage(error)}`,
@@ -232,7 +232,7 @@ export class ProjectProcessor extends StreamProcessor<
             append(
               {
                 type: "events.iterate.com/stream/subscription-configured",
-                idempotencyKey: `project-worker-subscription:${this.deps.itx.projectId}`,
+                idempotencyKey: `platform:project-worker-subscription:${this.deps.itx.projectId}`,
                 payload: {
                   subscriptionKey: "project-worker",
                   description:

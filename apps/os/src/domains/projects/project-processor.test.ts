@@ -177,7 +177,7 @@ describe("ProjectProcessor bootstrap", () => {
         .filter((event) => event.payload.subscriptionKey === "project-worker"),
     ).toMatchObject([
       {
-        idempotencyKey: "project-worker-creation-subscription:prj_test",
+        idempotencyKey: "platform:project-worker-creation-subscription:prj_test",
         payload: {
           deliver: { afterOffset: 0 },
           onPoison: "park",
@@ -188,7 +188,7 @@ describe("ProjectProcessor bootstrap", () => {
         },
       },
       {
-        idempotencyKey: "project-worker-subscription:prj_test",
+        idempotencyKey: "platform:project-worker-subscription:prj_test",
         payload: {
           deliver: { afterOffset: 1 },
           onPoison: "skip",
@@ -234,13 +234,13 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.events("events.iterate.com/project/created")).toEqual([]);
     expect(h.events("events.iterate.com/stream/subscription-removed")).toMatchObject([
       {
-        idempotencyKey: "project-worker-subscription-removed:prj_test",
+        idempotencyKey: "platform:project-worker-subscription-removed:prj_test",
         payload: { subscriptionKey: "project-worker" },
       },
     ]);
     expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
       {
-        idempotencyKey: "project/create-failed",
+        idempotencyKey: "platform:project/create-failed",
         payload: {
           createRequestedAtOffset: 1,
           error:
@@ -332,7 +332,7 @@ describe("ProjectProcessor bootstrap", () => {
 
     expect(h.events("events.iterate.com/project/create-failed")).toMatchObject([
       {
-        idempotencyKey: "project/create-failed",
+        idempotencyKey: "platform:project/create-failed",
         payload: {
           createRequestedAtOffset: 1,
           error: "Config repo creation failed: The backing repository could not be created.",
@@ -368,7 +368,7 @@ describe("ProjectProcessor bootstrap", () => {
   it("reduces only a terminal fact that exactly settles the open creation request", async () => {
     const failure = {
       type: "events.iterate.com/project/create-failed",
-      idempotencyKey: "project/create-failed",
+      idempotencyKey: "platform:project/create-failed",
       payload: {
         createRequestedAtOffset: 1,
         error: "not this request",

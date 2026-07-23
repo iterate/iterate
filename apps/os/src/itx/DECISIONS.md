@@ -345,7 +345,10 @@ been circling:
   config-repo failure or durable delivery-policy rejection appends terminal
   `project/create-failed`; worker-build errors remain unclassified, so they
   join availability, build-in-progress, and timeout outcomes in staying open
-  for durable redelivery. Create waits for
+  for durable redelivery. The root `project-worker` subscription and the
+  creation saga's `platform:` idempotency keys are accepted only with
+  platform-processor provenance, so a caller with newly widened project access
+  cannot mutate the fence or squat a terminal key. Create waits for
   either terminal fact by default, returning the same handle on success and
   throwing the recorded failure.
   Callers that render bootstrap progress themselves pass

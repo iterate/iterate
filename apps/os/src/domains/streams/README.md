@@ -309,7 +309,10 @@ subscription starting immediately before `project/create-requested`, with
 `onPoison: "park"`. It waits for that exact cursor to acknowledge the creation
 request before appending terminal `project/created`. This both avoids treating
 the worker as broken while it is being built and makes the userspace creation
-hook part of the project's creation boundary.
+hook part of the project's creation boundary. On `/`, every mutation of the
+`project-worker` subscription and every `platform:` idempotency key requires
+provenance stamped by a platform processor host; project code therefore cannot
+replace the temporary feed, move its cursor, or squat the later certificate.
 
 ## Hosting processors in a Durable Object
 
