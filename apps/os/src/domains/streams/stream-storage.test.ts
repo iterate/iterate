@@ -242,7 +242,11 @@ describe("reconcileSubscriptionCursorRows", () => {
     store.ensure("orphan", 2);
     store.nack("orphan", { attempt: 14, nextAttemptAt: 88_888, error: "config no longer folds" });
 
-    reconcileSubscriptionCursorRows(store, new Set(["survivor-clean", "survivor-backing-off"]));
+    reconcileSubscriptionCursorRows(
+      store,
+      new Set(["survivor-clean", "survivor-backing-off"]),
+      new Set(),
+    );
 
     // The orphan is gone entirely — its next_attempt_at must not arm alarms forever.
     expect(store.get("orphan")).toBeUndefined();
@@ -256,6 +260,36 @@ describe("reconcileSubscriptionCursorRows", () => {
       nextAttemptAt: null,
       lastError: null,
     });
+  });
+
+  it("keeps a parked survivor's failure evidence — the fold keeps it parked, so there is no fresh try", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("parked", 7);
+    store.nack("parked", { attempt: 14, nextAttemptAt: 55_555, error: "still down" });
+    store.park("parked", { attempt: 15, error: "still down" });
+
+    reconcileSubscriptionCursorRows(store, new Set(["parked"]), new Set(["parked"]));
+
+    // The stalled-warning sheet's "why" must survive the rebuild.
+    expect(store.get("parked")).toMatchObject({
+      ackedOffset: 7,
+      attempt: 15,
+      nextAttemptAt: null,
+      lastError: "still down",
+    });
+  });
+
+  it("still clears a parked row holding a stray retry schedule — no eternally re-armed alarm", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("parked-stray", 4);
+    // A parked row's next_attempt_at should be null (park guarantees it);
+    // simulate corrupted storage where it is not.
+    store.nack("parked-stray", { attempt: 9, nextAttemptAt: 77_777, error: "still down" });
+
+    reconcileSubscriptionCursorRows(store, new Set(["parked-stray"]), new Set(["parked-stray"]));
+
+    expect(store.get("parked-stray")).toMatchObject({ attempt: 0, nextAttemptAt: null });
+    expect(store.minNextAttemptAt()).toBeNull();
   });
 });
 

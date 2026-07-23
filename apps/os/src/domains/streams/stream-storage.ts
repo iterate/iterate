@@ -599,15 +599,26 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
  * may blame code the new version replaced. Progress is kept — `ackedOffset`
  * is monotonic truth about the same immutable log — while failure state is
  * cleared so every survivor gets an immediate fresh try under the new fold.
+ * PARKED survivors are the exception: the fold keeps them parked, so there is
+ * no fresh try to prime, and their attempt/lastError is the evidence the
+ * stalled-warning sheet shows — it must survive the rebuild.
  */
 export function reconcileSubscriptionCursorRows(
   store: SubscriptionCursorStore,
   configuredKeys: ReadonlySet<string>,
+  parkedKeys: ReadonlySet<string>,
 ): void {
   for (const row of store.list()) {
     if (!configuredKeys.has(row.subscriptionKey)) {
       store.delete(row.subscriptionKey);
-    } else if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
+      continue;
+    }
+    // A parked row's retry schedule is already clear (park guarantees it), so
+    // there is nothing alarm-driving to reconcile away — keep its evidence.
+    // If storage somehow holds a stray next_attempt_at anyway, fall through
+    // to the ack: losing the evidence beats an eternally re-armed alarm.
+    if (parkedKeys.has(row.subscriptionKey) && row.nextAttemptAt === null) continue;
+    if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
       // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
       store.ack(row.subscriptionKey, row.ackedOffset);
     }
