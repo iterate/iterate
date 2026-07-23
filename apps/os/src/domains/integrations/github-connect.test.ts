@@ -486,6 +486,109 @@ describe("completeConnect (github App installation)", () => {
     expect(network.streams.has(oldJournalName)).toBe(false);
   });
 
+  test("a steal retry bricks every owner it displaced, not only the final one", async () => {
+    const directoryName = DurableObjectNameCodec.stringify(
+      { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
+      { allowNullProjectId: true },
+    );
+    const directory = network.STREAM.getByName(directoryName);
+    await directory.append({
+      payload: {
+        connection: "project-a-installation",
+        externalId: "789",
+        projectId: "prj_a",
+        slug: "github",
+      },
+      type: "events.iterate.com/integration/connection-claimed",
+    });
+    const projectASecretName = DurableObjectNameCodec.stringify({
+      projectId: "prj_a",
+      path: githubConnectionSecretPath("project-a-installation"),
+    });
+    const projectCSecretName = DurableObjectNameCodec.stringify({
+      projectId: "prj_c",
+      path: githubConnectionSecretPath("project-c-installation"),
+    });
+    const targetSecretName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: githubConnectionSecretPath("install-789"),
+    });
+    await network.SECRET.getByName(projectASecretName).create({
+      egress: { urls: ["https://api.github.com"] },
+      material: {},
+    });
+    await network.SECRET.getByName(projectCSecretName).create({
+      egress: { urls: ["https://api.github.com"] },
+      material: {},
+    });
+    const state = await createOAuthState(
+      {
+        githubInstallationAuthorized: true,
+        githubInstallationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+
+    // This project commits [unclaim A, claim target]. Before its verification
+    // read, project C commits [unclaim target, claim C]. The retry then moves
+    // C to the target. Both displaced owners must lose token-minting access.
+    network.streamAppendHooks.push(async ({ events, name }) => {
+      if (
+        name !== directoryName ||
+        !events.some(
+          (event) =>
+            event.type === "events.iterate.com/integration/connection-claimed" &&
+            (event.payload as { projectId?: string }).projectId === PROJECT_ID,
+        )
+      ) {
+        return false;
+      }
+      await directory.append(
+        {
+          payload: {
+            connection: "install-789",
+            externalId: "789",
+            projectId: PROJECT_ID,
+            slug: "github",
+          },
+          type: "events.iterate.com/integration/connection-unclaimed",
+        },
+        {
+          payload: {
+            connection: "project-c-installation",
+            externalId: "789",
+            projectId: "prj_c",
+            slug: "github",
+          },
+          type: "events.iterate.com/integration/connection-claimed",
+        },
+      );
+      // Project C's successful steal dispossesses the target before this
+      // confirmation retries and wins ownership back.
+      await network.SECRET.getByName(targetSecretName).update({ egress: { urls: [] } });
+    });
+
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state,
+        userId: "user_1",
+      }),
+    ).resolves.toEqual({ connection: "install-789", ok: true });
+
+    expect(network.secrets.get(projectASecretName)).toMatchObject({ egress: { urls: [] } });
+    expect(network.secrets.get(projectCSecretName)).toMatchObject({ egress: { urls: [] } });
+    expect(network.secrets.get(targetSecretName)).toMatchObject({
+      egress: {
+        urls: expect.arrayContaining(["https://api.github.com", "https://uploads.github.com"]),
+      },
+    });
+  });
+
   test("a concurrent foreign claim wins once and bricks the losing connection", async () => {
     const directoryName = DurableObjectNameCodec.stringify(
       { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },

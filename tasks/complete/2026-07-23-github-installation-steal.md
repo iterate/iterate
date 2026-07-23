@@ -8,8 +8,9 @@ size: medium
 ## Status
 
 Done. The signed confirmation flow, authenticated RPC, atomic claim move, old-connection cleanup,
-dialog, docs, generated API, full local checks, headed preview proof, and green preview rerun are
-complete. No review threads remain.
+race-safe cleanup, dialog, docs, generated API, full local checks, headed preview proof, and green
+preview rerun are complete. Bugbot's concurrent-steal finding has a deterministic regression test
+and fix; final CI is pending.
 
 ## Goal
 
@@ -31,8 +32,9 @@ existing Telegram steal experience.
 - Confirmation is a dedicated project RPC. It accepts only the signed state and derives the
   confirming user from the authenticated itx principal; callers cannot supply the user identity.
 - Prepare the new project connection before routing moves. Commit the old unclaim and new claim in
-  one directory append, then brick the old secret and append a disconnected fact with reason
-  `stolen-by-another-project`.
+  one directory append, then brick every owner displaced across retries with reason
+  `stolen-by-another-project`. If another steal briefly bricks the eventual winner, restore its
+  secret and re-verify directory ownership before returning success.
 - Do not name the old project in the result or dialog. It may belong to another organization.
 - Replaying a successfully used confirmation state is idempotent when the installation is already
   owned by the target project.
@@ -56,7 +58,8 @@ existing Telegram steal experience.
       the error/state and confirm connects without repeating OAuth. *Headed preview-5 verification
       exercised both buttons and captured the dialog for the PR.*
 - [x] Add focused red-green tests for conflict proof, authorization checks, transfer side effects,
-      replay, and released-claim behavior. *Nine GitHub connect tests pass.*
+      replay, released-claim behavior, and concurrent steal retries. *Ten GitHub connect tests
+      pass, including an A → target → C → target ownership interleaving.*
 - [x] Update the GitHub integration docs and generated public itx API artifacts.
       *The design doc describes OAuth proof and claim moves; both generated itx API copies and the
       graph include `confirmGithubSteal`.*
@@ -79,3 +82,6 @@ existing Telegram steal experience.
   preview CI run hit an unrelated existing stream-wait flake, so an exact rerun is in progress.
 - 2026-07-23: The exact preview rerun passed all five deployed apps. The PR has no unresolved
   review threads and its body includes the final screenshot and verification summary.
+- 2026-07-23: Bugbot found that a retry cleaned only its final displaced owner. A deterministic
+  three-project race reproduced the live orphaned secret. The loop now bricks every displaced
+  owner, restores a briefly bricked winner, and verifies ownership again before success.

@@ -658,11 +658,20 @@ export async function confirmGithubSteal(input: {
     projectId: input.projectId,
   });
 
-  let displacedClaim: { connection: string; projectId: string } | null = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const claim = await lookupConnectionClaim("github", installationId);
     if (claim?.projectId === input.projectId) {
-      return { connection: claim.connection, ok: true };
+      if (
+        await restoreOwnedGithubConnection({
+          connection: claim.connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection: claim.connection, ok: true };
+      }
+      continue;
     }
     await appendConnectionDirectoryEvents([
       ...(claim === null
@@ -684,51 +693,70 @@ export async function confirmGithubSteal(input: {
         slug: "github",
       },
     ]);
-    const recordedClaim = await lookupConnectionClaim("github", installationId);
-    if (recordedClaim?.projectId === input.projectId && recordedClaim.connection === connection) {
-      displacedClaim = claim;
-      break;
-    }
-  }
-
-  if (displacedClaim === null) {
-    const recordedClaim = await lookupConnectionClaim("github", installationId);
-    if (recordedClaim?.projectId !== input.projectId || recordedClaim.connection !== connection) {
+    if (claim !== null) {
+      // Clean every owner this confirmation attempted to displace, not only
+      // the owner from the attempt that finally verifies. Another stealer can
+      // take ownership between this atomic directory batch and the read below;
+      // a retry must not leave the earlier owner's installation secret live.
       await recordDisconnection({
-        connection,
+        connection: claim.connection,
         disconnectedEvent: {
           type: "events.iterate.com/github/disconnected",
           payload: {
-            connection,
-            projectId: input.projectId,
-            reason: "installation-move-race-lost",
+            connection: claim.connection,
+            projectId: claim.projectId,
+            reason: "stolen-by-another-project",
           },
         },
-        projectId: input.projectId,
-        secretPath: githubConnectionSecretPath(connection),
+        projectId: claim.projectId,
+        secretPath: githubConnectionSecretPath(claim.connection),
         slug: "github",
       });
-      throw new Error("GitHub installation ownership changed repeatedly; please try again.");
+    }
+    const recordedClaim = await lookupConnectionClaim("github", installationId);
+    if (recordedClaim?.projectId === input.projectId && recordedClaim.connection === connection) {
+      if (
+        await restoreOwnedGithubConnection({
+          connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection, ok: true };
+      }
     }
   }
 
-  if (displacedClaim !== null) {
-    await recordDisconnection({
-      connection: displacedClaim.connection,
-      disconnectedEvent: {
-        type: "events.iterate.com/github/disconnected",
-        payload: {
-          connection: displacedClaim.connection,
-          projectId: displacedClaim.projectId,
-          reason: "stolen-by-another-project",
-        },
-      },
-      projectId: displacedClaim.projectId,
-      secretPath: githubConnectionSecretPath(displacedClaim.connection),
-      slug: "github",
-    });
+  const recordedClaim = await lookupConnectionClaim("github", installationId);
+  if (recordedClaim?.projectId === input.projectId && recordedClaim.connection === connection) {
+    if (
+      await restoreOwnedGithubConnection({
+        connection,
+        githubAppId: github.appId,
+        installationId,
+        projectId: input.projectId,
+      })
+    ) {
+      return { connection, ok: true };
+    }
   }
-  return { connection, ok: true };
+
+  await recordDisconnection({
+    connection,
+    disconnectedEvent: {
+      type: "events.iterate.com/github/disconnected",
+      payload: {
+        connection,
+        projectId: input.projectId,
+        reason: "installation-move-race-lost",
+      },
+    },
+    projectId: input.projectId,
+    secretPath: githubConnectionSecretPath(connection),
+    slug: "github",
+  });
+  throw new Error("GitHub installation ownership changed repeatedly; please try again.");
 }
 
 async function recordGithubConnection(input: {
@@ -738,22 +766,18 @@ async function recordGithubConnection(input: {
   installationId: string;
   projectId: string;
 }): Promise<void> {
+  const secret = githubConnectionSecret({
+    githubAppId: input.githubAppId,
+    installationId: input.installationId,
+  });
   await recordConnection({
     connection: input.connection,
     projectId: input.projectId,
     slug: "github",
     secrets: [
       {
-        egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
-        material: {},
+        ...secret,
         path: githubConnectionSecretPath(input.connection),
-        refresh: {
-          kind: "github-app-installation",
-          apiBase: "https://api.github.com",
-          appId: input.githubAppId,
-          installationId: input.installationId,
-          privateKey: { platform: "integrations.github" },
-        },
       },
     ],
     connectedEvent: {
@@ -767,6 +791,48 @@ async function recordGithubConnection(input: {
     },
     ...(input.directoryClaim ? { directoryClaim: input.directoryClaim } : {}),
   });
+}
+
+/**
+ * A concurrent stealer can brick this project's secret after it briefly owns
+ * the directory claim. Restore the credential, then prove the claim is still
+ * ours; callers retry or brick the connection when that final read loses.
+ */
+async function restoreOwnedGithubConnection(input: {
+  connection: string;
+  githubAppId: string;
+  installationId: string;
+  projectId: string;
+}): Promise<boolean> {
+  const secret = githubConnectionSecret(input);
+  await itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({
+      path: githubConnectionSecretPath(input.connection),
+      projectId: input.projectId,
+    }),
+  ).update({
+    egress: { urls: [...secret.egressUrls] },
+    material: secret.material,
+    refresh: secret.refresh,
+  });
+  const restoredClaim = await lookupConnectionClaim("github", input.installationId);
+  return (
+    restoredClaim?.projectId === input.projectId && restoredClaim.connection === input.connection
+  );
+}
+
+function githubConnectionSecret(input: { githubAppId: string; installationId: string }) {
+  return {
+    egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
+    material: {},
+    refresh: {
+      kind: "github-app-installation" as const,
+      apiBase: "https://api.github.com",
+      appId: input.githubAppId,
+      installationId: input.installationId,
+      privateKey: { platform: "integrations.github" as const },
+    },
+  };
 }
 
 async function exchangeGithubUserCode(input: {
