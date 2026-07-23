@@ -1,8 +1,8 @@
 import { isRepoNotSeededError, RepoNotSeededError } from "./utils.ts";
 
-// Project birth has one 60s sibling barrier. Keep this protocol-level
-// readiness wait inside it so a still-broken repo returns to the durable
-// redelivery lane instead of pinning the project frame indefinitely.
+// Keep this protocol-level readiness wait bounded so a still-broken repo
+// returns to the durable redelivery lane instead of pinning the project frame
+// indefinitely. Project.create() has a separate, tighter caller deadline.
 const EXISTING_ARTIFACT_READY_TIMEOUT_MS = 45_000;
 const EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS = 250;
 const EXISTING_ARTIFACT_READY_MAX_RETRY_MS = 4_000;

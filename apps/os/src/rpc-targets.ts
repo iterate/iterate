@@ -421,6 +421,7 @@ const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // A wedged processor must fail the caller loudly instead of parking an RPC
 // forever; the durable birth events remain committed for ordinary redelivery.
 const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
+const PROJECT_CREATE_READY_TIMEOUT_MS = 15_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -5200,6 +5201,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     args: { organizationSlug?: string; projectId?: string } = {},
     options?: { waitUntilReady?: boolean },
   ): Promise<ProjectRpcTarget> {
+    const projectCreateDeadline = Date.now() + PROJECT_CREATE_READY_TIMEOUT_MS;
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -5304,10 +5306,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           },
         );
     // Both lanes drive processor birth through the same wait; they differ
-    // only in who pays for it. A create must never leave its caller parked
-    // behind a wedged processor indefinitely: one project birth frame has a
-    // shared 60s sibling-barrier deadline; 75s leaves 15s for
-    // durable-delivery backoff and transport redial.
+    // only in who pays for it. The processor acknowledgement has its own
+    // bounded recovery window, while the ready lane below gives the caller a
+    // much tighter project-level deadline. The birth facts remain committed
+    // and durable delivery can finish the project after a caller times out.
     const driveBirth = (step: string) =>
       timedStep("create-timing", timing, step, () =>
         Promise.all([
@@ -5333,14 +5335,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       return this;
     }
 
-    // Ready lane: the birth events are already committed and durable delivery
-    // is already driving both processors, so the seed's own barrier and the
-    // birth wait overlap safely — sequencing them would only add latency.
+    // Ready lane: start the terminal project/ready wait alongside the sibling
+    // work. Its deadline is measured from entry to create(), so a slow
+    // processor or control-plane call fails the caller after roughly 15s
+    // instead of consuming an entire test timeout. Promise.all rejects at that
+    // boundary; the already-committed birth facts continue through durable
+    // delivery and an explicit caller/test retry can redial cleanly.
+    const remainingReadyTimeoutMs = Math.max(1, projectCreateDeadline - Date.now());
     await Promise.all([
       timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
       driveBirth("wait-project-birth"),
+      timedStep("create-timing", timing, "wait-project-ready", () =>
+        this.waitUntilReady({ timeoutMs: remainingReadyTimeoutMs }),
+      ),
     ]);
-    await timedStep("create-timing", timing, "wait-project-ready", () => this.waitUntilReady());
     return this;
   }
 
@@ -5428,7 +5436,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
       // Tight on purpose: the saga should complete in seconds (see
       // tasks/os-cold-create-latency.md for the cold-slot outliers that must
       // be fixed, not waited out). Preview CI warms slots before the suites.
-      timeoutMs: args?.timeoutMs ?? 60_000,
+      timeoutMs: args?.timeoutMs ?? PROJECT_CREATE_READY_TIMEOUT_MS,
     });
   }
 
