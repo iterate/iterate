@@ -1643,8 +1643,9 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {
-    const { reads, registry } = this.#processorResources();
-    await registry.catchUp(SandboxProcessorContract.slug);
+    const { reads } = this.#processorResources();
+    // The offset wait self-pulls and owns the complete read-your-writes
+    // timeout. Do not put an unbounded catch-up RPC in front of it.
     await reads.waitUntilEvent({ offset, timeoutMs: SANDBOX_PROCESSOR_WAIT_TIMEOUT_MS });
   }
 }

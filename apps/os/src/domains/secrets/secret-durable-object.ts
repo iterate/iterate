@@ -758,7 +758,10 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {
-    await this.#registry.catchUp(SecretProcessorContract.slug);
+    // The offset wait is the single bounded read-your-writes door: it
+    // self-pulls when the runner is behind. A separate catchUp here would put
+    // an unbounded Stream RPC in front of the timeout and can orphan the
+    // command even after the target Stream DO finished serving the read.
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
   }
 
