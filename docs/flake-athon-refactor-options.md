@@ -13,52 +13,78 @@ same surface. The candidates and the evidence that decided between them:
 ## TL;DR — the minimal fix (net ≈ −228 lines, less complexity, more robust)
 
 The first draft of this doc grew a 7-step plan. That was over-built. Re-examined
-for _smallest change / least complexity / most robustness_, grounded in
-Cloudflare's own docs and a real LOC count, the answer is **two changes, one of
-them a pure deletion**:
+for _smallest change / least complexity / most robustness_ — grounded in
+Cloudflare's own docs, and with the patch **actually applied and validated in an
+isolated worktree** (codex `gpt-5.6-sol`: 45/45 apps/os focused tests, 148/148
+preview-workflow tests, `pnpm typecheck`, and `git diff --check` all pass) — the
+answer is **two changes, one of them a pure deletion, for a measured net −277
+LOC** (43 added / 320 deleted):
 
-1. **Delete the entire rollout gate and its plumbing — ~241 lines removed, 0
-   added.** This is not just cleanup: **Cloudflare documents no way to wait for a
-   rollout to become globally consistent.** DO code propagation is eventually
-   consistent and a new Worker calls old-version DOs "for seconds to minutes"
-   ([known
-   issues](https://developers.cloudflare.com/durable-objects/platform/known-issues/));
+1. **Delete the entire rollout gate and its plumbing — 305 lines removed, ~17
+   added** (the additions are just formatter collapse where fields/branches were
+   removed; no replacement mechanism). This is not just cleanup: **Cloudflare
+   documents no way to wait for a rollout to become globally consistent.** DO code
+   propagation is eventually consistent and a new Worker calls old-version DOs
+   "for seconds to minutes"
+   ([known issues](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates));
    the _only_ supported remedy is forward/backward-compatible code — "design for
    skew." A time/probe gate is categorically the wrong tool, so the whole
-   subsystem (`preview-rollout-gate.ts`, `previewMinimumDeploymentAgeMs`, the
-   resolve functions, the before-suite sleep, the rollout-settle lane, the
-   per-spec `testInfo.setTimeout` extensions, the `PREVIEW_APP_ROLLOUT_*` env
-   vars, the config field) should go.
+   subsystem goes: `preview-rollout-gate.ts` (+ its test, −120), the
+   `previewMinimumDeploymentAgeMs` constant, the timestamp resolvers, the
+   before/inside-suite gates, the rollout-settle lane and env injection in
+   `preview.ts` (−89), the `previewTestRolloutGate` config field, the per-spec
+   `testInfo.setTimeout` extensions, and the rollout-timeout argument plumbing
+   threaded through the specs.
 
-2. **Close the one real gap: `waitForEvent` re-throws on reset — ~12 lines
-   added.** `create()`'s `project/ready` wait (`rpc-targets.ts:628-717`) already
-   re-arms a fresh subscription from a pinned `replayAfterOffset` on each slice,
-   but only `continue`s on a slice-timeout — on a DO reset it calls
-   `rethrowStreamUnavailable` and surfaces a create failure. Add a reset branch
-   at the ~3 reject sites (658, 665, 716) that `continue`s (with a small backoff),
-   reusing the **existing** `isRetryableDurableObjectAvailabilityError` classifier
-   and the **existing** deadline. The loop already mints a fresh stub each slice —
-   which is exactly Cloudflare's blessed retry shape (bounded, backed-off, fresh
-   stub, retry only the retryable class).
+2. **Close the one real gap by _reusing_ the existing one-retry helper — +12 / −7
+   in `rpc-targets.ts`.** `create()`'s `project/ready` wait resolves through
+   `waitUntilReady()` → `waitForEvent({ afterOffset: 0 })`, and the **single
+   native stub call at `rpc-targets.ts:681-689` is the only operation on the
+   create leg that still turns a first-touch reset into a terminal
+   `stream-unavailable` error** (everything else already self-heals). Rather than
+   add new re-arm branches, wrap that one call in the **existing**
+   `retryLoggedIdempotentOperation` helper — which already gives exactly one
+   retry, a **fresh stub** each attempt (the `durableObjectStub` getter re-calls
+   `getByName`), and an observable log. It's a read-only observation replayed from
+   the same pinned `afterOffset`, so a ready event committed before the reset is
+   replayed, not skipped; a second consecutive availability failure and every
+   application error stay terminal. This matches Cloudflare's blessed shape
+   exactly (bounded, fresh stub, retry only the retryable class) — and it also
+   requires flipping the existing test at
+   `stream-processor-rpc-target.test.ts:390-411`, which currently _freezes_ the
+   terminal-reset behavior, into a fresh-stub recovery proof.
 
 Everything else in the create saga already self-heals (keyed-append retry,
 processor-relay retry); this closes the single path that still surfaces a reset.
-**Net effect: delete a whole subsystem, add ~12 lines, and the reset is now
-absorbed in-process wherever eventual consistency lands it — instead of slept
-through and hoped.** That is strictly more robust _and_ strictly less code.
+**Net effect: delete a whole subsystem, add ~16 lines of product code, and the
+reset is absorbed in-process wherever eventual consistency lands it — at 1 s,
+91 s, or during an ordinary production create — instead of slept through and
+hoped.** Strictly more robust _and_ strictly less code, validated at the
+unit/typecheck level (the live preview marathon is the remaining check).
+
+Because the new retry sees the raw workerd exception, it **must not** retry
+overload — so the same change carries a **one-line guard in the existing boolean
+classifier** (`stream-unavailable.ts:38-45`), no new type or wire contract:
+
+```ts
+// isDurableObjectLifecycleError — exclude overload (Cloudflare: never retry it)
+return flags.overloaded !== true && (flags.durableObjectReset === true || flags.retryable === true);
+```
 
 **Two small, separable hardening fixes** (real per Cloudflare, but independent of
-the gate deletion — do them as their own tiny PRs, not as a precondition):
+the gate deletion — do them as their own tiny PRs, _not_ a precondition):
 
-- **Stop retrying `overloaded`** (audit finding B2). Cloudflare is explicit:
-  `.overloaded` "should not be retried… retrying will worsen the overload"
-  ([error
-  handling](https://developers.cloudflare.com/durable-objects/best-practices/error-handling/)),
-  yet `isDurableObjectLifecycleError` (`stream-unavailable.ts:38-45`) retries it
-  alongside `reset`/`retryable`. Split it out. ~5 lines, one classifier.
-- **Match the blessed retry cadence.** `waitUntilProcessed`'s ~1 Hz
-  deadline-loop drifts from Cloudflare's "exponential backoff + jitter, small
-  attempt cap." Minor; align when touching it.
+- **The broader `overloaded` story (audit finding B2).** The one-line guard above
+  fixes the raw-error path this change touches; the _full_ taxonomy (an
+  `overloaded` that already crossed capnweb as a `stream-unavailable:` string and
+  lost its flags, retried by `waitUntilProcessed`'s deadline loop) is a separable
+  B2 hardening — it does **not** need a discriminated-union classifier refactor to
+  land this fix. Cloudflare is explicit: `.overloaded` "should not be retried…
+  retrying will worsen the overload"
+  ([error handling](https://developers.cloudflare.com/durable-objects/best-practices/error-handling/)).
+- **Match the blessed retry cadence.** `waitUntilProcessed`'s ~1 Hz deadline-loop
+  drifts from Cloudflare's "exponential backoff + jitter, small attempt cap."
+  Minor; align when touching it.
 
 **Cut from the first draft as not load-bearing** for deleting the gate: the
 explicit-`create()`-contract change (#2273/B3 — orthogonal ambiguous-success
@@ -66,6 +92,29 @@ concern), the post-deploy canary (the marathon already _is_ the evidence), the
 fixture consolidation (good hygiene, optional), and the concurrency sweep (B4 —
 its own operational task). The active-readiness probe (C4) is not merely cut but
 **refuted** — Cloudflare confirms no convergence gate can exist.
+
+### The measured patch (applied + validated in a throwaway worktree)
+
+| File                                                                |   +add |    −del | Purpose                                                                                         |
+| ------------------------------------------------------------------- | -----: | ------: | ----------------------------------------------------------------------------------------------- |
+| `apps/os/src/rpc-targets.ts`                                        |     12 |       7 | Run the native `waitForEvent` through the existing logged one-retry helper                      |
+| `apps/os/src/domains/streams/stream-unavailable.ts`                 |      4 |       2 | Exclude raw overload from reset/retryable classification                                        |
+| `apps/os/src/domains/streams/stream-unavailable.test.ts`            |      1 |       1 | Assert raw overload is not lifecycle-retryable                                                  |
+| `apps/os/src/domains/streams/stream-processor-rpc-target.test.ts`   |      9 |       5 | Flip the terminal-reset test into a fresh-stub recovery proof                                   |
+| `apps/os/e2e/vitest/onboarding-smoke.ts`                            |      0 |       6 | Remove rollout-wait import/use                                                                  |
+| `packages/shared/src/test-support/preview-rollout-gate.ts` (+ test) |      0 |     120 | Delete the gate implementation + its tests                                                      |
+| `packages/shared/package.json`                                      |      0 |       1 | Remove gate export                                                                              |
+| `scripts/preview/preview.ts`                                        |      4 |      89 | Remove constant, resolvers, config field, before/inside-suite gates, env injection, settle lane |
+| `scripts/preview/preview.test.ts`                                   |      3 |      59 | Remove resolver/config/lane tests                                                               |
+| `scripts/preview/e2e-policy.test.ts`                                |      1 |       4 | Remove the rollout-gate policy assertion                                                        |
+| `specs/*` (create-project, seeded-apps, signup, test-support ×3)    |      9 |      26 | Remove rollout-timeout arg plumbing + `testInfo.setTimeout` extensions                          |
+| **Total**                                                           | **43** | **320** | **net −277 LOC**                                                                                |
+
+Validation on the applied patch: `apps/os` focused files **45/45 pass**, root
+preview workflow/policy **148/148 pass**, `pnpm --dir apps/os typecheck` passes,
+`git diff --check` passes. The remaining check is the live preview marathon (the
+zero-retry proof), which only Depot CI can run — so this is documented as a
+ready-to-apply patch rather than committed into this analysis PR.
 
 The detailed candidate analysis and the fuller (optional) version follow.
 
