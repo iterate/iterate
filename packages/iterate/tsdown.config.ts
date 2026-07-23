@@ -20,9 +20,16 @@ export default defineConfig([
       },
     },
     deps: {
-      alwaysBundle: ["@iterate-com/capnweb", "yaml", "zod"],
+      alwaysBundle: ["@iterate-com/capnweb", "minimatch", "yaml", "zod"],
       neverBundle: ["cloudflare:workers", "iterate:github-ai-linter-config"],
-      onlyBundle: ["@iterate-com/capnweb", "yaml", "zod"],
+      onlyBundle: [
+        "@iterate-com/capnweb",
+        "balanced-match",
+        "brace-expansion",
+        "minimatch",
+        "yaml",
+        "zod",
+      ],
     },
     dts: false,
     sourcemap: true,

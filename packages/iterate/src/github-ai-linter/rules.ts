@@ -1,3 +1,4 @@
+import { minimatch } from "minimatch";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 
@@ -21,7 +22,7 @@ const RuleMetadata = z.object({
 type RulesProject = {
   repos: {
     get(path: string): {
-      glob(pattern: string): Promise<{ commitOid: string; paths: string[] }>;
+      listFiles(): Promise<{ commitOid: string; paths: string[] }>;
       readFile(input: { commitOid: string; path: string }): Promise<{ content: string } | null>;
     };
   };
@@ -32,8 +33,10 @@ export async function loadGithubAiLinterRules(
   source: GithubAiLinterRuleSource,
 ): Promise<GithubAiLinterRules> {
   const repo = itx.repos.get(source.repoPath);
-  const snapshot = await repo.glob(source.glob);
-  const paths = snapshot.paths.toSorted();
+  const snapshot = await repo.listFiles();
+  const paths = snapshot.paths
+    .filter((path) => minimatch(path, source.glob, { dot: true }))
+    .toSorted();
   if (paths.length === 0) {
     throw new Error(
       `GitHub AI linter rule glob ${source.repoPath}:${source.glob} matched no files`,

@@ -1024,8 +1024,6 @@ export interface Repo {
   edit(input: EditRepoFileInput): Promise<EditRepoFileResult>;
   /** All committed file paths at HEAD. */
   listFiles(): Promise<{ commitOid: string; paths: string[] }>;
-  /** Committed file paths at HEAD matching a glob pattern. */
-  glob(pattern: string): Promise<{ commitOid: string; paths: string[] }>;
   /**
    * Commit history of a branch, newest first — oid, message, author,
    * timestamp (epoch ms), parent oids. Deliberately without per-commit file

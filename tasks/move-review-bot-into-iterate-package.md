@@ -3,20 +3,20 @@ size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: The standalone artifact reached rule loading in production, exposing that `Repo.glob()` exists only on this PR's undeployed OS. A red production-shaped rule-loader spec now requires the package to use the existing `Repo.listFiles()` API; the compatibility fix and another smoke remain.
+Status: The standalone artifact reached rule loading in production. The package now uses production's existing `Repo.listFiles()` API and bundles local glob matching; another Misha smoke remains.
 
 ## Plan
 
 - [x] Add a public `iterate/github-ai-linter` module with a declarative `GithubAiLinter.create(...)` app definition. *Implemented in `packages/iterate/src/github-ai-linter/index.ts`.*
 - [x] Keep event routing explicit in config while packaging the linter-specific reaction. *The worker keeps a private `#aiLintApp` and calls it from its existing `processEvent` hook; the SDK stays unchanged.*
 - [x] Move the review processor, durable host, subscription bootstrap, and GitHub webhook routing from `iterate/config` into the package while preserving durable keys, subscription keys, freshness, and idempotency. *The packaged worker keeps the existing review-bot identities and routing tests.*
-- [x] Load review rules from a repo glob descriptor; keep Iterate's canonical rule Markdown under root `rules/**/*.md` for both ordinary coding agents and the hosted linter. *Rule reads are pinned to the commit returned by `Repo.glob`; root agent instructions point to the same files.*
+- [x] Load review rules from a repo glob descriptor; keep Iterate's canonical rule Markdown under root `rules/**/*.md` for both ordinary coding agents and the hosted linter. *Rule reads are pinned to the commit returned by `Repo.listFiles`; the package filters paths locally and root agent instructions point to the same files.*
 - [x] Export/build/type the package submodule and cover its public behavior with integration-style package tests. *Both public exports build and the focused package suite passes.*
 - [x] Update the seeded config template and generated seed to import/register the package app; keep unrelated app routing and schedules out of scope. *The real template and generated file now contain the declaration.*
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
 - [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
 - [x] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Changed the invalid colon to a hyphen, bumped the subscription config revision to v2, and verified the emitted ref through the OS runtime schema.*
-- [ ] Make the packaged worker build through the real worker-bundler contract. *The physical configured worker now bundles `yaml`, `zod`, and Cap'n Web and passes the package graph gate; a second production workerd smoke remains.*
+- [ ] Make the packaged worker build through the real worker-bundler contract. *The physical configured worker bundles `yaml`, `zod`, Cap'n Web, and `minimatch`, passes the package graph gate, and uses only production-deployed Repo RPCs; another production workerd smoke remains.*
 - [x] Preserve terminal source-build errors for subscribers and stop retrying them. *The keyed coordinator stores a bounded one-shot failure receipt across actor eviction; the loader marks it non-retryable and the stream parks immediately with the exact error.*
 
 ## Approved decisions
@@ -49,3 +49,4 @@ Status: The standalone artifact reached rule loading in production, exposing tha
 - 2026-07-23: Misha successfully emitted the v3 subscription from config commit `5247613a`, then workerd rejected the packaged graph with `No such module "yaml"`. Added a post-build module-graph check so a configured worker with consumer-supplied bare imports cannot publish again.
 - 2026-07-23: Split the configured worker into its own workerd-targeted tsdown build, bundling `yaml`, `zod`, and `@iterate-com/capnweb` while leaving only `cloudflare:*` and `iterate:github-ai-linter-config` external. The emitted 508 kB module passes the graph gate.
 - 2026-07-23: Misha's next retry loaded the standalone worker, then failed with `The RPC receiver does not implement the method "glob"`. Production already exposes the equivalent snapshot primitive as `Repo.listFiles()`; added a production-shaped regression before removing the new host-only method.
+- 2026-07-23: The package now filters the production `Repo.listFiles()` snapshot with bundled `minimatch`, preserving commit-pinned reads without requiring a coordinated OS deployment. The focused spec, package graph gate, and package/OS typechecks pass.
