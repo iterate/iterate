@@ -87,6 +87,12 @@ export function remoteCursorsExtension(connection: CollabConnection) {
       decorations: DecorationSet = Decoration.none;
       timer: ReturnType<typeof setTimeout> | null = null;
       lastSent: { anchor: number; head: number } | null = null;
+      /** Re-announce every 25s: a lost join send self-heals, and an idle
+       * open sheet stays fresh past the server's 45s staleness window. */
+      heartbeat = setInterval(() => {
+        this.lastSent = null;
+        this.send();
+      }, 25_000);
 
       constructor(readonly view: EditorView) {
         connection.onPresence = (clients) => {
@@ -126,6 +132,7 @@ export function remoteCursorsExtension(connection: CollabConnection) {
 
       destroy() {
         connection.onPresence = null;
+        clearInterval(this.heartbeat);
         if (this.timer !== null) clearTimeout(this.timer);
         // Leave quietly so peers drop this caret instead of aging it out.
         connection.present(null);
