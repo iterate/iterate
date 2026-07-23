@@ -1,5 +1,5 @@
 ---
-status: done-pending-review
+status: complete
 size: small
 ---
 
