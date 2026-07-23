@@ -140,6 +140,12 @@ export interface TasksWorkspace {
     clientId?: string,
     afterPresence?: number,
   ): Promise<CollabWaitResult>;
+  /** Announce (or clear, with null) this client's mouse pointer on the board. */
+  pointerPresent(clientId: string, payload: unknown): Promise<void>;
+  /** Long-poll for board pointer movement past a generation (~25s park). */
+  pointerWait(
+    afterGeneration: number,
+  ): Promise<{ clients: { at: number; clientId: string; payload: unknown }[]; generation: number }>;
   /** Announce (or clear, with null) this client's cursor for one session. */
   present(
     filePath: string,

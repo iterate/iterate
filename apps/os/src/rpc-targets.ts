@@ -2174,6 +2174,16 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
     return this.durableObjectStub.collabPresent(path, clientId, selection);
   }
 
+  /** Announce (or clear, with null) this client's mouse pointer on the board. */
+  pointerPresent(clientId: string, payload: unknown) {
+    return this.durableObjectStub.pointerPresent(clientId, payload);
+  }
+
+  /** Long-poll for board pointer movement past a generation. */
+  pointerWait(afterGeneration: number) {
+    return this.durableObjectStub.pointerWait(afterGeneration);
+  }
+
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>> {
     return this.durableObjectStub.collabVersions();

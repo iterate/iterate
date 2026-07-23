@@ -39,6 +39,7 @@ import {
 } from "./workspace-core.ts";
 import { normalizeWorkspaceMountKeys } from "./utils.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
+import { PointerPresence, type PointerSnapshot } from "./pointer-presence.ts";
 import { CollabHost } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
 
@@ -480,6 +481,21 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   ): Promise<CollabPull> {
     await this.#assertCreated();
     return this.#collab.wait(path, epoch, afterVersion, clientId, afterPresence);
+  }
+
+  // Board-level mouse-pointer presence (not tied to any file session).
+  readonly #pointers = new PointerPresence();
+
+  /** Announce (or clear, with null) one client's mouse pointer. */
+  async pointerPresent(clientId: string, payload: unknown): Promise<void> {
+    await this.#assertCreated();
+    this.#pointers.present(clientId, payload);
+  }
+
+  /** Long-poll for pointer movement past a generation (~25s park). */
+  async pointerWait(afterGeneration: number): Promise<PointerSnapshot> {
+    await this.#assertCreated();
+    return this.#pointers.wait(afterGeneration);
   }
 
   /** Announce (or clear, with null) one client's cursor — quiet decoration,
