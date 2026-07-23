@@ -1247,7 +1247,20 @@ export class StreamSubscribers {
         ...(args.presence === undefined ? {} : { subscriber: args.presence }),
       },
     });
-    sink.onRpcBroken?.(() => connection.close("rpc-broken"));
+    sink.onRpcBroken?.((error) => {
+      if (subscriptionType === "configured") {
+        // A disposed predecessor can report its transport break late. Fence
+        // the hint to this exact connection so it cannot nack and close the
+        // replacement currently stored under the same subscription key.
+        if (this.#connections.get(subscriptionKey) === connection) {
+          this.#onDurableSinkFailure(subscriptionKey, error, "rpc-broken");
+        }
+      } else {
+        // Session-scoped ephemerals have no durable cursor to nack or retry;
+        // disconnecting forgets them exactly as their ownership contract says.
+        connection.close("rpc-broken");
+      }
+    });
     connection.wake();
     return connection;
   }
@@ -1262,20 +1275,31 @@ export class StreamSubscribers {
    * see #poke) and parks at the same threshold as every other lane.
    */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
+    this.#onDurableSinkFailure(subscriptionKey, error, "delivery-failed");
+  }
+
+  #onDurableSinkFailure(
+    subscriptionKey: string,
+    error: unknown,
+    reason: Extract<StreamSubscriberDisconnectReason, "rpc-broken" | "delivery-failed">,
+  ): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    const details = { subscriptionKey, error };
-    if (isDurableObjectLifecycleError(error)) {
+    const details = { subscriptionKey, reason, error };
+    if (reason === "rpc-broken" || isDurableObjectLifecycleError(error)) {
       // A killed, evicted, deployed, or overloaded subscriber is a modelled
-      // availability transition: the durable cursor stays put and the
-      // bounded backoff below reconnects it. Keep that expected transition
-      // out of the error signal while retaining an observable warning.
+      // availability transition. `onRpcBroken` is itself the transport's
+      // authoritative availability signal even when its Error lost workerd's
+      // lifecycle flags crossing an RPC boundary. The durable cursor stays
+      // put and the bounded backoff below reconnects it; keep that expected
+      // transition out of the error signal while retaining an observable
+      // warning.
       console.warn("stream durable sink unavailable; backing off before re-poke", details);
     } else {
       console.error("stream durable sink delivery failed; backing off before re-poke", details);
     }
     this.#onDeliveryFailure(subscriptionKey, error);
-    connection.close("delivery-failed");
+    connection.close(reason);
   }
 
   // ===========================================================================

@@ -1300,6 +1300,56 @@ describe("StreamSubscribers", () => {
     }
   });
 
+  it("backs off an RPC-broken wake sink before reconciling instead of hot re-poking", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 1);
+    h.append(evt(1, "a"));
+
+    let reportBroken: ((error: unknown) => void) | undefined;
+    const dispose = vi.fn();
+    const sink = Object.assign((_batch: StreamWakeEventBatch) => undefined, {
+      [Symbol.dispose]: dispose,
+      onRpcBroken: (handler: (error: unknown) => void) => {
+        reportBroken = handler;
+      },
+    }) as RetainedProcessEventBatch<StreamWakeEventBatch>;
+    h.dialImpl.poke = async () => ({ checkpointOffset: 0, sink });
+    h.subscribers.wake();
+    await h.settle();
+    expect(h.pokes).toHaveLength(1);
+    expect(reportBroken).toBeDefined();
+
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const broken = new Error("remote capability disconnected");
+      reportBroken!(broken);
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({
+          subscriptionKey: "k",
+          reason: "rpc-broken",
+          error: broken,
+        }),
+      );
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")?.attempt).toBe(1);
+      expect(h.row("k")?.nextAttemptAt).not.toBeNull();
+      expect(h.pokes).toHaveLength(1);
+      expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+        subscriptionKey: "k",
+        reason: "rpc-broken",
+      });
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
+  });
+
   it("t. an in-flight push delivery cannot clobber a cursor seek (epoch fence)", async () => {
     const h = makeHarness();
     h.configure(pushPayload(), 0);
