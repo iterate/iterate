@@ -1068,12 +1068,16 @@ export type CommittedCoreEvent<Type extends ParsedCoreEvent["type"]> = Extract<
   { type: Type }
 >;
 
+/** One committed event that created or replaced a subscription on its source stream. */
 export type CommittedSubscriptionConfiguredEvent =
   CommittedCoreEvent<"events.iterate.com/stream/subscription-configured">;
+/** One committed event that removed a subscription from its source stream. */
 export type CommittedSubscriptionRemovedEvent =
   CommittedCoreEvent<"events.iterate.com/stream/subscription-removed">;
+/** One committed receiver event recording a source stream's complete cross-post list. */
 export type CommittedCrossPostListRecordedEvent =
   CommittedCoreEvent<"events.iterate.com/stream/cross-post-list-recorded">;
+/** One committed source event confirming the receiver recorded its cross-post list. */
 export type CommittedCrossPostListConfirmedEvent =
   CommittedCoreEvent<"events.iterate.com/stream/cross-post-list-confirmed">;
 

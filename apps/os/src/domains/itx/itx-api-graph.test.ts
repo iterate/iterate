@@ -40,7 +40,10 @@ describe("the generated graph", () => {
 
 describe("typeSlice", () => {
   test("includes the reference closure in breadth-first order within budget", () => {
-    const slice = typeSlice({ declarations: byName, rootName: "Stream", maxTokens: 10_000 });
+    // The exact committed-event return types for cross-post setup make the
+    // Stream closure roughly 12.7k tokens. Keep enough room to prove that the
+    // complete public contract still resolves without a hidden frontier.
+    const slice = typeSlice({ declarations: byName, rootName: "Stream", maxTokens: 15_000 });
     expect(slice.includedNames[0]).toBe("Stream");
     expect(slice.includedNames).toContain("StreamEvent");
     expect(slice.frontierNames).toEqual([]);

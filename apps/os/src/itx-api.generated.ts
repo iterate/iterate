@@ -3366,6 +3366,7 @@ export type SubscriptionEndCondition = {
   )[];
 };
 
+/** One committed event that created or replaced a subscription on its source stream. */
 export type CommittedSubscriptionConfiguredEvent = Omit<
   {
     type: string;
@@ -3539,6 +3540,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
     };
   };
 
+/** One committed receiver event recording a source stream's complete cross-post list. */
 export type CommittedCrossPostListRecordedEvent = Omit<
   {
     type: string;
@@ -3678,6 +3680,7 @@ export type CommittedCrossPostListRecordedEvent = Omit<
     };
   };
 
+/** One committed source event confirming the receiver recorded its cross-post list. */
 export type CommittedCrossPostListConfirmedEvent = Omit<
   {
     type: string;
@@ -3903,6 +3906,7 @@ export type CommittedCrossPostListConfirmedEvent = Omit<
     };
   };
 
+/** One committed event that removed a subscription from its source stream. */
 export type CommittedSubscriptionRemovedEvent = Omit<
   {
     type: string;
