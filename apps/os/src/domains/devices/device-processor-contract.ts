@@ -373,7 +373,7 @@ export const DeviceProcessorContract = defineProcessorContract({
     // The eventless at-head pass settles orphaned attempts and expired requests
     // after recovery; the platform revival fact itself is not consumed.
     // `stream/woken` and
-    // `stream/subscriber-connected` are deliberately NOT consumed any more:
+    // `stream/connection-opened` are deliberately NOT consumed any more:
     // they were only ever extra re-check-at-head signals, and the runner's
     // final at-head pass makes them redundant.
   ],

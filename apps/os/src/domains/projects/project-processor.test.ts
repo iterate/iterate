@@ -19,9 +19,9 @@ import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { projectCreationEvents } from "./project-defaults.ts";
-import type {
+import {
   ProjectProcessorContract,
-  ProjectCustomDomainCloudflareSnapshot,
+  type ProjectCustomDomainCloudflareSnapshot,
 } from "./project-processor-contract.ts";
 import { ProjectProcessor } from "./project-processor-implementation.ts";
 
@@ -38,8 +38,7 @@ const PROJECT_CREATED = {
   },
 } satisfies ProjectEventInput;
 
-/** The cross-posted copy of the config repo's terminal creation certificate,
- * as the `cross-post:/` rule lands it on the project root. */
+/** The copied config-repo terminal certificate received on the project root. */
 const CONFIG_REPO_READY = {
   type: "events.iterate.com/repos/created",
   payload: {
@@ -51,7 +50,10 @@ const CONFIG_REPO_READY = {
   source: {
     crossPostedFrom: [
       {
-        subscriptionKey: "cross-post:/",
+        subscriptionKey: "project-config-to-root",
+        streamId: "11111111-1111-4111-8111-111111111111",
+        streamCreatedAt: new Date(1).toISOString(),
+        cursorChangedAtSourceOffset: 3,
         createdAt: new Date(2).toISOString(),
         offset: 4,
         path: "/repos/config",
@@ -214,8 +216,12 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
     expect(h.network.eventsAt("/repos/config")[2]).toMatchObject({
       payload: {
-        deliver: "new",
-        subscriptionKey: "cross-post:/",
+        subscriptionKey: "project-config-to-root",
+        receiver: {
+          action: "cross-post",
+          receivingStreamPath: "/",
+          delivery: { start: "now" },
+        },
       },
     });
     expect(h.network.eventsAt("/integrations/email").map((event) => event.type)).toEqual([
@@ -298,7 +304,7 @@ describe("ProjectProcessor bootstrap", () => {
 // =============================================================================
 
 describe("ProjectProcessor catalogs", () => {
-  it("catalogs physical paths and cross-posted domain objects without reducing agent collection facts", async () => {
+  it("catalogs physical paths and received domain objects without reducing agent collection facts", async () => {
     const h = makeProjectHarness();
     await h.play(
       ["append", PROJECT_CREATED],
@@ -314,7 +320,10 @@ describe("ProjectProcessor catalogs", () => {
           source: {
             crossPostedFrom: [
               {
-                subscriptionKey: "cross-post:/",
+                subscriptionKey: "agent-catalog",
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: new Date(1).toISOString(),
+                cursorChangedAtSourceOffset: 1,
                 createdAt: new Date(3).toISOString(),
                 offset: 1,
                 path: "/agents/slack/main/C123/ts-1",
@@ -336,6 +345,9 @@ describe("ProjectProcessor catalogs", () => {
             crossPostedFrom: [
               {
                 subscriptionKey: "repo-catalog",
+                streamId: "11111111-1111-4111-8111-111111111111",
+                streamCreatedAt: new Date(1).toISOString(),
+                cursorChangedAtSourceOffset: 1,
                 createdAt: new Date(4).toISOString(),
                 offset: 1,
                 path: "/repos/side-repo",
@@ -777,7 +789,11 @@ describe("ProjectProcessor full replay", () => {
     expect(h.state()).toMatchObject({ ready: true, notificationReady: true });
 
     const replay = makeProjectHarness({
-      substrate: { clock: h.clock, stream: h.stream, progress: makeMemoryProgressStore() },
+      substrate: {
+        clock: h.clock,
+        stream: h.stream,
+        progress: makeMemoryProgressStore(ProjectProcessorContract),
+      },
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 

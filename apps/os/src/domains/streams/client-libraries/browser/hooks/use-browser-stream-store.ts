@@ -1,37 +1,34 @@
-import { useCallback, useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useReducer, useSyncExternalStore } from "react";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
   type StreamBrowserStore,
 } from "../stream-browser-store.ts";
 import type { BrowserStreamClientFactory } from "../stream-transport.ts";
-import type { BrowserStreamSubscriberUser } from "../browser-subscriber.ts";
-import { CANONICAL_MIRROR_PROCESSORS } from "../canonical-mirror-processors.ts";
+import { BROWSER_STREAM_PROCESSORS } from "../browser-stream-processors.ts";
 
 /**
- * Mount THE stream mirror for a `(projectId, streamPath)` and subscribe this
- * component to it. This is the one browser entry point for streaming a stream
- * into the local event cache: it acquires (or joins) the single per-stream
- * runtime, which downloads the stream once and fans every batch out to the
- * canonical processor set (event cache + feed projection) — see
- * canonical-mirror-processors.ts. Views read whichever tables they need off the
+ * Mount the browser database for a `(projectId, streamPath)` and register this
+ * component as a listener. This is the one browser entry point for storing a
+ * stream locally: it acquires (or joins) the single per-stream runtime, which
+ * downloads the stream once and passes every batch to the raw-event writer and
+ * feed projector — see
+ * browser-stream-processors.ts. Views read whichever tables they need off the
  * returned `store.streamDatabase` via `useStreamQuery`.
  *
- * Subscribing is what STARTS the download (the runtime refcounts listeners), so
- * an unmounted mirror never folds. `acquireStreamRuntime` dedupes by
+ * Adding the first listener starts the download (the runtime refcounts listeners), so
+ * an unmounted database never processes events. `acquireStreamRuntime` dedupes by
  * `(projectId, streamPath)`, so three mounts across two pages all join the same
- * runtime and share one subscription.
+ * runtime and share one open event connection.
  */
-export function useStreamMirror(input: {
+export function useBrowserStreamStore(input: {
   createStreamClient: BrowserStreamClientFactory;
   /** See BrowserStreamConnectionConfig.resetTransport — evict a dead-but-never-closed transport. */
   resetTransport?: () => void;
-  /** Authenticated human announced in this browser subscription's presence metadata. */
-  subscriberUser?: BrowserStreamSubscriberUser;
   projectId: string;
   streamPath: string;
 }): { store: StreamBrowserStore; snapshot: StreamBrowserSnapshot } {
-  const { createStreamClient, resetTransport, subscriberUser, projectId, streamPath } = input;
+  const { createStreamClient, resetTransport, projectId, streamPath } = input;
   // Self-heal for the acquire-to-subscribe gap: React can yield between the
   // render that acquired the runtime and the commit that subscribes (Suspense,
   // lazy chunks — longer than any idle grace), and a runtime disposed inside
@@ -44,13 +41,12 @@ export function useStreamMirror(input: {
       acquireStreamRuntime({
         createStreamClient,
         ...(resetTransport === undefined ? {} : { resetTransport }),
-        ...(subscriberUser === undefined ? {} : { subscriberUser }),
         projectId,
         streamPath,
-        processors: CANONICAL_MIRROR_PROCESSORS,
+        processors: BROWSER_STREAM_PROCESSORS,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacquireEpoch drives the self-heal re-acquire.
-    [createStreamClient, resetTransport, subscriberUser, projectId, streamPath, reacquireEpoch],
+    [createStreamClient, resetTransport, projectId, streamPath, reacquireEpoch],
   );
   const subscribe = useCallback(
     (listener: () => void) => {
@@ -63,8 +59,5 @@ export function useStreamMirror(input: {
     [store],
   );
   const snapshot = useSyncExternalStore(subscribe, store.getSnapshot, store.getServerSnapshot);
-  useEffect(() => {
-    store.setSubscriberUser(subscriberUser);
-  }, [store, subscriberUser]);
   return { store, snapshot };
 }

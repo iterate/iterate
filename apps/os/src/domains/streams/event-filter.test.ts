@@ -1,10 +1,10 @@
-// EventSelector: the one filter dialect every lane speaks. These tests pin the
+// EventFilter: the one filter shape every event receiver uses. These tests pin the
 // schema's configure-time rejections, the compiled matcher's semantics
 // (exact-`true` conditions, "*" wildcard, intersection), and the compile cache.
 
 import { describe, expect, it, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
-import { compileEventSelector, compileJsonataExpression, EventSelector } from "./event-selector.ts";
+import { compileEventFilter, compileJsonataExpression, EventFilter } from "./event-filter.ts";
 
 function evt(type: string, payload?: Record<string, unknown>): StreamEvent {
   return {
@@ -16,7 +16,7 @@ function evt(type: string, payload?: Record<string, unknown>): StreamEvent {
   };
 }
 
-describe("EventSelector schema", () => {
+describe("EventFilter schema", () => {
   test.for([
     { name: "empty object (matches everything)", input: {}, ok: true },
     { name: "eventTypes list", input: { eventTypes: ["a"] }, ok: true },
@@ -29,64 +29,64 @@ describe("EventSelector schema", () => {
     { name: "blank condition", input: { condition: "   " }, ok: false },
     { name: "empty condition", input: { condition: "" }, ok: false },
   ])("$name -> valid: $ok", ({ input, ok }) => {
-    expect(EventSelector.safeParse(input).success).toBe(ok);
+    expect(EventFilter.safeParse(input).success).toBe(ok);
   });
 });
 
-describe("compileEventSelector", () => {
-  it("an undefined selector matches everything", () => {
-    const selector = compileEventSelector(undefined);
-    expect(selector.matches(evt("a"))).toBe(true);
-    expect(selector.matches(evt("b", { anything: 1 }))).toBe(true);
+describe("compileEventFilter", () => {
+  it("an undefined filter matches everything", () => {
+    const filter = compileEventFilter(undefined);
+    expect(filter.matches(evt("a"))).toBe(true);
+    expect(filter.matches(evt("b", { anything: 1 }))).toBe(true);
   });
 
-  it("an empty selector object matches everything", () => {
-    const selector = compileEventSelector({});
-    expect(selector.matches(evt("a"))).toBe(true);
+  it("an empty filter object matches everything", () => {
+    const filter = compileEventFilter({});
+    expect(filter.matches(evt("a"))).toBe(true);
   });
 
   it("eventTypes filters by exact type", () => {
-    const selector = compileEventSelector({ eventTypes: ["a", "b"] });
-    expect(selector.matches(evt("a"))).toBe(true);
-    expect(selector.matches(evt("b"))).toBe(true);
-    expect(selector.matches(evt("c"))).toBe(false);
-    expect(selector.matches(evt("a-prefix-mismatch"))).toBe(false);
+    const filter = compileEventFilter({ eventTypes: ["a", "b"] });
+    expect(filter.matches(evt("a"))).toBe(true);
+    expect(filter.matches(evt("b"))).toBe(true);
+    expect(filter.matches(evt("c"))).toBe(false);
+    expect(filter.matches(evt("a-prefix-mismatch"))).toBe(false);
   });
 
   it('"*" anywhere in eventTypes means all types', () => {
-    expect(compileEventSelector({ eventTypes: ["*"] }).matches(evt("anything"))).toBe(true);
-    expect(compileEventSelector({ eventTypes: ["a", "*"] }).matches(evt("b"))).toBe(true);
+    expect(compileEventFilter({ eventTypes: ["*"] }).matches(evt("anything"))).toBe(true);
+    expect(compileEventFilter({ eventTypes: ["a", "*"] }).matches(evt("b"))).toBe(true);
   });
 
   it("a condition must evaluate to exactly `true` — truthy is not enough", () => {
-    const truthy = compileEventSelector({ condition: "payload.count" });
+    const truthy = compileEventFilter({ condition: "payload.count" });
     expect(truthy.matches(evt("a", { count: 1 }))).toBe(false); // 1 is truthy, not `true`
     expect(truthy.matches(evt("a", { count: "yes" }))).toBe(false);
 
-    const boolean = compileEventSelector({ condition: "payload.enabled" });
+    const boolean = compileEventFilter({ condition: "payload.enabled" });
     expect(boolean.matches(evt("a", { enabled: true }))).toBe(true);
     expect(boolean.matches(evt("a", { enabled: false }))).toBe(false);
     expect(boolean.matches(evt("a", {}))).toBe(false); // absent field -> undefined
 
-    const comparison = compileEventSelector({ condition: 'payload.repo = "acme/widgets"' });
+    const comparison = compileEventFilter({ condition: 'payload.repo = "acme/widgets"' });
     expect(comparison.matches(evt("a", { repo: "acme/widgets" }))).toBe(true);
     expect(comparison.matches(evt("a", { repo: "acme/other" }))).toBe(false);
   });
 
   it("condition and eventTypes intersect: both must pass", () => {
-    const selector = compileEventSelector({
+    const filter = compileEventFilter({
       eventTypes: ["a"],
       condition: "payload.flag = true",
     });
-    expect(selector.matches(evt("a", { flag: true }))).toBe(true);
-    expect(selector.matches(evt("b", { flag: true }))).toBe(false); // wrong type
-    expect(selector.matches(evt("a", { flag: false }))).toBe(false); // condition false
-    expect(selector.matches(evt("a"))).toBe(false); // condition undefined
+    expect(filter.matches(evt("a", { flag: true }))).toBe(true);
+    expect(filter.matches(evt("b", { flag: true }))).toBe(false); // wrong type
+    expect(filter.matches(evt("a", { flag: false }))).toBe(false); // condition false
+    expect(filter.matches(evt("a"))).toBe(false); // condition undefined
   });
 
   it("throws on an unparseable condition — the configure-time validation gate", () => {
-    expect(() => compileEventSelector({ condition: "(((" })).toThrow();
-    expect(() => compileEventSelector({ condition: "payload.x =" })).toThrow();
+    expect(() => compileEventFilter({ condition: "(((" })).toThrow();
+    expect(() => compileEventFilter({ condition: "payload.x =" })).toThrow();
   });
 });
 
@@ -103,7 +103,17 @@ describe("compileJsonataExpression", () => {
     );
   });
 
-  it("throws on parse errors instead of caching them", () => {
-    expect(() => compileJsonataExpression("]")).toThrow();
+  it("turns JSONata's plain parser object into a useful Error instead of caching it", () => {
+    let thrown: unknown;
+    try {
+      compileJsonataExpression("payload.(((");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toMatchObject({
+      message:
+        'invalid JSONata expression (S0203, position 11): Expected ")" before end of expression',
+    });
   });
 });

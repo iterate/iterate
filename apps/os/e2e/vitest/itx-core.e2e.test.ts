@@ -90,9 +90,9 @@ test("Authenticated internal auth itx can create project and append to stream", 
 
   // We don't care about ordering, just that the stream contains each of these
   // event types. Mapping to types + arrayContaining is the concise idiomatic way.
-  // The repo/* events are CROSS-POSTED COPIES: the config repo commits its
-  // facts on its own stream (/repos/config) and the bootstrap's cross-post
-  // rule copies them here for the creation saga.
+  // The repo/* events arrive through a stream relationship: the config repo
+  // commits its facts on its own stream (/repos/config), then its subscription
+  // delivers them here for the creation saga.
   expect(events.map((event) => event.type)).toEqual(
     expect.arrayContaining([
       "events.iterate.com/stream/created",
@@ -101,7 +101,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
       "events.iterate.com/project/created",
       "events.iterate.com/repos/created",
       "events.iterate.com/project/ready",
-      "events.iterate.com/stream/subscriber-disconnected",
+      "events.iterate.com/stream/connection-closed",
     ]),
   );
 
@@ -125,7 +125,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
         expect.objectContaining({
           path: "/repos/config",
           projectId: description.projectId,
-          subscriptionKey: "cross-post:/",
+          subscriptionKey: "project-config-to-root",
           type: "events.iterate.com/repos/created",
         }),
       ],
@@ -137,7 +137,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(repoCreated!.offset).toBeLessThan(projectReady!.offset);
 
   // First-hand on the config repo's own stream: the same facts, no
-  // provenance chain, plus the repo processor + cross-post subscriptions.
+  // provenance chain, plus the repo processor and stream subscriptions.
   const configRepoEvents = await project.streams.get("/repos/config").getEvents();
   const firstHandRepoCreated = configRepoEvents.find(
     (event) => event.type === "events.iterate.com/repos/created",
@@ -150,12 +150,13 @@ test("Authenticated internal auth itx can create project and append to stream", 
     configRepoEvents.some(
       (event) =>
         event.type === "events.iterate.com/stream/subscription-configured" &&
-        (event.payload as { subscriptionKey?: string }).subscriptionKey === "cross-post:/",
+        (event.payload as { subscriptionKey?: string }).subscriptionKey ===
+          "project-config-to-root",
     ),
   ).toBe(true);
 
-  // The cross-post pipe stays live after bootstrap: a fresh append on the
-  // config repo's stream shows up on `/` as a provenance-stamped copy.
+  // The relationship stays live after bootstrap: a fresh append on the config
+  // repo's stream shows up on `/` with source-stream provenance.
   const [configRepoFact] = await project.streams.get("/repos/config").append({
     type: "events.iterate.test/config-repo-fact",
     payload: { marker: description.projectId },
@@ -192,7 +193,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
   expect(committedEvent).toMatchObject({
     type: "hello-world",
     // The birth certificate: created(1), the project-worker feed's
-    // subscription-configured(2), the PostHog feed(3), woken(4) — the first
+    // outbound project-worker config(2), the PostHog config(3), woken(4) — the first
     // user append is 5.
     offset: 5,
   });

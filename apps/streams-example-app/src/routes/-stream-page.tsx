@@ -29,7 +29,7 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
+import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 
 export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
@@ -132,8 +132,8 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
         <output className="font-mono text-xs text-slate-500" data-testid="stream-status">
           {runtime.snapshot.connectionStatus}
         </output>
-        <output className="font-mono text-xs text-slate-500" data-testid="subscription-status">
-          {runtime.snapshot.subscriptionStatus}
+        <output className="font-mono text-xs text-slate-500" data-testid="database-role">
+          {runtime.snapshot.databaseRole}
         </output>
         <output className="font-mono text-xs text-slate-500" data-testid="event-count">
           {runtime.eventCount}
@@ -165,10 +165,10 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
   );
 }
 
-// The browser's thin layer over the stream mirror: acquire the shared
-// (projectId, path) runtime — which, once it wins leadership, downloads the
+// The browser's thin layer over the local stream copy: acquire the shared
+// (projectId, path) runtime — whose elected writer downloads the
 // stream once and fans it out to the canonical processors exactly like the
-// StreamProcessorRunner DO — and subscribe to its snapshot for React. Every
+// StreamProcessorRunner DO — and register React for snapshot changes. Every
 // view of a stream joins this one runtime, so the raw and feed views here share
 // a single download.
 function useStreamProcessor(args: { streamPath: string; streamProjectId?: string }) {
@@ -179,7 +179,7 @@ function useStreamProcessor(args: { streamPath: string; streamProjectId?: string
         streamPath,
         ...(streamProjectId === undefined ? {} : { projectId: streamProjectId }),
         createStreamClient: createCapnwebStreamClient,
-        processors: CANONICAL_MIRROR_PROCESSORS,
+        processors: BROWSER_STREAM_PROCESSORS,
       }),
     [streamPath, streamProjectId],
   );
@@ -202,8 +202,8 @@ function useRawEventsView(args: {
     streamProjectId: args.streamProjectId,
   });
   // Counts come from the trigger-maintained event_type_counts table, not
-  // COUNT(*) over the mirror: these queries re-run reactively after every
-  // delivered batch, and a full-scan count on a deep mirror starves the shared
+  // COUNT(*) over the local event table: these queries re-run reactively after every
+  // delivered batch, and a full scan of a large table starves the shared
   // OPFS connection that ingest writes ride on (see the processor's schema).
   const totalCountResult = useStreamQuery(
     db,
@@ -654,7 +654,7 @@ function EventRows({
     followOnAppend: false,
     // TanStack's chat docs recommend `initialOffset` for restored screens.
     // `EventRows` mounts after the SQLite count query is ready, so a reload of
-    // an already-populated local mirror is a restored screen: start near the
+    // an already-populated local event table is a restored screen: start near the
     // estimated end so the first paint lands near the tail before the stick's
     // first ResizeObserver write converges it exactly.
     ...(initialScrollOffset.current === 0 ? {} : { initialOffset: initialScrollOffset.current }),
@@ -762,7 +762,7 @@ function EventRows({
         <StreamRuntimeNotice eventCount={eventCount} snapshot={snapshot} />
         {eventCount === 0 ? (
           <div className="flex min-h-60 flex-1 items-center justify-center gap-2.5 text-sm text-slate-500">
-            {snapshot.connectionStatus === "subscribed" ? null : (
+            {snapshot.connectionStatus === "receiving-events" ? null : (
               <div
                 className="size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
                 aria-hidden="true"
@@ -772,7 +772,7 @@ function EventRows({
               {eventTypeFilter !== ""
                 ? "SQLite is ready; no events match the selected event type"
                 : snapshot.connectionError === undefined
-                  ? snapshot.connectionStatus === "subscribed"
+                  ? snapshot.connectionStatus === "receiving-events"
                     ? "SQLite is ready; no events are stored locally yet"
                     : `SQLite is ready; stream connection is ${snapshot.connectionStatus}`
                   : `SQLite is ready; stream connection is ${snapshot.connectionStatus}: ${snapshot.connectionError}`}
@@ -935,20 +935,20 @@ function StreamRuntimeNotice({
     );
   }
 
-  if (eventCount === 0 && snapshot.subscriptionStatus === "follower") {
+  if (eventCount === 0 && snapshot.databaseRole === "reader") {
     // This is the exact failure shape seen after a deploy with stale tabs:
-    // the tab is connected but intentionally not subscribing, and its local
-    // SQLite mirror is empty. Surface it loudly instead of showing only a
+    // the tab is connected but intentionally does not open the event callback,
+    // and its local SQLite copy is empty. Surface it loudly instead of showing only a
     // spinner, because there may be no exception in this tab's console.
     return (
       <output
         className="grid gap-[3px] border-b border-[#fedf89] bg-[#fff8e6] py-[9px] pr-4 text-xs text-[#7a4b00]"
         data-testid="stream-warning"
       >
-        <strong>Follower with empty SQLite mirror</strong>
+        <strong>Reader with empty local event copy</strong>
         <span>
-          This tab is waiting for the elected writer tab to mirror events into local SQLite. Reload
-          or close older tabs if this does not resolve.
+          This tab is waiting for the elected writer tab to store events in local SQLite. Reload or
+          close older tabs if this does not resolve.
         </span>
       </output>
     );
@@ -1145,7 +1145,7 @@ function StreamSidebar({
       <div className="py-2">
         <ViewSwitcher streamView={streamView} />
       </div>
-      <SubscriptionTool
+      <BrowserEventCopyTool
         eventCount={eventCount}
         snapshot={snapshot}
         streamDatabase={streamDatabase}
@@ -1178,7 +1178,7 @@ function SidebarFooter() {
   );
 }
 
-function SubscriptionTool({
+function BrowserEventCopyTool({
   snapshot,
   streamDatabase,
   streamStore,
@@ -1199,10 +1199,10 @@ function SubscriptionTool({
   return (
     <section className="grid gap-2 py-4 first:pt-0">
       <h2 className="m-0 text-[11px] font-semibold uppercase tracking-[0.04em] text-[#98a2b3]">
-        Subscription
+        Browser event copy
       </h2>
       <dl className="m-0 grid gap-1 text-xs [&_dd]:m-0 [&_div]:flex [&_div]:items-center [&_div]:justify-between [&_dt]:text-[11px] [&_dt]:font-medium [&_dt]:text-[#98a2b3]">
-        <div title="Connection to the stream Durable Object over a capnweb WebSocket: connecting → connected → subscribing → subscribed (or reconnecting / error).">
+        <div title="Connection to the stream Durable Object over a capnweb WebSocket: connecting → connected → opening-event-callback → receiving-events (or reconnecting / error).">
           <dt>Status</dt>
           <dd>
             <output
@@ -1217,19 +1217,19 @@ function SubscriptionTool({
             </output>
           </dd>
         </div>
-        <div title="This tab's role in the Web Locks election. leader = the single writer (it subscribes to the stream and writes events into the shared local DB); follower = a reader that mirrors the leader's writes from the same on-disk DB; electing/idle = before a role is assigned.">
-          <dt>Subscription</dt>
+        <div title="This tab's role in the Web Locks election. writer = the one tab that opens the stream callback and writes events into the shared local DB; reader = a tab that reads those writes from the same on-disk DB; electing/idle = before a role is assigned.">
+          <dt>Local role</dt>
           <dd>
             <output
               className="whitespace-nowrap font-mono text-[11px] text-[#263142]"
-              data-testid="subscription-status"
+              data-testid="database-role"
             >
-              {snapshot.subscriptionStatus}
+              {snapshot.databaseRole}
             </output>
           </dd>
         </div>
         {snapshot.connectionError === undefined ? null : (
-          <div title="The most recent connection or subscription error, if any.">
+          <div title="The most recent WebSocket or event-callback error, if any.">
             <dt>Error</dt>
             <dd>
               <output className="block max-w-[150px] break-words text-right font-mono text-[11px] text-[#b42318]">
@@ -1238,7 +1238,7 @@ function SubscriptionTool({
             </dd>
           </div>
         )}
-        <div title="Number of events stored in this tab's local SQLite mirror (one row per stream offset).">
+        <div title="Number of events stored in this tab's local SQLite database (one row per stream offset).">
           <dt>Events</dt>
           <dd>
             <output
@@ -1512,7 +1512,9 @@ function StreamControlTool({
         <button
           className="w-full cursor-pointer whitespace-nowrap rounded-md bg-[#067647] px-3 py-2 text-[13px] font-semibold text-white disabled:cursor-default disabled:opacity-55"
           data-testid="stream-resume-button"
-          disabled={controlAction === "resuming" || snapshot.connectionStatus !== "subscribed"}
+          disabled={
+            controlAction === "resuming" || snapshot.connectionStatus !== "receiving-events"
+          }
           type="button"
           onClick={() => void resumeStream()}
         >
@@ -1525,7 +1527,7 @@ function StreamControlTool({
           disabled={
             controlAction === "pausing" ||
             runtimeState === undefined ||
-            snapshot.connectionStatus !== "subscribed"
+            snapshot.connectionStatus !== "receiving-events"
           }
           title="Append events.iterate.com/stream/paused — ordinary appends are rejected until the stream is resumed."
           type="button"
@@ -1800,7 +1802,7 @@ function randomStreamEventInput(args: {
   const random = randomValues[0] ?? 0;
   const suffix = `${args.index}-${crypto.randomUUID().slice(0, 8)}`;
   const actors = ["Ada", "Grace", "Linus", "Margaret", "Katherine", "Dennis"];
-  const nouns = ["invoice", "deployment", "workspace", "artifact", "subscription", "trace"];
+  const nouns = ["invoice", "deployment", "workspace", "artifact", "receipt", "trace"];
   const adjectives = ["urgent", "draft", "verified", "archived", "reviewed", "blocked"];
   const actor = actors[random % actors.length] ?? "Ada";
   const noun = nouns[(randomValues[1] ?? 0) % nouns.length] ?? "artifact";

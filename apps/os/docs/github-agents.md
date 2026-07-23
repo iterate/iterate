@@ -67,13 +67,13 @@ not change agent identity.
 ## Repo import is separate
 
 Linking `/repos/config` records the connection, installation, numeric
-repository ID, and current owner/name. It installs one cross-post filtered to
-`push` deliveries whose raw `body.repository.id` matches the link. The repo
+repository ID, and current owner/name. It configures the repo stream to receive
+only `push` deliveries whose raw `body.repository.id` matches the link. The repo
 processor additionally verifies the provenance, connection, installation,
 repository ID, and default branch before importing the push.
 
-That cross-post exists only for default-branch import. Pull-request userspace
-consumes the original connection event and rejects every cross-posted copy.
+That stream relationship exists only for default-branch import. Pull-request
+userspace consumes the original connection event and rejects every received copy.
 
 ## The userspace router
 
@@ -86,15 +86,15 @@ the policy, the `ReviewBotProcessorContract` (consuming
 redelivers the frame, and the router's stable idempotency keys collapse the
 re-run.
 
-Delivery is the guestbook's wake lane, with one difference: webhook streams
+Event processing uses the guestbook's hosted-processor wake mechanism, with one difference: webhook streams
 are per connection and no user action touches them directly, so nothing can
 configure the subscription at creation time. Instead the seeded `worker.ts`
 keeps a small bootstrap lane — on a `repo/github-link-configured` event
 (whose payload names the connection) it idempotently appends the bot's
 `stream/subscription-configured` event (from `review-bot-ref.ts`) to that
 connection's webhook stream, once per (re-)link rather than once per
-webhook. The stream spine pokes the new wake subscriber immediately, and a
-fresh subscription replays from offset zero, so pull requests opened shortly
+webhook. The source stream wakes the processor immediately, and a new
+processor starts from its checkpoint (zero on first use), so pull requests opened shortly
 before the link are still delivered. Because that replay covers the stream's
 whole history, the processor drops webhooks older than a freshness horizon
 (`reviewBotFreshnessHorizonMs`) — attaching to an old stream must not review
@@ -126,7 +126,7 @@ of facts to the PR stream:
 
 - a keyed, versioned developer-policy context item;
 - a stable agent summary and a GitHub pull-request binding;
-- the complete webhook with explicit cross-post provenance; and
+- the complete webhook with explicit source-stream provenance; and
 - when appropriate, trusted developer instructions and one externally authored
   request that wakes or interrupts the agent.
 

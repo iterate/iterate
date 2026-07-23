@@ -11,7 +11,7 @@ import {
   makeProcessorHarness,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
-import type { NotificationProcessorContract } from "./notification-processor-contract.ts";
+import { NotificationProcessorContract } from "./notification-processor-contract.ts";
 import { NotificationProcessor } from "./notification-processor-implementation.ts";
 
 type NotificationEventInput = ConsumedInput<NotificationProcessorContract>;
@@ -130,7 +130,7 @@ describe("NotificationProcessor approval intents", () => {
     const replay = makeNotificationHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(NotificationProcessorContract),
     });
     await replay.settle(); // replays the whole stream; a wedge would throw here
 

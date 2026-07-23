@@ -1,12 +1,12 @@
 import type { ItxExpression } from "../../itx/expression.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { integrationConnectionStreamPath } from "./utils.ts";
 
 /**
- * The desired durable subscription from an integration connection journal to
+ * The subscription that makes an integration connection stream wake
  * its router processor. Connection setup owns this append; webhook ingress
- * never creates or subscribes a processor. This module deliberately has no
+ * never configures that processor. This module deliberately has no
  * runtime bindings so setup and Node E2E fixtures build the same public facts.
  *
  * The idempotency key fingerprints the persisted capability name itself. A
@@ -26,7 +26,7 @@ export function buildIntegrationRouterSubscriptionConfiguredEvent(input: {
     ["get", input.connection],
     "processor",
   ] satisfies ItxExpression;
-  return buildDurableObjectProcessorSubscriptionConfiguredEvent({
+  return buildHostedProcessorSubscriptionConfiguredEvent({
     durableObjectName: DurableObjectNameCodec.stringify({
       projectId: input.projectId,
       path: streamPath,
@@ -40,7 +40,7 @@ export function buildIntegrationRouterSubscriptionConfiguredEvent(input: {
   });
 }
 
-/** Birth certificate paired with a connection router subscription. The
+/** Birth certificate paired with the connection router's subscription. The
  * provider owns the event type; the connection is processor config, not an
  * identity inferred from the stream path. */
 export function buildIntegrationRouterCreatedEvent(input: { connection: string; slug: string }) {

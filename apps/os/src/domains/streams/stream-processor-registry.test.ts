@@ -1,14 +1,14 @@
 // Isolation harness for createStreamProcessorRegistry — REAL registry + REAL
 // runners + REAL durability adapters over a fake DurableObjectState (in-memory
 // storage.kv, alarm cell, waitUntil), the in-memory MemoryStream journal, and
-// a virtual clock. Nothing here re-tests runner internals (frame
+// a virtual clock. Nothing here re-tests runner internals (batch
 // semantics live in stream-processor-runner.test.ts); it pins the registry's
 // own jobs:
 //
 //  - the single-DO-alarm multiplex (earliest slice wins, inherited-alarm
 //    adoption, due slices dropped at their own fire),
 //  - one platform fire routed to EVERY runner (each keepalive self-gates),
-//  - the wake handshake answering the runner's cursor + sink + capabilities,
+//  - the wake response returning the runner's cursor + processEventBatch + capabilities,
 //  - live-state assembly gated on isLoaded (a cold registry publishes
 //    nothing until loaded, then the real fold),
 //  - recovery revival: a runner that died owing work is revived by the alarm,
@@ -25,12 +25,11 @@ import {
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
-import type {
-  StreamSubscriberWakeResponse,
-  StreamWakeDeliverySettlement,
-} from "iterate/processors";
+import type { StreamProcessorWakeResponse, StreamWakeDeliveryResult } from "iterate/processors";
 
 const HOME = "/tests/registry";
+const STREAM_ID = "11111111-1111-4111-8111-111111111111";
+const RECREATED_STREAM_ID = "22222222-2222-4222-8222-222222222222";
 const REQUESTED = "events.iterate.com/registry-test/requested";
 // Both slugs share the ONE core revival type; per-runner identity rides the
 // payload's processorSlug (and the idempotency key), exactly as in production.
@@ -100,6 +99,7 @@ class RecorderProcessor extends StreamProcessor<
 function makeHarness(opts: { betaRecovery?: boolean } = {}) {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
   const stream = new MemoryStream(HOME);
+  stream.streamId = STREAM_ID;
   stream.now = () => clock.now;
 
   const kv = new Map<string, unknown>();
@@ -181,30 +181,31 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
       pending = [];
       boot();
     },
-    async wake(slug: string) {
-      return await registry.wakeStreamSubscriber({
-        stream: { projectId: null, path: HOME, streamMaxOffset: head() },
+    async wake(slug: string, streamId = STREAM_ID) {
+      return await registry.wakeStreamProcessor({
+        stream: { projectId: null, path: HOME, streamId, streamMaxOffset: head() },
         subscriptionKey: `wake:${slug}`,
         processorSlug: slug,
       });
     },
     /** Wake `slug` and push everything past its acknowledged cursor as one
-     * frame — the transport's job, minimally. */
+     * batch — the transport's job, minimally. */
     async deliverPending(slug: string) {
       const woken = await harness.wake(slug);
       const events = stream.events.filter((event) => event.offset > woken.checkpointOffset);
       if (events.length > 0) {
-        const settlement = await deliverWakeBatch(woken, {
+        const deliveryResult = await deliverWakeBatch(woken, {
           projectId: null,
           path: HOME,
+          streamId: woken.streamId,
           events,
           scannedAfterOffset: woken.checkpointOffset,
           scannedThroughOffset: head(),
           streamMaxOffset: head(),
           state: null,
         });
-        if (settlement.outcome === "error") {
-          throw new Error(settlement.error.message);
+        if (deliveryResult.outcome === "error") {
+          throw new Error(deliveryResult.error.message);
         }
       }
       await settle();
@@ -229,18 +230,21 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
 const hang = () => new Promise<never>(() => {});
 
 async function deliverWakeBatch(
-  woken: StreamSubscriberWakeResponse,
-  batch: Omit<Parameters<StreamSubscriberWakeResponse["sink"]>[0], "settleDelivery">,
-): Promise<StreamWakeDeliverySettlement> {
-  let settle!: (value: StreamWakeDeliverySettlement) => void;
-  const settled = new Promise<StreamWakeDeliverySettlement>((resolve) => {
-    settle = resolve;
+  woken: StreamProcessorWakeResponse,
+  batch: Omit<
+    Parameters<StreamProcessorWakeResponse["processEventBatch"]>[0],
+    "reportDeliveryResult"
+  >,
+): Promise<StreamWakeDeliveryResult> {
+  let report!: (value: StreamWakeDeliveryResult) => void;
+  const reported = new Promise<StreamWakeDeliveryResult>((resolve) => {
+    report = resolve;
   });
-  woken.sink({
+  woken.processEventBatch({
     ...batch,
-    settleDelivery: (value) => settle(value),
+    reportDeliveryResult: (value) => report(value),
   });
-  return await settled;
+  return await reported;
 }
 
 /** The processorSlugs of every journaled revival fact, sorted — revivals share
@@ -413,7 +417,7 @@ describe("recovery revival", () => {
     expect(revivedSlugs(h)).toEqual(["alpha-proc"]);
 
     // The fact's ordinary delivery turn is the guaranteed recovery pass: the
-    // wake resumes from the durable acknowledgement (the dead frame DID
+    // wake resumes from the durable acknowledgement (the dead batch DID
     // checkpoint — that is the zero-lag wedge) and hands alpha its fact.
     const woken = await h.deliverPending("alpha-proc");
     expect(woken.checkpointOffset).toBe(1);
@@ -422,16 +426,16 @@ describe("recovery revival", () => {
 });
 
 // =============================================================================
-// The wake handshake
+// The processor wake request and response
 // =============================================================================
 
-describe("wakeStreamSubscriber", () => {
-  it("answers the runner's cursor, sink, announcement, and runtime capabilities", async () => {
+describe("wakeStreamProcessor", () => {
+  it("answers the runner's cursor, processEventBatch, announcement, and runtime capabilities", async () => {
     const h = makeHarness();
-    // A multi-processor registry cannot guess which runner a poke is for.
+    // A multi-processor registry cannot guess which runner a wake is for.
     await expect(
-      h.registry.wakeStreamSubscriber({
-        stream: { projectId: null, path: HOME, streamMaxOffset: 0 },
+      h.registry.wakeStreamProcessor({
+        stream: { projectId: null, path: HOME, streamId: STREAM_ID, streamMaxOffset: 0 },
         subscriptionKey: "wake:unspecified",
       }),
     ).rejects.toThrow(/processorSlug/);
@@ -443,18 +447,20 @@ describe("wakeStreamSubscriber", () => {
 
     await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
     const woken = await h.wake("alpha-proc");
+    expect(woken.streamId).toBe(STREAM_ID);
     expect(woken.checkpointOffset).toBe(0);
-    const subscriber = woken.subscriber as {
+    const openedBy = woken.openedBy as {
       processor: { announcement: { slug: string; consumes: string[] } };
     };
-    expect(subscriber.processor.announcement.slug).toBe("alpha-proc");
+    expect(openedBy.processor.announcement.slug).toBe("alpha-proc");
 
-    // The returned sink is one-way. Its independent settlement reports when
+    // The returned callback is one-way. Its independent result reports when
     // the runner has durably advanced progress.
     await expect(
       deliverWakeBatch(woken, {
         projectId: null,
         path: HOME,
+        streamId: STREAM_ID,
         events: h.stream.events.slice(),
         scannedAfterOffset: woken.checkpointOffset,
         scannedThroughOffset: h.head(),
@@ -464,7 +470,7 @@ describe("wakeStreamSubscriber", () => {
     ).resolves.toEqual({ outcome: "ok" });
     const runtime = await woken.getRuntimeState!();
     expect(runtime.snapshot).toEqual({ offset: 1, state: { ids: ["a"] } });
-    // The frame commit notified the registry's observer, which reassembled
+    // The batch commit notified the registry's observer, which reassembled
     // live state synchronously (everything already loaded).
     expect(h.registry.live.getState()).toEqual({ ids: ["a"] });
 
@@ -473,7 +479,7 @@ describe("wakeStreamSubscriber", () => {
     expect(rewoken.checkpointOffset).toBe(1);
   });
 
-  it("returns the sink call before blocking processor work and settles independently", async () => {
+  it("returns the callback call before blocking processor work and reports independently", async () => {
     const h = makeHarness();
     let releaseBlocker!: () => void;
     const blocker = new Promise<void>((resolve) => {
@@ -486,27 +492,28 @@ describe("wakeStreamSubscriber", () => {
     };
     await h.stream.append({ type: REQUESTED, payload: { id: "slow" } });
     const woken = await h.wake("alpha-proc");
-    let settlement: StreamWakeDeliverySettlement | undefined;
+    let deliveryResult: StreamWakeDeliveryResult | undefined;
 
-    const returned = woken.sink({
+    const returned = woken.processEventBatch({
       projectId: null,
       path: HOME,
+      streamId: STREAM_ID,
       events: h.stream.events.slice(),
       scannedAfterOffset: 0,
       scannedThroughOffset: h.head(),
       streamMaxOffset: h.head(),
       state: null,
-      settleDelivery: (value) => {
-        settlement = value;
+      reportDeliveryResult: (value) => {
+        deliveryResult = value;
       },
     });
 
     expect(returned).toBeUndefined();
     await h.settle();
-    expect(settlement).toBeUndefined();
+    expect(deliveryResult).toBeUndefined();
 
     releaseBlocker();
-    await expect.poll(() => settlement).toEqual({ outcome: "ok" });
+    await expect.poll(() => deliveryResult).toEqual({ outcome: "ok" });
     await expect(woken.getRuntimeState!()).resolves.toMatchObject({
       snapshot: { offset: 1 },
     });
@@ -531,6 +538,7 @@ describe("wakeStreamSubscriber", () => {
         deliverWakeBatch(woken, {
           projectId: null,
           path: HOME,
+          streamId: STREAM_ID,
           events: h.stream.events.slice(),
           scannedAfterOffset: 0,
           scannedThroughOffset: h.head(),
@@ -559,8 +567,13 @@ describe("wakeStreamSubscriber", () => {
     // subscription pointing a sibling stream at this registry. Must be
     // rejected before it can fold foreign events into this processor.
     await expect(
-      h.registry.wakeStreamSubscriber({
-        stream: { projectId: null, path: "/agents/someone-else", streamMaxOffset: 5 },
+      h.registry.wakeStreamProcessor({
+        stream: {
+          projectId: null,
+          path: "/agents/someone-else",
+          streamId: STREAM_ID,
+          streamMaxOffset: 5,
+        },
         subscriptionKey: "wake:alpha-proc",
         processorSlug: "alpha-proc",
       }),
@@ -568,8 +581,13 @@ describe("wakeStreamSubscriber", () => {
 
     // A valid slug from the WRONG project (same path, foreign tenant).
     await expect(
-      h.registry.wakeStreamSubscriber({
-        stream: { projectId: "prj_intruder", path: HOME, streamMaxOffset: 5 },
+      h.registry.wakeStreamProcessor({
+        stream: {
+          projectId: "prj_intruder",
+          path: HOME,
+          streamId: STREAM_ID,
+          streamMaxOffset: 5,
+        },
         subscriptionKey: "wake:alpha-proc",
         processorSlug: "alpha-proc",
       }),
@@ -578,19 +596,74 @@ describe("wakeStreamSubscriber", () => {
     // The fence runs BEFORE slug resolution: a mismatched coordinate is
     // rejected as a mismatch, never as a missing/unknown slug.
     await expect(
-      h.registry.wakeStreamSubscriber({
-        stream: { projectId: null, path: "/agents/someone-else", streamMaxOffset: 5 },
+      h.registry.wakeStreamProcessor({
+        stream: {
+          projectId: null,
+          path: "/agents/someone-else",
+          streamId: STREAM_ID,
+          streamMaxOffset: 5,
+        },
         subscriptionKey: "wake:unspecified",
       }),
     ).rejects.toThrow(/coordinate mismatch/);
 
     // The matching coordinate still works (control).
-    const woken = await h.registry.wakeStreamSubscriber({
-      stream: { projectId: null, path: HOME, streamMaxOffset: 0 },
+    const woken = await h.registry.wakeStreamProcessor({
+      stream: { projectId: null, path: HOME, streamId: STREAM_ID, streamMaxOffset: 0 },
       subscriptionKey: "wake:alpha-proc",
       processorSlug: "alpha-proc",
     });
     expect(woken.checkpointOffset).toBe(0);
+  });
+
+  it("resets checkpoint and folded state for a recreated stream while rejecting the old callback", async () => {
+    const h = makeHarness();
+    await h.stream.append({ type: REQUESTED, payload: { id: "old" } });
+    const oldWake = await h.deliverPending("alpha-proc");
+    expect(oldWake.checkpointOffset).toBe(0);
+
+    expect(() =>
+      oldWake.processEventBatch({
+        projectId: null,
+        path: HOME,
+        streamId: RECREATED_STREAM_ID,
+        events: [],
+        scannedAfterOffset: 1,
+        scannedThroughOffset: 1,
+        streamMaxOffset: 1,
+        state: null,
+        reportDeliveryResult: vi.fn(),
+      }),
+    ).toThrow(/received batch.*expected/);
+
+    // The ID binding is durable, not merely an incarnation-local callback
+    // guard. A host that survives the source stream's reset must atomically
+    // replace lifetime A's checkpoint and fold before answering lifetime B.
+    h.stream.events = [];
+    h.stream.streamId = RECREATED_STREAM_ID;
+    h.crash();
+    const recreatedWake = await h.wake("alpha-proc", RECREATED_STREAM_ID);
+    expect(recreatedWake.checkpointOffset).toBe(0);
+    await expect(recreatedWake.getRuntimeState!()).resolves.toMatchObject({
+      snapshot: { offset: 0, state: { ids: [] } },
+    });
+
+    await h.stream.append({ type: REQUESTED, payload: { id: "new" } });
+    await expect(
+      deliverWakeBatch(recreatedWake, {
+        projectId: null,
+        path: HOME,
+        streamId: RECREATED_STREAM_ID,
+        events: h.stream.events.slice(),
+        scannedAfterOffset: 0,
+        scannedThroughOffset: 1,
+        streamMaxOffset: 1,
+        state: null,
+      }),
+    ).resolves.toEqual({ outcome: "ok" });
+    await expect(recreatedWake.getRuntimeState!()).resolves.toMatchObject({
+      snapshot: { offset: 1, state: { ids: ["new"] } },
+    });
   });
 });
 
@@ -607,7 +680,7 @@ describe("live state", () => {
     h.crash(); // cold incarnation: committed KV progress, nothing loaded yet
     h.registry.refreshLive();
     // Synchronously NOTHING was published — not the schema default (which
-    // would wipe the real fact for subscribers), not anything else; the
+    // would wipe the real fact for live-state listeners), not anything else; the
     // refresh deferred to an async load-then-assemble.
     expect(h.registry.live.getState()).toEqual({});
 

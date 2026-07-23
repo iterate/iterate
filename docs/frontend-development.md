@@ -246,7 +246,7 @@ switcher and stream tree already use plain `useLiveState` — the feed is the
 holdout, because its projection (the rendered feed + live agent activity) is
 folded in the browser today. The plan to collapse it — server-owned feed live
 view + cursor-paged history, then delete the mirror — is designed in
-[`apps/os/docs/stream-mirror-collapse.md`](../apps/os/docs/stream-mirror-collapse.md).
+[`apps/os/docs/replace-browser-stream-database.md`](../apps/os/docs/replace-browser-stream-database.md).
 Don't build new UI on the mirror; use `useLiveState`/`useItxQuery`.
 
 ## Where the boundary is

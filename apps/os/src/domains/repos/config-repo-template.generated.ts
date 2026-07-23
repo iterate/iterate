@@ -262,7 +262,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "apps/guestbook/ref.ts",
     content:
       "// The guestbook's shared identity, dependency-free on purpose: worker.ts\n" +
-      "// routes to this ref, and the wake subscription in the creation batch below\n" +
+      "// routes to this ref, and the hosted-processor subscription in the creation batch below\n" +
       "// persists the same ref — so ingress and the stream spine always dial the\n" +
       "// same Durable Object.\n" +
       "import type { StreamEventInput } from \"iterate/processors\";\n" +
@@ -287,7 +287,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "\n" +
       "/**\n" +
       " * The guestbook's creation batch: the birth certificate plus the durable WAKE\n" +
-      " * subscription that puts GuestbookApp on the stream's delivery spine.\n" +
+      " * subscription that wakes GuestbookApp when the stream advances.\n" +
       " * Initialization is lazy and only matters when something consumes the fold:\n" +
       " * the `/api` socket every page opens offers this batch, and so does a direct\n" +
       " * `sign()`. (A bare GET of `/` serves only the static shell — its client then\n" +
@@ -307,9 +307,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
       "      payload: {\n" +
       "        subscriptionKey: \"app-guestbook#guestbook\",\n" +
-      "        delivery: {\n" +
-      "          mode: \"wake\",\n" +
-      "          expression: [\"workers\", [\"get\", guestbookAppRef], \"processor\", \"wakeStreamSubscriber\"],\n" +
+      "        receiver: {\n" +
+      "          action: \"processor-wake\",\n" +
+      "          expression: [\"workers\", [\"get\", guestbookAppRef], \"processor\", \"wakeStreamProcessor\"],\n" +
       "          // Must match GuestbookProcessorContract.slug (processor.ts); a\n" +
       "          // string literal because this module stays dependency-free.\n" +
       "          processorSlug: \"guestbook\",\n" +
@@ -348,9 +348,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /** The wake door the stream spine dials — the subscription's persisted\n" +
-      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */\n" +
+      "   * expression is `workers.get(ref).processor.wakeStreamProcessor`. */\n" +
       "  get processor() {\n" +
-      "    return this.#host.wakeSubscriber;\n" +
+      "    return this.#host.wakeProcessor;\n" +
       "  }\n" +
       "\n" +
       "  /** Lazily initialize the stream: an empty fold means nobody has offered the\n" +
@@ -496,9 +496,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  /** The wake door the stream spine dials — the subscription's persisted\n" +
-      "   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */\n" +
+      "   * expression is `workers.get(ref).processor.wakeStreamProcessor`. */\n" +
       "  get processor() {\n" +
-      "    return this.#host.wakeSubscriber;\n" +
+      "    return this.#host.wakeProcessor;\n" +
       "  }\n" +
       "}\n",
   },
@@ -507,7 +507,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "// The review bot's shared IDENTITY, dependency-free on purpose (type-only\n" +
       "// imports bundle to pure data): the repo root's worker.ts imports this module\n" +
-      "// for its subscription bootstrap lane, and the wake subscription persists the\n" +
+      "// for its subscription bootstrap lane, and the hosted-processor subscription persists the\n" +
       "// same ref — so the bootstrap and the stream spine can never disagree about\n" +
       "// which Durable Object (and which build) reviews a connection's pull requests.\n" +
       "import type { StreamEventInput } from \"iterate/processors\";\n" +
@@ -530,7 +530,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "} satisfies DynamicWorkerSource;\n" +
       "\n" +
       "/**\n" +
-      " * Webhook streams are per connection and a wake subscription names one exact\n" +
+      " * Webhook streams are per connection and a hosted-processor subscription names one exact\n" +
       " * stream, so each GitHub connection gets its own host instance: the\n" +
       " * durableWorkerKey carries the connection slug, and the host learns its\n" +
       " * stream coordinates from the wake request itself (review-bot-app.ts).\n" +
@@ -546,7 +546,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n" +
       "\n" +
       "/**\n" +
-      " * The durable WAKE subscription that puts a connection's ReviewBotApp on that\n" +
+      " * The durable subscription that wakes a connection's ReviewBotApp from that\n" +
       " * webhook stream's delivery spine. worker.ts offers this batch each time a\n" +
       " * repo is linked (`repo/github-link-configured`); the stable subscriptionKey\n" +
       " * means the latest config replaces the old target without resetting its\n" +
@@ -558,13 +558,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      type: \"events.iterate.com/stream/subscription-configured\",\n" +
       "      payload: {\n" +
       "        subscriptionKey: \"app-review-bot#review-bot\",\n" +
-      "        delivery: {\n" +
-      "          mode: \"wake\",\n" +
+      "        receiver: {\n" +
+      "          action: \"processor-wake\",\n" +
       "          expression: [\n" +
       "            \"workers\",\n" +
       "            [\"get\", reviewBotAppRef(connection)],\n" +
       "            \"processor\",\n" +
-      "            \"wakeStreamSubscriber\",\n" +
+      "            \"wakeStreamProcessor\",\n" +
       "          ],\n" +
       "          processorSlug: \"review-bot\",\n" +
       "        },\n" +
@@ -682,9 +682,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  protected override processEvent(args: ProcessEventArgs<ReviewBotProcessorContract>): undefined {\n" +
       "    const { blockProcessorWhile, event } = args;\n" +
       "    if (event === null || event.type !== \"events.iterate.com/github/webhook-received\") return;\n" +
-      "    // First-hand facts only: a copy carrying cross-post provenance is another\n" +
-      "    // stream's history (e.g. the agent-stream copy this router itself\n" +
-      "    // appends), never input.\n" +
+      "    // First-hand facts only: a copy received from another stream is history,\n" +
+      "    // never fresh input for this router.\n" +
       "    if (event.source?.crossPostedFrom !== undefined) return;\n" +
       "    const now = this.deps.now ?? Date.now;\n" +
       "    if (now() - Date.parse(event.createdAt) > reviewBotFreshnessHorizonMs) return;\n" +
@@ -791,32 +790,10 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    streamPath: event.path,\n" +
       "    type: \"event\",\n" +
       "  };\n" +
-      "  // The copied webhook is durable agent-stream history but is deliberately\n" +
-      "  // outside the Agent processor's consumed vocabulary. Its companion tasks\n" +
-      "  // may therefore share this raw stream batch. The typed append below is only\n" +
-      "  // a schema-validating convenience; either append API has identical reducer\n" +
-      "  // meaning for a valid Agent event.\n" +
-      "  const agentEvents: StreamEventInput[] = [\n" +
-      "    {\n" +
-      "      type: event.type,\n" +
-      "      payload: event.payload,\n" +
-      "      ...(event.metadata === undefined ? {} : { metadata: event.metadata }),\n" +
-      "      idempotencyKey: `github-pr/webhook:${event.path}:${event.offset}`,\n" +
-      "      source: {\n" +
-      "        ...event.source,\n" +
-      "        crossPostedFrom: [\n" +
-      "          {\n" +
-      "            subscriptionKey: `userspace:github-pr:${repoPath}`,\n" +
-      "            createdAt: event.createdAt,\n" +
-      "            offset: event.offset,\n" +
-      "            path: event.path,\n" +
-      "            projectId: await itx.projectId,\n" +
-      "            type: event.type,\n" +
-      "          },\n" +
-      "        ],\n" +
-      "      },\n" +
-      "    },\n" +
-      "  ];\n" +
+      "  // The durable receive rule below records every matching webhook on the\n" +
+      "  // agent stream with platform-authored source.crossPostedFrom history. These are\n" +
+      "  // only the companion agent events that should trigger work.\n" +
+      "  const agentEvents: StreamEventInput[] = [];\n" +
       "\n" +
       "  const pullRequest = webhook.body.pull_request;\n" +
       "  const headSha = pullRequest?.head?.sha;\n" +
@@ -890,6 +867,16 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  }\n" +
       "\n" +
       "  if (!exists) await agent.create();\n" +
+      "  await agent.stream.receiveCrossPostsFrom({\n" +
+      "    sourceStreamPath: event.path,\n" +
+      "    subscriptionKey: `userspace:github-pr:${repoPath}`,\n" +
+      "    description: `Verified GitHub webhooks for ${repository.owner}/${repository.repo}#${number}`,\n" +
+      "    filter: {\n" +
+      "      eventTypes: [\"events.iterate.com/github/webhook-received\"],\n" +
+      "      condition: `payload.associations.repository.id = ${repository.id} and payload.associations.pullRequest.number = ${number}`,\n" +
+      "    },\n" +
+      "    start: \"beginning\",\n" +
+      "  });\n" +
       "  await agent.append(\n" +
       "    {\n" +
       "      type: \"events.iterate.com/agents/context-added\",\n" +
@@ -1329,8 +1316,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "        // on each GitHub connection's webhook stream. A repo link is the rare\n" +
       "        // moment a connection starts mattering to this project, and its fact\n" +
       "        // carries the connection slug — so this lane offers the bot's durable\n" +
-      "        // WAKE subscription once per (re-)link, not once per webhook. The\n" +
-      "        // append is idempotent, and a freshly configured wake subscription\n" +
+      "        // hosted-processor subscription once per (re-)link, not once per webhook. The\n" +
+      "        // append is idempotent, and a freshly configured subscription\n" +
       "        // replays its stream from offset zero, so pull requests opened\n" +
       "        // shortly before the link (within the bot's freshness horizon) still\n" +
       "        // get reviewed. From then on the stream spine dials the app\n" +

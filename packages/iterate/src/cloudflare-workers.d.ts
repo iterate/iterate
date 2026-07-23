@@ -38,6 +38,7 @@ interface DurableObjectStorage {
   kv: {
     get<T = unknown>(key: string): T | undefined;
     put(key: string, value: unknown): void;
+    delete(key: string): boolean;
   };
   getAlarm(): Promise<number | null>;
   setAlarm(scheduledTime: number): Promise<void>;

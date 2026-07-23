@@ -25,8 +25,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
         // on each GitHub connection's webhook stream. A repo link is the rare
         // moment a connection starts mattering to this project, and its fact
         // carries the connection slug — so this lane offers the bot's durable
-        // WAKE subscription once per (re-)link, not once per webhook. The
-        // append is idempotent, and a freshly configured wake subscription
+        // hosted-processor subscription once per (re-)link, not once per webhook. The
+        // append is idempotent, and a freshly configured subscription
         // replays its stream from offset zero, so pull requests opened
         // shortly before the link (within the bot's freshness horizon) still
         // get reviewed. From then on the stream spine dials the app

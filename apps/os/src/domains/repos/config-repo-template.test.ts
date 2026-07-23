@@ -87,15 +87,15 @@ test("browser pairs stay two-file createApp apps behind the thin router", () => 
   expect(worker).not.toContain("tanstack");
 });
 
-test("guestbook wake subscription names the hosted processor", () => {
+test("guestbook subscription names the hosted processor", () => {
   const subscription = guestbookCreationEvents()[1];
   expect(subscription).toMatchObject({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: "app-guestbook#guestbook",
-      delivery: {
-        mode: "wake",
-        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
+      receiver: {
+        action: "processor-wake",
+        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamProcessor"],
         // ref.ts is dependency-free, so it repeats the slug as a string;
         // this is the drift guard.
         processorSlug: GuestbookProcessorContract.slug,
@@ -121,8 +121,8 @@ test("app modules load and export the classes their refs name", () => {
   expect(guestbookAppRef.className).toBe(GuestbookApp.name);
 });
 
-test("review-bot wake subscriptions are per-connection and name the hosted processor", () => {
-  // Webhook streams are per connection and a wake subscription names one
+test("review-bot subscriptions are per-connection and name the hosted processor", () => {
+  // Webhook streams are per connection and a hosted-processor subscription names one
   // exact stream, so the durable identity must fork per connection — two
   // connections sharing one host would fence on mismatched registry
   // coordinates.
@@ -135,13 +135,13 @@ test("review-bot wake subscriptions are per-connection and name the hosted proce
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
       subscriptionKey: "app-review-bot#review-bot",
-      delivery: {
-        mode: "wake",
+      receiver: {
+        action: "processor-wake",
         expression: [
           "workers",
           ["get", reviewBotAppRef("install-789")],
           "processor",
-          "wakeStreamSubscriber",
+          "wakeStreamProcessor",
         ],
         // The ref module is dependency-free, so it repeats the slug as a
         // string; this is the drift guard — a mismatch would make the spine

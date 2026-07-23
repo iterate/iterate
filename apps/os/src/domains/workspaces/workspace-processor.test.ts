@@ -228,7 +228,7 @@ describe("WorkspaceProcessor reduce", () => {
     const replay = makeWorkspaceHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(WorkspaceProcessorContract),
     });
     await replay.settle(); // replays the whole stream from offset zero
 

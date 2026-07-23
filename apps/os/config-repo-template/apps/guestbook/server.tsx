@@ -23,9 +23,9 @@ export class GuestbookApp extends IterateDurableObject {
   }
 
   /** The wake door the stream spine dials — the subscription's persisted
-   * expression is `workers.get(ref).processor.wakeStreamSubscriber`. */
+   * expression is `workers.get(ref).processor.wakeStreamProcessor`. */
   get processor() {
-    return this.#host.wakeSubscriber;
+    return this.#host.wakeProcessor;
   }
 
   /** Lazily initialize the stream: an empty fold means nobody has offered the

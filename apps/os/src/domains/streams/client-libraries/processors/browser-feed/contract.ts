@@ -2,7 +2,7 @@
 // This browser-only processor consumes every stream event and projects it
 // into the per-stream OPFS SQLite `feed_items` table — the single rendered-
 // feed projection behind Pretty, Pretty+raw, and Raw — plus reduced state for
-// the live in-flight agent tail.
+// ephemeral agent events received on the current connection.
 
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";

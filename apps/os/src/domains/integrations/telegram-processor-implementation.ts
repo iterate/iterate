@@ -268,9 +268,9 @@ export class TelegramProcessor extends StreamProcessor<
         };
       }
       case "events.iterate.com/telegram/message-sent": {
-        // The journaled-send claim (cross-posted here by the telegram-agent
-        // processor): bot message_id → the session stream its request lived
-        // on, so replies to bot messages resolve to their exact thread.
+        // The journaled-send claim (relayed here by the telegram-agent
+        // effect): bot message_id → the session stream its request lived on,
+        // so replies to bot messages resolve to their exact thread.
         const { chatId, messageId, sessionPath } = event.payload;
         if (chatId === undefined || sessionPath === undefined) return state;
         return {

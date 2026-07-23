@@ -78,7 +78,7 @@ test("agent create installs only generic machinery; later events configure it", 
       type: AGENT_CONTEXT_ADDED_TYPE,
       idempotencyKey: ephemeralIdempotencyKey,
       ephemeral: true,
-      payload: { role: "user", content: "wake processors cannot consume this" },
+      payload: { role: "user", content: "hosted processors cannot consume this" },
     }),
   ).rejects.toThrow(
     `Processor "agent" cannot consume ephemeral event "${AGENT_CONTEXT_ADDED_TYPE}".`,
@@ -311,17 +311,15 @@ test("Agent create replays its earlier birth and setup events through its subscr
       Array.isArray(event.payload?.path) &&
       event.payload.path.join(".") === "workspace",
   );
-  // Processor subscriptions are wake-mode deliveries addressed by itx
-  // expression over the ordinary domain surface: { delivery: { mode:
-  // "wake", expression: ["agents", ["get", path], "processor",
-  // "wakeStreamSubscriber"] } }. The expression ROOT names the host domain.
+  // Hosted processor subscriptions are addressed by an ITX expression over
+  // the ordinary domain surface. The expression root names the host domain.
   const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
     event.payload as {
       subscriptionKey?: string;
-      delivery?: { mode?: string; expression?: unknown[] };
+      receiver?: { kind?: string; expression?: unknown[]; processorSlug?: string };
     };
   const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
-    wakeSubscriptionPayload(event).delivery?.expression?.[0];
+    wakeSubscriptionPayload(event).receiver?.expression?.[0];
   const agentSubscriptionOffset = requiredOffset(
     "agent processor subscription",
     (event) =>
@@ -409,7 +407,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       ],
     ],
     path: ["agentProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _agentCounterProvision = await agent.provideCapability({
     expression: [
@@ -443,7 +441,7 @@ test("Agent-only dynamic worker and durable object capabilities run from LLM scr
       ],
     ],
     path: ["agentCounter"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   await expect(
@@ -558,12 +556,12 @@ test("Dynamic worker env.ITX.get() is scoped by project and agent host path", as
   using _projectScopeProbeProvision = await project.provideCapability({
     expression: ["workers", ["get", scopeProbeWorkerRef("/")]],
     path: ["scopeProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
   using _agentScopeProbeProvision = await agent.provideCapability({
     expression: ["workers", ["get", scopeProbeWorkerRef(agentPath)]],
     path: ["scopeProbe"],
-    type: "itx-expression",
+    type: "itx-call",
   });
 
   // @ts-expect-error - dynamic project capability mounted by this test.
@@ -695,7 +693,7 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     processorSlugs = subscriptions
       .map(
         (event) =>
-          (event.payload as { delivery?: { processorSlug?: string } } | undefined)?.delivery
+          (event.payload as { receiver?: { processorSlug?: string } } | undefined)?.receiver
             ?.processorSlug,
       )
       .filter((slug): slug is string => typeof slug === "string");
@@ -706,7 +704,6 @@ test("agents.get(path).create explicitly appends and processes the complete birt
   expect(processorSlugs).toEqual(expect.arrayContaining(["agent", "capability-host"]));
   expect(subscriptionCount).toBeGreaterThanOrEqual(3);
 });
-
 test("Project worker processEventBatch receives events from every project stream and can cross-post", async () => {
   using session = withItxSession();
   using itx = session.authenticate({
@@ -801,11 +798,11 @@ test("Project worker processEventBatch receives events from every project stream
   await waitForCondition(
     async () => {
       const runtimeState = await project.streams.get(sourcePath).runtimeState();
-      const feed = runtimeState.runtime.subscriptions["project-worker"];
-      return (feed?.ackedOffset ?? 0) >= sourceEvent.offset;
+      const subscription = runtimeState.runtime.subscriptions["project-worker"];
+      return (subscription?.acknowledgedOffset ?? 0) >= sourceEvent.offset;
     },
     {
-      description: "project-worker feed ackedOffset to reach the source event",
+      description: "project-worker subscription acknowledgement to reach the source event",
       timeoutMs: 10_000,
     },
   );

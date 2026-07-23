@@ -1,6 +1,6 @@
 // The review bot's shared IDENTITY, dependency-free on purpose (type-only
 // imports bundle to pure data): the repo root's worker.ts imports this module
-// for its subscription bootstrap lane, and the wake subscription persists the
+// for its subscription bootstrap lane, and the hosted-processor subscription persists the
 // same ref — so the bootstrap and the stream spine can never disagree about
 // which Durable Object (and which build) reviews a connection's pull requests.
 import type { StreamEventInput } from "iterate/processors";
@@ -23,7 +23,7 @@ export const reviewBotAppSource = {
 } satisfies DynamicWorkerSource;
 
 /**
- * Webhook streams are per connection and a wake subscription names one exact
+ * Webhook streams are per connection and a hosted-processor subscription names one exact
  * stream, so each GitHub connection gets its own host instance: the
  * durableWorkerKey carries the connection slug, and the host learns its
  * stream coordinates from the wake request itself (review-bot-app.ts).
@@ -39,7 +39,7 @@ export function reviewBotAppRef(connection: string) {
 }
 
 /**
- * The durable WAKE subscription that puts a connection's ReviewBotApp on that
+ * The durable subscription that wakes a connection's ReviewBotApp from that
  * webhook stream's delivery spine. worker.ts offers this batch each time a
  * repo is linked (`repo/github-link-configured`); the stable subscriptionKey
  * means the latest config replaces the old target without resetting its
@@ -51,13 +51,13 @@ export function reviewBotSubscriptionEvents(connection: string): StreamEventInpu
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: "app-review-bot#review-bot",
-        delivery: {
-          mode: "wake",
+        receiver: {
+          action: "processor-wake",
           expression: [
             "workers",
             ["get", reviewBotAppRef(connection)],
             "processor",
-            "wakeStreamSubscriber",
+            "wakeStreamProcessor",
           ],
           processorSlug: "review-bot",
         },

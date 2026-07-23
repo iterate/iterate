@@ -46,6 +46,19 @@ test("the packages/iterate copy (published as iterate/sdk) is fresh (pnpm genera
   expect(readFileSync(packageCopyPath, "utf8")).toBe(readFileSync(generatedPath, "utf8"));
 });
 
+test("the public Stream API excludes raw and test-only Durable Object controls", () => {
+  const generated = readFileSync(generatedPath, "utf8");
+  for (const forbidden of [
+    "durableObjectStub",
+    "testRunIdleTeardownNow",
+    "testReset",
+    "testAppendCoreEvents",
+    "testReceiveStreamEvents",
+  ]) {
+    expect(generated).not.toContain(forbidden);
+  }
+});
+
 test("itx-api.generated.ts resolves its exact vendor types from iterate's dependencies", () => {
   const script = `
     import type { Project, StreamEvent } from "./itx-api.generated.ts";

@@ -24,14 +24,30 @@ const network = await vi.hoisted(async () => {
     pushShouldFail: false,
     configureLinkShouldFail: false,
     subscriptionRemoveAppendShouldFail: false,
+    subscriptionEventFailure: null as { remaining: number; type: string } | null,
+    receivedRuleSetObserved: false,
+    sourceAcceptanceObserved: false,
   };
   const itx = createFakeItxEnv({
     onAppend: ({ event }) => {
+      if (event.type === "events.iterate.com/stream/cross-post-list-recorded") {
+        state.receivedRuleSetObserved = true;
+      }
+      if (event.type === "events.iterate.com/stream/cross-post-list-confirmed") {
+        state.sourceAcceptanceObserved = true;
+      }
       if (
         state.subscriptionRemoveAppendShouldFail &&
         event.type === "events.iterate.com/stream/subscription-removed"
       ) {
         throw new Error("subscription-removed append exploded");
+      }
+      if (
+        state.subscriptionEventFailure?.type === event.type &&
+        state.subscriptionEventFailure.remaining > 0
+      ) {
+        state.subscriptionEventFailure.remaining -= 1;
+        throw new Error(`${event.type} append exploded`);
       }
     },
   });
@@ -51,6 +67,9 @@ const network = await vi.hoisted(async () => {
       state.pushShouldFail = false;
       state.configureLinkShouldFail = false;
       state.subscriptionRemoveAppendShouldFail = false;
+      state.subscriptionEventFailure = null;
+      state.receivedRuleSetObserved = false;
+      state.sourceAcceptanceObserved = false;
     },
     state,
     // Project egress IS the fake GitHub API: wrapped Octokit dispatches every
@@ -121,6 +140,11 @@ const network = await vi.hoisted(async () => {
           },
           async configureGithubLink(link: Record<string, unknown>) {
             if (state.configureLinkShouldFail) throw new Error("link write exploded");
+            if (!state.receivedRuleSetObserved || !state.sourceAcceptanceObserved) {
+              throw new Error("link write ran before both streams recorded the subscription");
+            }
+            state.receivedRuleSetObserved = false;
+            state.sourceAcceptanceObserved = false;
             state.githubLink = link;
             repoCalls.push({ args: [link], method: "configureGithubLink", name });
             return link;
@@ -168,6 +192,10 @@ const CONNECTION_STREAM = DurableObjectNameCodec.stringify({
   projectId: PROJECT_ID,
   path: `/integrations/github/${CONNECTION}`,
 });
+const REPO_STREAM = DurableObjectNameCodec.stringify({
+  projectId: PROJECT_ID,
+  path: "/repos/project",
+});
 
 function seedConnectedFact() {
   network.seedStream(CONNECTION_STREAM, {
@@ -196,7 +224,7 @@ describe("linkRepoToGithub", () => {
     network.reset();
   });
 
-  test("links an existing GitHub repo: records the link, installs the webhook subscription, seeds the mirror", async () => {
+  test("links an existing GitHub repo: records the link, adds the webhook subscription, pushes the current commit", async () => {
     seedConnectedFact();
 
     const result = await linkRepoToGithub(linkInput());
@@ -216,9 +244,8 @@ describe("linkRepoToGithub", () => {
       "pushToGithub",
     ]);
 
-    // The cross-post push subscription on the connection stream: GitHub
-    // webhooks about exactly this repository copy onto the repo's own stream
-    // via its `acceptCrossPost` sink.
+    // The first-class stream relationship on the connection stream: GitHub
+    // webhooks about exactly this repository copy onto the repo's own stream.
     const subscription = network.streams
       .get(CONNECTION_STREAM)
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-configured");
@@ -226,16 +253,37 @@ describe("linkRepoToGithub", () => {
       subscriptionKey: "github-repo:/repos/project",
       description:
         "Copies GitHub webhooks for acme/widgets onto this repo's stream so default-branch pushes can be imported.",
-      selector: {
+      filter: {
         condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
         eventTypes: ["events.iterate.com/github/webhook-received"],
       },
-      delivery: {
-        mode: "push",
-        expression: ["streams", ["get", "/repos/project"], "acceptCrossPost"],
+      receiver: {
+        action: "cross-post",
+        receivingStreamPath: "/repos/project",
+        delivery: {
+          start: "now",
+          onFailingEvent: "halt",
+          includeEphemeral: false,
+        },
       },
-      deliver: "new",
     });
+    const inbound = network.streams
+      .get(REPO_STREAM)
+      ?.find((event) => event.type === "events.iterate.com/stream/cross-post-list-recorded");
+    expect(inbound?.payload).toMatchObject({
+      source: { projectId: PROJECT_ID, path: `/integrations/github/${CONNECTION}` },
+      sourceOffset: subscription?.offset,
+      subscriptionsByKey: {
+        "github-repo:/repos/project": {
+          configuredAtSourceOffset: subscription?.offset,
+        },
+      },
+    });
+    expect(
+      network.streams
+        .get(CONNECTION_STREAM)
+        ?.some((event) => event.type === "events.iterate.com/stream/cross-post-list-confirmed"),
+    ).toBe(true);
   });
 
   test("can link without pushing starter history during a creation saga", async () => {
@@ -273,7 +321,7 @@ describe("linkRepoToGithub", () => {
     network.state.githubCreateStatus = 403;
 
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(/could not be created/);
-    // Nothing was linked and no subscription was installed.
+    // Nothing was linked and no subscription was added.
     expect(network.repoCalls).toEqual([]);
     expect(
       network.streams
@@ -292,7 +340,7 @@ describe("linkRepoToGithub", () => {
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
       /exists, but connection "install-789" \(App installation 789\) has no access to it.*github\.com\/organizations\/acme\/settings\/installations\/789/,
     );
-    // Nothing was linked and no subscription was installed.
+    // Nothing was linked and no subscription was added.
     expect(network.repoCalls).toEqual([]);
     expect(
       network.streams
@@ -316,14 +364,14 @@ describe("linkRepoToGithub", () => {
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(/is not connected/);
   });
 
-  test("rolls the webhook subscription back when recording the link fails", async () => {
+  test("removes the webhook subscription when recording the link fails", async () => {
     seedConnectedFact();
     network.state.configureLinkShouldFail = true;
 
     await expect(linkRepoToGithub(linkInput())).rejects.toThrow(/link write exploded/);
 
-    // The subscription that went in ahead of the link write was compensated
-    // away, so a failed link leaves neither a link nor a live subscription
+    // The subscription appended ahead of the link write was removed, so a failed
+    // link leaves neither a link nor a subscription
     // behind.
     const connectionEvents = network.streams.get(CONNECTION_STREAM) ?? [];
     expect(
@@ -334,8 +382,60 @@ describe("linkRepoToGithub", () => {
     const removed = connectionEvents.find(
       (e) => e.type === "events.iterate.com/stream/subscription-removed",
     );
-    expect(removed?.payload).toEqual({ subscriptionKey: "github-repo:/repos/project" });
+    expect(removed?.payload).toEqual({
+      subscriptionKey: "github-repo:/repos/project",
+      reason: "requested",
+    });
     expect(network.state.githubLink).toBeNull();
+  });
+
+  test("never records a link when the receiving stream rejects the source list", async () => {
+    seedConnectedFact();
+    network.state.subscriptionEventFailure = {
+      remaining: 1,
+      type: "events.iterate.com/stream/cross-post-list-recorded",
+    };
+
+    await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
+      /cross-post-list-recorded.*append exploded/,
+    );
+
+    expect(network.state.githubLink).toBeNull();
+    const sourceFacts = network.streams.get(CONNECTION_STREAM) ?? [];
+    expect(sourceFacts.map((event) => event.type)).toContain(
+      "events.iterate.com/stream/subscription-configured",
+    );
+    expect(sourceFacts.map((event) => event.type)).toContain(
+      "events.iterate.com/stream/subscription-removed",
+    );
+    expect((network.streams.get(REPO_STREAM) ?? []).map((event) => event.payload)).toEqual([
+      expect.objectContaining({ subscriptionsByKey: {} }),
+    ]);
+  });
+
+  test("never records a link before the source appends list acceptance", async () => {
+    seedConnectedFact();
+    network.state.subscriptionEventFailure = {
+      remaining: 1,
+      type: "events.iterate.com/stream/cross-post-list-confirmed",
+    };
+
+    await expect(linkRepoToGithub(linkInput())).rejects.toThrow(
+      /cross-post-list-confirmed.*append exploded/,
+    );
+
+    expect(network.state.githubLink).toBeNull();
+    expect((network.streams.get(REPO_STREAM) ?? []).map((event) => event.type)).toEqual([
+      "events.iterate.com/stream/cross-post-list-recorded",
+      "events.iterate.com/stream/cross-post-list-recorded",
+    ]);
+    expect(
+      (network.streams.get(REPO_STREAM) ?? []).map((event) =>
+        Object.keys(
+          (event.payload as { subscriptionsByKey: Record<string, unknown> }).subscriptionsByKey,
+        ),
+      ),
+    ).toEqual([["github-repo:/repos/project"], []]);
   });
 
   test("re-linking through a different connection removes the old connection's subscription", async () => {
@@ -357,7 +457,7 @@ describe("linkRepoToGithub", () => {
       },
     });
 
-    // A failed old-subscription removal aborts the re-link BEFORE anything
+    // A failed old-rule removal aborts the re-link BEFORE anything
     // changes: the link still names the old connection and a retry starts clean.
     network.state.subscriptionRemoveAppendShouldFail = true;
     await expect(linkRepoToGithub({ ...linkInput(), connection: otherConnection })).rejects.toThrow(
@@ -379,7 +479,10 @@ describe("linkRepoToGithub", () => {
     const oldRemoved = network.streams
       .get(CONNECTION_STREAM)
       ?.find((e) => e.type === "events.iterate.com/stream/subscription-removed");
-    expect(oldRemoved?.payload).toEqual({ subscriptionKey: "github-repo:/repos/project" });
+    expect(oldRemoved?.payload).toEqual({
+      subscriptionKey: "github-repo:/repos/project",
+      reason: "requested",
+    });
     expect(network.state.githubLink).toMatchObject({ connection: otherConnection });
   });
 
@@ -412,18 +515,18 @@ describe("linkRepoToGithub", () => {
     expect(network.state.githubLink).toMatchObject({ connection: CONNECTION });
 
     const oldStreamEvents = network.streams.get(CONNECTION_STREAM) ?? [];
-    const lastSubscriptionFact = [...oldStreamEvents]
+    const lastSubscriptionEvent = [...oldStreamEvents]
       .reverse()
       .find(
         (e) =>
           e.type === "events.iterate.com/stream/subscription-configured" ||
           e.type === "events.iterate.com/stream/subscription-removed",
       );
-    // The restore (a subscription-configured) landed AFTER the removal.
-    expect(lastSubscriptionFact?.type).toBe("events.iterate.com/stream/subscription-configured");
-    expect(lastSubscriptionFact?.payload).toMatchObject({
+    // The restored outbound configuration landed after the removal.
+    expect(lastSubscriptionEvent?.type).toBe("events.iterate.com/stream/subscription-configured");
+    expect(lastSubscriptionEvent?.payload).toMatchObject({
       subscriptionKey: "github-repo:/repos/project",
-      selector: {
+      filter: {
         condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
       },
     });
@@ -441,17 +544,17 @@ describe("linkRepoToGithub", () => {
 
     expect(network.state.githubLink).toMatchObject({ repo: "widgets", repositoryId: 101 });
     const connectionEvents = network.streams.get(CONNECTION_STREAM) ?? [];
-    const lastSubscriptionFact = [...connectionEvents]
+    const lastSubscriptionEvent = [...connectionEvents]
       .reverse()
       .find(
         (event) =>
           event.type === "events.iterate.com/stream/subscription-configured" ||
           event.type === "events.iterate.com/stream/subscription-removed",
       );
-    expect(lastSubscriptionFact).toMatchObject({
+    expect(lastSubscriptionEvent).toMatchObject({
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
-        selector: {
+        filter: {
           condition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',
         },
       },
@@ -476,7 +579,10 @@ describe("unlinkRepoFromGithub", () => {
     const removed = network.streams
       .get(CONNECTION_STREAM)
       ?.find((event) => event.type === "events.iterate.com/stream/subscription-removed");
-    expect(removed?.payload).toEqual({ subscriptionKey: "github-repo:/repos/project" });
+    expect(removed?.payload).toEqual({
+      subscriptionKey: "github-repo:/repos/project",
+      reason: "requested",
+    });
   });
 
   test("unlinking an unlinked repo is a no-op", async () => {
@@ -495,9 +601,9 @@ describe("unlinkRepoFromGithub", () => {
     await expect(
       unlinkRepoFromGithub({ projectId: PROJECT_ID, repoPath: "/repos/project" }),
     ).rejects.toThrow(/subscription-removed append exploded/);
-    // The link is still in place — the subscription is removed BEFORE the
-    // link, so a failure leaves a retryable state, never an orphaned
-    // subscription with no link.
+    // The link is still in place — the subscription is removed BEFORE the link,
+    // so a failure leaves a retryable state, never an orphaned rule with no
+    // link.
     expect(network.state.githubLink).not.toBeNull();
 
     network.state.subscriptionRemoveAppendShouldFail = false;
@@ -507,5 +613,39 @@ describe("unlinkRepoFromGithub", () => {
     });
     expect(retried).toEqual({ unlinked: true });
     expect(network.state.githubLink).toBeNull();
+  });
+
+  test("a receiver-list removal failure keeps the link and a retry reuses the source removal", async () => {
+    seedConnectedFact();
+    await linkRepoToGithub(linkInput());
+    network.state.subscriptionEventFailure = {
+      remaining: 1,
+      type: "events.iterate.com/stream/cross-post-list-recorded",
+    };
+
+    await expect(
+      unlinkRepoFromGithub({ projectId: PROJECT_ID, repoPath: "/repos/project" }),
+    ).rejects.toThrow(/cross-post-list-recorded.*append exploded/);
+    expect(network.state.githubLink).not.toBeNull();
+
+    const retried = await unlinkRepoFromGithub({
+      projectId: PROJECT_ID,
+      repoPath: "/repos/project",
+    });
+    expect(retried).toEqual({ unlinked: true });
+    expect(
+      (network.streams.get(CONNECTION_STREAM) ?? []).filter(
+        (event) => event.type === "events.iterate.com/stream/subscription-removed",
+      ),
+    ).toHaveLength(1);
+    expect(
+      (network.streams.get(REPO_STREAM) ?? []).filter(
+        (event) =>
+          event.type === "events.iterate.com/stream/cross-post-list-recorded" &&
+          Object.keys(
+            (event.payload as { subscriptionsByKey: Record<string, unknown> }).subscriptionsByKey,
+          ).length === 0,
+      ),
+    ).toHaveLength(1);
   });
 });

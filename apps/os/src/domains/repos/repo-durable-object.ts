@@ -4,7 +4,7 @@ import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
@@ -190,8 +190,8 @@ export class RepoDurableObject extends DurableObject<Env> {
   // runner's committed progress.
   readonly #reads = this.#registry.reads(this.#repoProcessor);
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */

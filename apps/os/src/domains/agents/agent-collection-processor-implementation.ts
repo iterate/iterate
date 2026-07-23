@@ -1,6 +1,9 @@
 import { StreamProcessor, type ReduceArgs, type StreamEvent } from "iterate/processors";
 import { AgentPath, foldAgentSummaryUpdated } from "./agent-presence.ts";
-import { AgentCollectionProcessorContract } from "./agent-collection-processor-contract.ts";
+import {
+  AGENT_COLLECTION_SUBSCRIPTION_KEY,
+  AgentCollectionProcessorContract,
+} from "./agent-collection-processor-contract.ts";
 
 /**
  * The project's agent catalog, reduced from cross-posted agent facts.
@@ -20,7 +23,7 @@ import { AgentCollectionProcessorContract } from "./agent-collection-processor-c
  * not summary chatter.
  *
  * Every timestamp comes from the SOURCE hop
- * (`event.source.crossPostedFrom.at(-1)`), never from the copy's own commit
+ * (`event.source.crossPostedFrom.at(-1)`), never from the received copy's commit
  * time: a copy can arrive long after the source fact, and the catalog must
  * preserve source chronology, not ingest delay. A malformed committed copy is
  * skipped and logged rather than wedging the cursor. If that log fires, an
@@ -48,7 +51,7 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
         return { ...state, birthCertificate: event.payload };
       }
       case "events.iterate.com/agent/created": {
-        const source = crossPostedAgentSource(event);
+        const source = receivedAgentSource(event);
         if (source === null) return state;
         if (state.agents[source.path] !== undefined) return state;
         return {
@@ -64,7 +67,7 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
         };
       }
       case "events.iterate.com/agent/summary-updated": {
-        const source = crossPostedAgentSource(event);
+        const source = receivedAgentSource(event);
         if (source === null) return state;
         const previous = state.agents[source.path];
         if (previous === undefined) {
@@ -118,14 +121,20 @@ export class AgentCollectionStreamProcessor extends StreamProcessor<AgentCollect
  * commit time. An unattributable committed fact is logged and skipped so it
  * cannot wedge the cursor.
  */
-function crossPostedAgentSource(event: Pick<StreamEvent, "type" | "source">): {
+function receivedAgentSource(event: Pick<StreamEvent, "type" | "source">): {
   path: AgentPath;
   createdAt: string;
   offset: number;
 } | null {
   const source = event.source?.crossPostedFrom?.at(-1);
   if (source === undefined) {
-    console.error(`agent collection skipped ${event.type}: missing cross-post provenance`);
+    console.error(`agent collection skipped ${event.type}: missing source-stream coordinates`);
+    return null;
+  }
+  if (source.subscriptionKey !== AGENT_COLLECTION_SUBSCRIPTION_KEY) {
+    console.error(
+      `agent collection skipped ${event.type}: unexpected subscription "${source.subscriptionKey}"`,
+    );
     return null;
   }
   const path = AgentPath.safeParse(source.path);

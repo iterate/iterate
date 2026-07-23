@@ -1,6 +1,6 @@
 // `iterate/processors` — the PURE stream-processor machinery: contracts,
 // the processor base class, the runner (two-cursor drive), the keepalive
-// state machine, and the wire types shared with the platform's stream spine.
+// state machine, and the wire types shared with the platform's stream event sender.
 // Runtime-neutral on purpose: no cloudflare:workers import anywhere in this
 // graph, so node processes (tests, CLIs, tooling) can import contracts and
 // processors directly. The Durable-Object HOSTING layer (registry + DO
@@ -15,5 +15,5 @@ export * from "./stream-processor.ts";
 export * from "./stream-processor-runner.ts";
 export * from "./stream-processor-keepalive.ts";
 export * from "./processor-host-capabilities.ts";
-export * from "./subscriber-metrics.ts";
+export * from "./event-consumption-metrics.ts";
 export * from "./stream-runtime-metrics.ts";

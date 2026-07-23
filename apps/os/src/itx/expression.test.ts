@@ -1,6 +1,6 @@
 import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
-import { evaluateItxExpression } from "./expression.ts";
+import { evaluateItxExpression, ItxExpression } from "./expression.ts";
 
 /**
  * A fake transport stub: object-like, disposable, NOT an RpcTarget — the
@@ -114,4 +114,20 @@ describe("evaluateItxExpression stub hygiene", () => {
     expect(value).toBe("ok");
     expect(disposed).toEqual([]);
   });
+
+  it.each(["__proto__", "constructor", "prototype"])(
+    "rejects the reserved property name %s in reads and calls",
+    async (propertyName) => {
+      const root = { [propertyName]: () => "unsafe" };
+
+      expect(ItxExpression.safeParse([propertyName]).success).toBe(false);
+      expect(ItxExpression.safeParse([[propertyName]]).success).toBe(false);
+      await expect(evaluateItxExpression(root, [propertyName])).rejects.toThrow(
+        `reserved property name "${propertyName}"`,
+      );
+      await expect(evaluateItxExpression(root, [[propertyName]])).rejects.toThrow(
+        `reserved property name "${propertyName}"`,
+      );
+    },
+  );
 });

@@ -20,7 +20,7 @@ import {
   TELEGRAM_ACCESS_WELCOME_TEXT,
   TelegramProcessor,
 } from "./telegram-processor-implementation.ts";
-import type { TelegramProcessorContract } from "./telegram-processor-contract.ts";
+import { TelegramProcessorContract } from "./telegram-processor-contract.ts";
 import { buildTelegramAccessSettingsUrl } from "./utils.ts";
 
 type RouterEventInput = ConsumedInput<TelegramProcessorContract>;
@@ -113,7 +113,11 @@ function makeRouterHarness(substrate?: HarnessSubstrate & { network: MemoryStrea
         },
         telegramAccessSettingsUrl: async () => SETTINGS_URL,
       }),
-    substrate: { clock, stream, progress: substrate?.progress ?? makeMemoryProgressStore() },
+    substrate: {
+      clock,
+      stream,
+      progress: substrate?.progress ?? makeMemoryProgressStore(TelegramProcessorContract),
+    },
   });
   return { ...harness, network, notificationFailures, telegramCalls };
 }
@@ -468,7 +472,7 @@ describe("TelegramProcessor (webhook router)", () => {
     const replay = makeRouterHarness({
       clock: h.clock,
       network: h.network,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(TelegramProcessorContract),
       stream: h.stream,
     });
     await replay.settle();
@@ -659,7 +663,7 @@ describe("TelegramProcessor (webhook router)", () => {
     const replay = makeRouterHarness({
       clock: h.clock,
       network: h.network,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(TelegramProcessorContract),
       stream: h.stream,
     });
     await replay.settle();

@@ -27,7 +27,7 @@ function makeHarness(
         repointAlarm: async () => {},
         reads: deps.reads,
       }),
-    substrate: { clock, stream, progress: makeMemoryProgressStore() },
+    substrate: { clock, stream, progress: makeMemoryProgressStore(SchedulerProcessorContract) },
   });
 }
 

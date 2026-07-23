@@ -97,7 +97,11 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
     (() => {
       const clock = { now: Date.parse("2026-07-18T08:00:00Z") };
       const network = new MemoryStreamNetwork(() => clock.now);
-      return { clock, stream: network.get("/devices/phone"), progress: makeMemoryProgressStore() };
+      return {
+        clock,
+        stream: network.get("/devices/phone"),
+        progress: makeMemoryProgressStore(DeviceProcessorContract),
+      };
     })();
   const harness = makeProcessorHarness<DeviceProcessorContract, DeviceProcessor>({
     createProcessor: (deps) =>
@@ -135,7 +139,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
 // =============================================================================
 
 describe("DeviceProcessor enrollment", () => {
-  it("created cross-posts the catalog fact and arms the notification-intent subscription on the root stream", async () => {
+  it("created records the catalog fact and arms the notification-intent subscription on the root stream", async () => {
     const h = makeDeviceHarness();
     await h.play(["append", DEVICE_CREATED]);
 
@@ -154,12 +158,16 @@ describe("DeviceProcessor enrollment", () => {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
           subscriptionKey: "notification-intent:/devices/phone",
-          selector: { eventTypes: ["events.iterate.com/notification/requested"] },
-          delivery: {
-            mode: "push",
-            expression: ["streams", ["get", "/devices/phone"], "acceptCrossPost"],
+          filter: { eventTypes: ["events.iterate.com/notification/requested"] },
+          receiver: {
+            action: "cross-post",
+            receivingStreamPath: "/devices/phone",
+            delivery: {
+              start: "now",
+              onFailingEvent: "halt",
+              includeEphemeral: false,
+            },
           },
-          deliver: "new",
         },
       },
     ]);
@@ -203,7 +211,7 @@ describe("DeviceProcessor enrollment", () => {
       tokenUpdatedOffset: 3,
     });
     // The revocation removed the intent subscription; the token update
-    // re-armed it (a fresh event — the cross-post key carries the offset).
+    // re-armed it (a fresh event whose idempotency key carries the offset).
     expect(h.rootEvents().map((event) => event.type)).toEqual([
       "events.iterate.com/device/created",
       "events.iterate.com/stream/subscription-configured",
@@ -664,7 +672,7 @@ describe("DeviceProcessor replay", () => {
     const replay = makeDeviceHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(DeviceProcessorContract),
     });
     replay.gateway.send = async () => {
       throw new Error("a replay must not dial Expo");

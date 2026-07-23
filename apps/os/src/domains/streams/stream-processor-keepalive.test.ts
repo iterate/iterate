@@ -14,7 +14,7 @@ const T0 = Date.parse("2026-07-09T12:00:00Z");
 /**
  * The keepalive is clock/storage/transport-free by construction, so the whole
  * failure matrix runs against a mutable clock and scripted hooks — the same
- * harness shape as scheduler-processor.test.ts and stream-subscribers.test.ts.
+ * harness shape as scheduler-processor.test.ts.
  */
 function makeHarness(options: { version?: string; revive?: () => Promise<void> } = {}) {
   const clock = { now: T0 };
@@ -26,6 +26,7 @@ function makeHarness(options: { version?: string; revive?: () => Promise<void> }
     kept: Promise<unknown>[];
     version: string;
     revive: () => Promise<void>;
+    discardFailedRevival: ((error: unknown, record: KeepaliveRecord) => boolean) | undefined;
   } = {
     record: undefined,
     armCalls: [],
@@ -34,6 +35,7 @@ function makeHarness(options: { version?: string; revive?: () => Promise<void> }
     kept: [],
     version: options.version ?? "v1",
     revive: options.revive ?? (() => Promise.resolve()),
+    discardFailedRevival: undefined,
   };
   const build = () =>
     new ProcessorKeepalive({
@@ -52,6 +54,7 @@ function makeHarness(options: { version?: string; revive?: () => Promise<void> }
         state.reviveCalls.push(record);
         await state.revive();
       },
+      discardFailedRevival: (error, record) => state.discardFailedRevival?.(error, record) ?? false,
       appendFact: (event) => {
         state.facts.push(event);
       },
@@ -181,6 +184,38 @@ describe("revival", () => {
     expect(h.state.reviveCalls).toHaveLength(1);
   });
 
+  test("a permanently invalid revival is discarded and does not poison later clean work", async () => {
+    const stale = new Error("the stream lifetime was replaced");
+    const h = makeHarness({ revive: () => Promise.reject(stale) });
+    const keepalive = h.build();
+    const failedWork = deferred();
+    keepalive.track(failedWork.promise);
+    await settle({ reject: failedWork.reject });
+
+    const discarded: KeepaliveRecord[] = [];
+    h.state.discardFailedRevival = (error, record) => {
+      expect(error).toBe(stale);
+      discarded.push(record);
+      h.state.record = undefined;
+      h.state.armCalls.push(null);
+      return true;
+    };
+
+    h.clock.now = T0 + KEEPALIVE_ALARM_LEAD_MS;
+    await expect(keepalive.onAlarm()).resolves.toBe("revival_discarded");
+    expect(discarded).toHaveLength(1);
+    expect(keepalive.armedAtMs).toBeNull();
+
+    // The discarded attempt clears the previous failure flags. Fresh clean
+    // work on the same incarnation can confirm and disarm normally.
+    const cleanWork = deferred();
+    keepalive.track(cleanWork.promise);
+    await settle({ resolve: cleanWork.resolve });
+    h.clock.now = keepalive.armedAtMs!;
+    await expect(keepalive.onAlarm()).resolves.toBe("clean_disarmed");
+    expect(h.state.reviveCalls).toHaveLength(1);
+  });
+
   test("one clean settle does not mask a failure in the same window", async () => {
     const h = makeHarness();
     const keepalive = h.build();
@@ -247,7 +282,7 @@ describe("the crash-loop breaker", () => {
   });
 
   test("crash-loop evidence lands once at the threshold, keyed on version", async () => {
-    const h = makeHarness({ revive: () => Promise.reject(new Error("poison")) });
+    const h = makeHarness({ revive: () => Promise.reject(new Error("revival failed")) });
     h.build().track(deferred().promise);
     for (let i = 0; i < 5; i += 1) {
       const fresh = h.build();
@@ -262,7 +297,7 @@ describe("the crash-loop breaker", () => {
   });
 
   test("a new worker version resets the budget (the antidote deployed)", async () => {
-    const h = makeHarness({ revive: () => Promise.reject(new Error("poison")) });
+    const h = makeHarness({ revive: () => Promise.reject(new Error("revival failed")) });
     h.build().track(deferred().promise);
     for (let i = 0; i < 4; i += 1) {
       const fresh = h.build();

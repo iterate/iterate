@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
@@ -282,8 +282,8 @@ export class AgentDurableObject extends DurableObject<Env> {
     { recovery: true },
   );
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */

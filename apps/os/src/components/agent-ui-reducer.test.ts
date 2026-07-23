@@ -469,14 +469,14 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("tracks subscriber presence including processor announcements", () => {
+  test("tracks open callback connections including processor announcements", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "agent:agent",
-          direction: "outbound",
-          subscriber: {
+          connectionKey: "agent:agent",
+          kind: "hosted",
+          openedBy: {
             incarnationId: "i1",
             processor: {
               announcement: {
@@ -492,11 +492,11 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "browser:tab-1",
-          direction: "inbound",
-          subscriber: {
+          connectionKey: "browser:tab-1",
+          kind: "session",
+          openedBy: {
             description: "browser",
             user: {
               id: "usr_jonas",
@@ -508,19 +508,21 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/stream/subscriber-disconnected",
-        payload: { subscriptionKey: "browser:tab-1", reason: "unsubscribed" },
+        type: "events.iterate.com/stream/connection-closed",
+        payload: { connectionKey: "browser:tab-1", reason: "closed-by-owner" },
       },
     ]);
 
     expect(state.presence).toHaveLength(2);
     expect(state.presence[0]).toMatchObject({
-      subscriptionKey: "agent:agent",
+      connectionKey: "agent:agent",
+      connectionKind: "hosted",
       connected: true,
       processor: { slug: "agent", version: "0.1.0" },
     });
     expect(state.presence[1]).toMatchObject({
-      subscriptionKey: "browser:tab-1",
+      connectionKey: "browser:tab-1",
+      connectionKind: "session",
       connected: false,
       user: {
         id: "usr_jonas",
@@ -531,33 +533,33 @@ describe("agent-ui reducer", () => {
     });
   });
 
-  test("clears stale subscriber metadata when a subscription key reconnects", () => {
+  test("clears stale opener metadata when a connection key reopens", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "browser:tab-1",
-          direction: "inbound",
-          subscriber: {
+          connectionKey: "browser:tab-1",
+          kind: "session",
+          openedBy: {
             description: "browser",
             user: { email: "jonas@example.com", name: "Jonas Temple" },
           },
         },
       },
       {
-        type: "events.iterate.com/stream/subscriber-connected",
+        type: "events.iterate.com/stream/connection-opened",
         payload: {
-          subscriptionKey: "browser:tab-1",
-          direction: "inbound",
-          subscriber: { description: "browser" },
+          connectionKey: "browser:tab-1",
+          kind: "session",
+          openedBy: { description: "browser" },
         },
       },
     ]);
 
     expect(state.presence).toEqual([
       {
-        subscriptionKey: "browser:tab-1",
-        direction: "inbound",
+        connectionKey: "browser:tab-1",
+        connectionKind: "session",
         connected: true,
         description: "browser",
       },
@@ -578,8 +580,8 @@ describe("agent-ui reducer", () => {
       { type: "events.iterate.com/stream/created" },
       { type: "events.iterate.com/stream/woken" },
       {
-        type: "events.iterate.com/stream/subscriber-connected",
-        payload: { subscriptionKey: "agent:agent", direction: "outbound" },
+        type: "events.iterate.com/stream/connection-opened",
+        payload: { connectionKey: "agent:agent", kind: "hosted" },
       },
       { type: "events.iterate.com/stream/woken" },
     ]);
@@ -592,7 +594,7 @@ describe("agent-ui reducer", () => {
         timestampMs: Date.parse("2026-06-11T00:00:04.000Z"),
       },
     ]);
-    expect(state.presence).toMatchObject([{ subscriptionKey: "agent:agent", connected: false }]);
+    expect(state.presence).toMatchObject([{ connectionKey: "agent:agent", connected: false }]);
   });
 
   test("a durable rebuild recovers the interrupted partial from the settled fact", () => {

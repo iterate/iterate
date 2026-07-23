@@ -9,6 +9,7 @@ import type {
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
+import { CoreProcessorContract } from "../domains/streams/core-processor-contract.ts";
 
 const liveStateMocks = vi.hoisted(() => ({
   project: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("@iterate-com/ui/components/serialized-object-code-block", () => ({
 }));
 
 import { PresenceAvatar, StreamStatePanel } from "./stream-state-panel.tsx";
+import { CorePrettyState } from "./stream-processor-pretty-state.tsx";
 
 const mountedRoots: Array<ReturnType<typeof createRoot>> = [];
 const reactEnvironment = globalThis as typeof globalThis & {
@@ -54,8 +56,8 @@ afterEach(async () => {
 test("presence avatars render an authenticated user's picture with an initials fallback", async () => {
   const { host, root } = mountPanel();
   const entry: AgentUiPresenceEntry = {
-    subscriptionKey: "browser:tab-1",
-    direction: "inbound",
+    connectionKey: "browser:tab-1",
+    connectionKind: "session",
     connected: true,
     description: "browser",
     user: {
@@ -76,8 +78,8 @@ test("presence avatars render an authenticated user's picture with an initials f
 
 test("presence tooltips show human identity and processor names", async () => {
   const human: AgentUiPresenceEntry = {
-    subscriptionKey: "browser:tab-1",
-    direction: "inbound",
+    connectionKey: "browser:tab-1",
+    connectionKind: "session",
     connected: true,
     user: {
       id: "usr_jonas",
@@ -120,8 +122,8 @@ test("a focused human subscriber shows their name, email address, and user id", 
     refresh: vi.fn(),
   });
   const entry: AgentUiPresenceEntry = {
-    subscriptionKey: "browser:tab-1",
-    direction: "inbound",
+    connectionKey: "browser:tab-1",
+    connectionKind: "session",
     connected: true,
     description: "browser",
     user: {
@@ -141,7 +143,7 @@ test("a focused human subscriber shows their name, email address, and user id", 
     root.render(
       <StreamStatePanel
         {...panelProps({
-          focusedKey: entry.subscriptionKey,
+          focusedKey: entry.connectionKey,
           presence: [entry],
         })}
       />,
@@ -177,7 +179,7 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
     root.render(
       <StreamStatePanel
         {...panelProps({
-          focusedKey: processorPresence.subscriptionKey,
+          focusedKey: processorPresence.connectionKey,
           getProcessorRuntimeState,
           presence: [processorPresence],
         })}
@@ -198,6 +200,225 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
   expect(getProcessorRuntimeState).toHaveBeenCalledTimes(1);
   expect(host.textContent).not.toContain("Loading reduced state");
   expect(host.querySelector("[data-testid=serialized-state]")?.textContent).toBe('{"stable":true}');
+});
+
+test("a blocked subscription removal remains visible after its configured row is gone", async () => {
+  const subscriptionKey = "stream:/receiver";
+  const state = streamRuntimeState(8);
+  state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
+    maxOffset: 8,
+    crossPostListDeliveriesByReceivingStream: {
+      "/receiver": {
+        sourceOffset: 7,
+        status: "blocked",
+        attempts: 6,
+        error: "receiver journal unavailable",
+        blockedAt: "2026-07-18T00:01:00.000Z",
+        subscriptionKeysRecordedByReceiver: [subscriptionKey],
+      },
+    },
+  });
+  liveStateMocks.project.mockReturnValue({
+    value: state,
+    status: "live" as const,
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+
+  const { host, root } = mountPanel();
+  await act(async () => {
+    root.render(
+      <StreamStatePanel
+        {...panelProps({
+          focusedKey: subscriptionKey,
+        })}
+      />,
+    );
+  });
+
+  await vi.waitFor(() => {
+    expect(host.textContent).toContain("Pending subscription removal from /receiver");
+  });
+  expect(host.textContent).toContain("subscription list blocked (attempt 6)");
+  expect(host.textContent).toContain("cross-post-list source offset#7");
+  expect(host.textContent).toContain("receiver journal unavailable");
+});
+
+test("a moved subscription shows that its new receiver is waiting for the blocked old receiver", async () => {
+  const subscriptionKey = "issues-for-reviewer";
+  const state = streamRuntimeState(9);
+  state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
+    maxOffset: 9,
+    subscriptions: {
+      outbound: {
+        byKey: {
+          [subscriptionKey]: {
+            configuredAtOffset: 8,
+            configuredAt: "2026-07-21T12:00:08.000Z",
+            configuration: {
+              subscriptionKey,
+              receiver: {
+                action: "cross-post",
+                receivingStreamPath: "/agents/b",
+                delivery: {
+                  start: "now",
+                  onFailingEvent: "halt",
+                  includeEphemeral: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    crossPostListDeliveriesByReceivingStream: {
+      "/agents/a": {
+        sourceOffset: 8,
+        status: "blocked",
+        attempts: 8,
+        error: "old receiver unavailable",
+        blockedAt: "2026-07-21T12:01:00.000Z",
+        subscriptionKeysRecordedByReceiver: [subscriptionKey],
+      },
+      "/agents/b": {
+        sourceOffset: 8,
+        status: "pending",
+        subscriptionKeysRecordedByReceiver: [],
+      },
+    },
+  });
+  liveStateMocks.project.mockReturnValue({
+    value: state,
+    status: "live" as const,
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+
+  const { host, root } = mountPanel();
+  await act(async () => {
+    root.render(<StreamStatePanel {...panelProps({ focusedKey: subscriptionKey })} />);
+  });
+
+  await vi.waitFor(() => {
+    expect(host.textContent).toContain("waiting for blocked subscription removal from /agents/a");
+  });
+  expect(host.textContent).toContain(
+    "Waiting for these streams to confirm removal of this subscription: /agents/a (blocked at #8)",
+  );
+  expect(host.textContent).toContain("durable list statepending");
+});
+
+test.each([
+  ["beginning", "beginning (all history)"],
+  ["now", "now (from configure time)"],
+  [{ afterOffset: 4 }, "after offset #4"],
+] as const)("a durable receiver renders the stored %j start position", async (start, label) => {
+  const subscriptionKey = "copy-from-offset";
+  const state = streamRuntimeState(8);
+  state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
+    maxOffset: 8,
+    subscriptions: {
+      outbound: {
+        byKey: {
+          [subscriptionKey]: {
+            configuredAtOffset: 7,
+            configuredAt: "2026-07-21T12:00:00.000Z",
+            configuration: {
+              subscriptionKey,
+              receiver: {
+                action: "cross-post",
+                receivingStreamPath: "/receiver",
+                delivery: {
+                  start,
+                  onFailingEvent: "halt",
+                  includeEphemeral: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  state.runtime.subscriptions[subscriptionKey] = {
+    acknowledgedOffset: 4,
+    acknowledgedEvents: 0,
+    lag: 4,
+    attempt: 0,
+    nextAttemptAt: null,
+    inFlightDeadlineAt: null,
+    lastError: null,
+  };
+  liveStateMocks.project.mockReturnValue({
+    value: state,
+    status: "live" as const,
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+
+  const { host, root } = mountPanel();
+  await act(async () => {
+    root.render(<StreamStatePanel {...panelProps({ focusedKey: subscriptionKey })} />);
+  });
+
+  await vi.waitFor(() => expect(host.textContent).toContain(label));
+});
+
+test("core state renders subscriptions inside each source-stream record", async () => {
+  const { host, root } = mountPanel();
+  await act(async () => {
+    root.render(
+      <CorePrettyState
+        runtime={undefined}
+        state={{
+          maxOffset: 12,
+          eventCount: 12,
+          subscriptions: {
+            inbound: {
+              bySourcePath: {
+                "/source": {
+                  source: { projectId: "prj_source", path: "/source" },
+                  sourceOffset: 11,
+                  byKey: {
+                    "copy-to-receiver": {
+                      configuration: {},
+                      configuredAtSourceOffset: 7,
+                      numEventsReceived: 3,
+                      numEventsDropped: 1,
+                      lastEventReceivedAt: "2026-07-21T12:00:00.000Z",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+  });
+
+  expect(host.textContent).toContain("prj_source /source");
+  expect(host.textContent).toContain("copy-to-receiver · list from source offset #11");
+  expect(host.textContent).toContain("3 received");
+  expect(host.textContent).toContain("last event 2026-07-21T12:00:00.000Z");
 });
 
 function mountPanel() {
@@ -254,8 +475,8 @@ const processorAnnouncement: AgentUiProcessorAnnouncement = {
 };
 
 const processorPresence: AgentUiPresenceEntry = {
-  subscriptionKey: "processor:test",
-  direction: "outbound",
+  connectionKey: "processor:test",
+  connectionKind: "hosted",
   connected: true,
   processor: processorAnnouncement,
 };
@@ -263,27 +484,29 @@ const processorPresence: AgentUiPresenceEntry = {
 const emptyMetrics = {
   spark: [],
   transportRttMs: null,
-  subscriber: undefined,
+  eventConsumption: undefined,
 };
 
 function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
   return {
-    coreProcessorState: { maxOffset },
+    coreProcessorState: CoreProcessorContract.stateSchema.parse({ maxOffset }),
     runtime: {
       connections: {
-        [processorPresence.subscriptionKey]: {
-          subscriptionType: "ephemeral",
+        [processorPresence.connectionKey]: {
+          kind: "hosted",
+          subscriptionKey: processorPresence.connectionKey,
           startedAt: "2026-07-18T00:00:00.000Z",
-          cursor: maxOffset,
+          deliveredThroughOffset: maxOffset,
           lag: 0,
           batchesSent: 1,
           eventsSent: 1,
           bytesSent: 1,
-          subscriber: { processor: { announcement: processorAnnouncement } },
+          openedBy: { processor: { announcement: processorAnnouncement } },
           hasPendingDelivery: false,
         },
       },
       subscriptions: {},
+      crossPostListRetries: {},
       metrics: {
         measuredSince: "2026-07-18T00:00:00.000Z",
         reportedAt: "2026-07-18T00:00:00.000Z",

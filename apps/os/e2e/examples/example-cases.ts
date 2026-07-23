@@ -99,11 +99,12 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set(
 );
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
-  "stream-cross-post": {
-    // Project pools are reused; per-runtime paths keep every lease independent.
+  "stream-receive-events-from": {
+    // Matrix runtimes share a project; per-runtime paths keep each durable
+    // relationship and its received events isolated from sibling runtimes.
     vars: ({ marker }) => ({
-      source: `/examples/cross-post/source-${marker}`,
-      target: `/examples/cross-post/target-${marker}`,
+      source: `/examples/receive-events/source-${marker}`,
+      target: `/examples/receive-events/target-${marker}`,
     }),
     assert: (result, ctx, expect) => {
       const shaped = result as {
@@ -112,9 +113,9 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
       expect(shaped.provenance).toHaveLength(1);
-      // crossPostTo without an explicit key defaults to cross-post:<target>.
+      // receiveCrossPostsFrom without an explicit key uses the receiving path.
       expect(shaped.provenance[0]).toMatchObject({
-        subscriptionKey: `cross-post:/examples/cross-post/target-${ctx.marker}`,
+        subscriptionKey: `stream:/examples/receive-events/target-${ctx.marker}`,
       });
     },
   },
@@ -267,7 +268,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "provide-itx-expression": {
     vars: ({ marker }) => ({ note: marker, path: `/repl/expression-${marker}` }),
     assert: (result, { marker }, expect) => {
-      expect(result).toMatchObject({ mountType: "itx-expression", note: marker });
+      expect(result).toMatchObject({ mountType: "itx-call", note: marker });
       expect((result as { offset: number }).offset).toBeGreaterThan(0);
     },
   },

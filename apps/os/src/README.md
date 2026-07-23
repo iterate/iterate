@@ -215,9 +215,9 @@ codegen keeps the seeded file map in
 the seeded project worker through the worker build pipeline, and then emits
 `project/ready`. The onboarding agent is created separately and explicitly
 when its dashboard chat opens; its path alone never creates it. The config
-repo's stream carries a `cross-post:/` subscription from birth, so every
-config-repo event (including `repos/created`) is copied onto the project stream
-`/` with provenance. Streams are the coordination layer for all of this —
+repo's stream carries a `project-config-to-root` subscription from birth, so
+every config-repo event (including `repos/created`) is delivered to the project
+stream `/` with provenance. Streams are the coordination layer for all of this —
 bootstrap is events and processors, not a setup RPC.
 
 ## Events
@@ -355,21 +355,26 @@ the send-and-wait convenience.
 
 `StreamDurableObject` owns the journal (DO SQLite); its storage methods stay
 synchronous internally while the public `Stream` capability is async through
-an RpcTarget. Processors are hosted by their domain DO via
-`createStreamProcessorHost(...)` — `host.add((deps) => new SomeProcessor(deps))`
-— and receive a full public `Stream` capability, never raw DO stubs.
-Subscription handshakes are identity-only: the stream tells the host which
-`subscriptionKey` to open; the host answers with the one public
-`subscribe({ subscriptionKey, configured: true })` verb on its own stream
-capability, handing the stream a live `processEventBatch` callback (the same
-live-capability shape as itx provision). State is a fold of the journal; the
-`{offset, state}` checkpoint is a disposable cache. The domain's own guide is
+an RpcTarget. A domain Durable Object constructs its processors and one
+`StreamProcessorRunner` per processor. A thin `StreamProcessorRegistry` routes
+`wakeStreamProcessor` calls and alarms to the right runner.
+
+When a hosted-processor subscription has events to send, the source stream
+calls `wakeStreamProcessor({ subscriptionKey, processorSlug, stream })`. The
+runner's `openEventBatchCallback()` returns its committed checkpoint plus a
+live `processEventBatch` callback. The source retains that callback and sends
+ordered batches after the checkpoint. The processor, not the source, commits
+the authoritative processing cursor with its reduced state. There is no
+callback-registration call in the opposite direction.
+
+Processors receive a full public `Stream` capability, never raw Durable Object
+stubs. The domain's own guide is
 `domains/streams/README.md`; the doctrine is
 `docs/domain-objects-and-stream-processors.md`.
 
-The browser stream mirror is a second host of the same engine: the dashboard
+The browser stream database uses the same runner directly: the dashboard
 keeps a local event table plus derived tables and runs real `StreamProcessor`
-contracts in the browser host, with announcements preserved
+contracts over SQLite, with announcements preserved
 (`domains/streams/client-libraries/browser/`).
 
 ## Workers RPC types patch

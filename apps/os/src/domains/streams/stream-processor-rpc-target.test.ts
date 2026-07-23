@@ -3,9 +3,11 @@ import type { StreamEvent } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import {
   ProcessorRelayRpcTarget,
+  STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
+import { streamDeliveryAuthContext } from "../../auth.ts";
 
 describe("StreamRpcTarget", () => {
   it("relays the stream runtime LiveState property without polling runtimeState", async () => {
@@ -32,7 +34,7 @@ describe("StreamRpcTarget", () => {
     const runtimeStatePoll = vi.fn();
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
           liveState: Promise.resolve({ get, subscribe }),
           runtimeState: runtimeStatePoll,
@@ -93,7 +95,7 @@ describe("StreamRpcTarget", () => {
     Object.defineProperty(runtimeState, Symbol.dispose, { value: runtimeStateDispose });
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
           append: async () => appended,
           getEvent: async () => read,
@@ -158,7 +160,7 @@ describe("StreamRpcTarget", () => {
     });
 
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return { getEvents: async () => result } as never;
       }
     }
@@ -189,7 +191,7 @@ describe("StreamRpcTarget", () => {
     } satisfies StreamEvent;
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return {
           waitForEvent: () => (acquisitions === 1 ? firstWait.promise : Promise.resolve(event)),
@@ -233,7 +235,7 @@ describe("StreamRpcTarget", () => {
     let acquisitions = 0;
     const remoteTimeouts: number[] = [];
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return {
           waitForEvent: (input: { timeoutMs: number }) => {
@@ -281,7 +283,7 @@ describe("StreamRpcTarget", () => {
     const waitInputs: { afterOffset?: number; timeoutMs: number }[] = [];
     let headReads = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
           getMaxOffset: () => {
             headReads += 1;
@@ -333,7 +335,7 @@ describe("StreamRpcTarget", () => {
     let headReads = 0;
     let waits = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
           getMaxOffset: () => {
             headReads += 1;
@@ -370,7 +372,7 @@ describe("StreamRpcTarget", () => {
     const predicateError = new Error("predicate failed");
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { waitForEvent: () => Promise.reject(predicateError) } as never;
       }
@@ -383,7 +385,7 @@ describe("StreamRpcTarget", () => {
 
     await expect(
       stream.waitForEvent({ afterOffset: 0, predicate: () => true, timeoutMs: 30_000 }),
-    ).rejects.toBe(predicateError);
+    ).rejects.toThrow("predicate failed");
     expect(acquisitions).toBe(1);
   });
 
@@ -393,7 +395,7 @@ describe("StreamRpcTarget", () => {
     });
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { waitForEvent: () => Promise.reject(lifecycleError) } as never;
       }
@@ -414,7 +416,7 @@ describe("StreamRpcTarget", () => {
     vi.useFakeTimers();
     let acquisitions = 0;
     class TestStreamRpcTarget extends StreamRpcTarget {
-      override get durableObjectStub() {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
         acquisitions += 1;
         return { waitForEvent: () => new Promise<StreamEvent>(() => undefined) } as never;
       }
@@ -441,6 +443,58 @@ describe("StreamRpcTarget", () => {
       await waiting.catch(() => undefined);
       vi.useRealTimers();
     }
+  });
+
+  it("requires branded sender authority and the receiving stream's project", async () => {
+    const receiveCrossPostedEvents = vi.fn(async () => ({ accepted: 0, dropped: [] }));
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        return { receiveCrossPostedEvents } as never;
+      }
+    }
+    const batch = {
+      projectId: "prj_receiver",
+      path: "/source",
+      events: [],
+      streamMaxOffset: 1,
+      subscriptionKey: "test",
+      cursorChangedAtSourceOffset: 1,
+      deliveryId: "test",
+      attempt: 1,
+      configuredEvent: {
+        type: "events.iterate.com/stream/subscription-configured",
+        offset: 1,
+        createdAt: new Date(0).toISOString(),
+        path: "/source",
+        payload: {},
+      },
+    };
+
+    const forged = new TestStreamRpcTarget({
+      auth: {
+        assertCanAccessProject: vi.fn(),
+        principal: "trusted-internal",
+      } as never,
+      path: "/receiver",
+      projectId: "prj_receiver",
+    });
+    expect(() => forged.receiveCrossPostedEvents(batch as never)).toThrow(
+      "accepted only from trusted internal senders",
+    );
+
+    const branded = new TestStreamRpcTarget({
+      auth: streamDeliveryAuthContext("prj_receiver"),
+      path: "/receiver",
+      projectId: "prj_receiver",
+    });
+    expect(() =>
+      branded.receiveCrossPostedEvents({ ...batch, projectId: "prj_other" } as never),
+    ).toThrow("must come from the receiving stream's project");
+    await expect(branded.receiveCrossPostedEvents(batch as never)).resolves.toEqual({
+      accepted: 0,
+      dropped: [],
+    });
+    expect(receiveCrossPostedEvents).toHaveBeenCalledOnce();
   });
 });
 
@@ -487,24 +541,50 @@ describe("StreamProcessorRpcTarget", () => {
 });
 
 describe("ProcessorRelayRpcTarget", () => {
+  it.each(["user:test", "trusted-internal"])(
+    "rejects hosted-processor wake calls carrying only principal %s",
+    async (principal) => {
+      const wakeStreamProcessor = vi.fn(async () => ({ accepted: true as const })) as never;
+      const relay = new ProcessorRelayRpcTarget({
+        auth: { principal } as never,
+        host: () => ({
+          processor: Promise.resolve({
+            getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+            snapshot: async () => ({ offset: 0, state: {} }),
+            waitUntilProcessed: async () => undefined,
+          }),
+          wakeStreamProcessor,
+        }),
+      });
+
+      await expect(
+        relay.wakeStreamProcessor({
+          processorSlug: "test",
+          subscriptionKey: "test",
+        } as never),
+      ).rejects.toThrow("wakeStreamProcessor may be called only by trusted stream event sending");
+      expect(wakeStreamProcessor).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves an asynchronous host for processor reads and wake delivery", async () => {
-    const wakeStreamSubscriber = vi.fn(async () => ({ accepted: true as const })) as never;
+    const wakeStreamProcessor = vi.fn(async () => ({ accepted: true as const })) as never;
     const relay = new ProcessorRelayRpcTarget({
-      auth: { principal: "trusted-internal" } as never,
+      auth: streamDeliveryAuthContext("prj_test"),
       host: async () => ({
         processor: Promise.resolve({
           getRuntimeState: async () => ({ snapshot: { offset: 4, state: { running: true } } }),
           snapshot: async () => ({ offset: 4, state: { running: true } }),
           waitUntilProcessed: async () => undefined,
         }),
-        wakeStreamSubscriber,
+        wakeStreamProcessor,
       }),
     });
 
     await expect(relay.snapshot()).resolves.toEqual({ offset: 4, state: { running: true } });
     const request = { processorSlug: "sandbox", subscriptionKey: "sandbox-test" } as never;
-    await expect(relay.wakeStreamSubscriber(request)).resolves.toEqual({ accepted: true });
-    expect(wakeStreamSubscriber).toHaveBeenCalledWith(request);
+    await expect(relay.wakeStreamProcessor(request)).resolves.toEqual({ accepted: true });
+    expect(wakeStreamProcessor).toHaveBeenCalledWith(request);
   });
 
   it("disposes the transient remote processor facade after success and failure", async () => {
@@ -527,7 +607,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: processorFacade(),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -552,7 +632,7 @@ describe("ProcessorRelayRpcTarget", () => {
           snapshot: async () => ({ offset: 1, state: { configured: true } }),
           waitUntilProcessed: async () => undefined,
         }),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -583,7 +663,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -632,7 +712,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve(processor),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -661,7 +741,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -698,7 +778,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve(processor),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -731,7 +811,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -779,7 +859,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -815,7 +895,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -856,7 +936,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -902,7 +982,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -947,7 +1027,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),
@@ -976,7 +1056,7 @@ describe("ProcessorRelayRpcTarget", () => {
       auth: { principal: "trusted-internal" } as never,
       host: () => ({
         processor: Promise.resolve({}),
-        wakeStreamSubscriber: async () => {
+        wakeStreamProcessor: async () => {
           throw new Error("not used");
         },
       }),

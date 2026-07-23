@@ -30,7 +30,7 @@ Timeline (2026-07-22, UTC):
 - 18:07:31 — poison verdict on offset 70 after 3 attempts → skipped
 - 18:07:34 — third consecutive poison verdict → `MAX_CONSECUTIVE_SKIPS` →
   **parked**. Ten seconds from first failure to giving up.
-- 2026-07-23 — appended `subscription-resumed`; delivery caught up 70 → 866
+- 2026-07-23 — appended `subscription-delivery-resumed`; delivery caught up 70 → 866
   with zero failures. Receiver was fine; the outage lasted seconds.
 
 ## Direction
@@ -69,7 +69,7 @@ hours. Instead:
 
 ## Implementation log
 
-- 2026-07-23: prod `misha` remediated via `subscription-resumed` append
+- 2026-07-23: prod `misha` remediated via `subscription-delivery-resumed` append
   (`doppler run --config prd -- pnpm cli itx run --context misha -e ...`).
   Caught up 70 → 866 immediately, zero failures, confirming transience.
 - 2026-07-23: ride-out fix implemented, then reverted after discussion

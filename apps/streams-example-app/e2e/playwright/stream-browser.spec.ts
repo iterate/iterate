@@ -5,11 +5,11 @@ import { join } from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
 import { expect, test } from "./test.ts";
-import { CANONICAL_MIRROR_PROCESSORS } from "~/domains/streams/client-libraries/browser/canonical-mirror-processors.ts";
+import { BROWSER_STREAM_PROCESSORS } from "~/domains/streams/client-libraries/browser/browser-stream-processors.ts";
 import {
-  mirrorLockVersionVector,
-  streamMirrorWriterLockName,
-} from "~/domains/streams/client-libraries/browser/stream-leader.ts";
+  processorSchemaVersionKey,
+  streamDatabaseWriterLockName,
+} from "~/domains/streams/client-libraries/browser/stream-writer.ts";
 
 // Local reproduction of CI conditions (slow runner + real network to a deployed worker).
 // Example: E2E_CPU_THROTTLE=6 E2E_NET_LATENCY_MS=100 WORKER_URL=https://... pnpm playwright.
@@ -33,10 +33,10 @@ test.beforeEach(async ({ page }) => {
   }
 });
 
-// Baseline end-to-end smoke test for the simplified browser mirror: a composer append must
-// go to the server, be delivered back through the single elected subscriber, land in SQLite,
+// Baseline end-to-end smoke test for the browser database: a composer append must
+// go to the server, return through the elected writer's event callback, land in SQLite,
 // and show up through the visible-range SQL query.
-test("stream page appends through the shared browser mirror", async ({ page }) => {
+test("stream page appends through the shared browser database", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
 
@@ -206,7 +206,7 @@ test("random bulk insert creates multiple filterable event types and shows filte
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 83 = standalone birth certificate (2) + subscriber-connected + 80 random events.
+  // 83 = standalone birth certificate (2) + connection-opened + 80 random events.
   await expect(page.getByTestId("event-count")).toHaveText("83", { timeout: 30_000 });
   await expect(page.getByTestId("filter-count")).toHaveText("83 total events");
 
@@ -237,15 +237,15 @@ test("random bulk insert creates multiple filterable event types and shows filte
 // threw NoModificationAllowedError, fatally rejecting VFS creation. Every reconnect
 // re-failed the same way, so the new page showed no events and every append died, until a
 // much later reload. The patch makes the sweep best-effort; this test drives the exact
-// trigger: leave a page mid-bulk-ingest, then require the next stream to mirror and append.
-test("navigating to a new stream mid-ingest still opens the new mirror and appends", async ({
+// trigger: leave a page mid-bulk-ingest, then require the next stream to open its database and append.
+test("navigating to a new stream mid-ingest still opens the new database and appends", async ({
   page,
 }) => {
   const busyPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: busyPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
-  // Big enough that the mirror is still ingesting when we navigate away.
+  // Big enough that the browser writer is still storing events when we navigate away.
   await page.getByLabel("Count").fill("20000");
   await page.getByLabel("Batch size").fill("1000");
   await page.getByLabel("Seconds").fill("0");
@@ -268,7 +268,7 @@ test("navigating to a new stream mid-ingest still opens the new mirror and appen
 // terminated worker whose handles the browser has not released yet). The stream page's VFS
 // sweep then deterministically hits NoModificationAllowedError on removeEntry; unpatched
 // wa-sqlite turned that into "no database can open on this origin".
-test("stale OPFS temp directory with open handles does not block the mirror", async ({
+test("stale OPFS temp directory with open handles does not block the browser database", async ({
   context,
   page,
 }) => {
@@ -311,7 +311,9 @@ test("stale OPFS temp directory with open handles does not block the mirror", as
 // already has enough rows to scroll should mount at the newest rows after a reload, not at
 // local_index 0. This is separate from "follow while appending": reload reconstructs the
 // virtualizer from SQLite query results and must still settle at the tail.
-test("stream page reload starts at the bottom of an existing local mirror", async ({ page }) => {
+test("stream page reload starts at the bottom of an existing local event table", async ({
+  page,
+}) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
@@ -322,7 +324,7 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
 
-  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
+  const expectedCount = insertedCount + 3; // created + woken + connection-opened
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
@@ -335,7 +337,7 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await page.reload();
 
   // The reload tears down the old delivery connection and opens a new one, so
-  // the server appends a subscriber-disconnected + subscriber-connected pair.
+  // the server appends a connection-closed + connection-opened pair.
   const expectedCountAfterReload = expectedCount + 2;
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCountAfterReload), {
     timeout: 30_000,
@@ -344,7 +346,7 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await expect(page.locator(`[data-index='${expectedCountAfterReload - 1}']`)).toBeVisible();
 });
 
-test("event feed view starts at the bottom on first visit while replay fills the mirror", async ({
+test("event feed view starts at the bottom on first visit while replay fills the event table", async ({
   browser,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
@@ -367,14 +369,16 @@ test("event feed view starts at the bottom on first visit while replay fills the
   await expect(page.getByTestId("feed-item-count")).not.toHaveText(/^0 feed items$/, {
     timeout: 30_000,
   });
-  await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
+  await expect(page.getByTestId("stream-status")).toHaveText("receiving-events", {
+    timeout: 30_000,
+  });
   await expect.poll(() => feedDistanceFromEnd(page)).toBeLessThanOrEqual(2);
   await expect(page.getByTestId("feed-scroll-to-bottom-affordance")).toHaveCount(0);
   await freshContext.close();
 });
 
 // Guards "instant enough" first draw. This catches regressions where OPFS/wa-sqlite setup,
-// subscription, or reactive query invalidation leaves the page hydrated but visually empty.
+// event connection, or reactive query invalidation leaves the page hydrated but visually empty.
 test("first event row draws quickly", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
@@ -389,9 +393,9 @@ test("first event row draws quickly", async ({ page }) => {
 });
 
 // Proves two component-owned runtimes can point at one stream in one tab. The intended fix
-// was to rely on the same Web Locks leadership election used across tabs, so one runtime
-// writes and the other follows the shared OPFS mirror.
-test("split view can mount the same stream twice and mirror appends", async ({ page }) => {
+// was to rely on the same Web Locks writer role election used across tabs, so one runtime
+// writes and the other reads the shared OPFS database.
+test("split view can mount the same stream twice and display appends", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(
     `/split-stream?left=${encodeURIComponent(streamPath)}&right=${encodeURIComponent(streamPath)}`,
@@ -410,9 +414,9 @@ test("split view can mount the same stream twice and mirror appends", async ({ p
   await expect(eventMeta(page, type)).toHaveCount(2);
 });
 
-// Covers the original leadership requirement across browser tabs. Closing the elected writer
-// must release the lock, promote the follower, reconnect, and keep future appends live.
-test("two browser tabs update and hand off leadership after the writer closes", async ({
+// Covers the original writer role requirement across browser tabs. Closing the elected writer
+// must release the lock, promote the reader, reconnect, and keep future appends live.
+test("two browser tabs update and hand off writer role after the writer closes", async ({
   context,
   page,
 }) => {
@@ -439,24 +443,24 @@ test("two browser tabs update and hand off leadership after the writer closes", 
     expect(eventMeta(otherPage, type).first()).toBeVisible(),
   ]);
 
-  const leader = (await isLeader(page)) ? page : otherPage;
-  const follower = leader === page ? otherPage : page;
-  await expect(follower.getByTestId("subscription-status")).toContainText(/follower|leader/);
-  await leader.close();
-  await expect(follower.getByTestId("subscription-status")).toHaveText("leader");
+  const writer = (await isWriter(page)) ? page : otherPage;
+  const reader = writer === page ? otherPage : page;
+  await expect(reader.getByTestId("database-role")).toContainText(/reader|writer/);
+  await writer.close();
+  await expect(reader.getByTestId("database-role")).toHaveText("writer");
 
   const afterHandoffType = "events.iterate.com/debug/playwright-after-handoff";
-  await appendComposerEvent(follower, {
+  await appendComposerEvent(reader, {
     type: afterHandoffType,
     payload: { streamPath, value: crypto.randomUUID() },
   });
-  await expect(eventMeta(follower, afterHandoffType).first()).toBeVisible();
+  await expect(eventMeta(reader, afterHandoffType).first()).toBeVisible();
 });
 
 // Deploy/schema-change regression. This reproduces the browser symptom where normal tabs
-// got stuck on `connected`, `follower`, `Events: 0` after a deploy, while incognito worked.
+// got stuck on `connected`, `reader`, `Events: 0` after a deploy, while incognito worked.
 // Old tabs can keep holding the previous unversioned Web Lock after new JS deploys and
-// migrates the shared OPFS DB. A fresh runtime must not become a permanent follower behind
+// migrates the shared OPFS DB. A fresh runtime must not become a permanent reader behind
 // that stale lock; its versioned lock should let it take over and replay server history.
 test("fresh runtime takes over when a legacy writer lock is still held", async ({
   context,
@@ -468,35 +472,35 @@ test("fresh runtime takes over when a legacy writer lock is still held", async (
   await holdLegacyWriterLock(legacyLockHolder, streamPath);
 
   await page.goto(streamRoute({ path: streamPath }));
-  await expect(page.getByTestId("subscription-status")).toHaveText("leader");
-  // 3 = the standalone birth certificate + this page's own subscriber-connected.
+  await expect(page.getByTestId("database-role")).toHaveText("writer");
+  // 3 = the standalone birth certificate + this page's own connection-opened.
   await expect(page.getByTestId("event-count")).toHaveText("3");
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await legacyLockHolder.close();
 });
 
-// If this tab is only a follower and its local SQLite mirror is empty, the page must say so
+// If this tab is only a reader and its local SQLite database is empty, the page must say so
 // explicitly. This is the UI regression test for "no swallowed errors": this state may not
 // throw in the current tab, so the feed itself must explain why rows are not loading.
-test("empty follower state is visible in the stream UI", async ({ context, page }) => {
+test("empty reader state is visible in the stream UI", async ({ context, page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   const lockHolder = await context.newPage();
   await lockHolder.goto("/blank");
   await holdCurrentWriterLock(lockHolder, streamPath);
 
   await page.goto(streamRoute({ path: streamPath }));
-  await expect(page.getByTestId("subscription-status")).toHaveText("follower");
+  await expect(page.getByTestId("database-role")).toHaveText("reader");
   await expect(page.getByTestId("event-count")).toHaveText("0");
   await expect(page.getByTestId("stream-warning")).toContainText(
-    "Follower with empty SQLite mirror",
+    "Reader with empty local event copy",
   );
 
   await lockHolder.close();
 });
 
 // Split view should not imply any global singleton. Two different streams mounted side by
-// side each own their stream runtime, database file, and leadership election.
+// side each own their stream runtime, database file, and writer role election.
 test("split view keeps different streams isolated", async ({ page }) => {
   const leftPath = `/e2e/${crypto.randomUUID()}/left`;
   const rightPath = `/e2e/${crypto.randomUUID()}/right`;
@@ -506,8 +510,8 @@ test("split view keeps different streams isolated", async ({ page }) => {
 
   const leftPane = splitPane(page, leftPath);
   const rightPane = splitPane(page, rightPath);
-  await expect(leftPane.getByTestId("subscription-status")).toHaveText("leader");
-  await expect(rightPane.getByTestId("subscription-status")).toHaveText("leader");
+  await expect(leftPane.getByTestId("database-role")).toHaveText("writer");
+  await expect(rightPane.getByTestId("database-role")).toHaveText("writer");
 
   const leftType = "events.iterate.com/debug/playwright-left-stream";
   const rightType = "events.iterate.com/debug/playwright-right-stream";
@@ -630,7 +634,7 @@ test("scroll to bottom affordance counts new events while away from tail", async
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 83 = standalone birth certificate (2) + subscriber-connected + 80 random events.
+  // 83 = standalone birth certificate (2) + connection-opened + 80 random events.
   await expect(page.getByTestId("event-count")).toHaveText("83", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
@@ -665,7 +669,7 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 103 = standalone birth certificate (2) + subscriber-connected + 100 random events.
+  // 103 = standalone birth certificate (2) + connection-opened + 100 random events.
   await expect(page.getByTestId("event-count")).toHaveText("103", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
@@ -719,7 +723,7 @@ test("expanding the tail event row at stream end stays above the composer", asyn
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 123 = standalone birth certificate (2) + subscriber-connected + 120 random events.
+  // 123 = standalone birth certificate (2) + connection-opened + 120 random events.
   await expect(page.getByTestId("event-count")).toHaveText("123", { timeout: 30_000 });
   await expectAtStreamEnd(page);
 
@@ -760,7 +764,7 @@ test("event row open and closed state survives virtual row unmounts", async ({ p
   await page.getByLabel("Seconds").fill("0");
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
-  // 163 = standalone birth certificate (2) + subscriber-connected + 160 random events.
+  // 163 = standalone birth certificate (2) + connection-opened + 160 random events.
   await expect(page.getByTestId("event-count")).toHaveText("163", { timeout: 30_000 });
 
   await page.getByRole("button", { name: "Scroll to top" }).click();
@@ -786,9 +790,9 @@ test("event row open and closed state survives virtual row unmounts", async ({ p
 });
 
 // Exercises disposal when one of two same-stream panes changes path. This prevents stale
-// component-owned runtimes from keeping old WebSocket subscriptions or Web Lock candidates
+// component-owned runtimes from keeping old WebSocket connections or Web Lock candidates
 // alive after React unmounts a pane.
-test("split view disposes a replaced same-stream pane and keeps leadership", async ({ page }) => {
+test("split view disposes a replaced same-stream pane and keeps writer role", async ({ page }) => {
   const sharedPath = `/e2e/${crypto.randomUUID()}/shared`;
   const nextPath = `/e2e/${crypto.randomUUID()}/next`;
   await page.goto(
@@ -799,15 +803,15 @@ test("split view disposes a replaced same-stream pane and keeps leadership", asy
     page.locator(`[data-stream-path='${cssString(e2eStreamPath(sharedPath))}']`),
   ).toHaveCount(2);
   // Two views of the same (path, processor) now SHARE one runtime/connection (within-tab
-  // dedup), so both panes reflect that single runtime as the leader — no intra-tab follower.
+  // dedup), so both panes reflect that single runtime as the writer — no intra-tab reader.
   await expect
     .poll(async () =>
-      (await page.getByTestId("subscription-status").allInnerTexts())
+      (await page.getByTestId("database-role").allInnerTexts())
         .map((status) => status.toLowerCase())
         .sort()
         .join(","),
     )
-    .toBe("leader,leader");
+    .toBe("writer,writer");
 
   await page.getByLabel("Left stream").fill(nextPath);
   await page.getByRole("button", { name: "Go to streams" }).click();
@@ -816,8 +820,8 @@ test("split view disposes a replaced same-stream pane and keeps leadership", asy
   const nextPane = splitPane(page, nextPath);
   await expect(sharedPane).toHaveCount(1);
   await expect(nextPane).toHaveCount(1);
-  await expect(sharedPane.getByTestId("subscription-status")).toHaveText("leader");
-  await expect(nextPane.getByTestId("subscription-status")).toHaveText("leader");
+  await expect(sharedPane.getByTestId("database-role")).toHaveText("writer");
+  await expect(nextPane.getByTestId("database-role")).toHaveText("writer");
 
   const sharedType = "events.iterate.com/debug/playwright-shared-after-dispose";
   const nextType = "events.iterate.com/debug/playwright-next-after-dispose";
@@ -857,7 +861,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await page.getByRole("button", { name: "Stream random events" }).click();
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
 
-  const expectedCount = insertedCount + 3; // created + woken + subscriber-connected
+  const expectedCount = insertedCount + 3; // created + woken + connection-opened
   await expect(page.getByTestId("event-count")).toHaveText(String(expectedCount), {
     timeout: 30_000,
   });
@@ -884,7 +888,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await expect(page.locator(`[data-index='${expectedCount - 1}']`)).toBeVisible();
 });
 
-// Verifies the raw SQLite export feature end to end. The downloaded browser OPFS mirror must
+// Verifies the raw SQLite export feature end to end. The downloaded browser OPFS database must
 // be a real SQLite database that can be queried from disk, not just a blob with the right name.
 test("downloaded SQLite file can be queried from disk", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
@@ -913,18 +917,20 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
   }
 });
 
-// Reconnection test: killing the Durable Object should reconnect the browser subscriber and
-// append the server's woken event instead of leaving the mirror stuck on a dead WebSocket.
+// Reconnection test: killing the Durable Object should reopen the browser's event callback and
+// append the server's woken event instead of leaving the browser writer stuck on a dead WebSocket.
 test("kill reconnects and appends a new woken event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
-  // 3 = the standalone birth certificate + this page's own subscriber-connected.
+  // 3 = the standalone birth certificate + this page's own connection-opened.
   await expect(page.getByTestId("event-count")).toHaveText("3");
 
   await page.getByRole("button", { name: "Kill" }).click();
-  await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
+  await expect(page.getByTestId("stream-status")).toHaveText("receiving-events", {
+    timeout: 30_000,
+  });
   // The killed incarnation took every connection with it: the reboot appends a
-  // fresh woken fact and the browser's reconnect a fresh subscriber-connected.
+  // fresh woken fact and the browser's reconnect a fresh connection-opened.
   await expect(page.getByTestId("event-count")).toHaveText("5", { timeout: 30_000 });
   await expect(eventMeta(page, "events.iterate.com/stream/woken")).toHaveCount(2);
 });
@@ -941,7 +947,7 @@ test("killing the stream DO mid-blast loses no appends and duplicates none", asy
   // serially everywhere. The fixme blamed the retry budget; the budget was
   // never consulted. The browser's WebSocket terminates at the WORKER, so a
   // kill mid-append rejects through a perfectly healthy session carrying the
-  // DO's abort reason as a plain `Error("kill requested")` — and the mirror's
+  // DO's abort reason as a plain `Error("kill requested")` — and the browser writer's
   // transient-classifier, which only knew socket shapes, surfaced the first
   // such rejection instead of retrying. (Serial runs mostly dodge the window;
   // contention widens it.) Fixed by the stream-unavailable error contract:
@@ -972,7 +978,7 @@ test("killing the stream DO mid-blast loses no appends and duplicates none", asy
   await expect(page.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
 
   // Exactly `insertedCount` generated events: none lost, none duplicated.
-  // Control events (created/woken/subscriber-*) vary with the kills, so count
+  // Control events (created/woken/connection-*) vary with the kills, so count
   // only the generated types via the filter dropdown.
   await expect
     .poll(
@@ -988,10 +994,10 @@ test("killing the stream DO mid-blast loses no appends and duplicates none", asy
     .toBe(insertedCount);
 });
 
-// Same guarantee from a FOLLOWER tab: appends ride the follower's own connection (no
-// leadership required), survive a mid-blast DO kill, and both tabs' mirrors converge on
+// Same guarantee from a READER tab: appends ride the reader's own connection (no
+// writer role required), survive a mid-blast DO kill, and both tabs' databases contain
 // the exact same count.
-test("two tabs: follower blast survives a DO kill and both mirrors converge", async ({
+test("two tabs: reader blast survives a DO kill and both databases contain every event", async ({
   context,
   page,
 }) => {
@@ -1006,21 +1012,21 @@ test("two tabs: follower blast survives a DO kill and both mirrors converge", as
     expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
   ]);
 
-  const leader = (await isLeader(page)) ? page : otherPage;
-  const follower = leader === page ? otherPage : page;
-  await expect(follower.getByTestId("subscription-status")).toContainText(/follower|leader/);
+  const writer = (await isWriter(page)) ? page : otherPage;
+  const reader = writer === page ? otherPage : page;
+  await expect(reader.getByTestId("database-role")).toContainText(/reader|writer/);
 
   const insertedCount = 2000;
-  await follower.getByLabel("Count").fill(String(insertedCount));
-  await follower.getByLabel("Batch size").fill("50");
-  await follower.getByLabel("Seconds").fill("3");
-  await follower.getByRole("button", { name: "Stream random events" }).click();
-  await expect(follower.getByTestId("insert-state")).toHaveText("inserting");
+  await reader.getByLabel("Count").fill(String(insertedCount));
+  await reader.getByLabel("Batch size").fill("50");
+  await reader.getByLabel("Seconds").fill("3");
+  await reader.getByRole("button", { name: "Stream random events" }).click();
+  await expect(reader.getByTestId("insert-state")).toHaveText("inserting");
 
-  await leader.waitForTimeout(500);
-  await leader.getByRole("button", { name: "Kill" }).click();
+  await writer.waitForTimeout(500);
+  await writer.getByRole("button", { name: "Kill" }).click();
 
-  await expect(follower.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
+  await expect(reader.getByTestId("insert-state")).toHaveText("done", { timeout: 60_000 });
 
   const generatedCount = (scope: Page) =>
     scope.getByLabel("Event type filter").evaluate((element) => {
@@ -1029,15 +1035,15 @@ test("two tabs: follower blast survives a DO kill and both mirrors converge", as
         .filter((option) => option.value.startsWith("events.iterate.com/random/"))
         .reduce((sum, option) => sum + Number(/\((\d+)\)$/.exec(option.text)?.[1] ?? 0), 0);
     });
-  await expect.poll(() => generatedCount(leader), { timeout: 60_000 }).toBe(insertedCount);
-  await expect.poll(() => generatedCount(follower), { timeout: 60_000 }).toBe(insertedCount);
+  await expect.poll(() => generatedCount(writer), { timeout: 60_000 }).toBe(insertedCount);
+  await expect.poll(() => generatedCount(reader), { timeout: 60_000 }).toBe(insertedCount);
 });
 
-// A cold mirror far behind the head must PULL history (paged getEvents, client-paced)
-// instead of letting the one-directional subscription blast the whole backlog at it —
+// A cold local copy far behind the source head must page through history with getEvents()
+// before it opens the callback for new events. That client pacing prevents
 // that's the flow-control fix for the 1M-replay memory blowup. This pins the behavior:
 // a fresh browser context opening a stream thousands of events deep catches up exactly
-// (no loss, no duplication) and ends live-subscribed.
+// (no loss, no duplication) and ends receiving new events.
 test("cold open of a deep stream pull-pages history and converges exactly", async ({ browser }) => {
   const seedContext = await browser.newContext();
   const seedPage = await seedContext.newPage();
@@ -1059,7 +1065,7 @@ test("cold open of a deep stream pull-pages history and converges exactly", asyn
   const consoleLines: string[] = [];
   coldPage.on("console", (message) => consoleLines.push(message.text()));
   await coldPage.goto(streamRoute({ path: streamPath }));
-  await expect(coldPage.getByTestId("stream-status")).toHaveText("subscribed", {
+  await expect(coldPage.getByTestId("stream-status")).toHaveText("receiving-events", {
     timeout: 60_000,
   });
   await expect
@@ -1074,16 +1080,16 @@ test("cold open of a deep stream pull-pages history and converges exactly", asyn
       { timeout: 120_000 },
     )
     .toBe(insertedCount);
-  // The catch-up must have gone through the pull lane, not the subscription blast.
+  // The client must page through durable history before opening its event callback.
   expect(
     consoleLines.some((line) =>
-      line.includes("durable historical offsets before opening the live subscription"),
+      line.includes("durable historical offsets before opening the event callback"),
     ),
   ).toBe(true);
   await coldContext.close();
 });
 
-// Catches stale local OPFS mirrors after server reset. This is the deployed-worker race that
+// Catches stale local OPFS databases after server reset. This is the deployed-worker race that
 // led to old local rows surviving; the browser now discards impossible local state and shows
 // the fresh server stream.
 test("reset discards stale local rows and shows a fresh stream", async ({ page }) => {
@@ -1100,7 +1106,9 @@ test("reset discards stale local rows and shows a fresh stream", async ({ page }
   await expect(page.getByTestId("event-count")).toHaveText("4");
 
   await page.getByRole("button", { name: "Reset", exact: true }).click();
-  await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
+  await expect(page.getByTestId("stream-status")).toHaveText("receiving-events", {
+    timeout: 30_000,
+  });
   // The wiped stream births fresh (2 events) and this page reconnects (+1).
   await expect(page.getByTestId("event-count")).toHaveText("3", { timeout: 30_000 });
   await expect(eventMeta(page, type)).toHaveCount(0);
@@ -1207,9 +1215,9 @@ function splitPane(page: Page, streamPath: string) {
   return page.locator(`[data-stream-path='${cssString(e2eStreamPath(streamPath))}']`);
 }
 
-async function isLeader(page: Page) {
-  await expect(page.getByTestId("subscription-status")).toContainText(/leader|follower/);
-  return (await page.getByTestId("subscription-status").innerText()) === "leader";
+async function isWriter(page: Page) {
+  await expect(page.getByTestId("database-role")).toContainText(/writer|reader/);
+  return (await page.getByTestId("database-role").innerText()) === "writer";
 }
 
 async function holdLegacyWriterLock(page: Page, streamPath: string) {
@@ -1224,13 +1232,13 @@ async function holdLegacyWriterLock(page: Page, streamPath: string) {
 }
 
 async function holdCurrentWriterLock(page: Page, streamPath: string) {
-  const lockName = streamMirrorWriterLockName({
+  const lockName = streamDatabaseWriterLockName({
     projectId: "default",
     streamPath,
-    versionVector: mirrorLockVersionVector(CANONICAL_MIRROR_PROCESSORS),
+    processorSchemaVersionKey: processorSchemaVersionKey(BROWSER_STREAM_PROCESSORS),
   });
   await page.evaluate(async (name) => {
-    // Derive this from the same canonical processor set as the live mirror. A
+    // Derive this from the same processor set as the live browser database. A
     // stale lock name makes the test vacuous because the page elects itself.
     await new Promise<void>((resolve) => {
       void navigator.locks.request(name, async () => {

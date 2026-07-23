@@ -437,8 +437,8 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-response-chunk": {
       description:
         "One streamed chunk received from the transport, verbatim. Ephemeral: it reaches " +
-        "ephemeral subscriptions (browser feed, TUI) but is excluded from default reads, never " +
-        "delivered to durable subscribers, and evictable — the durable truth is the assistant " +
+        "open browser/TUI connections but is excluded from default reads and durable subscriptions, " +
+        "and may be evicted — the durable truth is the assistant " +
         "context item / llm-request-settled pair.",
       // FORCIBLY EPHEMERAL: the contract, not the append site, decides.
       // Every append/parse lane built from this definition defaults the
@@ -548,7 +548,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/capability-host/script-run-requested",
     "events.iterate.com/capability-host/script-run-settled",
     // Every error on the stream — the processor's own emissions, the runner's
-    // poison skips, anything else — is transcribed into model-visible context.
+    // repeatedly failing events that were skipped, anything else — is transcribed into model-visible context.
     "events.iterate.com/stream/error-occurred",
     // Recovery relies on the eventless at-head pass, not consumption of the
     // platform revival fact, to find and re-run orphaned work after eviction.

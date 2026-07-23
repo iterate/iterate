@@ -165,27 +165,36 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("installs processor wakes and the narrow collection push in the same batch", () => {
+  test("appends processor wake subscriptions and the narrow collection cross-post in the same batch", () => {
     const subscriptions = defaultsFor("/agents/demo").events.filter(
       (event) => event.type === "events.iterate.com/stream/subscription-configured",
     );
     expect(
       subscriptions.flatMap((event) =>
-        event.payload.delivery.mode === "wake" ? [event.payload.delivery.processorSlug] : [],
+        event.payload.receiver.action === "processor-wake"
+          ? [event.payload.receiver.processorSlug]
+          : [],
       ),
     ).toEqual(["agent", "capability-host"]);
     expect(
-      subscriptions.find((event) => event.payload.delivery.mode === "push")?.payload,
+      subscriptions.find((event) => event.payload.receiver.action === "cross-post")?.payload,
     ).toMatchObject({
       subscriptionKey: "agent-collection",
-      deliver: "all",
-      selector: {
+      filter: {
         eventTypes: [
           "events.iterate.com/agent/created",
           "events.iterate.com/agent/summary-updated",
         ],
       },
-      delivery: { mode: "push", expression: ["agents", "processEvent"] },
+      receiver: {
+        action: "cross-post",
+        receivingStreamPath: "/agents",
+        delivery: {
+          start: "beginning",
+          includeEphemeral: false,
+          onFailingEvent: "halt",
+        },
+      },
     });
   });
 

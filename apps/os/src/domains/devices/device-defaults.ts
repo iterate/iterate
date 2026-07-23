@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
 
 /** The immutable `device/created` enrollment birth certificate payload. */
@@ -23,7 +23,7 @@ export function deviceCreationEvents(input: {
       idempotencyKey: `device/created:${projectId}:${deviceId}`,
       payload,
     }),
-    buildDurableObjectProcessorSubscriptionConfiguredEvent({
+    buildHostedProcessorSubscriptionConfiguredEvent({
       durableObjectName,
       idempotencyKey: `stream/subscription-configured:${durableObjectName}#${DeviceProcessorContract.slug}`,
       processor: ["devices", ["get", deviceId], "processor"],

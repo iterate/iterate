@@ -14,7 +14,7 @@ const payload = {
 } satisfies DeviceCreatePayload;
 
 describe("deviceCreationEvents", () => {
-  test("builds the certificate and processor subscription with payload-free keys", () => {
+  test("builds the certificate and hosted-processor subscription with payload-free keys", () => {
     const first = deviceCreationEvents({
       deviceId: "device-1",
       payload,

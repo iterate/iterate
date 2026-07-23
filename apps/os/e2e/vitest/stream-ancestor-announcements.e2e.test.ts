@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { internalStreamId } from "../../src/domains/streams/stream-delivery-utils.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
@@ -34,9 +35,15 @@ test("a newborn stream announces itself to every ancestor", async () => {
   );
   const onRoot = await root.getEvent({ idempotencyKey: announcementKey("/", childPath) });
   expect(onRoot?.payload).toEqual({ childPath });
+  await expect(
+    root.append({
+      type: "events.iterate.test/cannot-impersonate-child-announcement",
+      idempotencyKey: announcementKey("/", childPath),
+    }),
+  ).rejects.toThrow(/iterate-internal idempotency keys are platform-authored/);
 });
 
-test("a lost ancestor announcement heals on the stream's next wake", async () => {
+test("a failed ancestor announcement retries on the child stream's next append", async () => {
   const marker = crypto.randomUUID();
   const childPath = `/announce-heal-${marker}/child`;
 
@@ -72,17 +79,19 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
     await root.append({ type: "events.iterate.com/stream/resumed", payload: {} });
   }
 
-  // Next incarnation: `woken` re-announces. Without the re-announce-on-wake
-  // behavior the stream stays orphaned forever (the prd incident). kill()
-  // aborts its own incarnation, so the RPC itself always rejects.
-  await child.kill().catch(() => undefined);
-  await child.getEvents({ limit: 1 });
+  // The first failed background call must not mark this incarnation as done.
+  // Another ordinary append re-runs the level check and retries the same
+  // idempotent announcement; an eviction is not required for repair.
+  await child.append({
+    type: "events.iterate.test/announce-retry-probe",
+    payload: { marker },
+  });
 
   await waitForCondition(
     async () =>
       (await root.getEvent({ idempotencyKey: announcementKey("/", childPath) })) !== undefined,
     {
-      description: `root child-stream-created announcement for ${childPath} after re-wake`,
+      description: `root child-stream-created announcement for ${childPath} after another append`,
       timeoutMs: 10_000,
     },
   );
@@ -98,8 +107,8 @@ test("a lost ancestor announcement heals on the stream's next wake", async () =>
 // 1. A newborn stream announces itself to EVERY ancestor, root included.
 // 2. An announcement lost in flight — the 2026-07-09 prd incident: a deploy
 //    rollover recycled the isolate mid birth turn, orphaning a Telegram
-//    connection stream and its chat stream — heals on the stream's next wake,
-//    because every `woken` fact re-announces with idempotent appends.
+//    connection stream and its chat stream — remains owed and retries on the
+//    next append (and also on a fresh incarnation's `woken` append).
 
 const announcementKey = (ancestorPath: string, childPath: string) =>
-  `child-stream-created:${ancestorPath}:${childPath}`;
+  internalStreamId("child-stream-created", ancestorPath, childPath);

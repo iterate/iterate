@@ -1,35 +1,37 @@
 import { z } from "zod";
 
+/**
+ * Maximum number of stream-to-stream copies retained in one event's provenance.
+ * Cycles normally stop a chain earlier; this bounds acyclic graphs and the
+ * serialized event growth they can produce.
+ */
+export const MAX_CROSS_POSTED_FROM_HOPS = 32;
+
 /** Append input before the stream assigns offset and timestamp. */
-export const StreamEventInput = z.object({
+export const StreamEventInput = z.strictObject({
   type: z.string(),
   payload: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  // Deliberately NOT strict: committed rows are re-parsed through this schema
-  // on every read (stream-storage.ts), so a strict envelope would poison
-  // every stream holding an event with a retired source shape (e.g. the
-  // pre-chain `crossPost` object). Unknown keys strip on read; the row is
-  // untouched.
   source: z
-    .object({
-      // Stamped by the StreamProcessor append lanes: which processor appended
+    .strictObject({
+      // Stamped by the StreamProcessor append methods: which processor appended
       // this event, and — for per-event side effects — while processing which
       // event. `stream` is the processor's home stream (where `whileProcessing`
       // offsets resolve), recorded absolutely so the stamp stays meaningful on
-      // rows appended cross-stream and on cross-posted copies. The stamp is a
+      // rows appended cross-stream and on copies produced by a subscription. The stamp is a
       // claim, not authentication: same trust model as idempotency keys.
-      // Deliberately not strict (see the envelope comment above): a retired
-      // stamp field must strip on read, not poison the row.
       processor: z
-        .object({
+        .strictObject({
           slug: z.string(),
           version: z.string(),
-          stream: z.object({
+          stream: z.strictObject({
             path: z.string().trim().min(1),
             projectId: z.string().trim().min(1).nullable(),
+            /** Exact lifetime of the processor's home stream. */
+            streamId: z.uuid(),
           }),
           whileProcessing: z
-            .object({
+            .strictObject({
               offset: z.number().int().nonnegative(),
               type: z.string().trim().min(1),
             })
@@ -38,19 +40,24 @@ export const StreamEventInput = z.object({
         .optional(),
       crossPostedFrom: z
         .array(
-          z
-            .object({
-              /** The push subscription (on the SOURCE stream) that carried this hop. */
-              subscriptionKey: z.string().trim().min(1),
-              createdAt: z.string(),
-              offset: z.number().int().nonnegative(),
-              path: z.string().trim().min(1),
-              projectId: z.string().trim().min(1).nullable(),
-              type: z.string().trim().min(1),
-            })
-            .strict(),
+          z.strictObject({
+            /** The source stream's subscription that copied this event. */
+            subscriptionKey: z.string().trim().min(1),
+            /** Random identity assigned when that source stream's storage was created. */
+            streamId: z.uuid(),
+            /** Creation time of that source stream, used to order destructive recreations. */
+            streamCreatedAt: z.string().trim().min(1),
+            /** Configure or cursor-set event that started this delivered copy. */
+            cursorChangedAtSourceOffset: z.number().int().positive(),
+            createdAt: z.string(),
+            offset: z.number().int().nonnegative(),
+            path: z.string().trim().min(1),
+            projectId: z.string().trim().min(1).nullable(),
+            type: z.string().trim().min(1),
+          }),
         )
         .min(1)
+        .max(MAX_CROSS_POSTED_FROM_HOPS)
         .optional(),
     })
     .optional(),
@@ -60,9 +67,9 @@ export const StreamEventInput = z.object({
    * any event, but EXCLUDED from range reads unless explicitly requested
    * (`includeEphemeral: true`; point reads by offset or idempotency key
    * always return them). Durable subscriptions exclude them by default;
-   * push/webhook subscriptions may explicitly set `includeEphemeral: true`,
-   * while wake processors can never opt in. Ephemeral subscriptions (`subscribe()`)
-   * receive them only when appended after that exact subscription opens;
+   * cross-post, ITX-call, and webhook subscriptions may explicitly set
+   * `includeEphemeral: true`, while hosted processors can never opt in. Session connections (`openConnection()`)
+   * receive them only when appended after that exact connection opens;
    * historical ephemeral rows are never replayed. The stream may EVICT their
    * rows in the future (memory pressure, DO startup sweeps), so nothing
    * durable may ever depend on one: use them for transient signals whose
@@ -101,12 +108,12 @@ export const StreamListItem = z.object({
  * metadata, provenance source, and idempotency key — everything before the
  * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
  * second-class row: excluded from range reads unless `includeEphemeral`,
- * excluded from durable delivery unless a push/webhook explicitly opts in, and evictable —
+ * excluded from durable delivery unless a cross-post, ITX-call, or webhook subscription opts in, and evictable —
  * for transient signals (LLM streaming chunks) whose durable truth lands as
  * its own event. */
 export type StreamEventInput = z.infer<typeof StreamEventInput>;
 /** One committed event on a durable stream: type, JSON payload, offset,
- * idempotency key, and provenance (processor stamp / cross-post chain), plus
+ * idempotency key, and provenance (processor stamp / source-stream chain), plus
  * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
  * second-class row (see `StreamEventInput`). */
 export type StreamEvent = z.infer<typeof StreamEvent>;

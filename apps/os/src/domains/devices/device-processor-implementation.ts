@@ -18,7 +18,7 @@ import {
  * root stream (the catalog the project processor lists devices from) and
  * configures a notification-intent subscription there, so every project-level
  * `notification/requested` intent is copied onto this device stream.
- * `push-token-updated` re-arms that subscription (re-enrollment also clears a
+ * `push-token-updated` re-arms that rule (re-enrollment also clears a
  * standing revocation); `device/revoked` removes it.
  *
  * A push obligation opens when a `device/notification-requested` (direct) or
@@ -95,8 +95,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
               idempotencyKey: this.idempotencyKey("catalog-created", event),
               payload: event.payload,
             },
-            notificationIntentCrossPost({
-              idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+            notificationIntentSubscriptionEvent({
+              idempotencyKey: this.idempotencyKey("notification-intent-subscription", event),
               path: this.path,
             }),
           ),
@@ -106,8 +106,8 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         blockProcessorWhile(() =>
           appendTo(
             "/",
-            notificationIntentCrossPost({
-              idempotencyKey: this.idempotencyKey("notification-intent-cross-post", event),
+            notificationIntentSubscriptionEvent({
+              idempotencyKey: this.idempotencyKey("notification-intent-subscription", event),
               path: this.path,
             }),
           ),
@@ -117,8 +117,11 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         blockProcessorWhile(() =>
           appendTo("/", {
             type: "events.iterate.com/stream/subscription-removed",
-            idempotencyKey: this.idempotencyKey("notification-intent-cross-post-removed", event),
-            payload: { subscriptionKey: `notification-intent:${this.path}` },
+            idempotencyKey: this.idempotencyKey("notification-intent-subscription-removed", event),
+            payload: {
+              subscriptionKey: `notification-intent:${this.path}`,
+              reason: "requested",
+            },
           }),
         );
         break;
@@ -575,24 +578,28 @@ type DeviceProcessorDeps = {
 // -----------------------------------------------------------------------------
 
 /**
- * The notification-intent subscription on the project root stream: copies
+ * The notification-intent subscription on the project root stream: sends
  * every project-level `notification/requested` intent onto this device's
  * stream, where it reduces into a push obligation. Keyed per device path, so
- * created/updated re-arms converge on one subscription.
+ * created/updated re-arms converge on one rule.
  */
-function notificationIntentCrossPost(input: { idempotencyKey: string; path: string }) {
+function notificationIntentSubscriptionEvent(input: { idempotencyKey: string; path: string }) {
   return {
     type: "events.iterate.com/stream/subscription-configured" as const,
     idempotencyKey: input.idempotencyKey,
     payload: {
       subscriptionKey: `notification-intent:${input.path}`,
-      description: `Copies project notification intents to ${input.path} for device-owned delivery.`,
-      selector: { eventTypes: ["events.iterate.com/notification/requested"] },
-      delivery: {
-        mode: "push" as const,
-        expression: ["streams", ["get", input.path], "acceptCrossPost"],
+      description: `Delivers project notification intents to ${input.path} for device-owned delivery.`,
+      filter: { eventTypes: ["events.iterate.com/notification/requested"] },
+      receiver: {
+        action: "cross-post" as const,
+        receivingStreamPath: input.path,
+        delivery: {
+          start: "now" as const,
+          onFailingEvent: "halt" as const,
+          includeEphemeral: false,
+        },
       },
-      deliver: "new" as const,
     },
   };
 }

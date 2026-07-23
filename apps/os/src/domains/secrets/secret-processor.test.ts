@@ -57,7 +57,11 @@ function makeSecretHarness(substrate?: HarnessSubstrate) {
   if (substrate === undefined) {
     const clock = { now: 1_000_000 };
     const network = new MemoryStreamNetwork(() => clock.now);
-    substrate = { clock, stream: network.get(SECRET_PATH), progress: makeMemoryProgressStore() };
+    substrate = {
+      clock,
+      stream: network.get(SECRET_PATH),
+      progress: makeMemoryProgressStore(SecretProcessorContract),
+    };
   }
   const harness = makeProcessorHarness<SecretProcessorContract>({
     createProcessor: (deps) => new SecretProcessor(deps),
@@ -106,7 +110,7 @@ describe("SecretProcessor birth", () => {
     expect(h.catalog()).toMatchObject([
       {
         type: "events.iterate.com/secret/created",
-        idempotencyKey: "secret/catalog-created@/secrets/example:1",
+        idempotencyKey: `secret/catalog-created@/secrets/example:1@source-stream:${h.stream.streamId}`,
         payload: { config: { visibility: "write-only" } },
       },
     ]);
@@ -277,7 +281,9 @@ describe("SecretProcessor recovery", () => {
     h.crash();
     await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
     expect(h.catalog()).toMatchObject([
-      { idempotencyKey: "secret/catalog-created@/secrets/example:1" },
+      {
+        idempotencyKey: `secret/catalog-created@/secrets/example:1@source-stream:${h.stream.streamId}`,
+      },
     ]);
     expect(h.state().birthCertificate).not.toBeNull();
   });
@@ -313,7 +319,7 @@ describe("SecretProcessor recovery", () => {
     const replay = makeSecretHarness({
       clock: h.clock,
       stream: h.stream,
-      progress: makeMemoryProgressStore(),
+      progress: makeMemoryProgressStore(SecretProcessorContract),
     });
     await replay.settle(); // replays every event; a wedge would throw here
 

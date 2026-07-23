@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamSubscriberWakeRequest, StreamSubscriberWakeResponse } from "iterate/processors";
+import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
@@ -115,8 +115,8 @@ export class SecretDurableObject extends DurableObject<Env> {
   // public stream appends remain concurrent and are handled by the assertion.
   #updates: Promise<void> = Promise.resolve();
 
-  wakeStreamSubscriber(args: StreamSubscriberWakeRequest): Promise<StreamSubscriberWakeResponse> {
-    return this.#registry.wakeStreamSubscriber(args);
+  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
+    return this.#registry.wakeStreamProcessor(args);
   }
 
   /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
@@ -816,7 +816,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   async #commitRefreshedMaterial(material: unknown, snapshot: SecretSnapshot): Promise<void> {
     let current = snapshot;
     for (let attempt = 1; attempt <= MAX_MATERIAL_APPEND_ATTEMPTS; attempt += 1) {
-      // Offset-only stream facts (subscriber connection telemetry, wake facts,
+      // Offset-only stream facts (callback-connection telemetry, processor wake facts,
       // or concurrent audit events) may advance the raw stream while a token
       // is being minted. They do not invalidate the refresh. A real secret
       // update does: updatedOffset covers material, egress, and refresh policy.

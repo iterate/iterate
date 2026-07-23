@@ -7,8 +7,8 @@
  * The data layer is the SAME client stack the web app renders from: the
  * one-socket session keeper (`iterate/client`, pointed at the deployment via
  * `configureIterateSession`) and the shared React hooks (`iterate/sdk/itx/react` —
- * `useItxQuery` seeds durable history and `useItxSubscription` owns reconnect,
- * watchdog, and re-subscribe recovery), folding stream events through the
+ * `useItxQuery` seeds durable history and `useStreamConnection` owns reconnect,
+ * watchdog, and reopen-with-replay recovery), folding stream events through the
  * shared agent-ui reducer (@iterate-com/ui). Sends use TanStack Query's
  * mutation lifecycle and `agent.message` on the same socket. This file owns
  * the app shell and terminal runtime state; the presentational components live
@@ -26,7 +26,7 @@ import {
   createIterateQueryClient,
   ProjectScope,
   useItxQuery,
-  useItxSubscription,
+  useStreamConnection,
   type Itx,
 } from "../sdk/itx/react.ts";
 import {
@@ -64,7 +64,7 @@ process.on("exit", () => computerSharing[Symbol.dispose]());
 const historyQueryKey = ["agent-feed-history", args.projectId, args.agentPath] as const;
 
 // One keeper socket for the whole process — the TUI's equivalent of the
-// browser tab. Everything below (subscription, sends) rides it.
+// browser tab. Everything below (event connection and message sends) uses it.
 configureIterateSession({
   baseUrl: args.baseUrl,
   credentials: resolveItxAuth({ configName: process.env.ITERATE_CONFIG_NAME }),
@@ -74,22 +74,22 @@ configureIterateSession({
 // The app shell
 // ---------------------------------------------------------------------------
 
-async function openAgentFeedSubscription(input: {
+async function openAgentFeedConnection(input: {
   itx: Itx;
   model: ReturnType<typeof createAgentFeedModel>;
   publishFeed: () => void;
 }) {
-  // One agent path stub per (re)subscribe cycle, released once the returned
-  // subscription handle exists. useItxSubscription owns and releases that
+  // One agent path stub each time the connection opens, released once the returned
+  // connection handle exists. useStreamConnection owns and releases that
   // handle on dependency changes, reconnect, and unmount.
   const agent = input.itx.agents.get(args.agentPath);
   try {
-    return await agent.stream.subscribe({
+    return await agent.stream.openConnection({
       processEventBatch: (batch) => {
         if (input.model.applyEvents(batch.events)) input.publishFeed();
       },
       replayAfterOffset: input.model.snapshot().lastOffset,
-      subscriber: { description: "iterate chat TUI" },
+      openedBy: { description: "iterate chat TUI" },
     });
   } finally {
     (agent as Partial<Disposable>)[Symbol.dispose]?.();
@@ -99,8 +99,8 @@ async function openAgentFeedSubscription(input: {
 function AgentChatApp() {
   const computerShare = useSyncExternalStore(computerSharing.subscribe, computerSharing.snapshot);
   // The immutable/durable half is a finite TanStack query, exactly like a
-  // browser route read. The live subscription starts at that query's cursor,
-  // closes the read→subscribe race with replay, then owns the tail.
+  // browser route read. The live connection starts at that query's cursor,
+  // closes the read→open race with replay, then owns the tail.
   const history = useItxQuery({
     key: historyQueryKey,
     query: (itx) =>
@@ -126,18 +126,18 @@ function AgentChatApp() {
    * Establish the live agent feed on the shared socket from the query-seeded
    * model's resume cursor. The finite query above owns one-time agent birth and
    * durable history. That keeps potentially slow creation outside the live
-   * subscription's transport watchdog, whose timer now covers only subscribe.
+   * connection's transport watchdog, whose timer now covers only opening it.
    * Recovery rereads the current cursor and the model folds replay overlap out
    * by offset.
    */
-  const subscribeAgentFeed = useCallback(
-    (itx: Itx) => openAgentFeedSubscription({ itx, model, publishFeed }),
+  const openAgentFeed = useCallback(
+    (itx: Itx) => openAgentFeedConnection({ itx, model, publishFeed }),
     [model, publishFeed],
   );
-  const subscription = useItxSubscription(subscribeAgentFeed, [model], {
+  const connection = useStreamConnection(openAgentFeed, [model], {
     slug: args.projectId,
   });
-  // oxlint-disable react-doctor/query-mutation-missing-invalidation -- History is only the startup seed; the replay-capable subscription is the live authority. Writing or refetching the mutation result here can advance the model past delayed events.
+  // oxlint-disable react-doctor/query-mutation-missing-invalidation -- History is only the startup seed; the replay-capable connection is the live authority. Writing or refetching the mutation result here can advance the model past delayed events.
   const {
     mutate: sendMessage,
     isPending: messageIsPending,
@@ -159,7 +159,7 @@ function AgentChatApp() {
     : messageError != null
       ? `send failed: ${messageError instanceof Error ? messageError.message : String(messageError)}`
       : "";
-  const notice = [messageNotice, subscription.status === "error" ? "Ctrl+R to retry" : ""]
+  const notice = [messageNotice, connection.status === "error" ? "Ctrl+R to retry" : ""]
     .filter(Boolean)
     .join(" · ");
   const [composerValue, setComposerValue] = useState("");
@@ -172,8 +172,8 @@ function AgentChatApp() {
 
   useKeyboard((key) => {
     if (key.name === "escape") clearComposer();
-    if (key.ctrl && key.name === "r" && subscription.status === "error") {
-      subscription.refresh();
+    if (key.ctrl && key.name === "r" && connection.status === "error") {
+      connection.refresh();
     }
   });
 
@@ -195,8 +195,8 @@ function AgentChatApp() {
     <box width="100%" height="100%" flexDirection="column" backgroundColor={COLORS.bg}>
       <ChatHeader
         title={`${args.projectId} ${args.agentPath}`}
-        status={subscription.status}
-        detail={subscription.error}
+        status={connection.status}
+        detail={connection.error}
         notice={[notice, computerShare.notice].filter(Boolean).join(" · ")}
         eventCount={feed.eventCount}
       />

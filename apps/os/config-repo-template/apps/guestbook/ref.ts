@@ -1,5 +1,5 @@
 // The guestbook's shared identity, dependency-free on purpose: worker.ts
-// routes to this ref, and the wake subscription in the creation batch below
+// routes to this ref, and the hosted-processor subscription in the creation batch below
 // persists the same ref — so ingress and the stream spine always dial the
 // same Durable Object.
 import type { StreamEventInput } from "iterate/processors";
@@ -24,7 +24,7 @@ export const guestbookAppRef = {
 
 /**
  * The guestbook's creation batch: the birth certificate plus the durable WAKE
- * subscription that puts GuestbookApp on the stream's delivery spine.
+ * subscription that wakes GuestbookApp when the stream advances.
  * Initialization is lazy and only matters when something consumes the fold:
  * the `/api` socket every page opens offers this batch, and so does a direct
  * `sign()`. (A bare GET of `/` serves only the static shell — its client then
@@ -44,9 +44,9 @@ export function guestbookCreationEvents(): StreamEventInput[] {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: "app-guestbook#guestbook",
-        delivery: {
-          mode: "wake",
-          expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
+        receiver: {
+          action: "processor-wake",
+          expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamProcessor"],
           // Must match GuestbookProcessorContract.slug (processor.ts); a
           // string literal because this module stays dependency-free.
           processorSlug: "guestbook",

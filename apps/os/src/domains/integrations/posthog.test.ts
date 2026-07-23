@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StreamPushEventBatch } from "iterate/processors";
+import type { StreamDeliveryBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import {
@@ -24,12 +24,19 @@ function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
       processor: {
         slug: "agent",
         version: "1.2.3",
-        stream: { projectId: "prj_123", path: "/agents/ada" },
+        stream: {
+          projectId: "prj_123",
+          path: "/agents/ada",
+          streamId: "11111111-1111-4111-8111-111111111111",
+        },
         whileProcessing: { offset: 6, type: "events.example.com/question-asked" },
       },
       crossPostedFrom: [
         {
           subscriptionKey: "mirror",
+          streamId: "11111111-1111-4111-8111-111111111111",
+          streamCreatedAt: "2026-07-16T09:00:00.000Z",
+          cursorChangedAtSourceOffset: 1,
           createdAt: "2026-07-16T09:59:00.000Z",
           offset: 3,
           path: "/source",
@@ -43,13 +50,16 @@ function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
   };
 }
 
-function batch(events: StreamEvent[]): StreamPushEventBatch {
+function batch(events: StreamEvent[]): StreamDeliveryBatch {
   return {
     projectId: "prj_123",
     path: "/agents/ada",
+    streamId: "11111111-1111-4111-8111-111111111111",
+    streamCreatedAt: "2026-07-16T09:00:00.000Z",
     events,
     streamMaxOffset: 99,
     subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
+    cursorChangedAtSourceOffset: 4,
     deliveryId: `${POSTHOG_SUBSCRIPTION_KEY}:7-8`,
     attempt: 2,
     configuredEvent: {
@@ -84,21 +94,23 @@ function captureArgs(events: StreamEvent[], workerName = "os-prd") {
 }
 
 describe("first-party PostHog stream integration", () => {
-  it("uses an ordinary all-history subscription that excludes ephemeral rows", () => {
+  it("uses an all-history subscription that excludes ephemeral rows", () => {
     const event = posthogSubscriptionEvent();
     expect(event).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: "iterate-platform-posthog-subscription-v2",
+      idempotencyKey: "iterate-platform-posthog-subscription-v3",
       payload: {
         subscriptionKey: POSTHOG_SUBSCRIPTION_KEY,
-        description: "iterate's first-party durable-event PostHog feed",
-        delivery: {
-          mode: "push",
+        description: "Iterate's first-party durable-event PostHog feed",
+        receiver: {
+          action: "itx-call",
           expression: ["integrations", "posthog", "processEventBatch"],
+          delivery: {
+            start: "beginning",
+            includeEphemeral: false,
+            onFailingEvent: "halt",
+          },
         },
-        deliver: "all",
-        includeEphemeral: false,
-        onPoison: "park",
       },
     });
     expect(() => CoreProcessorContract.parseEventInput(event)).not.toThrow();
@@ -313,6 +325,28 @@ describe("first-party PostHog stream integration", () => {
       $groups: { project: "prj_123" },
       distinct_id: retryProperties.distinct_id,
     });
+  });
+
+  it("uses a different source identity after stream recreation", async () => {
+    const first: CapturedRequest[] = [];
+    const recreated: CapturedRequest[] = [];
+    const event = streamEvent();
+
+    await capturePosthogStreamEventBatch(captureArgs([event]), {
+      fetch: acceptingFetch(first),
+    });
+    await capturePosthogStreamEventBatch(
+      {
+        ...captureArgs([event]),
+        batch: {
+          ...batch([event]),
+          streamId: "22222222-2222-4222-8222-222222222222",
+        },
+      },
+      { fetch: acceptingFetch(recreated) },
+    );
+
+    expect(recreated[0]!.batch[0]!.uuid).not.toBe(first[0]!.batch[0]!.uuid);
   });
 
   it("rejects malformed source timestamps and non-2xx capture responses", async () => {
