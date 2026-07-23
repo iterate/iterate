@@ -15,60 +15,52 @@ const record: ProjectDirectoryRecord = {
   name: "Alpha",
 };
 
-function directoryWithPut(
-  put: ReturnType<typeof vi.fn>,
-  deleteKey = vi.fn().mockResolvedValue(undefined),
-): KVNamespace {
-  return { delete: deleteKey, put } as unknown as KVNamespace;
+function directoryWithPut(put: ReturnType<typeof vi.fn>): KVNamespace {
+  return { put } as unknown as KVNamespace;
 }
 
 describe("primeProjectDirectory", () => {
   beforeEach(() => auth.getProjectBySlug.mockReset());
 
-  it("writes both durable lookup keys and clears a stale shared miss", async () => {
+  it("writes both durable lookup keys", async () => {
     const put = vi.fn().mockResolvedValue(undefined);
-    const deleteKey = vi.fn().mockResolvedValue(undefined);
 
-    await primeProjectDirectory(directoryWithPut(put, deleteKey), record);
+    await primeProjectDirectory(directoryWithPut(put), record);
 
     const body = JSON.stringify(record);
     expect(put.mock.calls).toEqual([
       ["slug:alpha", body],
       ["project:prj_alpha", body],
     ]);
-    expect(deleteKey).toHaveBeenCalledExactlyOnceWith("missing-slug:alpha");
   });
 
-  it("recovers from one timed-out attempt and observes its late rejection", async () => {
+  it("retries only the timed-out key and observes its late rejection", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const rejectLate: Array<(error: Error) => void> = [];
-      const put = vi
-        .fn()
-        .mockImplementationOnce(
-          () =>
-            new Promise<void>((_resolve, reject) => {
-              rejectLate.push(reject);
-            }),
-        )
-        .mockImplementationOnce(
-          () =>
-            new Promise<void>((_resolve, reject) => {
-              rejectLate.push(reject);
-            }),
-        )
-        .mockResolvedValueOnce(undefined)
-        .mockResolvedValueOnce(undefined);
+      let slugAttempts = 0;
+      const put = vi.fn((key: string) => {
+        if (key === "slug:alpha" && slugAttempts++ === 0) {
+          return new Promise<void>((_resolve, reject) => {
+            rejectLate.push(reject);
+          });
+        }
+        return Promise.resolve();
+      });
       const primed = primeProjectDirectory(directoryWithPut(put), record);
 
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(primed).resolves.toBeUndefined();
 
-      expect(put).toHaveBeenCalledTimes(4);
+      expect(put.mock.calls.map(([key]) => key)).toEqual([
+        "slug:alpha",
+        "project:prj_alpha",
+        "slug:alpha",
+      ]);
       expect(warn).toHaveBeenCalledWith(
         "[project-directory] write failed; retrying",
-        expect.objectContaining({ attempt: 1, maxAttempts: 2 }),
+        expect.objectContaining({ attempt: 1, keyKind: "slug", maxAttempts: 2 }),
       );
       for (const reject of rejectLate) reject(new Error("late platform cancellation"));
       await Promise.resolve();
@@ -78,34 +70,71 @@ describe("primeProjectDirectory", () => {
     }
   });
 
-  it("rejects after two failed attempts instead of swallowing the dependency error", async () => {
+  it("does not retry a successful sibling when the other key rejects", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const put = vi.fn().mockRejectedValue(new Error("KV unavailable"));
+      const put = vi.fn((key: string) =>
+        key === "slug:alpha" ? Promise.reject(new Error("KV unavailable")) : Promise.resolve(),
+      );
 
       await expect(primeProjectDirectory(directoryWithPut(put), record)).rejects.toThrow(
-        "Project directory write failed after 2 attempts: KV unavailable",
+        "Project directory slug write failed after 2 attempts: KV unavailable",
       );
-      expect(put).toHaveBeenCalledTimes(4);
+      expect(put.mock.calls.map(([key]) => key)).toEqual([
+        "slug:alpha",
+        "project:prj_alpha",
+        "slug:alpha",
+      ]);
     } finally {
       warn.mockRestore();
     }
   });
 
-  it("rejects after two bounded attempts when KV never settles", async () => {
+  it("recovers when both keys independently time out once", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const put = vi.fn(() => new Promise<void>(() => {}));
+      const attempts = new Map<string, number>();
+      const put = vi.fn((key: string) => {
+        const attempt = (attempts.get(key) ?? 0) + 1;
+        attempts.set(key, attempt);
+        return attempt === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+      });
+      const primed = primeProjectDirectory(directoryWithPut(put), record);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(primed).resolves.toBeUndefined();
+      expect(put).toHaveBeenCalledTimes(4);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes every late rejection after independent timeouts", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const rejectLate: Array<(error: Error) => void> = [];
+      const put = vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectLate.push(reject);
+          }),
+      );
       const primed = primeProjectDirectory(directoryWithPut(put), record);
       const rejected = expect(primed).rejects.toThrow(
-        "Project directory write failed after 2 attempts: Project directory KV write timed out after 10000ms",
+        "Project directory slug write failed after 2 attempts: Project directory KV write timed out after 10000ms",
       );
 
       await vi.advanceTimersByTimeAsync(20_000);
 
       await rejected;
       expect(put).toHaveBeenCalledTimes(4);
+      for (const reject of rejectLate) reject(new Error("late platform cancellation"));
+      await Promise.resolve();
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

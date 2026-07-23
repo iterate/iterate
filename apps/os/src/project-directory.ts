@@ -8,9 +8,9 @@
  * Layering per lookup: KV first (global, no expiry — slugs are immutable,
  * create overwrites its keys, and admin-lane projects have no auth-side row
  * so the cache is their only directory), then the auth worker behind a
- * short in-isolate negative memo plus a bounded shared negative marker. The
- * positive KV key is ALWAYS checked first, and every authoritative positive
- * write also deletes an older miss marker. That shared marker matters for
+ * short in-isolate negative memo plus a bounded shared negative marker. A
+ * visible positive KV key is ALWAYS checked first, so it outranks an older
+ * miss marker (which expires by itself). That shared marker matters for
  * canonical `<app>--<project>` hosts: the whole label is a legitimate
  * project-slug candidate, but its expected miss must not make each fresh
  * ingress isolate round-trip through the auth worker. Hits are written back,
@@ -40,12 +40,13 @@ export type ProjectIdentity = {
 
 const MEMO_TTL_MS = 15_000;
 // Cloudflare KV requires expirationTtl >= 60s. Reads check the separate
-// positive `slug:` key first, and every positive cache write invalidates this
-// marker; it exists only to suppress repeated authoritative misses.
+// positive `slug:` key first, so this marker cannot mask a visible positive;
+// it exists only to suppress repeated authoritative misses.
 const SHARED_NEGATIVE_TTL_SECONDS = 60;
 const SHARED_NEGATIVE_MARKER = "missing";
-// These writes are exact and idempotent. One retry absorbs a transient KV
-// stall while two short windows keep this required create step bounded.
+// These writes are exact and idempotent. Each key retries independently: a
+// transient stall on one key must not duplicate a successful sibling write
+// and turn that duplicate into a second, batch-wide stall.
 const REQUIRED_WRITE_ATTEMPT_TIMEOUT_MS = 10_000;
 const REQUIRED_WRITE_MAX_ATTEMPTS = 2;
 const CACHE_FILL_TIMEOUT_MS = 1_000;
@@ -185,8 +186,7 @@ export async function listProjectDirectory(
   return records;
 }
 
-/** Eagerly cache a project the caller just created or resolved, invalidating
- * any shared miss that predates the authoritative positive record. */
+/** Eagerly cache a project the caller just created or resolved. */
 export async function primeProjectDirectory(
   directory: KVNamespace,
   record: ProjectDirectoryRecord,
@@ -210,20 +210,34 @@ async function writeThrough(
   // No expiration: slugs are immutable and `projects.get(slug).create` overwrites the
   // keys it primes, so entries never go stale — and admin-lane projects
   // (auth mints only an id, no directory row) have NO auth fallback, so an
-  // expiring cache would break their slug ingress after the TTL. Clearing the
-  // negative marker is part of the same required write attempt: a positive
-  // prime must not leave a stale shared miss behind.
+  // expiring cache would break their slug ingress after the TTL. A stale
+  // negative marker needs no explicit delete: reads always check this positive
+  // slug key first, and the marker expires after 60 seconds in any case.
   const body = JSON.stringify(record);
+  await Promise.all([
+    writeDirectoryKey(directory, slugKey(record.slug), "slug", body, policy),
+    writeDirectoryKey(directory, projectKey(record.id), "project", body, policy),
+  ]);
+}
+
+async function writeDirectoryKey(
+  directory: KVNamespace,
+  key: string,
+  keyKind: "project" | "slug",
+  body: string,
+  policy: { attemptTimeoutMs: number; maxAttempts: number },
+): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt += 1) {
     try {
-      await writeDirectoryRecord(directory, record, body, policy.attemptTimeoutMs);
+      await writeDirectoryKeyAttempt(directory, key, body, policy.attemptTimeoutMs);
       return;
     } catch (error) {
       lastError = error;
       if (attempt < policy.maxAttempts) {
         console.warn("[project-directory] write failed; retrying", {
           attempt,
+          keyKind,
           maxAttempts: policy.maxAttempts,
           reason: errorMessage(error),
         });
@@ -232,22 +246,18 @@ async function writeThrough(
   }
 
   throw new Error(
-    `Project directory write failed after ${policy.maxAttempts} attempts: ${errorMessage(lastError)}`,
+    `Project directory ${keyKind} write failed after ${policy.maxAttempts} attempts: ${errorMessage(lastError)}`,
     { cause: lastError },
   );
 }
 
-async function writeDirectoryRecord(
+async function writeDirectoryKeyAttempt(
   directory: KVNamespace,
-  record: ProjectDirectoryRecord,
+  key: string,
   body: string,
   timeoutMs: number,
 ): Promise<void> {
-  const write = Promise.all([
-    directory.put(slugKey(record.slug), body),
-    directory.put(projectKey(record.id), body),
-    directory.delete(missingSlugKey(record.slug)),
-  ]);
+  const write = directory.put(key, body);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
