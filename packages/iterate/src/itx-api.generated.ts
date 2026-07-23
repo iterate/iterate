@@ -1493,6 +1493,10 @@ export interface Workspace {
   collab: WorkspaceCollab;
   /** A path's mount content at HEAD — the base uncommitted work diffs against. */
   readBase(path: string): Promise<string | null>;
+  /** Announce (or clear, with null) this client's mouse pointer on the board. */
+  pointerPresent(clientId: string, payload: unknown): Promise<void>;
+  /** Long-poll for board pointer movement past a generation. */
+  pointerWait(afterGeneration: number): Promise<PointerSnapshot & Disposable>;
   /** Batched file reads (board seeds): one RPC, missing paths map to null. */
   readFiles(paths: string[]): Promise<Record<string, string | null>>;
   /** One file's raw bytes from the merged view; null when missing. */
@@ -1627,10 +1631,6 @@ export interface WorkspaceCollab {
     clientId: string,
     selection: { anchor: number; head: number } | null,
   ): Promise<void>;
-  /** Announce (or clear, with null) this client's mouse pointer on the board. */
-  pointerPresent(clientId: string, payload: unknown): Promise<void>;
-  /** Long-poll for board pointer movement past a generation. */
-  pointerWait(afterGeneration: number): Promise<PointerSnapshot & Disposable>;
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>>;
   /** Attributed tracked changes since the last commit (redline segments). */
@@ -3633,6 +3633,13 @@ export type WorkspaceConfigPatch = {
     | undefined;
 };
 
+/** One read of the pointer map: every fresh client's opaque payload plus the
+ * generation a long-poll compares against. */
+export type PointerSnapshot = {
+  clients: { at: number; clientId: string; payload: unknown }[];
+  generation: number;
+};
+
 /** Input to `Workspace.edit` — a safe single-occurrence string replacement. */
 export type EditWorkspaceFileInput = {
   newString: string;
@@ -3867,13 +3874,6 @@ export type DynamicWorkerRefBase = {
  * long-poll when the generation advanced past the client's cursor. */
 export type CollabPresence = {
   clients: { anchor: number; at: number; clientId: string; head: number }[];
-  generation: number;
-};
-
-/** One read of the pointer map: every fresh client's opaque payload plus the
- * generation a long-poll compares against. */
-export type PointerSnapshot = {
-  clients: { at: number; clientId: string; payload: unknown }[];
   generation: number;
 };
 
