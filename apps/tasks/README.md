@@ -2,7 +2,7 @@
 
 A Kanban board over the `tasks/` folder of any iterate project's config repo —
 deployed as a **stateless vessel** at `tasks.iterate.workers.dev` (deployed
-manually with `pnpm deploy` from this directory; not part of the envs.ts
+manually with `pnpm run deploy` from this directory; not part of the envs.ts
 fleet, no routes of its own). Imported from the standalone
 [iterate/tasks](https://github.com/iterate/tasks) repo. It never
 holds project secrets or user sessions of its own. Every useful request

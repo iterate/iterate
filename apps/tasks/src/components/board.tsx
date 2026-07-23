@@ -9,15 +9,15 @@ import {
   PlusIcon,
   TagIcon,
 } from "lucide-react";
+import { Badge } from "@iterate-com/ui/components/badge";
+import { Button } from "@iterate-com/ui/components/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import { cn } from "@iterate-com/ui/lib/utils";
 import type { TaskChangeStatus } from "../state.ts";
 import { taskColumnState } from "../tasks-model.ts";
 import { stateLabel, type BoardTask, type PresenceUser, type RowField } from "../lib/board-model.ts";
 import type { BoardProjection } from "../lib/board-engine.ts";
 import { agoText, type RecentTouch } from "../lib/recency.ts";
-import { Badge } from "./ui/badge.tsx";
-import { Button } from "./ui/button.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
-import { cn } from "./ui/utils.ts";
 
 /**
  * The board proper, in the apps/os repo-ide dialect: rows are folder

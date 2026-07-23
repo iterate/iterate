@@ -1053,9 +1053,6 @@ importers:
 
   apps/tasks:
     dependencies:
-      '@base-ui/react':
-        specifier: ^1.2.0
-        version: 1.2.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@codemirror/collab':
         specifier: ^6.1.1
         version: 6.1.1
@@ -1071,6 +1068,9 @@ importers:
       '@dnd-kit/react':
         specifier: ^0.5.0
         version: 0.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@iterate-com/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       '@tanstack/react-router':
         specifier: ^1.170.10
         version: 1.170.15(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -1080,12 +1080,6 @@ importers:
       capnweb:
         specifier: npm:@iterate-com/capnweb@0.10.0
         version: '@iterate-com/capnweb@0.10.0'
-      class-variance-authority:
-        specifier: ^0.7.1
-        version: 0.7.1
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
       iterate:
         specifier: workspace:*
         version: link:../../packages/iterate
@@ -1104,9 +1098,6 @@ importers:
       streamdown:
         specifier: ^2.5.0
         version: 2.5.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      tailwind-merge:
-        specifier: ^3.3.1
-        version: 3.5.0
       y-codemirror.next:
         specifier: ^0.3.5
         version: 0.3.5(@codemirror/state@6.7.1)(@codemirror/view@6.43.6)(yjs@13.6.31)
@@ -1150,9 +1141,6 @@ importers:
       tailwindcss:
         specifier: ^4.3.2
         version: 4.3.2
-      tw-animate-css:
-        specifier: ^1.4.0
-        version: 1.4.0
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
