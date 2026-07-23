@@ -219,6 +219,10 @@ export function getAuthPlugins(options: AuthPluginOptions) {
     oauthProvider({
       loginPage: "/login",
       consentPage: "/consent",
+      selectAccount: {
+        page: "/login",
+        shouldRedirect: () => false,
+      },
       postLogin: {
         page: "/project-access",
         shouldRedirect: async ({ scopes, session }) => {

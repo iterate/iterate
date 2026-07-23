@@ -47,7 +47,7 @@ function SignInRoute() {
 
   function startGoogleSignIn() {
     setRedirectingTo("google");
-    signIn({ returnTo, loginHint: "google" });
+    signIn({ returnTo, loginHint: "google", prompt: "select_account" });
   }
 
   return (

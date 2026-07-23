@@ -529,6 +529,9 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     if (loginHint === "email" || loginHint === "google") {
       url.searchParams.set("login_hint", loginHint);
     }
+    if (requestURL.searchParams.get("prompt") === "select_account") {
+      url.searchParams.set("prompt", "select_account");
+    }
 
     setCookie(
       c,

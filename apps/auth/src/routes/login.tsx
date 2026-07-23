@@ -401,6 +401,15 @@ function getPostLoginRedirectUrl(fallbackRedirect: string) {
   const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
   searchParams.delete("exp");
   searchParams.delete("sig");
+  const remainingPrompts = searchParams
+    .get("prompt")
+    ?.split(" ")
+    .filter((prompt) => prompt && prompt !== "select_account");
+  if (remainingPrompts?.length) {
+    searchParams.set("prompt", remainingPrompts.join(" "));
+  } else {
+    searchParams.delete("prompt");
+  }
   redirectUrl.search = searchParams.toString();
   return redirectUrl.toString();
 }

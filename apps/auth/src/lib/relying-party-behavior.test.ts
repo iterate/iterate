@@ -84,6 +84,21 @@ describe("relying-party routes and sessions", () => {
     });
   }
 
+  it("asks the authorization server to select an account when sign-in requires a choice", async () => {
+    const handler = testAuthHandler(config);
+
+    const response = await handler(
+      new Request(
+        "http://localhost:65455/api/iterate-auth/login?login_hint=google&prompt=select_account",
+      ),
+    );
+
+    assert.equal(response.status, 302);
+    const location = new URL(response.headers.get("location") ?? "");
+    assert.equal(location.searchParams.get("login_hint"), "google");
+    assert.equal(location.searchParams.get("prompt"), "select_account");
+  });
+
   it("resolves relative return paths against the configured public return origin", async () => {
     const handler = testAuthHandler({
       ...config,
