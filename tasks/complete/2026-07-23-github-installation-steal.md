@@ -88,3 +88,6 @@ existing Telegram steal experience.
 - 2026-07-23: Bugbot's follow-up correctly noted that restoring only the secret left the lifecycle
   journal disconnected and that replay skipped repair. Ownership settlement now restores secret
   and connected fact together, and both the retry and replay paths use it before returning.
+- 2026-07-23: Bugbot's final pass found two surface omissions: `__describe()` now lists the
+  confirmation RPC, and the controlled GitHub warning handles Escape/close attempts by clearing
+  its signed-state query parameters.

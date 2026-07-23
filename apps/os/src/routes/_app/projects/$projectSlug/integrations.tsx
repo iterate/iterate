@@ -326,13 +326,28 @@ function ProjectIntegrationsContent() {
   const openStream = (streamPath: string) => {
     void navigate(linkOptionsForStreamPath(params.projectSlug, streamPath));
   };
+  const dismissGithubSteal = () => {
+    void navigate({
+      replace: true,
+      search: (previous) => ({
+        ...previous,
+        error: undefined,
+        githubSteal: undefined,
+      }),
+    });
+  };
 
   // Same shell as secrets/agents/repos: ProjectStreamView owns the header
   // (path pill flush left, presence + RTT + stream state on the right) and the
   // live /integrations feed; the domain UI is the panel beside it.
   const panel = (
     <>
-      <AlertDialog open={githubStealState !== null}>
+      <AlertDialog
+        open={githubStealState !== null}
+        onOpenChange={(open) => {
+          if (!open) dismissGithubSteal();
+        }}
+      >
         <AlertDialogContent size="sm">
           <AlertDialogHeader>
             <AlertDialogTitle>Steal this GitHub installation?</AlertDialogTitle>
@@ -342,19 +357,7 @@ function ProjectIntegrationsContent() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel
-              disabled={stealGithub.isPending}
-              onClick={() => {
-                void navigate({
-                  replace: true,
-                  search: (previous) => ({
-                    ...previous,
-                    error: undefined,
-                    githubSteal: undefined,
-                  }),
-                });
-              }}
-            >
+            <AlertDialogCancel disabled={stealGithub.isPending} onClick={dismissGithubSteal}>
               Cancel
             </AlertDialogCancel>
             <AlertDialogAction

@@ -3383,6 +3383,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        confirmGithubSteal:
+          "Move a GitHub installation after explicit confirmation: { state } — state is the signed user/project/installation proof returned by completeConnect.",
         connectTelegram:
           "Connect a Telegram bot by BotFather token: { botToken } — no OAuth, no redirect.",
         disconnect: "Disconnect one connection: { provider, connection }.",
