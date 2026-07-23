@@ -52,6 +52,39 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 13 (2026-07-23, post-#2271)
+
+This round starts from `origin/main` at
+`8990fa9043d815f8c5f2006bf7610129fe45c9c8`, after PR #2271 removed a cyclic
+Durable Object RPC lifetime from durable stream wake delivery. The old stream
+sink returned the processor attempt promise and the stream pulled it for
+liveness. A processor that appended back to its delivering stream could
+therefore retain the actor/request-drain cycle until an idle boundary released
+it, despite doing little useful work.
+
+Wake batches are now one-way and dispose their result unpulled. Each batch
+carries an independent one-shot settlement capability through which the
+processor reports its eventual durable success or serialized failure. Missing
+settlement leaves the existing checkpoint authoritative; idle recovery re-pokes
+from it. Delivery failure and broken-transport signals both enter the same
+bounded backoff/park machine, and late signals are fenced to the exact
+connection that created them.
+
+The final exact-head #2271 check ran every canonical suite in 227 seconds with
+zero failures and zero absorbed retries: Depot workflow `1w2np2p7w2`, job
+`2xswh11402`, attempt `6kl9w6n7m7`. PostHog recorded 3,342 passing final test
+records, 7 pre-existing explicit skips, and zero failed or retried records.
+The formerly 65-second `journal-is-the-record` Playwright case completed in
+11.232 seconds; its Vitest equivalent completed in 7.639 seconds. Cloudflare
+observed one deliberately induced Durable Object reset on the changed wake
+path, classified it outside the error signal as
+`stream durable sink unavailable; backing off before re-poke`, and showed no
+repeated warning or invalid-settlement event.
+
+That run is acceptance evidence for the fix before its squash merge. The
+round-13 consecutive proof starts at 0/25 on the new immutable PR head based
+exactly on `8990fa9043d815f8c5f2006bf7610129fe45c9c8`.
+
 ## Round 12 (2026-07-23, post-#2269)
 
 This round starts from `origin/main` at
