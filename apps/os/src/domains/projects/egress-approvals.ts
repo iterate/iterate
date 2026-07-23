@@ -134,7 +134,7 @@ export function buildApprovalMessage(input: {
   approvalRequestEventOffset: number;
   requested: Pick<
     HumanApprovalRequestedPayload,
-    "method" | "url" | "headers" | "bodySha256" | "secretPaths"
+    "method" | "url" | "headers" | "body" | "secretPaths"
   >;
   decision: "granted" | "rejected";
 }): Uint8Array {
@@ -146,7 +146,7 @@ export function buildApprovalMessage(input: {
       method: input.requested.method,
       url: input.requested.url,
       headers: input.requested.headers,
-      bodySha256: input.requested.bodySha256,
+      bodySha256: input.requested.body?.sha256 || null,
       secretPaths: input.requested.secretPaths,
       decision: input.decision,
     }),
@@ -156,15 +156,19 @@ export function buildApprovalMessage(input: {
 export const APPROVAL_BODY_INSPECTION_LIMIT_BYTES = 64 * 1024;
 
 /** Keep a bounded body prefix for human inspection; UTF-8 stays readable and other bytes are base64. */
-export function approvalRequestBody(bytes: Uint8Array): {
+export function approvalRequestBody(
+  bytes: Uint8Array,
+  sha256: string,
+): {
   encoding: "utf8" | "base64";
   content: string;
   originalByteLength: number;
+  sha256: string;
   truncated: boolean;
 } {
   const truncated = bytes.byteLength > APPROVAL_BODY_INSPECTION_LIMIT_BYTES;
   const inspectionBytes = bytes.slice(0, APPROVAL_BODY_INSPECTION_LIMIT_BYTES);
-  const metadata = { originalByteLength: bytes.byteLength, truncated };
+  const metadata = { originalByteLength: bytes.byteLength, sha256, truncated };
   try {
     return {
       encoding: "utf8",

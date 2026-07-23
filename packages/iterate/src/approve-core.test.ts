@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { RpcStub } from "@iterate-com/capnweb";
 import type { Stream, StreamEvent } from "./itx-api.generated.ts";
-import { awaitSettlement, EVENT, reconcileBacklog } from "./approve-core.ts";
+import { awaitSettlement, EVENT, reconcileBacklog, safeHost } from "./approve-core.ts";
 
 // A minimal stand-in for a project stream. `waitForEvent` replays from
 // `afterOffset` in order and the earliest match wins — exactly the durable
@@ -41,6 +41,10 @@ function fakeStream(log: StreamEvent[]): RpcStub<Stream> {
 const REQUEST_OFFSET = 10;
 // A short settlement window so the no-match cases resolve fast under test.
 const WINDOW_MS = 40;
+
+test("safeHost preserves the port that identifies a destination", () => {
+  expect(safeHost("http://localhost:8080/refund")).toBe("localhost:8080");
+});
 
 function event(type: string, offset: number, payload: Record<string, unknown>): StreamEvent {
   return {
@@ -114,7 +118,7 @@ describe("reconcileBacklog — the door's first resolution is authoritative", ()
         secretPaths: [],
         ruleKey: "r",
         expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
-        bodyPreview: null,
+        body: null,
       },
       createdAt: "2026-01-01T00:00:00.000Z",
     }) as unknown as StreamEvent;

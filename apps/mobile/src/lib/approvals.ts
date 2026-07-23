@@ -43,17 +43,7 @@ export function approvalBodyForDisplay(payload: RequestedPayload): {
   text: string;
   truncated: boolean;
 } | null {
-  if (payload.body === null) return null;
-  if (payload.body === undefined) {
-    return payload.bodyPreview === null
-      ? null
-      : {
-          language: "text",
-          originalByteLength: null,
-          text: payload.bodyPreview,
-          truncated: true,
-        };
-  }
+  if (payload.body === null || payload.body === undefined) return null;
   const originalByteLength =
     payload.body.originalByteLength === undefined ? null : payload.body.originalByteLength;
   if (payload.body.encoding === "base64") {

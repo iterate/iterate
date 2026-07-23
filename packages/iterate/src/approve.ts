@@ -324,30 +324,17 @@ function reportSettlement(offset: number, settlement: Exclude<Settlement, { kind
 }
 
 function renderHeldRequest(offset: number, payload: RequestedPayload): void {
-  const secretLine =
-    payload.secretPaths.length === 0
-      ? []
-      : [
-          `spends secret${payload.secretPaths.length > 1 ? "s" : ""}: ${payload.secretPaths.join(", ")}`,
-        ];
-  const preview =
-    payload.bodyPreview !== null && payload.bodyPreview.length > 200
-      ? `${payload.bodyPreview.slice(0, 200)}…`
-      : payload.bodyPreview;
-  const bodyLines =
-    preview === null
-      ? payload.bodySha256 === null
-        ? []
-        : [`body: sha256 ${payload.bodySha256.slice(0, 16)}…`]
-      : [`body: ${preview}`];
-  prompts.note(
-    [
-      `${payload.method} ${payload.url}`,
-      ...secretLine,
-      ...bodyLines,
-      `rule: ${payload.ruleKey}`,
-      `expires: ${payload.expiresAt}`,
-    ].join("\n"),
-    `Held egress request #${offset}`,
-  );
+  const lines = [`${payload.method} ${payload.url}`];
+  if (payload.secretPaths.length > 0) {
+    const noun = payload.secretPaths.length > 1 ? "secrets" : "secret";
+    lines.push(`spends ${noun}: ${payload.secretPaths.join(", ")}`);
+  }
+  if (payload.body) {
+    let content = payload.body.content;
+    if (payload.body.encoding === "base64") content = `[base64] ${content}`;
+    if (payload.body.truncated || content.length > 200) content = `${content.slice(0, 200)}…`;
+    lines.push(`body: ${content}`);
+  }
+  lines.push(`rule: ${payload.ruleKey}`, `expires: ${payload.expiresAt}`);
+  prompts.note(lines.join("\n"), `Held egress request #${offset}`);
 }

@@ -59,6 +59,9 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
+const PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
+const PREVIEW_ITERATE_PACKAGE_POLL_MS = 1_000;
+const PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
 const RETIRED_QUEUE_PAGE_SIZE = 100;
 const RETIRED_WORKER_QUEUE_CONSUMERS = [
   { label: "Artifact event", suffix: "-events" },
@@ -75,6 +78,57 @@ const RetiredQueueConsumer = z.object({
   script_name: z.string().optional(),
   type: z.string().optional(),
 });
+
+/**
+ * pkg.pr.new publishes a PR head in a separate GitHub Actions workflow. The
+ * Depot preview can start first, so make the exact immutable tarball an
+ * explicit deployment prerequisite. This runs beside the Vite build and
+ * sidecar uploads; the healthy path adds no critical-path work.
+ */
+export async function waitForPreviewIteratePackage(
+  packageSpec: string,
+  dependencies: {
+    fetch?: typeof fetch;
+    now?: () => number;
+    sleep?: (ms: number) => Promise<void>;
+    timeoutMs?: number;
+  } = {},
+): Promise<void> {
+  const fetchPackage = dependencies.fetch ?? fetch;
+  const now = dependencies.now ?? Date.now;
+  const sleep =
+    dependencies.sleep ??
+    (async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS;
+  const deadline = now() + timeoutMs;
+  let lastFailure = "No response received.";
+
+  while (now() < deadline) {
+    try {
+      const response = await fetchPackage(packageSpec, {
+        cache: "no-store",
+        method: "HEAD",
+        redirect: "follow",
+        signal: AbortSignal.timeout(
+          Math.max(1, Math.min(PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
+        ),
+      });
+      if (response.ok) {
+        console.log(`preview iterate package available: ${packageSpec}`);
+        return;
+      }
+      lastFailure = `HTTP ${response.status}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+
+    await sleep(Math.min(PREVIEW_ITERATE_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
+  }
+
+  throw new Error(
+    `Timed out waiting ${timeoutMs}ms for the preview iterate package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
+  );
+}
 
 /**
  * Cloudflare refuses a handler-less Worker upload while a previous Queue
@@ -355,16 +409,36 @@ export default async function deploy(
     // preview fleet has produced account-level 429s. Both still fit beneath
     // the main build, and deployApp joins this lane before uploading the main
     // Worker so neither service binding can target a missing script.
-    concurrentBuildWork: async (ctx, _secretValues, credentials) => {
+    concurrentBuildWork: async (ctx, secretValues, credentials) => {
       const cwd = fileURLToPath(new URL("..", import.meta.url));
-      for (const config of ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"]) {
-        await runAsync(
-          "pnpm",
-          ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name],
-          {
-            cwd,
-            env: credentials,
-          },
+      const tasks = [
+        (async () => {
+          for (const config of ["wrangler.typechecker.jsonc", "wrangler.worker-bundler.jsonc"]) {
+            await runAsync(
+              "pnpm",
+              ["exec", "wrangler", "deploy", "--config", config, "--env", ctx.name],
+              {
+                cwd,
+                env: credentials,
+              },
+            );
+          }
+        })(),
+      ];
+      const packageSpec = secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC;
+      if (packageSpec) {
+        tasks.push(waitForPreviewIteratePackage(packageSpec));
+      }
+
+      const results = await Promise.allSettled(tasks);
+      const failures = results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .map((result) => result.reason);
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(
+          failures,
+          "Compiler-sidecar deployment and preview package preflight both failed",
         );
       }
     },
