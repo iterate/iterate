@@ -345,7 +345,7 @@ function ProjectIntegrationsContent() {
       <AlertDialog
         open={githubStealState !== null}
         onOpenChange={(open) => {
-          if (!open) dismissGithubSteal();
+          if (!open && !stealGithub.isPending) dismissGithubSteal();
         }}
       >
         <AlertDialogContent size="sm">
