@@ -199,11 +199,9 @@ export class SchedulerDurableObject extends DurableObject<Env> {
     });
   }
 
-  // catchUp swallows failures by design (it serves stale state to reads), so
-  // the write path adds a hard wait: the command only returns once the
-  // committed reduced state provably includes the event it just appended.
+  // The offset wait self-pulls and owns the complete read-your-writes
+  // timeout. Do not put an unbounded catch-up RPC in front of it.
   async #waitUntilProcessed(offset: number): Promise<void> {
-    await this.#registry.catchUp(PROCESSOR_SLUG);
     await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
   }
 }
