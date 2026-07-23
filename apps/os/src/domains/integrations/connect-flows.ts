@@ -642,13 +642,21 @@ export async function confirmGithubSteal(input: {
   }
 
   const installationId = stateData.githubInstallationId;
+  const github = requireGithubConfig(input.config);
+  if (!github.appId) throw new Error("GitHub App is not configured.");
   const existingClaim = await lookupConnectionClaim("github", installationId);
-  if (existingClaim?.projectId === input.projectId) {
+  if (
+    existingClaim?.projectId === input.projectId &&
+    (await restoreOwnedGithubConnection({
+      connection: existingClaim.connection,
+      githubAppId: github.appId,
+      installationId,
+      projectId: input.projectId,
+    }))
+  ) {
     return { connection: existingClaim.connection, ok: true };
   }
 
-  const github = requireGithubConfig(input.config);
-  if (!github.appId) throw new Error("GitHub App is not configured.");
   const connection = `install-${sanitizeConnectionName(installationId)}`;
   await recordGithubConnection({
     connection,
@@ -780,15 +788,7 @@ async function recordGithubConnection(input: {
         path: githubConnectionSecretPath(input.connection),
       },
     ],
-    connectedEvent: {
-      type: "events.iterate.com/github/connected",
-      payload: {
-        connection: input.connection,
-        externalId: input.installationId,
-        installationId: input.installationId,
-        projectId: input.projectId,
-      },
-    },
+    connectedEvent: githubConnectedEvent(input),
     ...(input.directoryClaim ? { directoryClaim: input.directoryClaim } : {}),
   });
 }
@@ -815,10 +815,37 @@ async function restoreOwnedGithubConnection(input: {
     material: secret.material,
     refresh: secret.refresh,
   });
+  const status = await getConnectionStatus({
+    connection: input.connection,
+    projectId: input.projectId,
+    provider: "github",
+  });
+  if (!status.connected) {
+    await integrationStreamStub(
+      input.projectId,
+      integrationConnectionStreamPath("github", input.connection),
+    ).append(githubConnectedEvent(input));
+  }
   const restoredClaim = await lookupConnectionClaim("github", input.installationId);
   return (
     restoredClaim?.projectId === input.projectId && restoredClaim.connection === input.connection
   );
+}
+
+function githubConnectedEvent(input: {
+  connection: string;
+  installationId: string;
+  projectId: string;
+}) {
+  return {
+    type: "events.iterate.com/github/connected",
+    payload: {
+      connection: input.connection,
+      externalId: input.installationId,
+      installationId: input.installationId,
+      projectId: input.projectId,
+    },
+  };
 }
 
 function githubConnectionSecret(input: { githubAppId: string; installationId: string }) {

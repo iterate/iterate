@@ -85,3 +85,6 @@ existing Telegram steal experience.
 - 2026-07-23: Bugbot found that a retry cleaned only its final displaced owner. A deterministic
   three-project race reproduced the live orphaned secret. The loop now bricks every displaced
   owner, restores a briefly bricked winner, and verifies ownership again before success.
+- 2026-07-23: Bugbot's follow-up correctly noted that restoring only the secret left the lifecycle
+  journal disconnected and that replay skipped repair. Ownership settlement now restores secret
+  and connected fact together, and both the retry and replay paths use it before returning.

@@ -513,6 +513,10 @@ describe("completeConnect (github App installation)", () => {
       projectId: PROJECT_ID,
       path: githubConnectionSecretPath("install-789"),
     });
+    const targetJournalName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: "/integrations/github/install-789",
+    });
     await network.SECRET.getByName(projectASecretName).create({
       egress: { urls: ["https://api.github.com"] },
       material: {},
@@ -569,6 +573,14 @@ describe("completeConnect (github App installation)", () => {
       // Project C's successful steal dispossesses the target before this
       // confirmation retries and wins ownership back.
       await network.SECRET.getByName(targetSecretName).update({ egress: { urls: [] } });
+      await network.STREAM.getByName(targetJournalName).append({
+        payload: {
+          connection: "install-789",
+          projectId: PROJECT_ID,
+          reason: "stolen-by-another-project",
+        },
+        type: "events.iterate.com/github/disconnected",
+      });
     });
 
     await expect(
@@ -587,6 +599,38 @@ describe("completeConnect (github App installation)", () => {
         urls: expect.arrayContaining(["https://api.github.com", "https://uploads.github.com"]),
       },
     });
+    expect(network.streams.get(targetJournalName)?.at(-1)?.type).toBe(
+      "events.iterate.com/github/connected",
+    );
+
+    // A displaced stealer can finish cleanup after this project has reclaimed
+    // ownership. Replaying the same confirmation must repair both the bricked
+    // secret and the disconnected lifecycle projection.
+    await network.SECRET.getByName(targetSecretName).update({ egress: { urls: [] } });
+    await network.STREAM.getByName(targetJournalName).append({
+      payload: {
+        connection: "install-789",
+        projectId: PROJECT_ID,
+        reason: "stolen-by-another-project",
+      },
+      type: "events.iterate.com/github/disconnected",
+    });
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state,
+        userId: "user_1",
+      }),
+    ).resolves.toEqual({ connection: "install-789", ok: true });
+    expect(network.secrets.get(targetSecretName)).toMatchObject({
+      egress: {
+        urls: expect.arrayContaining(["https://api.github.com", "https://uploads.github.com"]),
+      },
+    });
+    expect(network.streams.get(targetJournalName)?.at(-1)?.type).toBe(
+      "events.iterate.com/github/connected",
+    );
   });
 
   test("a concurrent foreign claim wins once and bricks the losing connection", async () => {
