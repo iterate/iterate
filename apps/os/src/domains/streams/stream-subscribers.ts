@@ -787,10 +787,9 @@ export class StreamSubscribers {
    * A push delivery failed. `park` mode (and every poke failure) goes through
    * the shared backoff/park machine. `skip` mode first bisects the batch to
    * isolate the poison event, requires SKIP_CONFIRM_ATTEMPTS consecutive
-   * failures of that lone event before stepping over it, and stops skipping
-   * when skips run consecutive (a receiver that fails everything is DOWN, not
-   * poisoned — mass-skipping its backlog would be silent data loss): at the
-   * cap it rejoins the shared backoff/park machine and rides out the outage.
+   * failures of that lone event before stepping over it, and still parks when
+   * skips run consecutive (a receiver that fails everything is DOWN, not
+   * poisoned — mass-skipping its backlog would be silent data loss).
    */
   #onPushFailure(args: {
     subscriptionKey: string;
@@ -829,17 +828,10 @@ export class StreamSubscribers {
       }
       // Confirmed poison — unless skips are running consecutive, in which
       // case the receiver is down (everything fails, nothing is "the" poison
-      // event) and mass-skipping its backlog would be silent data loss. Down
-      // is an outage, not a verdict: hold the cursor and rejoin the shared
-      // backoff/park machine — the row's attempt counter keeps growing past
-      // the confirm threshold, so backoff stretches toward the cap and the
-      // subscription only parks after MAX_DELIVERY_ATTEMPTS total consecutive
-      // failures, the same ~hours of tolerance park mode gives any outage.
-      // (Parking here instead once turned a ~10s transport blip into a
-      // permanently stalled config-worker feed needing a human Resume click.)
+      // event) and mass-skipping its backlog would be silent data loss: park.
       const skips = (this.#consecutiveSkips.get(subscriptionKey) ?? 0) + 1;
       if (skips >= MAX_CONSECUTIVE_SKIPS) {
-        this.#onDeliveryFailure(subscriptionKey, error, row?.attempt ?? 0);
+        this.#park(subscriptionKey, attempt, error);
         return "stop";
       }
       const poison = matched[0]!;
