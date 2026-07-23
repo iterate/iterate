@@ -10,6 +10,65 @@ Four candidate designs were each prototyped independently against the real code
 (by parallel Claude subagents), and a Codex `gpt-5.6-sol` xhigh pass audited the
 same surface. The candidates and the evidence that decided between them:
 
+## TL;DR — the minimal fix (net ≈ −228 lines, less complexity, more robust)
+
+The first draft of this doc grew a 7-step plan. That was over-built. Re-examined
+for _smallest change / least complexity / most robustness_, grounded in
+Cloudflare's own docs and a real LOC count, the answer is **two changes, one of
+them a pure deletion**:
+
+1. **Delete the entire rollout gate and its plumbing — ~241 lines removed, 0
+   added.** This is not just cleanup: **Cloudflare documents no way to wait for a
+   rollout to become globally consistent.** DO code propagation is eventually
+   consistent and a new Worker calls old-version DOs "for seconds to minutes"
+   ([known
+   issues](https://developers.cloudflare.com/durable-objects/platform/known-issues/));
+   the _only_ supported remedy is forward/backward-compatible code — "design for
+   skew." A time/probe gate is categorically the wrong tool, so the whole
+   subsystem (`preview-rollout-gate.ts`, `previewMinimumDeploymentAgeMs`, the
+   resolve functions, the before-suite sleep, the rollout-settle lane, the
+   per-spec `testInfo.setTimeout` extensions, the `PREVIEW_APP_ROLLOUT_*` env
+   vars, the config field) should go.
+
+2. **Close the one real gap: `waitForEvent` re-throws on reset — ~12 lines
+   added.** `create()`'s `project/ready` wait (`rpc-targets.ts:628-717`) already
+   re-arms a fresh subscription from a pinned `replayAfterOffset` on each slice,
+   but only `continue`s on a slice-timeout — on a DO reset it calls
+   `rethrowStreamUnavailable` and surfaces a create failure. Add a reset branch
+   at the ~3 reject sites (658, 665, 716) that `continue`s (with a small backoff),
+   reusing the **existing** `isRetryableDurableObjectAvailabilityError` classifier
+   and the **existing** deadline. The loop already mints a fresh stub each slice —
+   which is exactly Cloudflare's blessed retry shape (bounded, backed-off, fresh
+   stub, retry only the retryable class).
+
+Everything else in the create saga already self-heals (keyed-append retry,
+processor-relay retry); this closes the single path that still surfaces a reset.
+**Net effect: delete a whole subsystem, add ~12 lines, and the reset is now
+absorbed in-process wherever eventual consistency lands it — instead of slept
+through and hoped.** That is strictly more robust _and_ strictly less code.
+
+**Two small, separable hardening fixes** (real per Cloudflare, but independent of
+the gate deletion — do them as their own tiny PRs, not as a precondition):
+
+- **Stop retrying `overloaded`** (audit finding B2). Cloudflare is explicit:
+  `.overloaded` "should not be retried… retrying will worsen the overload"
+  ([error
+  handling](https://developers.cloudflare.com/durable-objects/best-practices/error-handling/)),
+  yet `isDurableObjectLifecycleError` (`stream-unavailable.ts:38-45`) retries it
+  alongside `reset`/`retryable`. Split it out. ~5 lines, one classifier.
+- **Match the blessed retry cadence.** `waitUntilProcessed`'s ~1 Hz
+  deadline-loop drifts from Cloudflare's "exponential backoff + jitter, small
+  attempt cap." Minor; align when touching it.
+
+**Cut from the first draft as not load-bearing** for deleting the gate: the
+explicit-`create()`-contract change (#2273/B3 — orthogonal ambiguous-success
+concern), the post-deploy canary (the marathon already _is_ the evidence), the
+fixture consolidation (good hygiene, optional), and the concurrency sweep (B4 —
+its own operational task). The active-readiness probe (C4) is not merely cut but
+**refuted** — Cloudflare confirms no convergence gate can exist.
+
+The detailed candidate analysis and the fuller (optional) version follow.
+
 ## The failure mode, stated correctly
 
 After a fresh Worker version deploys, Cloudflare resets each Durable Object to
@@ -96,12 +155,16 @@ reset whenever/wherever it lands are sound.** C4 is viable _only_ as an explicit
 owner-and-removal-criterion quarantine if C2 is judged too risky to land at once
 — never as readiness proof.
 
-## Recommendation
+## The fuller version (optional — only if you want more than the minimal fix)
 
-**Land C2 (finish the self-healing saga) as the core, with the classifier split
-that finding B2 requires, model `create()`'s outcome explicitly (finding B3),
-consolidate fixtures with C3, delete the blind gate, and replace it with a
-post-deploy recovery _canary_ (not a gate).** In order:
+> **Read the [TL;DR minimal fix](#tldr--the-minimal-fix-net--228-lines-less-complexity-more-robust)
+> first.** The two-change minimal fix above is the recommendation. The steps
+> below are the same ideas expanded, plus the _optional_ extras (explicit create
+> contract, fixture consolidation, canary, concurrency sweep). Treat them as a
+> menu of independent follow-ups, **not** as a single package that must land
+> together — bundling them was the over-build the maintainer pushed back on.
+
+In order:
 
 1. **Split the availability classifier** (foundational; fixes B2). Replace the
    single boolean with a discriminated result `"reset" | "retryable" |
