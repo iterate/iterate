@@ -147,12 +147,15 @@ describe("retries live in exactly one layer", () => {
     expect(script.split("pnpm exec tsx e2e/vitest/onboarding-smoke.ts")).toHaveLength(2);
   });
 
-  it("the onboarding smoke gets one retry, like every other test", () => {
+  it("the onboarding smoke gets one retry and waits at its project-creation boundary", () => {
     const source = readFileSync(
       resolve(repoRoot, "apps/os/e2e/vitest/onboarding-smoke.ts"),
       "utf8",
     );
     expect(source).toContain("const ATTEMPTS = 2;");
+    const rolloutGate = "await waitForPreviewRolloutBeforeProjectCreation();";
+    expect(source).toContain(rolloutGate);
+    expect(source.indexOf(rolloutGate)).toBeLessThan(source.indexOf("root.projects.get("));
   });
 
   it("bounds the onboarding smoke as a joined background lane", () => {

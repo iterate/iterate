@@ -910,8 +910,9 @@ describe("preview test commands", () => {
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
     // Independent setup starts immediately. Playwright begins as soon as
-    // Chromium is ready. Its project fixture consumes the absolute deadline
-    // from the environment, while the smoke and age clock gate Vitest here.
+    // Chromium is ready. Its project fixture and the smoke consume the
+    // absolute deadline from the environment, while the age clock gates
+    // Vitest here.
     for (const lane of ["run_visible_lane rollout-settle sleep", smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
