@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
 import { z } from "zod/v4";
 import type {
   IterateAuthAccessTokenOrganizationClaim,
@@ -6,6 +6,7 @@ import type {
 } from "@iterate-com/shared/auth-claims";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
@@ -51,16 +52,28 @@ let configPromise: Promise<OsPlaywrightAuthConfig> | undefined;
 
 export async function createProjectFixture(
   slugPrefix: string,
-  input: { baseURL: string | undefined; page: Page; projectCount?: number },
+  input: {
+    baseURL: string | undefined;
+    page: Page;
+    projectCount?: number;
+    testInfo: TestInfo;
+  },
 ) {
   const baseUrl = input.baseURL;
   if (!baseUrl) throw new Error("Playwright baseURL fixture is required.");
 
+  const [config] = await Promise.all([
+    resolveOsPlaywrightAuthConfig(),
+    waitForPreviewRolloutBeforeProjectCreation({
+      beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
+    }),
+  ]);
   const projectSlug = uniqueFixtureSlug(slugPrefix);
   const projectFixtures = await Promise.all(
     Array.from({ length: input.projectCount ?? 1 }, (_, index) =>
-      createAdminProject({
+      createAdminProjectAfterPreviewRollout({
         baseUrl,
+        config,
         slug: index === 0 ? projectSlug : uniqueFixtureSlug(`${slugPrefix}-${index + 1}`),
       }),
     ),
@@ -130,8 +143,11 @@ export async function connectAdminItx(baseUrl: string) {
   });
 }
 
-export async function createAdminProject(input: { baseUrl: string; slug: string }) {
-  const config = await resolveOsPlaywrightAuthConfig();
+async function createAdminProjectAfterPreviewRollout(input: {
+  baseUrl: string;
+  config: OsPlaywrightAuthConfig;
+  slug: string;
+}) {
   // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
   // token})`) and then poll `project.processor.onStateChange` until the
   // project reached phase "ready". The itx create resolves only after the
@@ -139,7 +155,7 @@ export async function createAdminProject(input: { baseUrl: string; slug: string 
   // seeded, project worker probed), so the readiness wait is gone and auth is
   // an explicit admin-secret credential on connect.
   using session = connectItx({
-    auth: { type: "admin-secret", secret: config.adminApiSecret },
+    auth: { type: "admin-secret", secret: input.config.adminApiSecret },
     baseUrl: input.baseUrl,
     headers: cloudflareWorkerVersionOverrideHeaders(process.env),
   });

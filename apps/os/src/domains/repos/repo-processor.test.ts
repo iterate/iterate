@@ -270,10 +270,13 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
-  it("settles a vendor failure as create-failed instead of claiming the repo was created", async () => {
+  it("settles a non-retryable Artifacts input failure as create-failed", async () => {
     const h = makeRepoHarness();
     h.importPublic.impl = async () => {
-      throw new Error("Cloudflare Artifacts 10400: An internal error occurred");
+      throw Object.assign(new Error("The repository name is invalid."), {
+        code: "INVALID_REPO_NAME",
+        name: "ArtifactsError",
+      });
     };
     const request = {
       type: "github-public" as const,
@@ -290,7 +293,7 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repos/create-failed")).toMatchObject([
       {
         idempotencyKey: "repo/create-failed",
-        payload: { error: "Cloudflare Artifacts 10400: An internal error occurred", request },
+        payload: { error: "The repository name is invalid.", request },
       },
     ]);
     expect(h.state()).toMatchObject({ createFailure: { request }, birthCertificate: null });

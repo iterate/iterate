@@ -95,6 +95,31 @@ describe("RepoProcessor eviction recovery", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
+  it("redelivers an Artifacts infrastructure failure without poisoning the repo", async () => {
+    const h = makeHarness();
+    let calls = 0;
+    h.createEmpty.impl = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw Object.assign(new Error("An internal error occurred."), {
+          code: "INTERNAL_ERROR",
+          name: "ArtifactsError",
+        });
+      }
+      return CREATED_ARTIFACT;
+    };
+    await h.stream.append(EMPTY_REQUEST);
+
+    await expect(h.settle()).rejects.toThrow("An internal error occurred.");
+    expect(calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
+
+    await h.settle();
+
+    expect(calls).toBe(2);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
   it("re-drives an interrupted creation obligation after the keepalive alarm", async () => {
     const h = makeHarness();
     h.createEmpty.impl = () => new Promise<never>(() => {});
