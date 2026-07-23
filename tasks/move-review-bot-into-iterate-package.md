@@ -3,7 +3,7 @@ size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: Both Misha failures now have green regressions: the package ships a physical worker entry point, and alarm-observed source failures survive long enough to park subscribers with the exact error. Package/OS typechecks and 79 focused tests pass; the production workerd smoke remains.
+Status: Misha now reaches the physical v3 worker entry point, but its production workerd smoke exposed a bare `yaml` import in the published runtime graph. A package-build gate now reproduces the incomplete artifact; making the configured worker standalone remains.
 
 ## Plan
 
@@ -46,3 +46,4 @@ Status: Both Misha failures now have green regressions: the package ships a phys
 - 2026-07-23: Added `dist/github-ai-linter/configured-worker.mjs` as the physical entry point, kept only the per-install config virtual, and bumped subscription config to v3 so Misha replaces the temporary smoke subscription.
 - 2026-07-23: Cloudflare traces showed each build settling as `source-failed` in about 0.6 seconds while the subscriber retained `This worker is still building.` and retried. The follow-up must durably expose that terminal compiler error and park the subscription.
 - 2026-07-23: Added a one-shot durable terminal-failure receipt to the keyed build coordinator. The next foreground call consumes it, the loader restores the non-retryable verdict after Workers RPC, and the stream parks on the first exact source error without another alarm; explicit resume can still retry a potentially transient package-install failure.
+- 2026-07-23: Misha successfully emitted the v3 subscription from config commit `5247613a`, then workerd rejected the packaged graph with `No such module "yaml"`. Added a post-build module-graph check so a configured worker with consumer-supplied bare imports cannot publish again.

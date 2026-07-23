@@ -3,5 +3,11 @@
   "existingSubscription": {
     "durableWorkerKey": "app-review-bot:install-114628444-bjinlk2pdykc",
     "idempotencyKey": "review-bot/subscription:v1"
+  },
+  "packagedWorkerFailure": {
+    "configCommit": "5247613a5a827d675d435378c5119ae89744f248",
+    "error": "No such module \"yaml\".\n  imported from \"bundle.js\"",
+    "policyVersion": "misha-smoke-2",
+    "subscriptionOffset": 78
   }
 }

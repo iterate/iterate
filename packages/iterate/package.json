@@ -116,7 +116,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown && tsc -p tsconfig.sdk.json",
+    "build": "tsdown && tsx scripts/check-github-ai-linter-bundle.ts && tsc -p tsconfig.sdk.json",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
