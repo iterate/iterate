@@ -860,6 +860,9 @@ export interface ProjectIntegrations {
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
+  /** Move a GitHub installation after a signed, user-bound OAuth proof has
+   * been returned to the dashboard for explicit confirmation. */
+  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }>;
   /** Disconnect one connection: { provider, connection }. */
   disconnect(input: {
     connection: string;
@@ -2774,6 +2777,12 @@ export type OAuthProviderSlug = "github" | "google" | "slack";
  * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
+  | {
+      callbackUrl: string | null;
+      error: "github_installation_already_claimed";
+      githubStealState: string;
+      ok: false;
+    }
   | { callbackUrl: string | null; error: string; ok: false };
 
 /** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional

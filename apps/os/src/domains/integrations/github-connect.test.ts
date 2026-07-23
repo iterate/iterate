@@ -5,8 +5,8 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { completeConnect } from "./connect-flows.ts";
-import { createOAuthState } from "./oauth-state.ts";
+import { completeConnect, confirmGithubSteal } from "./connect-flows.ts";
+import { createOAuthState, verifyOAuthState } from "./oauth-state.ts";
 import { INTEGRATION_DIRECTORY_STREAM_PATH, githubConnectionSecretPath } from "./utils.ts";
 import { parseConfig } from "~/config.ts";
 
@@ -177,7 +177,7 @@ describe("completeConnect (github App installation)", () => {
     expect(network.secrets.size).toBe(0);
   });
 
-  test("an installation already claimed by another project cannot be reassigned", async () => {
+  test("a foreign claim returns a signed confirmation proof without changing storage", async () => {
     const directoryName = DurableObjectNameCodec.stringify(
       { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
       { allowNullProjectId: true },
@@ -218,21 +218,272 @@ describe("completeConnect (github App installation)", () => {
       }),
     );
 
-    await expect(
-      completeConnect({
-        code: "oauth-code",
-        config: testConfig(),
-        projectId: PROJECT_ID,
-        provider: "github",
-        state: secondState,
-        userId: "user_1",
-      }),
-    ).resolves.toEqual({
+    const result = await completeConnect({
+      code: "oauth-code",
+      config: testConfig(),
+      projectId: PROJECT_ID,
+      provider: "github",
+      state: secondState,
+      userId: "user_1",
+    });
+    expect(result).toMatchObject({
       callbackUrl: null,
       error: "github_installation_already_claimed",
+      githubStealState: expect.stringMatching(/^v1\./),
       ok: false,
     });
+    if (!result.ok && "githubStealState" in result) {
+      await expect(
+        verifyOAuthState(
+          { provider: "github", state: result.githubStealState },
+          SECRET_ENCRYPTION_KEY,
+        ),
+      ).resolves.toMatchObject({
+        githubInstallationAuthorized: true,
+        githubInstallationId: "789",
+        projectId: PROJECT_ID,
+        userId: "user_1",
+      });
+    }
     expect(network.secrets.size).toBe(0);
+  });
+
+  test("confirming the signed proof moves the installation and dispossesses the old project", async () => {
+    const directoryName = DurableObjectNameCodec.stringify(
+      { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
+      { allowNullProjectId: true },
+    );
+    await network.STREAM.getByName(directoryName).append({
+      payload: {
+        connection: "their-installation",
+        externalId: "789",
+        projectId: "prj_other",
+        slug: "github",
+      },
+      type: "events.iterate.com/integration/connection-claimed",
+    });
+    const oldSecretName = DurableObjectNameCodec.stringify({
+      projectId: "prj_other",
+      path: githubConnectionSecretPath("their-installation"),
+    });
+    await network.SECRET.getByName(oldSecretName).create({
+      egress: { urls: ["https://api.github.com"] },
+      material: {},
+    });
+    const state = await createOAuthState(
+      { projectId: PROJECT_ID, provider: "github", userId: "user_1" },
+      SECRET_ENCRYPTION_KEY,
+    );
+    const setupResult = await completeConnect({
+      config: testConfig(),
+      installationId: "789",
+      projectId: PROJECT_ID,
+      provider: "github",
+      state,
+      userId: "user_1",
+    });
+    const secondState = new URL(setupResult.callbackUrl!).searchParams.get("state")!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (request: RequestInfo | URL) => {
+        const url = String(request);
+        if (url === "https://github.com/login/oauth/access_token") {
+          return Response.json({ access_token: "ghu_user" });
+        }
+        if (url.startsWith("https://api.github.com/user/installations?")) {
+          return Response.json({ installations: [{ id: 789 }] });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+    const conflict = await completeConnect({
+      code: "oauth-code",
+      config: testConfig(),
+      projectId: PROJECT_ID,
+      provider: "github",
+      state: secondState,
+      userId: "user_1",
+    });
+    if (conflict.ok || !("githubStealState" in conflict)) {
+      throw new Error("expected a GitHub steal confirmation state");
+    }
+
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state: conflict.githubStealState,
+        userId: "user_1",
+      }),
+    ).resolves.toEqual({ connection: "install-789", ok: true });
+
+    expect(network.secrets.get(oldSecretName)).toMatchObject({ egress: { urls: [] } });
+    const oldJournalName = DurableObjectNameCodec.stringify({
+      projectId: "prj_other",
+      path: "/integrations/github/their-installation",
+    });
+    expect(network.streams.get(oldJournalName)?.at(-1)).toMatchObject({
+      type: "events.iterate.com/github/disconnected",
+      payload: {
+        connection: "their-installation",
+        projectId: "prj_other",
+        reason: "stolen-by-another-project",
+      },
+    });
+    expect(network.streams.get(directoryName)?.slice(-2)).toMatchObject([
+      {
+        type: "events.iterate.com/integration/connection-unclaimed",
+        payload: {
+          connection: "their-installation",
+          externalId: "789",
+          projectId: "prj_other",
+          slug: "github",
+        },
+      },
+      {
+        type: "events.iterate.com/integration/connection-claimed",
+        payload: {
+          connection: "install-789",
+          externalId: "789",
+          projectId: PROJECT_ID,
+          slug: "github",
+        },
+      },
+    ]);
+    const newSecretName = DurableObjectNameCodec.stringify({
+      projectId: PROJECT_ID,
+      path: githubConnectionSecretPath("install-789"),
+    });
+    expect(network.secrets.get(newSecretName)).toMatchObject({
+      egress: {
+        urls: expect.arrayContaining(["https://api.github.com", "https://uploads.github.com"]),
+      },
+      refresh: {
+        appId: "123456",
+        installationId: "789",
+        kind: "github-app-installation",
+      },
+    });
+
+    const directoryEventCount = network.streams.get(directoryName)?.length;
+    const oldJournalEventCount = network.streams.get(oldJournalName)?.length;
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state: conflict.githubStealState,
+        userId: "user_1",
+      }),
+    ).resolves.toEqual({ connection: "install-789", ok: true });
+    expect(network.streams.get(directoryName)).toHaveLength(directoryEventCount!);
+    expect(network.streams.get(oldJournalName)).toHaveLength(oldJournalEventCount!);
+  });
+
+  test("confirmation rejects a different user, project, or unsigned authorization", async () => {
+    const authorizedState = await createOAuthState(
+      {
+        githubInstallationAuthorized: true,
+        githubInstallationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    const unprovedState = await createOAuthState(
+      {
+        githubInstallationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state: authorizedState,
+        userId: "user_2",
+      }),
+    ).rejects.toThrow("Invalid or expired GitHub installation move confirmation.");
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: "prj_other",
+        state: authorizedState,
+        userId: "user_1",
+      }),
+    ).rejects.toThrow("Invalid or expired GitHub installation move confirmation.");
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state: unprovedState,
+        userId: "user_1",
+      }),
+    ).rejects.toThrow("Invalid or expired GitHub installation move confirmation.");
+    expect(network.secrets.size).toBe(0);
+    expect(network.streams.size).toBe(0);
+  });
+
+  test("confirmation connects normally if the old project releases its claim first", async () => {
+    const directoryName = DurableObjectNameCodec.stringify(
+      { path: INTEGRATION_DIRECTORY_STREAM_PATH, projectId: null },
+      { allowNullProjectId: true },
+    );
+    const directory = network.STREAM.getByName(directoryName);
+    await directory.append({
+      payload: {
+        connection: "their-installation",
+        externalId: "789",
+        projectId: "prj_other",
+        slug: "github",
+      },
+      type: "events.iterate.com/integration/connection-claimed",
+    });
+    const state = await createOAuthState(
+      {
+        githubInstallationAuthorized: true,
+        githubInstallationId: "789",
+        projectId: PROJECT_ID,
+        provider: "github",
+        userId: "user_1",
+      },
+      SECRET_ENCRYPTION_KEY,
+    );
+    await directory.append({
+      payload: {
+        connection: "their-installation",
+        externalId: "789",
+        projectId: "prj_other",
+        slug: "github",
+      },
+      type: "events.iterate.com/integration/connection-unclaimed",
+    });
+
+    await expect(
+      confirmGithubSteal({
+        config: testConfig(),
+        projectId: PROJECT_ID,
+        state,
+        userId: "user_1",
+      }),
+    ).resolves.toEqual({ connection: "install-789", ok: true });
+    expect(network.streams.get(directoryName)?.at(-1)).toMatchObject({
+      type: "events.iterate.com/integration/connection-claimed",
+      payload: {
+        connection: "install-789",
+        externalId: "789",
+        projectId: PROJECT_ID,
+      },
+    });
+    const oldJournalName = DurableObjectNameCodec.stringify({
+      projectId: "prj_other",
+      path: "/integrations/github/their-installation",
+    });
+    expect(network.streams.has(oldJournalName)).toBe(false);
   });
 
   test("a concurrent foreign claim wins once and bricks the losing connection", async () => {
@@ -281,18 +532,18 @@ describe("completeConnect (github App installation)", () => {
       });
     });
 
-    await expect(
-      completeConnect({
-        code: "oauth-code",
-        config: testConfig(),
-        projectId: PROJECT_ID,
-        provider: "github",
-        state: secondState,
-        userId: "user_1",
-      }),
-    ).resolves.toEqual({
+    const result = await completeConnect({
+      code: "oauth-code",
+      config: testConfig(),
+      projectId: PROJECT_ID,
+      provider: "github",
+      state: secondState,
+      userId: "user_1",
+    });
+    expect(result).toMatchObject({
       callbackUrl: null,
       error: "github_installation_already_claimed",
+      githubStealState: expect.stringMatching(/^v1\./),
       ok: false,
     });
 

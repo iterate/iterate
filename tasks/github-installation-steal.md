@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: verifying
 size: medium
 ---
 
@@ -7,10 +7,9 @@ size: medium
 
 ## Status
 
-Specification complete; implementation has not started. The intended flow reuses the successful
-GitHub OAuth proof, asks for explicit confirmation in the integrations page, then moves the
-installation without an unclaimed webhook-routing window. Tests, UI proof, preview verification,
-and review follow-up remain.
+Implementation and focused domain tests are complete. The signed confirmation flow, authenticated
+RPC, atomic claim move, old-connection cleanup, dialog, docs, and generated API are in place.
+Repository checks, preview/browser proof, and review follow-up remain.
 
 ## Goal
 
@@ -42,17 +41,24 @@ existing Telegram steal experience.
 
 ## Checklist
 
-- [ ] Return a signed GitHub steal-confirmation state only after successful GitHub user OAuth proof.
-- [ ] Add an authenticated `confirmGithubSteal({ state })` project RPC that validates the signed
-      project/user/installation proof.
-- [ ] Move the directory claim atomically, prepare the new connection first, and dispossess the old
-      project afterward without leaking its identity.
-- [ ] Make confirmation replay safe and handle a claim released between prompt and confirmation.
+- [x] Return a signed GitHub steal-confirmation state only after successful GitHub user OAuth proof.
+      *The callback mints a short-lived `githubInstallationAuthorized` state after GitHub enumerates
+      the installation for the signed-in user.*
+- [x] Add an authenticated `confirmGithubSteal({ state })` project RPC that validates the signed
+      project/user/installation proof. *`ProjectIntegrationsRpcTarget` derives the user from its
+      authenticated principal.*
+- [x] Move the directory claim atomically, prepare the new connection first, and dispossess the old
+      project afterward without leaking its identity. *`confirmGithubSteal` batches the unclaim and
+      claim, then records `stolen-by-another-project` on the old journal.*
+- [x] Make confirmation replay safe and handle a claim released between prompt and confirmation.
+      *Focused tests cover both outcomes.*
 - [ ] Show an accessible destructive confirmation dialog on the integrations page; cancel clears
       the error/state and confirm connects without repeating OAuth.
-- [ ] Add focused red-green tests for conflict proof, authorization checks, transfer side effects,
-      replay, and released-claim behavior.
-- [ ] Update the GitHub integration docs and generated public itx API artifacts.
+- [x] Add focused red-green tests for conflict proof, authorization checks, transfer side effects,
+      replay, and released-claim behavior. *Nine GitHub connect tests pass.*
+- [x] Update the GitHub integration docs and generated public itx API artifacts.
+      *The design doc describes OAuth proof and claim moves; both generated itx API copies and the
+      graph include `confirmGithubSteal`.*
 - [ ] Run focused tests and repository pre-PR checks; verify the flow in a headed browser on a
       preview deployment and add visual proof to the PR.
 - [ ] Move this task to `tasks/complete/` and update the PR body when implementation and review are
@@ -63,3 +69,5 @@ existing Telegram steal experience.
 - 2026-07-23: Production diagnosis found installation `114628444` live on `task-demo`; the current
   callback correctly rejected connecting it to `misha`. That concrete case defines the acceptance
   flow for this task.
+- 2026-07-23: Added the signed proof, explicit RPC, safe transfer ordering, dashboard dialog, and
+  focused regression coverage. Focused tests and the OS typecheck pass.

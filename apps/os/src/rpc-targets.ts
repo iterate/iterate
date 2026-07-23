@@ -125,6 +125,7 @@ import {
 } from "./domains/secrets/utils.ts";
 import {
   completeConnect,
+  confirmGithubSteal,
   connectTelegram,
   disconnectProvider,
   getConnectionStatus,
@@ -3520,6 +3521,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       provider: input.provider,
       state: input.state,
       userId: input.userId,
+    });
+  }
+
+  /** Move a GitHub installation after a signed, user-bound OAuth proof has
+   * been returned to the dashboard for explicit confirmation. */
+  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) {
+      throw new Error("Confirming a GitHub installation move requires a signed-in user.");
+    }
+    return confirmGithubSteal({
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      state: input.state,
+      userId: user.userId,
     });
   }
 

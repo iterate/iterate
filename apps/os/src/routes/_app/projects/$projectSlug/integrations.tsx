@@ -85,6 +85,9 @@ type ConnectionEntry = Awaited<ReturnType<Project["integrations"]["list"]>>[numb
 
 const Search = StreamViewSearch.extend({
   error: z.string().optional(),
+  /** Signed proof that GitHub user OAuth authorized moving an installation
+   * currently claimed by another project. */
+  githubSteal: z.string().optional(),
   /** Deep-link target: `?connect=<slug>` auto-starts that integration's connect
    * flow on mount, then clears itself so a refresh never re-triggers. */
   connect: z.string().optional(),
@@ -186,7 +189,10 @@ function ProjectIntegrationsContent() {
     });
   };
   const providedConnections = (connections ?? []).filter((entry) => entry.source === "provided");
-  const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
+  const githubStealState =
+    search.error === "github_installation_already_claimed" ? search.githubSteal || null : null;
+  const oauthErrorLabel =
+    search.error && githubStealState === null ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation({
     mutationFn: async () => {
@@ -247,6 +253,18 @@ function ProjectIntegrationsContent() {
       toast.success("GitHub disconnected");
     },
     onError: (error) => toast.error(`Failed to disconnect GitHub: ${error.message}`),
+  });
+  const stealGithub = useMutation({
+    mutationFn: async (state: string) => await itx.integrations.confirmGithubSteal({ state }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
+      await navigate({
+        replace: true,
+        search: (previous) => ({ ...previous, error: undefined, githubSteal: undefined }),
+      });
+      toast.success("GitHub installation moved");
+    },
+    onError: (error) => toast.error(`Failed to move GitHub installation: ${error.message}`),
   });
   const disconnectGoogle = useMutation({
     mutationFn: async (connection: string) =>
@@ -314,6 +332,45 @@ function ProjectIntegrationsContent() {
   // live /integrations feed; the domain UI is the panel beside it.
   const panel = (
     <>
+      <AlertDialog open={githubStealState !== null}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Steal this GitHub installation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This installation is already connected to another project. Stealing it disconnects
+              that project and routes future GitHub activity here.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={stealGithub.isPending}
+              onClick={() => {
+                void navigate({
+                  replace: true,
+                  search: (previous) => ({
+                    ...previous,
+                    error: undefined,
+                    githubSteal: undefined,
+                  }),
+                });
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={stealGithub.isPending}
+              onClick={() => {
+                if (githubStealState !== null) stealGithub.mutate(githubStealState);
+              }}
+            >
+              {stealGithub.isPending ? <Spinner data-icon="inline-start" /> : null}
+              {stealGithub.isPending ? "Stealing..." : "Steal it"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {oauthErrorLabel ? (
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
