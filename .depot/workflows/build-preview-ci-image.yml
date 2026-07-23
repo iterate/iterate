@@ -1,12 +1,20 @@
 name: Build Preview CI Image
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "**/package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/depot-ci/bake-preview-ci-image.sh"
+      - ".depot/workflows/build-preview-ci-image.yml"
   schedule:
-    # Weekly (Mondays 04:17 UTC). Mainline checks and production deploys use
-    # this snapshot; preview deploy/e2e uses Depot's standard runners. The
-    # reconcile step in each consumer validates the baked workspace against
-    # the checked-out lockfile, so weekly baking keeps startup fast without a
-    # daily image build. See docs/depot-ci.md.
+    # Weekly (Mondays 04:17 UTC) repairs drift even when dependency inputs have
+    # not changed. Relevant mainline changes rebuild immediately so consumers
+    # rarely spend startup time reconciling a stale snapshot. The reconcile
+    # step remains the correctness authority. See docs/depot-ci.md.
     - cron: "17 4 * * 1"
   workflow_dispatch: {}
 
