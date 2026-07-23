@@ -78,6 +78,49 @@ boundary plus onboarding smoke settled. Round 15 begins at 0/25 and first
 measures unchanged warm-slot runs through the canonical Depot workflow before
 changing the rollout critical path.
 
+### Round 15 seven-minute proof and Project description reset
+
+Exact head `a0706e02629ec20ca205fdf12596cbc2b6f0d7f5` produced five consecutive
+clean canonical runs in 339, 333, 271, 251, and 411 seconds. The fifth run
+(`q5hjb85fr1`) completed in 6 minutes 51 seconds with zero framework retries.
+That is direct evidence for the 420-second proof ceiling: the old five-minute
+limit would have rejected a complete, clean run, while the revised limit left
+only nine seconds of headroom.
+
+Run six (`ngtx6pwk2h`) finished in 241 seconds but is rejected because
+`repo-ide-markdown-preview.spec.ts` passed only on Playwright's second attempt.
+The first attempt created its project successfully, then the pipelined
+`Project.__describe()` call was rejected with `durableObjectReset: true` and
+`Durable Object reset because its code was updated.` Exact-version Cloudflare
+trace `0bd2b7add32f43a5e61359103b532f4f` places the Project Durable Object reset
+about 140 seconds after the OS deployment was recorded—well after the existing
+90-second deployment-age gate. Repo and Stream Durable Objects reset in the
+same interval. This is therefore deployment-wide lifecycle behavior, not a
+markdown-preview assertion failure or a project-creation collision.
+
+PostHog confirms the scope: during the preceding seven days the same explicit
+code-update reset reached at least 20 different live test names across
+unrelated branches. Cloudflare documents Worker and Durable Object rollout as
+eventually consistent over seconds to minutes and provides no finite
+deployment-complete barrier for all Durable Object identities. Increasing a
+fixed pre-test sleep would add permanent critical-path latency without proving
+that a later identity cannot be reassigned.
+
+The product boundary is instead made honest: the read-only Project description
+operation now uses the existing Durable Object availability helper for exactly
+one observable replay. The whole logical read is repeated so its Project and
+Capability Host snapshots remain from one attempt. Only workerd lifecycle flags
+or the explicit cross-RPC stream-unavailable contract qualify; application
+errors remain authoritative and no mutation can be replayed. The first reset
+is logged with project and scope context, and a second failure is returned.
+Focused tests cover resets from either Durable Object branch, and the shared
+classifier tests retain the no-application-error/no-loop guarantees.
+
+The retry resets the accepted streak to 0/25. Merging current `origin/main` at
+`ecc8d1fa48d17eda5e12b9c7ff6f03b75d8d0358` also invalidates the earlier
+immutable head, so the next accepted proof starts from the merged corrective
+head with the same seven-minute ceiling.
+
 ## Round 14 (2026-07-23, post-#2275)
 
 PR #2275 made preview worker builds fail closed when the dependency installer

@@ -481,8 +481,8 @@ function detachPlainRpcResult(result: object): object {
 /**
  * One replay of an idempotent Durable Object call with the absorbed first
  * failure logged — the single onRetry shape shared by every retrying door in
- * this file (stream reads, keyed appends, workspace reads, script rejoins,
- * the agent-create wait).
+ * this file (stream reads, keyed appends, workspace reads, project
+ * descriptions, script rejoins, the agent-create wait).
  */
 function retryLoggedIdempotentOperation<Result>(input: {
   context: Record<string, unknown>;
@@ -5493,10 +5493,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    */
   async __describe(): Promise<ProjectDescription> {
     const scopePath = this.#capabilityHost.path;
-    const [project, hostDescription] = await Promise.all([
-      this.durableObjectStub.describe(),
-      this.#capabilityHost.__describe(),
-    ]);
+    const [project, hostDescription] = await retryLoggedIdempotentOperation({
+      context: { projectId: this.#projectId, scopePath },
+      message: "project description retrying after Durable Object reset",
+      operation: () =>
+        Promise.all([this.durableObjectStub.describe(), this.#capabilityHost.__describe()]),
+    });
     const mountedCapabilities = hostDescription.capabilities;
     return describeNode({
       instructions:
