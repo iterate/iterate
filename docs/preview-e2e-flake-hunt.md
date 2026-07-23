@@ -111,6 +111,22 @@ is a visible bounded lifecycle gate, not a retry, test quarantine, synthetic
 Durable Object sampler, or serial deployment barrier. The accepted counter
 remains 0/25 until the new immutable PR head completes the canonical marathon.
 
+The first formal head then passed four consecutive full runs in 231–241
+seconds with zero retries. Run 5 took 361 seconds and was rejected because two
+Playwright cases needed their permitted retry. Both failed before their named
+stimulus: one fresh onboarding feed never painted its greeting, and one REPL
+case timed out inside project creation. Cloudflare telemetry for the first
+project records successful birth/readiness followed by `durableObjectReset`
+warnings on its stream sink at `00:05:00Z` and `00:05:04Z`. Its creation began
+before the 90-second clock expired, because only Vitest consumed that boundary.
+
+The follow-up keeps the Playwright process parallel but passes the absolute
+rollout deadline into its project helpers. Forged-session creation and the real
+email-signup form wait only immediately before creating a project; Chromium,
+page setup, authentication, browser-only specs, smoke, TUI, and other app suites
+continue to overlap the rollout. The rejected 4/25 streak remains diagnostic
+evidence only; the accepted counter restarts at 0/25 on the new head.
+
 ## Round 9 (2026-07-22, post-#2260)
 
 This proof starts from `origin/main` at

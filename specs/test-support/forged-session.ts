@@ -6,6 +6,7 @@ import type {
 } from "@iterate-com/shared/auth-claims";
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
+import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { connectItx } from "iterate/node";
 import { doppler } from "../../apps/os/scripts/dev.ts";
 import { mintForgedAccessToken, mintForgedIdToken } from "../../scripts/auth/forge-token.ts";
@@ -132,6 +133,7 @@ export async function connectAdminItx(baseUrl: string) {
 
 export async function createAdminProject(input: { baseUrl: string; slug: string }) {
   const config = await resolveOsPlaywrightAuthConfig();
+  await waitForPreviewRolloutBeforeProjectCreation();
   // itx-v4 cutover: this used to dial the legacy client (`withItx({baseUrl,
   // token})`) and then poll `project.processor.onStateChange` until the
   // project reached phase "ready". The itx create resolves only after the

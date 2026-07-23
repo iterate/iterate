@@ -10,6 +10,7 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
+import { resolvePreviewRolloutWaitMs } from "@iterate-com/shared/test-support/preview-rollout-gate";
 import { createProjectFixture as createForgedProjectFixture } from "./forged-session.ts";
 import { screenshot } from "./screenshot.ts";
 
@@ -41,6 +42,7 @@ export const test = base.extend<{
     ) => Promise<Awaited<ReturnType<typeof createForgedProjectFixture>>>;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
+  previewRolloutTimeoutBudget: void;
 }>({
   context: async ({ context }, use) => {
     if (Object.keys(cloudflareWorkerVersionOverrideHeaders(process.env)).length > 0) {
@@ -111,4 +113,15 @@ export const test = base.extend<{
       for (const dispose of extraPageDisposers) await dispose().catch(() => {});
     }
   },
+  previewRolloutTimeoutBudget: [
+    async (_fixtures, use, testInfo) => {
+      // The project-create gate is intentional harness time, not product test
+      // time. Preserve every test's configured execution budget while still
+      // making the wait visible inside its trace and wall-clock telemetry.
+      const rolloutWaitMs = resolvePreviewRolloutWaitMs({ environment: process.env });
+      if (rolloutWaitMs > 0) testInfo.setTimeout(testInfo.timeout + rolloutWaitMs);
+      await use();
+    },
+    { auto: true },
+  ],
 });

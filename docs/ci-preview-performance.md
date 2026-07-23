@@ -16,9 +16,11 @@ The preview lifecycle has two barriers:
 2. Start every selected app test lane together; wait until every lane finishes.
 
 OS starts its onboarding smoke, explicit TUI quarantine marker, Chromium setup,
-Playwright, and a bounded deployment-age clock together. High-fanout Vitest
-joins after the smoke and age clock; both gates normally finish under
-Playwright's longer critical path. Therefore, healthy wall time should approach:
+Playwright, and a bounded deployment-age clock together. Browser and auth setup
+continue immediately, while project-backed Playwright fixture creation and
+high-fanout Vitest respect the rollout boundary. The gate normally finishes
+under Playwright's longer critical path. Therefore, healthy wall time should
+approach:
 
 ```text
 pickup + setup + slowest deploy + slowest test lane + reporting
@@ -36,9 +38,12 @@ raise the budget automatically.
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
 - OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
-  the rollout-age clock run concurrently. High-fanout Vitest waits only for the
-  smoke and clock; every background process is joined even if another one
-  fails, so a failure cannot orphan work or discard another lane's result.
+  the rollout-age clock run concurrently. Playwright workers may perform
+  browser/auth setup immediately, but their shared project-creation helpers
+  wait on the clock's absolute deadline before addressing fresh project-backed
+  Durable Objects. High-fanout Vitest waits only for the smoke and clock; every
+  background process is joined even if another one fails, so a failure cannot
+  orphan work or discard another lane's result.
 - Chromium installation begins before the four OS lanes and overlaps their
   startup.
 - OS Vitest gives every current file a worker immediately and permits at most
@@ -76,11 +81,13 @@ serially because they intentionally share one warm container.
   documents that Worker/DO updates are globally eventually consistent even
   after the new edge Worker answers, and changing an object's assigned version
   resets that object. For a newly deployed OS version, the dense Vitest fan-out
-  therefore waits until 90 seconds after the successful deploy command. The
-  clock overlaps exact-version readiness, onboarding smoke, Chromium setup,
-  Playwright, TUI, and every other app suite. Reused old deployments wait zero
-  seconds. This is one visible lifecycle boundary, not a retry or a synthetic
-  placement sample.
+  therefore waits until 90 seconds after the successful deploy command. Root
+  Playwright receives that absolute deadline too: its process and non-project
+  work begin immediately, while forged-session and real-signup helpers wait at
+  the project-create operation. The clock overlaps exact-version readiness,
+  onboarding smoke, Chromium setup, Playwright setup, TUI, and every other app
+  suite. Reused old deployments wait zero seconds. This is one visible
+  lifecycle boundary, not a retry or a synthetic placement sample.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests

@@ -56,6 +56,7 @@ const {
   resolvePreviewCompareBaseSha,
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
+  resolvePreviewRolloutReadyAtMs,
   resolvePreviewRolloutRemainingSeconds,
   resolvePreviewTestBaseUrlEnvironment,
   resolvePreviewTestTargetPlan,
@@ -879,7 +880,7 @@ describe("preview test commands", () => {
     expect(collector).not.toContain("runner-telemetry");
   });
 
-  test("gates high-fanout OS Vitest on rollout age and the production-shaped smoke", () => {
+  test("starts Playwright early while gating project-backed work and Vitest", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
     const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
@@ -909,8 +910,8 @@ describe("preview test commands", () => {
     expect(script).toContain('[ "$TUI_OK" -eq 0 ]');
     expect(script).toContain('[ "$E2E_OK" -eq 0 ]');
     // Independent setup starts immediately. Playwright begins as soon as
-    // Chromium is ready, while the production-shaped smoke and bounded
-    // deployment-age clock gate only high-fanout Vitest.
+    // Chromium is ready. Its project fixture consumes the absolute deadline
+    // from the environment, while the smoke and age clock gate Vitest here.
     for (const lane of ["run_visible_lane rollout-settle sleep", smokeLane, tuiLane]) {
       expect(script.indexOf(lane)).toBeLessThan(script.indexOf('wait "$PW_INSTALL_PID"'));
     }
@@ -954,6 +955,8 @@ describe("preview test commands", () => {
       }),
     ).toBe(0);
     expect(resolvePreviewRolloutRemainingSeconds({ appSlug: "os", nowMs: now })).toBe(0);
+    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "os", deployedAt })).toBe(now + 90_000);
+    expect(resolvePreviewRolloutReadyAtMs({ appSlug: "auth", deployedAt })).toBe(0);
     expect(() =>
       resolvePreviewRolloutRemainingSeconds({
         appSlug: "os",

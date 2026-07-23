@@ -36,6 +36,7 @@ import {
   E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV,
   renderCloudflareWorkerVersionOverrides,
 } from "../../packages/shared/src/test-support/cloudflare-worker-version-overrides.ts";
+import { PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV } from "../../packages/shared/src/test-support/preview-rollout-gate.ts";
 import {
   parseWorkerSizeFromDeployOutput,
   parseWorkerSizeStatusDescription,
@@ -66,9 +67,10 @@ const draftPreviewNotice = [
 // consistent after the new edge Worker version is serving. A newly addressed
 // Durable Object can therefore still be assigned the prior code for seconds
 // to minutes, and an in-flight RPC is reset when that assignment changes.
-// Keep the one dense OS fan-out behind a bounded deployment-age gate; smoke,
-// browser tests, browser installation, and every other app keep running while
-// this clock elapses, so it normally stays off the critical path.
+// Keep project-backed DO creation and the dense OS fan-out behind a bounded
+// deployment-age gate. Browser/auth setup, smoke, installation, and every
+// other app keep running while this clock elapses, so it normally stays off
+// the critical path.
 const osPreviewMinimumDeploymentAgeMs = 90_000;
 const previewRolloutRemainingSecondsEnvironment = "PREVIEW_APP_ROLLOUT_REMAINING_SECONDS";
 
@@ -839,17 +841,24 @@ function resolvePreviewRolloutRemainingSeconds(input: {
   deployedAt?: string | null;
   nowMs?: number;
 }) {
-  if (input.appSlug !== "os" || !input.deployedAt) {
-    return 0;
-  }
+  const readyAtMs = resolvePreviewRolloutReadyAtMs(input);
+  if (readyAtMs === 0) return 0;
+
+  return Math.ceil(Math.max(0, readyAtMs - (input.nowMs ?? Date.now())) / 1_000);
+}
+
+function resolvePreviewRolloutReadyAtMs(input: {
+  appSlug: CloudflarePreviewAppSlugType;
+  deployedAt?: string | null;
+}) {
+  if (input.appSlug !== "os" || !input.deployedAt) return 0;
 
   const deployedAtMs = Date.parse(input.deployedAt);
   if (!Number.isFinite(deployedAtMs)) {
     throw new Error(`Invalid preview deployment timestamp: ${input.deployedAt}`);
   }
 
-  const elapsedMs = Math.max(0, (input.nowMs ?? Date.now()) - deployedAtMs);
-  return Math.ceil(Math.max(0, osPreviewMinimumDeploymentAgeMs - elapsedMs) / 1_000);
+  return deployedAtMs + osPreviewMinimumDeploymentAgeMs;
 }
 
 async function testPreviewApps({
@@ -995,12 +1004,17 @@ async function testPreviewApps({
       app,
       apps: recorded.apps,
     });
+    const rolloutDeploymentTimestamp = existingEntry.deployedAt ?? existingEntry.updatedAt;
     const rolloutRemainingSeconds = resolvePreviewRolloutRemainingSeconds({
       appSlug: app.slug,
       // Entries written before deployedAt existed fall back to their last
       // recorded transition. That may wait conservatively on one legacy
       // rerun, but it cannot release a genuinely fresh deployment early.
-      deployedAt: existingEntry.deployedAt ?? existingEntry.updatedAt,
+      deployedAt: rolloutDeploymentTimestamp,
+    });
+    const rolloutReadyAtMs = resolvePreviewRolloutReadyAtMs({
+      appSlug: app.slug,
+      deployedAt: rolloutDeploymentTimestamp,
     });
 
     const startedAt = Date.now();
@@ -1025,7 +1039,10 @@ async function testPreviewApps({
         "env",
         `${E2E_CLOUDFLARE_WORKERS_VERSION_OVERRIDES_ENV}=${workerVersionOverrides}`,
         ...(app.slug === "os"
-          ? [`${previewRolloutRemainingSecondsEnvironment}=${rolloutRemainingSeconds}`]
+          ? [
+              `${previewRolloutRemainingSecondsEnvironment}=${rolloutRemainingSeconds}`,
+              `${PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV}=${rolloutReadyAtMs}`,
+            ]
           : []),
         ...baseUrlEnvironment,
         ...app.previewTestCommandArgs,
@@ -2212,9 +2229,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // time we reach the specs instead of adding ~4s in front of them.
         "pnpm --dir ../.. exec playwright install chromium > /tmp/os-preview-pw-install.log 2>&1 & PW_INSTALL_PID=$!",
         // Smoke and TUI own isolated state, so start them with the Chromium
-        // install. Playwright starts as soon as Chromium is ready. The
-        // high-fanout Vitest lane waits for both the production-shaped
-        // onboarding smoke and a bounded age on a newly deployed OS version.
+        // install. Playwright starts as soon as Chromium is ready; its
+        // project-creation helpers use the absolute rollout boundary passed
+        // above, so browser/auth setup continues while fresh project-backed
+        // DO work waits. The high-fanout Vitest lane waits for both the
+        // production-shaped onboarding smoke and the same bounded age.
         // Edge readiness cannot prove global Durable Object code propagation:
         // Cloudflare may reset an object when its assigned version changes.
         // The age clock starts when deploy completes and overlaps every lane
@@ -6150,6 +6169,7 @@ export const previewInternals = {
   resolvePreviewOsContainerRollout,
   resolvePreviewReadinessUrls,
   resolvePreviewTestBaseUrlEnvironment,
+  resolvePreviewRolloutReadyAtMs,
   resolvePreviewRolloutRemainingSeconds,
   resolvePreviewTestTargetPlan,
   resolvePreviewTestTelemetryEnvironment,
