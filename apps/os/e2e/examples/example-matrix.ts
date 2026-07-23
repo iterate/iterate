@@ -15,12 +15,22 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { RpcTarget } from "capnweb";
+import { ITX_INITIAL_CONNECTION_RETRY_PREFIX } from "../../scripts/itx.ts";
 import type { ItxExample, ItxExampleRuntime } from "../../src/itx/examples.ts";
 import { runExample } from "../test-support/run-example.ts";
 import { baseUrl, connectProject } from "./e2e-env.ts";
 
 export const MATRIX_RUNTIMES = ["node", "cli", "run-script", "project-worker"] as const;
 export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime;
+export type CliInitialConnectionRetry = {
+  attemptDurationMs: number;
+  delayMs: number;
+  error: string;
+  errorCode?: string;
+  failedAttempt: number;
+  nextAttempt: number;
+  startedAt: string;
+};
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -34,13 +44,15 @@ export async function runExampleCode(
     projectId: string;
     timeoutMs: number;
     vars: Record<string, unknown>;
+    onInitialConnectionRetry?: (retry: CliInitialConnectionRetry) => Promise<void> | void;
   },
 ): Promise<unknown> {
-  // Exactly one attempt: transient absorption is the vitest CI retry's job
-  // (E2E_CI_RETRIES, docs/testing.md#retries-and-timeouts). A retry wrapper
-  // here used to re-roll anything containing "internal error; reference =" —
-  // Cloudflare's redaction of EVERY server-side crash — which could mask
-  // real worker-startup product bugs behind a silent second retry layer.
+  // Execute user code exactly once. The CLI may make one observable fresh
+  // dial before its RPC session exists, but neither it nor these runtime
+  // adapters replay authentication or an operation. A wrapper here used to
+  // re-roll anything containing "internal error; reference =" — Cloudflare's
+  // redaction of EVERY server-side crash — which could mask real
+  // worker-startup product bugs behind a silent second retry layer.
   switch (runtime) {
     case "node":
       return await runInNode(input);
@@ -61,13 +73,14 @@ async function runInCli(input: {
   projectId: string;
   timeoutMs: number;
   vars: Record<string, unknown>;
+  onInitialConnectionRetry?: (retry: CliInitialConnectionRetry) => Promise<void> | void;
 }): Promise<unknown> {
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => abortController.abort(), input.timeoutMs);
   // tsx directly (not `pnpm cli`) so stdout is exactly the run command's one
   // JSON document, with no package-runner banner in front of it.
   try {
-    const { stdout } = await execFileAsync(
+    const { stderr, stdout } = await execFileAsync(
       "pnpm",
       [
         "exec",
@@ -92,6 +105,7 @@ async function runInCli(input: {
         signal: abortController.signal,
       },
     );
+    await reportCliDiagnostics(stderr, input.onInitialConnectionRetry);
     return JSON.parse(stdout);
   } catch (error) {
     if (abortController.signal.aborted) {
@@ -101,6 +115,41 @@ async function runInCli(input: {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function reportCliDiagnostics(
+  stderr: string,
+  onInitialConnectionRetry:
+    | ((retry: CliInitialConnectionRetry) => Promise<void> | void)
+    | undefined,
+) {
+  for (const line of stderr.split(/\r?\n/u).filter(Boolean)) {
+    if (!line.startsWith(ITX_INITIAL_CONNECTION_RETRY_PREFIX)) {
+      console.warn(`[cli stderr] ${line}`);
+      continue;
+    }
+    const retry = parseInitialConnectionRetry(
+      line.slice(ITX_INITIAL_CONNECTION_RETRY_PREFIX.length),
+    );
+    console.warn(`${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${JSON.stringify(retry)}`);
+    await onInitialConnectionRetry?.(retry);
+  }
+}
+
+function parseInitialConnectionRetry(value: string): CliInitialConnectionRetry {
+  const parsed = JSON.parse(value) as Record<string, unknown>;
+  if (
+    typeof parsed.attemptDurationMs !== "number" ||
+    typeof parsed.delayMs !== "number" ||
+    typeof parsed.error !== "string" ||
+    typeof parsed.failedAttempt !== "number" ||
+    typeof parsed.nextAttempt !== "number" ||
+    typeof parsed.startedAt !== "string" ||
+    (parsed.errorCode !== undefined && typeof parsed.errorCode !== "string")
+  ) {
+    throw new Error(`Invalid CLI initial-connection retry diagnostic: ${value}`);
+  }
+  return parsed as CliInitialConnectionRetry;
 }
 
 function cliProcessFailure(error: unknown): unknown {
