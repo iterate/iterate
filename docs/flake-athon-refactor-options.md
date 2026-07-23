@@ -116,6 +116,88 @@ preview workflow/policy **148/148 pass**, `pnpm --dir apps/os typecheck` passes,
 zero-retry proof), which only Depot CI can run — so this is documented as a
 ready-to-apply patch rather than committed into this analysis PR.
 
+## Round 3 — can we cut further? (mostly: we're near the floor)
+
+Asked to cut again — less code, less mental clutter, more robustness, favouring
+"make the product path work and tell the caller to retry" over harness
+compensation — a wide re-investigation (three subagents + codex, Cloudflare +
+capnweb source) found **one genuinely on-target low-faff win, a couple of
+freebies, and an honest "don't over-refactor the rest."**
+
+### ✅ The one high-value, low-faff addition: a clear "retry later" signal to the caller
+
+This is exactly the "clearly communicate to the caller when it's no use" ask, and
+it costs **~6-8 lines in one function, zero caller or codegen churn.** Today
+`create()`'s default lane rejects at ~15 s (`PROJECT_CREATE_READY_TIMEOUT_MS`,
+measured from create-entry) while the 75 s birth drive keeps committing — so a
+caller can get an _undifferentiated_ error for a project that then becomes ready
+(audit finding B3). The fix is **not** a typed-union return or a create/await
+split (both were measured to _add_ net complexity — a union propagated through
+`itx-api.generated.ts` + every caller, or a default-behaviour flip felt by every
+out-of-tree script). It's simply: when the ready-wait deadline elapses _while
+birth is still progressing_, throw a clearly-named **retryable** error —
+`"project not ready yet — birth still in progress, retry"` — instead of a bare
+`waitForEvent` timeout string, and measure that 15 s from when the ready-wait
+opens, not from create-entry. No return-type change, no caller changes. The
+caller's existing `try/catch` keeps working; the message now tells it to retry.
+Combined with the round-2 self-heal, the harness relies on this clean signal +
+the one CI retry — no gate.
+
+### ✅ Freebies (safe, net-negative)
+
+- **Merge the duplicate `#read` retry** — `WorkspaceGitRpcTarget.#read`
+  (`rpc-targets.ts:2089-2095`) is byte-identical to `WorkspaceRpcTarget.#read`
+  (`2028-2034`). Share one. **−7 LOC, ~0 risk.**
+- **Delete `waitForOnboardingGreeting`** (`lib/onboarding-agent.ts:76-106`, ~25
+  LOC) once the round-2 `waitForEvent` reset gap is closed — it is a _hand-rolled
+  copy_ of exactly the re-arm-from-durable-cursor logic that fix gives
+  `waitForEvent`. Sequence it after the gap fix; flip its test. **−25 LOC.**
+- **Correct a stale comment.** `stream-unavailable.ts:6-13` claims capnweb "strips
+  everything but `message`/`name`." That is **false** for the
+  `@iterate-com/capnweb@0.10.0` fork this repo runs — it preserves own-enumerable
+  Error properties and the `cause` chain (verified by round-trip). Misleading;
+  fix regardless.
+
+### 🟡 The real deeper clutter — but it is NOT low-faff, so don't bundle it
+
+The retry _machinery_ is already near-minimal: only **~4 retry shapes** (one
+shared `retryLoggedIdempotentOperation` reused at 6 read/append/barrier sites; the
+`waitUntilProcessed` slice+backoff loop; the `#callProcessorOutcome`
+acquire-dispose-race; the browser transport backoff) plus a few non-retry
+recovery shapes. **A "grand unified retry" would be wrong** — the shapes are
+distinct for real reasons (stub disposal, durable cursors, a reconnecting socket).
+Consolidation is already done.
+
+The genuine conceptual clutter is that a "retryable DO failure" has **three
+representations**: (1) raw workerd flags in-worker; (2) the `stream-unavailable:`
+message-string tag for the capnweb→browser hop; (3) an explicit
+`{durableObjectReset, overloaded, retryable}` payload manually re-serialized
+across the **native Worker→Worker wake hop** (`stream-subscribers.ts:1586-1596`).
+Tempting to unify on a clean `retryable` own-property (the capnweb fork now
+preserves it) — **but the string tag is load-bearing precisely where own-props
+are not:** Cloudflare native Workers RPC preserves `message` but _strips own
+properties_
+([RPC error handling](https://developers.cloudflare.com/workers/runtime-apis/rpc/error-handling/)),
+which is exactly why the wake hop hand-serializes the flags. Replacing the tag
+with an own-property would **regress** any native-RPC hop unless each is taught to
+re-serialize — a careful, medium-faff refactor across ~7 sites with a
+serialization-dependency test. **Don't ride it in the lean fix.** File it as a
+separate "unify the DO-failure signal" cleanup: worth doing for mental hygiene,
+but not "little faff" and it doesn't change robustness — so it must not gate the
+−277 deletion.
+
+### Net for round 3
+
+The lean fix stays the round-2 core (delete gate −277, close the `waitForEvent`
+gap +12/−7). Round 3 _adds_ the clear caller error (~+6) and _removes_ ~32 more
+via the two freebies — **~−300 LOC** total, with a clean "retry later" signal and
+no new abstraction. Honest headline: **we're near the floor.** The remaining
+clutter (three failure representations) is real but its cleanup is a separate
+careful task, not a quick cut — bundling it would trade the "little faff" the ask
+wants for churn that doesn't move robustness.
+
+---
+
 The detailed candidate analysis and the fuller (optional) version follow.
 
 ## The failure mode, stated correctly
