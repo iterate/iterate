@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-The email path and one-screen chooser update are implemented and local checks
-pass. A fresh preview browser proof and PR media update remain.
+Both OS sign-in methods now offer account selection, and the chooser shows all
+alternatives on one screen. Local checks and preview browser proof pass.
 
 ## Problem
 
@@ -19,14 +19,16 @@ no chance to choose another account.
 
 ## Decision
 
-Keep the auth session. When OS starts its Google sign-in flow, require Iterate
-Auth to show its account chooser if an auth session already exists:
+Keep the auth session. When OS starts either sign-in flow, require Iterate Auth
+to show its account chooser if an auth session already exists:
 
 - continue with the current Iterate account; or
-- choose **Log in as someone else**, then use Google's account picker.
+- continue with email; or
+- continue with Google and use Google's account picker.
 
-Do not globally sign out of Iterate Auth or Google. Email sign-in and OAuth
-clients that do not explicitly request account selection must keep their
+Show those alternatives directly below an **or** divider, with no “Current”
+badge or reveal step. Do not globally sign out of Iterate Auth or Google.
+OAuth clients that do not explicitly request account selection must keep their
 current behavior.
 
 ## Checklist
@@ -40,7 +42,7 @@ current behavior.
 - [x] Require the same account-selection opportunity for OS email sign-in. _Both OS method buttons send the one-shot `select_account` prompt._
 - [x] Remove the “Current” badge from account rows. _The account's actions already convey which session is active._
 - [x] Show the email and Google alternatives directly below an “or” divider without an extra reveal step. _The chooser has no reveal state or “Log in as someone else” button._
-- [ ] Re-run checks and replace the preview browser proof.
+- [x] Re-run checks and replace the preview browser proof. _The full monorepo suite passes after merging current main; Preview 14 verifies the final one-screen email and Google chooser, and PR #2281 contains the updated screenshot._
 
 ## Implementation notes
 
@@ -54,3 +56,6 @@ current behavior.
   and Google reauthentication from returning to the chooser.
 - Preview review found that OS's email button did not send the prompt, so an
   existing Auth session could still silently authorize its Google identity.
+- The account chooser uses its own transient `account_chooser_method` search
+  key so OS's upstream `login_hint=email` does not hide either alternative on
+  entry. The key is removed before the authorization redirect resumes.
