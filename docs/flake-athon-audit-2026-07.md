@@ -26,7 +26,12 @@ rework that is fail-closed in exactly the right places. The "big deletion =
 deleted guard" heuristic mostly misfires: the -1,297 / -1,059 / -319 diffs are
 dominated by moved code, completed-task-file cleanup, and doc churn.
 
-The real risk is **concentrated in one place, not spread**:
+The rollout race (#1) is the largest single issue, but the Codex cross-check
+showed the risk is **somewhat more distributed than a first pass suggests** —
+two changes rated GOOD by the Claude fan-out are downgraded below with verified
+external evidence (**B2** #2266 retries `overloaded` against Cloudflare guidance;
+**B4** #2227 reversed a measured concurrency ceiling on one run). The headline
+findings:
 
 | #     | Severity    | What                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Status at HEAD              |
 | ----- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
@@ -37,11 +42,15 @@ The real risk is **concentrated in one place, not spread**:
 | 5     | 🟢 Nit      | **#2253** quarantined the live-capability WebSocket-mesh e2e (real coverage debt, but honestly booked via the protocol with a named task). **#2271 / #2273** introduce one wedged-teardown re-poke path and one bounded create-read poll with **no telemetry counter**, so a future regression hides as absorbed latency rather than surfacing as data.                                                                                                                 | Acceptable; observe         |
 
 Nothing in the runtime-stability cluster (streams, wake, sandbox, worker-build:
-#2271, #2266, #2257, #2256, #2251, #2252, #2270, #2273, #2269, #2240, #2230)
-masks a race. Every new wait/retry there is bounded and scoped to the right
-error class; the two changes most capable of hiding an ordering bug (#2271's
-removal of pulled-result liveness, #2269's removal of a pre-wait `catchUp`) are
-each _replaced by a stronger invariant_, verified in source.
+#2271, #2257, #2256, #2252, #2270, #2269, #2240, #2230) masks a race. Every new
+wait/retry there is bounded and scoped to the right error class; the two changes
+most capable of hiding an ordering bug (#2271's removal of pulled-result
+liveness, #2269's removal of a pre-wait `catchUp`) are each _replaced by a
+stronger invariant_, verified in source. **The two exceptions the Codex pass
+caught** — #2266 looping on `overloaded` (B2) and #2251 stranding a queued build
+after alarm-retry exhaustion (U1) — are not ordering-race masks but a wrong
+error contract and a missing terminal state respectively; both are in the
+cross-check ledger below with fixes.
 
 ---
 
@@ -360,12 +369,28 @@ it("no test-run step performs in-band telemetry delivery", () => {
 
 Done in this PR: [`tasks/preview-rollout-do-reset-gate.md`](../tasks/preview-rollout-do-reset-gate.md).
 
-### D. Replace the blind age gate with an active readiness probe (the real fix for #1)
+### D. The real fix for #1 — make the operation self-heal, delete the gate
 
-Design in §1. Land behind a Depot CI validation run. Definition of done: the
-`flake-hunt-loop.sh` marathon reaches a **non-zero zero-retry streak** with no
-`Durable Object reset because its code was updated` in any first attempt — the
-exit criterion recorded in the task file.
+> **Superseded design note.** An earlier draft of this section proposed a _cheap
+> active readiness probe_ (one touch per DO namespace class). The Codex
+> cross-check refuted it: Cloudflare DO rollout is **globally eventually
+> consistent per object/placement**, so probing identity A does not prove a
+> future test identity B (different placement) has converged — #2140 used many
+> identities precisely because one is insufficient. **No gate or probe can prove
+> convergence.** The sound fix is operations that survive a reset whenever/wherever
+> it lands. Full candidate comparison + recommendation:
+> [`docs/flake-athon-refactor-options.md`](flake-athon-refactor-options.md).
+
+The recommended shape: (1) split the availability classifier so `overloaded` is
+never retried (finding B2); (2) finish the create saga's self-heal — one
+`waitForEvent` branch re-arms on reset like `waitUntilProcessed` already does;
+(3) model `create()`'s outcome explicitly instead of the ambiguous 15 s reject
+(finding B3); (4) consolidate to one canonical fixture; (5) delete the blind gate
+and plumbing; (6) replace it with a post-deploy recovery **canary** (proof, not a
+sleep). Land behind a Depot CI validation run. Definition of done: the
+`flake-hunt-loop.sh` marathon reaches the **25-consecutive-zero-retry** bar
+(finding B5) with no `Durable Object reset because its code was updated` in any
+first attempt — the exit criterion recorded in the task file.
 
 ---
 
@@ -391,5 +416,42 @@ the orchestration agent, looking at HEAD, found Playwright _is_ gated per-spec b
 closed it as a blind sleep_ — is more accurate than either agent alone and is
 the reason this audit reads the three PRs as one story.
 
-_Codex cross-check summary: (pending — folded in on completion of the parallel
-run.)_
+**Codex cross-check — where it went further than the Claude fan-out.** Codex
+independently confirmed #2261/#2265 as the headline, and the deletion-heuristic
+misfires. It also surfaced **four substantive findings the Claude clusters rated
+GOOD but Codex downgrades with external evidence — all verified against source**:
+
+- **B2 · #2266 retries `overloaded` (HIGH).** `isDurableObjectLifecycleError`
+  (`stream-unavailable.ts:38-45`) collapses `durableObjectReset | overloaded |
+retryable` into one boolean, and #2266 loops on it to the deadline. Cloudflare
+  says overload must **not** be retried (it worsens the overload). Under the
+  campaign's 48-file + 16-worker fan-out this is a synchronized retry storm that
+  hides the capacity signal. Fix: discriminate `reset|retryable|overloaded` and
+  propagate overload as typed backpressure. _(The Claude cluster-C pass called
+  #2266 "bounded and fine" — true for reset, wrong for overload.)_
+- **B3 · #2273 ambiguous create-success (HIGH).** Default `create()` rejects at
+  ~15 s while a 75 s birth drive keeps committing (`rpc-targets.ts:5200-5205,
+5308-5343`), so a caller can get an _error_ for a project that durably succeeds
+  and later becomes ready — an unmodelled outcome that leans on a caller/test
+  redial. Fix: split the acknowledgement boundaries (see the refactor doc).
+- **B4 · #2227 concurrency reversal is unproven (BAD/RISK).** #2169 — the PR
+  immediately before — kept **7** Vitest file workers because a 64-worker
+  experiment made remote project bootstrap "substantially slower and less
+  reliable" (remote capacity, not runner CPU, was the ceiling). #2227 reversed it
+  to ~48 on **one** retrying run, violating the documented "≥3 unchanged runs
+  before a concurrency change" rule (`docs/ci-preview-performance.md:152-154`).
+  The 48+16 burst is the environment in which the later overload/create-tail
+  findings appear.
+- **B5 · the campaign never met its own bar.** The release proof is 25
+  consecutive zero-retry runs (`ci-preview-performance.md:156-169`); the accepted
+  runs for #2253/#2261/#2265/#2266/#2273 each still carried retries (streak
+  0/25). Green under the one-retry policy ≠ "flake-athon proven."
+- **U1 · #2251 can strand a queued build** after native alarm-retry exhaustion
+  (no durable `stalled`/`failed` terminal state) — a latent leak, not a flake.
+
+And the **decisive correction to this audit's own §7-D**: the active-probe idea
+is not provably correct under eventual consistency; the sound answer is
+self-healing operations + a post-deploy canary. That correction reshaped the
+recommendation in
+[`docs/flake-athon-refactor-options.md`](flake-athon-refactor-options.md) — the
+strongest single argument for running the two audits in parallel.

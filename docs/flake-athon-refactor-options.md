@@ -1,0 +1,186 @@
+# Refactor options: project creation & e2e fixtures (flake-athon follow-up)
+
+The [audit](flake-athon-audit-2026-07.md) found the one real robustness-for-green
+trade is the preview Durable-Object rollout race, currently gated by a **blind
+90 s sleep** (`previewMinimumDeploymentAgeMs`) that is off the guarded ladder and
+unprovable. This doc explores four candidate refactors that address it by
+improving **project creation** and the **e2e test fixtures**, and recommends one.
+
+Four candidate designs were each prototyped independently against the real code
+(by parallel Claude subagents), and a Codex `gpt-5.6-sol` xhigh pass audited the
+same surface. The candidates and the evidence that decided between them:
+
+## The failure mode, stated correctly
+
+After a fresh Worker version deploys, Cloudflare resets each Durable Object to
+load the new code on first access — surfacing as `Durable Object reset because
+its code was updated`. **Crucially, this rollout is _globally eventually
+consistent per object/placement_** ([CF known
+issues](https://developers.cloudflare.com/durable-objects/platform/known-issues/)):
+old and new code coexist for a window, and _which_ identity resets _when_
+depends on placement. This one fact is decisive — see C4.
+
+Two things must be classified apart (they are conflated today at
+`stream-unavailable.ts:38-45`, and the audit's finding **B2** shows why that
+matters):
+
+- **reset / retryable** — an idempotent caller may safely reacquire a fresh
+  incarnation and retry.
+- **overloaded** — Cloudflare says [do **not**
+  retry](https://developers.cloudflare.com/durable-objects/best-practices/error-handling/);
+  retrying worsens the overload. Under the campaign's 48-Vitest-file + 16-worker
+  fan-out, a deadline-long retry loop on `overloaded` becomes a synchronized
+  request storm that hides the capacity signal.
+
+## The four candidates
+
+### C1 — Blanket retry at the itx client transport
+
+Wrap the client so any RPC that returns a reset error retries transparently.
+**Rejected.** capnweb is a pipelined, stateful session: a "call" is a property
+chain whose intermediate stubs are server-held; a mid-chain reset invalidates
+them, so blind replay is unsafe. And non-idempotent mutations can't be
+auto-retried without keys the transport can't see. The _sound_ form collapses to
+an opt-in per-method helper — which already exists server-side
+(`retryIdempotentDurableObjectOperation`) — and still can't reach the
+browser-button-driven creates the sign-up specs use. Narrower than C2, no unique
+benefit.
+
+### C2 — Self-healing create saga (server-side) ✅ core of the recommendation
+
+Make each first-touch operation absorb a reset by reacquiring a fresh incarnation
+under one deadline, so `create()` never surfaces the rollover. **Key finding
+from prototyping: this is ~90 % already shipped.** The saga's reset-prone steps
+already self-heal:
+
+| Saga step                | First-touch DO         | Coverage today                                                                                                                  |
+| ------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| root birth append        | STREAM                 | ✅ keyed-append door → `retryIdempotentDurableObjectOperation` (one bounded retry, dedupes on idempotency key)                  |
+| subscriptions            | STREAM                 | ✅ rides the birth append                                                                                                       |
+| processor birth drive    | PROJECT + notification | ✅ `ProcessorRelayRpcTarget.waitUntilProcessed` (#2266's reacquire-under-deadline)                                              |
+| secret seed              | SECRET                 | ✅ swallow-and-reheal (ensure-create on reveal)                                                                                 |
+| **`project/ready` wait** | STREAM                 | ❌ **the one gap** — `waitForEvent` (`rpc-targets.ts:628-719`) re-throws a reset instead of re-arming like `waitUntilProcessed` |
+
+And every **on-demand** DO (agent, sandbox, scheduler, workspace, repo, secret)
+returns a `ProcessorRelayRpcTarget`, so mid-test first-touches already self-heal
+too — which **disproves C3's feared "mid-test reset" gap**. So C2 is not a build,
+it's a _finish_: one production change (teach `waitForEvent` to re-arm on
+reset/retryable under its existing deadline, with a small backoff), then the gate
+is fully redundant. Provable (observes `project/ready` actually committed on the
+fresh incarnation, bounded so a real wedge still fails), and it helps **real
+users** creating a project against a just-deployed worker — not just tests.
+
+### C3 — One canonical retrying fixture (test layer) ✅ complementary
+
+A single `createTestProject()` (and Playwright sibling) that owns slug + create +
+readiness + disposal and is the only way a test provisions — migrating the ~4
+bypassing call sites (`agent-response-cache`, `project-ingress`,
+`create-test-project-pool`, and the Playwright forged-session path). **Good
+hygiene, low risk, test-only.** On its own it's insufficient (it can't reach the
+`email-otp-signup` server-side browser-click create, and a fixture-layer retry
+doesn't help production), and its retry is largely _redundant with C2_ once the
+saga self-heals. But consolidating to one provisioner — with **no** rollout wait
+and **no** per-spec `setTimeout` extension — is worth doing alongside C2.
+
+### C4 — Cheap active readiness probe (keep a provable gate) ❌ not provably correct
+
+Touch one identity per DO namespace class after deploy, confirm it serves the new
+version, release all lanes. Attractive (≈6 RPCs vs #2140's ~500), **but the
+premise is false.** Because rollout is globally eventually consistent
+_per-object/placement_, a probe of identity A does **not** prove a future test
+identity B (different placement) has converged. #2140 used _many_ identities
+precisely because one is insufficient — reducing the sample doesn't turn a
+statistical gate into a proof. This is the correction that decides the whole
+question: **no gate/probe can prove convergence; only operations that survive a
+reset whenever/wherever it lands are sound.** C4 is viable _only_ as an explicit,
+owner-and-removal-criterion quarantine if C2 is judged too risky to land at once
+— never as readiness proof.
+
+## Recommendation
+
+**Land C2 (finish the self-healing saga) as the core, with the classifier split
+that finding B2 requires, model `create()`'s outcome explicitly (finding B3),
+consolidate fixtures with C3, delete the blind gate, and replace it with a
+post-deploy recovery _canary_ (not a gate).** In order:
+
+1. **Split the availability classifier** (foundational; fixes B2). Replace the
+   single boolean with a discriminated result `"reset" | "retryable" |
+"overloaded" | null` in `stream-unavailable.ts`. Reacquire only
+   `reset`/`retryable` for idempotent callers; propagate `overloaded` as a typed
+   backpressure outcome that is **never** looped on. Everything below depends on
+   classifying correctly.
+
+2. **Finish the saga self-heal** (C2). Teach `waitForEvent`
+   (`rpc-targets.ts:628-719`) to re-arm on `reset`/`retryable` under its existing
+   deadline (mirroring `waitUntilProcessed`), with a small inter-slice backoff so
+   a genuinely resetting DO can't hot-loop the isolate. Durable rows replay from
+   the pinned `replayAfterOffset`, so `project/ready` is genuinely observed, not
+   skipped. Add a unit test that injects a reset (fake stub rejects once, then
+   succeeds) and asserts create reaches ready; two consecutive resets past the
+   deadline still reject.
+
+3. **Model `create()`'s outcome explicitly** (fixes B3; this is the heart of
+   "project creation"). Today default `create()` rejects at ~15 s while a 75 s
+   birth drive keeps committing — a caller can get an _error_ for a project that
+   durably succeeds and later becomes ready. Split the acknowledgement: `create()`
+   returns after identity + birth-batch commit with the stable handle;
+   `waitUntilReady({ timeoutMs })` is a separate explicit observation; a
+   convenience returns `{ project, readiness: "ready" | "provisioning" }`. A
+   committed create is **never** an undifferentiated error — which removes the
+   "caller/test retry redials" crutch entirely.
+
+4. **Consolidate fixtures** (C3). One canonical `createTestProject()` + Playwright
+   sibling built on the explicit-outcome create; migrate the bypassing call
+   sites; delete the per-spec `testInfo.setTimeout` extensions
+   (`forged-session.ts:67`, `email-otp-signup.ts:62`).
+
+5. **Delete the blind gate and all its plumbing** —
+   `previewMinimumDeploymentAgeMs`, `resolvePreviewRolloutReadyAtMs`,
+   `resolvePreviewRolloutRemainingSeconds`, the before-suite sleep, the
+   rollout-settle lane, `packages/shared/src/test-support/preview-rollout-gate.ts`,
+   the `PREVIEW_APP_ROLLOUT_*` env vars, and the `previewTestRolloutGate` config
+   field. Findings **#1 and #2 both vanish** — there is no constant left to sit
+   off the ladder.
+
+6. **Replace the gate with a post-deploy recovery canary** (not a gate). Right
+   after deploy, create a fresh real project (new identity, new placement) and
+   assert it reaches ready **without a framework retry**. This is _positive proof
+   the self-heal works_ on this exact deploy — release evidence — where the 90 s
+   sleep only ever _hoped_. It runs once per deploy and fails the deploy loudly if
+   recovery is broken; it does not gate the suite on a guessed duration.
+
+7. **Then re-earn the concurrency & release evidence** (findings B4/B5). With
+   `overloaded` no longer retried into a storm, re-sweep Vitest file workers
+   (8/12/16/24/32/48) over ≥3 unchanged runs per the documented rule, pick the
+   throughput knee, and run the 25-consecutive-zero-retry marathon on the final
+   head. Only then is the campaign _proven_, not merely green.
+
+### Why this is the right shape
+
+- **It deletes more than it adds.** Gate + plumbing + per-spec `setTimeout` + the
+  ambiguous-create crutch all go; the net new code is one `waitForEvent` branch,
+  a discriminated classifier, an explicit create contract, one fixture, and a
+  canary.
+- **It's provably correct where a gate cannot be.** The reset is survived at the
+  operation, so it holds whenever/wherever eventual consistency lands the
+  rollover — not predicated on a guessed window.
+- **It fixes the product, not the timeout**, and helps real users hitting a
+  freshly deployed worker — the policy's first principle.
+- **It separates two contracts that must not be conflated** (reset-recovery vs
+  overload-backpressure), removing a latent storm under high fan-out.
+
+### What would make this recommendation wrong
+
+- If the `waitForEvent` re-arm can't be made bounded/idempotent cleanly (it can —
+  `waitUntilProcessed` already is the template), OR
+- If project birth has a real _service_ capacity limit (not just isolated IDs),
+  in which case bounded admission (a semaphore/queue with durable terminal state)
+  is the product fix and unbounded fixture concurrency is the actual bug — the
+  concurrency sweep in step 7 is what tells us. Either way the blind sleep is not
+  the answer.
+
+_Codex independent design cross-check: folded in — Codex's audit converged on the
+same "make operations idempotent + incarnation-independent, add a post-deploy
+canary, do not restore a sampler" conclusion, and supplied the classifier-split
+(B2) and eventual-consistency correction that upgraded this recommendation over
+the audit's original active-probe sketch._

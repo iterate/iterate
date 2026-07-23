@@ -54,24 +54,34 @@ most first failures `Durable Object reset because its code was updated`.
 
 ## Proposed fix
 
-Replace the blind age gate with a **cheap active readiness gate** that checks the
-real invariant and returns as soon as it holds:
+> **Corrected after the Codex cross-check.** An earlier version of this task
+> proposed an *active readiness probe* (one touch per DO namespace class). That
+> is **not provably correct**: Cloudflare DO rollout is globally eventually
+> consistent *per object/placement*, so probing one identity does not prove a
+> future test identity (different placement) has converged. No gate or probe can
+> prove convergence — only operations that survive a reset whenever/wherever it
+> lands.
 
-- One readiness request **per DO namespace class the suite actually uses** (a
-  handful, not 500 fleet-wide synthetic probes), issued once, that forces and
-  confirms the post-deploy reset. The reset is idempotent and one-shot per
-  version, so a single touch per namespace is sufficient — provable, not
-  probabilistic.
-- Retry a namespace probe **only** on `durableObjectReset`/`overloaded` until the
-  version served matches the deployed Worker version, then move on. Never a fixed
-  sleep.
-- Bounded by `PREVIEW_ROLLOUT_READINESS_WATCHDOG_MS` on the guarded ladder, sized
-  ~2× the measured p99 settle. A rollout that never settles *should* fail the run
-  (principle 3), not be slept through.
-- Both lanes wait on the same ready signal (Vitest at its fan-out boundary,
-  Playwright's project-create helpers on the same gate).
+Make project creation (and every first-touch operation) **self-heal** across a
+reset, then delete the gate — full candidate comparison and recommendation in
+[`docs/flake-athon-refactor-options.md`](../docs/flake-athon-refactor-options.md):
 
-Sketch in `docs/flake-athon-audit-2026-07.md` § 1 and § 7-D.
+1. **Split the availability classifier** so `overloaded` is propagated as typed
+   backpressure and never retried (audit finding B2); reacquire only
+   `reset`/`retryable`.
+2. **Finish the create saga self-heal**: `waitForEvent`
+   (`rpc-targets.ts:628-719`) re-arms on reset under its existing deadline, the
+   way `waitUntilProcessed` already does — the one residual gap; all other saga
+   steps and on-demand DOs already self-heal via the relay + keyed-append door.
+3. **Model `create()`'s outcome explicitly** instead of the ambiguous 15 s reject
+   while birth continues (finding B3), so a committed create is never surfaced as
+   an error.
+4. **Consolidate to one canonical `createTestProject()` fixture** and delete the
+   per-spec `testInfo.setTimeout` extensions.
+5. **Delete** the blind gate + all plumbing.
+6. **Replace it with a post-deploy recovery canary** — create a fresh real
+   project right after deploy and assert it recovers without a framework retry.
+   Proof, not a sleep.
 
 ## Interim state (already landed)
 
@@ -80,9 +90,13 @@ Sketch in `docs/flake-athon-audit-2026-07.md` § 1 and § 7-D.
 
 ## Exit criteria (remove this task when all hold)
 
-- [ ] The blind `previewMinimumDeploymentAgeMs` sleep is gone; the gate is an
-      active readiness probe bounded by a laddered watchdog.
-- [ ] `scripts/preview/flake-hunt-loop.sh` reaches a **non-zero zero-retry
-      streak** with **no** `Durable Object reset because its code was updated`
+- [ ] The blind `previewMinimumDeploymentAgeMs` sleep and its plumbing are gone;
+      project creation self-heals across a reset (no gate).
+- [ ] The availability classifier discriminates `reset|retryable|overloaded`;
+      `overloaded` is never retried into a loop.
+- [ ] A post-deploy recovery canary asserts a fresh project recovers without a
+      framework retry.
+- [ ] `scripts/preview/flake-hunt-loop.sh` reaches the **25-consecutive-zero-retry**
+      release bar with **no** `Durable Object reset because its code was updated`
       in any first attempt across the streak.
-- [ ] The healthy-run start delay is the *measured* settle time, not a fixed 90s.
+- [ ] The healthy-run start delay is zero — no fixed post-deploy sleep.
