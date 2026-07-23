@@ -25,8 +25,10 @@ const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
 // Bounds each sibling-birth wait so a broken sibling fails the frame into
 // ordinary durable redelivery instead of pinning project creation forever;
-// generous because the config repo's birth includes a git artifact push.
-const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 60_000;
+// the config repo's birth includes a git artifact push and has produced an
+// observed 65s preview tail under full-suite load, so 75s is the smallest
+// honest bounded horizon with operational headroom.
+const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
 
 /**
  * The project root processor. It lives on the project's `/` stream and does

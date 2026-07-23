@@ -52,6 +52,36 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 14 (2026-07-23, post-#2275)
+
+PR #2275 made preview worker builds fail closed when the dependency installer
+returns warnings instead of an executable bundle, and made deployment wait in
+parallel for the exact SHA-pinned `pkg.pr.new` SDK package. Its final exact-head
+preview check ran every runnable suite in 240 seconds, and PostHog's finalizer
+matched all 6/6 expected sources. One OS Vitest case nevertheless passed only
+after retry, so the run is rejected and the strict counter remains 0/25.
+
+The retry was `Project worker processEventBatch receives events from every
+project stream and can cross-post`. Its first project failed the public
+15-second create deadline after 14.308 seconds of the remaining ready budget;
+the whole-test retry created a different project and passed. This was not a
+near-miss followed by harmless background completion. Exact-version trace
+`4d603e1afeb62f5f959255504b895244` shows the abandoned first project's config
+repository processor still waiting at offset 7 and eventually reporting
+`waitUntilProcessed timed out after 59517ms`. Its terminal stream appends
+completed around 65 seconds after `Project.create` began.
+
+PR #2273 had introduced an inconsistent timeout hierarchy: a 15-second public
+project-create deadline wrapped a 60-second sibling-birth barrier inside a
+75-second processor acknowledgement, and explicitly expected a whole-test
+retry to redial. The corrective change removes that retry-dependent contract.
+Sibling birth now owns one shared 75-second budget, the Project processor owns
+90 seconds, and the public entry-to-ready operation owns 100 seconds. Healthy
+creates still return immediately; the original caller now observes either the
+original fully ready project or one bounded failure. The existing
+`os-cold-create-latency` task retains the separate obligation to eliminate this
+tail rather than treating the upper bounds as latency targets.
+
 ## Round 13 (2026-07-23, post-#2271 and #2273)
 
 PR #2271 removed a cyclic Durable Object RPC lifetime from durable stream wake
