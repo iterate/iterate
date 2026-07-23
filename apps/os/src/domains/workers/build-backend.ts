@@ -15,6 +15,19 @@ export const WORKER_BUNDLER_VERSION = "0.2.1";
 export const WORKER_COMPATIBILITY_DATE = "2026-05-01";
 export const WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
+// worker-bundler currently reports dependency-install failures as warnings
+// and can still return an esbuild output containing unresolved bare imports.
+// Such output is not a usable artifact: Worker Loader rejects it only when
+// the first request tries to instantiate the module graph. Keep ordinary
+// compiler warnings, but fail the build boundary on every install-warning
+// shape emitted by worker-bundler's installer.
+const DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS = [
+  /^Failed to parse package\.json\b/,
+  /^Could not resolve version for\b/,
+  /^Version .+ not found for\b/,
+  /^Failed to install\b/,
+] as const;
+
 const PACKAGE_DEPENDENCY_FIELDS = [
   "dependencies",
   "devDependencies",
@@ -121,5 +134,23 @@ function unwrapBuildResult<T>(result: { error: string } | { result: T }): T {
   if ("error" in result) {
     throw new WorkerBuildFailedError(buildFailureMessageFromError(result.error));
   }
-  return result.result;
+  const built = result.result;
+  if (
+    typeof built === "object" &&
+    built !== null &&
+    "warnings" in built &&
+    Array.isArray(built.warnings)
+  ) {
+    const dependencyInstallFailures = built.warnings.filter(
+      (warning): warning is string =>
+        typeof warning === "string" &&
+        DEPENDENCY_INSTALL_FAILURE_WARNING_PATTERNS.some((pattern) => pattern.test(warning)),
+    );
+    if (dependencyInstallFailures.length > 0) {
+      throw new WorkerBuildFailedError(
+        buildFailureMessageFromError(dependencyInstallFailures.join("\n")),
+      );
+    }
+  }
+  return built;
 }

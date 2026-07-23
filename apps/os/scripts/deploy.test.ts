@@ -15,9 +15,56 @@ import {
   isExactOsProjectMiss,
   posthogBuildEnv,
   resolveOsContainerDeployArgs,
+  waitForPreviewIteratePackage,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
+
+describe("preview iterate package prerequisite", () => {
+  it("polls the exact immutable package with HEAD until it is available", async () => {
+    const packageSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
+    let now = 0;
+    const requests: Array<{ init?: RequestInit; url: string }> = [];
+    const responses = [new Response(null, { status: 404 }), new Response(null, { status: 200 })];
+    const fetchPackage: typeof fetch = async (input, init) => {
+      requests.push({ init, url: String(input) });
+      return responses.shift() ?? new Response(null, { status: 200 });
+    };
+
+    await waitForPreviewIteratePackage(packageSpec, {
+      fetch: fetchPackage,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+      timeoutMs: 5_000,
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests.map(({ url }) => url)).toEqual([packageSpec, packageSpec]);
+    expect(requests.map(({ init }) => init?.method)).toEqual(["HEAD", "HEAD"]);
+    expect(now).toBe(1_000);
+  });
+
+  it("fails closed with the missing URL and last response after a bounded wait", async () => {
+    const packageSpec = "https://pkg.pr.new/iterate/iterate/iterate@missing";
+    let now = 0;
+
+    await expect(
+      waitForPreviewIteratePackage(packageSpec, {
+        fetch: async () => new Response(null, { status: 404 }),
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        timeoutMs: 2_500,
+      }),
+    ).rejects.toThrow(
+      `Timed out waiting 2500ms for the preview iterate package ${packageSpec}. Last check: HTTP 404.`,
+    );
+    expect(now).toBe(2_500);
+  });
+});
 
 describe("retired Worker Queue consumers", () => {
   it.each(["script", "script_name"] as const)(
