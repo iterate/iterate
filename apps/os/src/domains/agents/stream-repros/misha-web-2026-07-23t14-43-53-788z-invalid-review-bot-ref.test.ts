@@ -1,3 +1,4 @@
+import { createWorker } from "@cloudflare/worker-bundler";
 import { GithubAiLinter } from "iterate/github-ai-linter";
 import type { StreamEvent, StreamEventInput } from "iterate/sdk";
 import { expect, test } from "vitest";
@@ -25,6 +26,46 @@ test("re-linking the packaged linter replaces Misha's rejected subscription with
   }).toMatchObject({
     idempotencyKeyChanged: true,
     workerRef: { success: true },
+  });
+});
+
+test("the packaged linter ref builds after worker-bundler installs iterate", async () => {
+  const appended: Array<{ events: StreamEventInput[]; path: string }> = [];
+  const app = GithubAiLinter.create({
+    policyVersion: "misha-smoke-1",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/config" },
+  });
+
+  await app.processEvent(
+    githubLinkConfigured(fixture.connection),
+    projectEnv((path, ...events) => appended.push({ events, path })),
+  );
+
+  const subscription: any = appended[0]?.events[0];
+  const ref = subscription.payload.delivery.expression[1][1];
+  const createWorkerOptions = ref.source.createWorker;
+  const installedEntrypoint = "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs";
+  const result = await createWorker({
+    ...createWorkerOptions,
+    files: {
+      "package.json": "{}",
+      [installedEntrypoint]: [
+        'import config from "iterate:github-ai-linter-config";',
+        "export default {",
+        "  fetch() {",
+        "    return new Response(config.policyVersion);",
+        "  },",
+        "};",
+      ].join("\n"),
+    },
+  });
+
+  expect({
+    mainModule: result.mainModule,
+    moduleSource: result.modules[result.mainModule],
+  }).toMatchObject({
+    mainModule: "bundle.js",
+    moduleSource: expect.stringContaining("misha-smoke-1"),
   });
 });
 
