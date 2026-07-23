@@ -155,6 +155,35 @@ post-deploy recovery _canary_ (not a gate).** In order:
    throughput knee, and run the 25-consecutive-zero-retry marathon on the final
    head. Only then is the campaign _proven_, not merely green.
 
+### Correctness constraints (surfaced by the Codex design cross-check)
+
+The Codex refactor pass independently landed on the same C2-primary / C3-complement
+/ C1-defense-in-depth / C4-rejected ordering, and sharpened three things that make
+the difference between a self-heal that's _safe_ and one that's subtly wrong:
+
+- **⚠️ The retry must not span the identity-mint boundary.** The admin/test
+  `create()` path _mints a fresh project ID_ via `AUTH.mintProjectId()` when none
+  is supplied (`rpc-targets.ts:5380-5387`), so replaying an _unclassified_ failure
+  **before** `primeProjectDirectory()` commits can create **conflicting
+  identities** — there is already an expected-failure regression for exactly this
+  (`apps/os/e2e/vitest/project-create-concurrency.regression.e2e.test.ts`). The
+  rollout self-heal is still safe because the first project-DO touch happens
+  _after_ directory priming (`:5209-5265`), so phase-2 retries retain one ID — but
+  the invariant to state is the **narrow** one ("retry only after stable identity
+  is established"), not "create is idempotent." A _complete_ fix routes admin
+  slug→ID reservation through one authority (atomic reservation), at which point
+  the regression test can flip to a normal idempotency assertion.
+- **Fix the secret-seed catch-all while here.** The API-key seed today catches
+  **every** error and only warns (`rpc-targets.ts:5280-5307`) — which conflicts
+  with the "no silent failure" principle. Either model it as an explicit
+  observable obligation (retry only the availability class; record a durable
+  explanation on exhaustion) or fold secret existence into `project/ready`. Don't
+  let the ambiguous swallow ride along under the new contract.
+- **Size the deadline from measured p99, never a sleep.** The current create
+  deadline is 15 s (`rpc-targets.ts:420-424`) and the flake hunt saw cold outliers
+  near that boundary. If real resets routinely exhaust 15 s, pick a product SLO
+  from the measured p99 — do not reintroduce a pre-test sleep to pad it.
+
 ### Why this is the right shape
 
 - **It deletes more than it adds.** Gate + plumbing + per-spec `setTimeout` + the
@@ -178,9 +207,20 @@ post-deploy recovery _canary_ (not a gate).** In order:
   is the product fix and unbounded fixture concurrency is the actual bug — the
   concurrency sweep in step 7 is what tells us. Either way the blind sleep is not
   the answer.
+- **Scope caveat:** `project/ready` proves the _birth saga_, not every future
+  first-touch of an unrelated fresh Agent / Repo / Workspace object. On-demand DOs
+  route through the relay's availability retry (so a reset is absorbed), but if any
+  post-create first-touch operation is _non-idempotent_, it needs the same
+  bounded, error-scoped treatment before the **whole-suite** gate is deleted — the
+  create-leg self-heal alone doesn't certify it. Both audits agree a synthetic
+  namespace sample cannot supply that proof either.
 
-_Codex independent design cross-check: folded in — Codex's audit converged on the
-same "make operations idempotent + incarnation-independent, add a post-deploy
-canary, do not restore a sampler" conclusion, and supplied the classifier-split
-(B2) and eventual-consistency correction that upgraded this recommendation over
-the audit's original active-probe sketch._
+_Codex independent design cross-check: **folded in.** The dedicated Codex
+`gpt-5.6-sol` design pass independently reached the same ordering — C2 self-healing
+saga primary, C3 canonical fixture, C1 client-retry as defense-in-depth only (never
+a global mutation-retry policy), C4 rejected — and converged on "make operations
+idempotent + incarnation-independent, prove success from the actual project's
+durable `project/ready`, add a post-deploy canary, do **not** restore a sampler."
+It also supplied the classifier-split (B2) and the eventual-consistency correction
+that upgraded this recommendation over the audit's original active-probe sketch, and
+surfaced the identity-mint / secret-seed / deadline-sizing constraints above._
