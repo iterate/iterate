@@ -1,9 +1,9 @@
-status: needs-preview
+status: ready-for-review
 size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: The implementation and config migration are ported onto current `main`. All local checks and package publication pass; the preview rerun remains.
+Status: The implementation and config migration are complete. Local checks, package publication, and the full preview deployment/E2E suite pass; config must switch its temporary branch package URL back to `@main` after this PR merges.
 
 ## Plan
 
@@ -14,7 +14,7 @@ Status: The implementation and config migration are ported onto current `main`. 
 - [x] Export/build/type the package submodule and cover its public behavior with integration-style package tests. *Both public exports build and the focused package suite passes.*
 - [x] Update the seeded config template and generated seed to import/register the package app; keep unrelated app routing and schedules out of scope. *The real template and generated file now contain the declaration.*
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
-- [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests and the package build pass. Preview proof awaits both PRs.*
+- [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
 
 ## Approved decisions
 
@@ -35,3 +35,5 @@ Status: The implementation and config migration are ported onto current `main`. 
 - 2026-07-22: The first preview exposed one stale E2E fixture assertion for the deleted seeded bot path. Removed that assertion, added the inverse check, and updated the GitHub-agent guide to describe the packaged runtime and Markdown rules; preview rerun pending.
 - 2026-07-23: Opened draft PRs iterate/iterate#2259 and iterate/config#18; the config PR consumes #2259's pkg.pr.new artifact until the package change reaches `main`.
 - 2026-07-23: Review rejected the generic project-app registry as premature. Restored the SDK's explicit `processEvent` seam and made both workers call their private configured linter directly.
+- 2026-07-23: Replaced iterate/iterate#2259 with #2277 after pkg.pr.new lost the reopened PR's workflow mapping. Carried the resolved human review into the replacement PR and updated config#18 to consume its branch artifact.
+- 2026-07-23: Preview-10 deployed the exact implementation SHA for all five apps; every E2E lane passed, including OS Playwright and 47 OS Vitest files.
