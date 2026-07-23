@@ -140,12 +140,9 @@ export interface TasksWorkspace {
     clientId?: string,
     afterPresence?: number,
   ): Promise<CollabWaitResult>;
-  /** Announce (or clear, with null) this client's mouse pointer on the board. */
-  pointerPresent(clientId: string, payload: unknown): Promise<void>;
-  /** Long-poll for board pointer movement past a generation (~25s park). */
-  pointerWait(
-    afterGeneration: number,
-  ): Promise<{ clients: { at: number; clientId: string; payload: unknown }[]; generation: number }>;
+  /** Fresh caret presence per open file — the board's "who has this card
+   * open" dots (clientIds; labels/colors derive client-side). */
+  presenceSummary(): Promise<Record<string, string[]>>;
   /** Announce (or clear, with null) this client's cursor for one session. */
   present(
     filePath: string,

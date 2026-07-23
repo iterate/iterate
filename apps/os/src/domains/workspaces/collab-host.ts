@@ -349,6 +349,20 @@ export class CollabHost {
     }
   }
 
+  /** Fresh caret presence per live path — the board's "who has this open". */
+  presenceSummary(): Record<string, string[]> {
+    const now = Date.now();
+    const summary: Record<string, string[]> = {};
+    for (const [path, clients] of this.#presence) {
+      const fresh = [...clients]
+        .filter(([, cursor]) => now - cursor.at <= PRESENCE_STALE_MS)
+        .map(([clientId]) => clientId)
+        .sort();
+      if (fresh.length > 0) summary[path] = fresh;
+    }
+    return summary;
+  }
+
   #presenceFor(path: string): CollabPresence {
     const clients = this.#presence.get(path);
     const now = Date.now();

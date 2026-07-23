@@ -33,6 +33,7 @@ export function parseTaskCard(path: string, source: string): TaskCard {
       state: normalizeTaskState(undefined),
       labels: [],
       agent: null,
+      createdBy: null,
       source,
       frontmatterError: true,
     };
@@ -47,6 +48,7 @@ export function parseTaskCard(path: string, source: string): TaskCard {
     // compatibility and older files.
     labels: uniqueStrings([...stringArray(metadata.tags), ...stringArray(metadata.labels)]),
     agent: stringValue(metadata.agent) ?? null,
+    createdBy: stringValue(metadata["created-by"]) ?? null,
     source,
     frontmatterError: false,
   };
@@ -107,6 +109,9 @@ export function newTaskFile(input: {
   body?: string;
   state?: string;
   author?: string;
+  /** Durable attribution: "Name <email>" for humans, a /stream path for
+   * agents (renderers link values starting with "/"). */
+  createdBy?: string;
 }): {
   path: string;
   content: string;
@@ -117,6 +122,9 @@ export function newTaskFile(input: {
   document.set("state", state);
   if (input.author !== undefined && input.author.trim() !== "") {
     document.set("author", input.author.trim());
+  }
+  if (input.createdBy !== undefined && input.createdBy.trim() !== "") {
+    document.set("created-by", input.createdBy.trim());
   }
   const yaml = document.toString().trimEnd();
   const body = input.body?.trim();
