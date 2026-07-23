@@ -116,6 +116,9 @@ function makeTasksWorkspace(): WorkspaceConfig {
     ],
     project: ["src/**/*.{ts,tsx}!", "scripts/**/*.mjs", "!dist/**!"],
     vite: false,
+    paths: {
+      "~/*": ["../os/src/*"],
+    },
     // tailwindcss backs the @tailwindcss/vite plugin and the ui package's
     // globals.css; nothing imports it from TS. `cloudflare:workers` parses as
     // the "cloudflare" package — same posture as the other app workspaces.

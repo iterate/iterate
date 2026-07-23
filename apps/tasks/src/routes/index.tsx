@@ -46,7 +46,7 @@ function Home() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <SidebarTrigger className="-ml-1" />
+        <SidebarTrigger className="-ml-1 md:hidden" />
         <CheckoutBreadcrumbs />
       </header>
       {!loaded ? (

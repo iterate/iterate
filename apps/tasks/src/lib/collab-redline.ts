@@ -8,7 +8,7 @@ import {
   type Tooltip,
   type ViewUpdate,
 } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { RangeSetBuilder, Transaction, type Range } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import type { CollabConnection } from "./collab-client.ts";
 import type { CollabChangeSegment } from "./tasks-api.ts";
@@ -114,6 +114,17 @@ class DeletionFlag extends WidgetType {
   }
 }
 
+function insertionMark(clientId: string, createdAt: number | undefined): Decoration {
+  return Decoration.mark({
+    attributes: {
+      "data-author": clientId,
+      "data-when": String(createdAt ?? ""),
+      style: `background: ${authorColor(clientId, 0.18)}; border-bottom: 2px solid ${authorColor(clientId, 0.9)}`,
+    },
+    class: "cm-redline-ins",
+  });
+}
+
 function decorate(segments: CollabChangeSegment[], docLength: number): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   // RangeSetBuilder demands ascending positions; the server sorts, but
@@ -144,18 +155,7 @@ function decorate(segments: CollabChangeSegment[], docLength: number): Decoratio
       const from = Math.min(segment.from, docLength);
       const to = Math.min(segment.to, docLength);
       if (from >= to) continue;
-      builder.add(
-        from,
-        to,
-        Decoration.mark({
-          attributes: {
-            "data-author": segment.clientId,
-            "data-when": String(segment.createdAt ?? ""),
-            style: `background: ${authorColor(segment.clientId, 0.18)}; border-bottom: 2px solid ${authorColor(segment.clientId, 0.9)}`,
-          },
-          class: "cm-redline-ins",
-        }),
-      );
+      builder.add(from, to, insertionMark(segment.clientId, segment.createdAt));
     }
   }
   return builder.finish();
@@ -202,6 +202,29 @@ export function redlineExtension(connection: CollabConnection) {
         if (!update.docChanged) return;
         // Keep marks visually anchored while the authoritative fold catches up.
         this.decorations = this.decorations.map(update.changes);
+        // Own keystrokes wear marks IMMEDIATELY — the authoritative fold
+        // replaces them with the server's identical segments once edits
+        // settle, so tracking never lags typing. Remote batches skip the
+        // optimism: their authors' marks arrive with the refresh.
+        if (update.transactions.every((tr) => !tr.annotation(Transaction.remote))) {
+          const now = Date.now();
+          const adds: Range<Decoration>[] = [];
+          update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+            const deleted = update.startState.doc.sliceString(fromA, toA);
+            if (deleted.length > 0) {
+              adds.push(
+                Decoration.widget({
+                  side: -1,
+                  widget: new DeletionFlag(connection.clientId, deleted, now),
+                }).range(fromB),
+              );
+            }
+            if (inserted.length > 0) {
+              adds.push(insertionMark(connection.clientId, now).range(fromB, toB));
+            }
+          });
+          if (adds.length > 0) this.decorations = this.decorations.update({ add: adds, sort: true });
+        }
         this.futile = 0;
         if (this.timer) clearTimeout(this.timer);
         this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);
