@@ -1972,6 +1972,16 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.durableObjectStub.readBase(path);
   }
 
+  /** Announce (or clear, with null) this client's mouse pointer on the board. */
+  pointerPresent(clientId: string, payload: unknown) {
+    return this.durableObjectStub.pointerPresent(clientId, payload);
+  }
+
+  /** Long-poll for board pointer movement past a generation. */
+  pointerWait(afterGeneration: number) {
+    return this.durableObjectStub.pointerWait(afterGeneration);
+  }
+
   /** Batched file reads (board seeds): one RPC, missing paths map to null. */
   readFiles(paths: string[]): Promise<Record<string, string | null>> {
     return this.durableObjectStub.readFiles(paths);
@@ -2172,16 +2182,6 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   /** Announce (or clear, with null) this client's cursor for one session. */
   present(path: string, clientId: string, selection: { anchor: number; head: number } | null) {
     return this.durableObjectStub.collabPresent(path, clientId, selection);
-  }
-
-  /** Announce (or clear, with null) this client's mouse pointer on the board. */
-  pointerPresent(clientId: string, payload: unknown) {
-    return this.durableObjectStub.pointerPresent(clientId, payload);
-  }
-
-  /** Long-poll for board pointer movement past a generation. */
-  pointerWait(afterGeneration: number) {
-    return this.durableObjectStub.pointerWait(afterGeneration);
   }
 
   /** Head versions of every live session (a cheap board change cursor). */
