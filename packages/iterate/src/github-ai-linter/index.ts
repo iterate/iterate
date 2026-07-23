@@ -1,5 +1,4 @@
-import type { ItxBinding, StreamEventInput } from "../sdk.ts";
-import type { IterateProjectApp } from "../project-apps.ts";
+import type { ItxBinding, StreamEvent, StreamEventInput } from "../sdk.ts";
 import type { GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -7,14 +6,12 @@ export type GithubAiLinterConfig = {
   rules: GithubAiLinterRuleSource;
 };
 
-export type GithubAiLinterProjectApp = IterateProjectApp<{ ITX: ItxBinding }>;
-
 const reviewBotSubscriptionConfigVersion = 1;
 
 export const GithubAiLinter = {
-  create(config: GithubAiLinterConfig): GithubAiLinterProjectApp {
+  create(config: GithubAiLinterConfig) {
     return {
-      async processEvent(event, env) {
+      async processEvent(event: StreamEvent, env: { ITX: ItxBinding }) {
         if (event.type !== "events.iterate.com/repo/github-link-configured") return;
         const connection = event.payload?.connection;
         if (typeof connection !== "string" || connection.length === 0) return;

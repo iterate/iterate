@@ -1,5 +1,5 @@
 import { GithubAiLinter } from "iterate/github-ai-linter";
-import { IterateWorkerEntrypoint } from "iterate/sdk";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 
 // An iterate project is, in the abstract, just a fetch function.
@@ -13,15 +13,17 @@ import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 // { fetch, processEvent }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
-  protected override apps = [
-    GithubAiLinter.create({
-      policyVersion: "2",
-      rules: {
-        glob: "rules/**/*.md",
-        repoPath: "/repos/iterate",
-      },
-    }),
-  ];
+  #aiLintApp = GithubAiLinter.create({
+    policyVersion: "2",
+    rules: {
+      glob: "rules/**/*.md",
+      repoPath: "/repos/iterate",
+    },
+  });
+
+  protected override async processEvent(event: StreamEvent): Promise<void> {
+    await this.#aiLintApp.processEvent(event, this.env);
+  }
 
   async fetch(req: Request): Promise<Response> {
     const app = req.headers.get("x-iterate-app");

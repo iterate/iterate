@@ -4,7 +4,7 @@
 // drift is a lint error. This file is oxfmt-ignored: the codegen preset owns
 // its formatting.
 // codegen:start {preset: custom, source: ./config-repo-template.codegen.cjs, export: projectRepoTemplateFiles}
-export const PROJECT_REPO_INITIAL_FILES = [
+export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }> = [
   {
     path: "AGENTS.md",
     content:
@@ -806,7 +806,7 @@ export const PROJECT_REPO_INITIAL_FILES = [
     path: "worker.ts",
     content:
       "import { GithubAiLinter } from \"iterate/github-ai-linter\";\n" +
-      "import { IterateWorkerEntrypoint } from \"iterate/sdk\";\n" +
+      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
@@ -820,15 +820,17 @@ export const PROJECT_REPO_INITIAL_FILES = [
       "// { fetch, processEvent }\n" +
       "\n" +
       "export default class ProjectWorker extends IterateWorkerEntrypoint {\n" +
-      "  protected override apps = [\n" +
-      "    GithubAiLinter.create({\n" +
-      "      policyVersion: \"2\",\n" +
-      "      rules: {\n" +
-      "        glob: \"rules/**/*.md\",\n" +
-      "        repoPath: \"/repos/iterate\",\n" +
-      "      },\n" +
-      "    }),\n" +
-      "  ];\n" +
+      "  #aiLintApp = GithubAiLinter.create({\n" +
+      "    policyVersion: \"2\",\n" +
+      "    rules: {\n" +
+      "      glob: \"rules/**/*.md\",\n" +
+      "      repoPath: \"/repos/iterate\",\n" +
+      "    },\n" +
+      "  });\n" +
+      "\n" +
+      "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
+      "    await this.#aiLintApp.processEvent(event, this.env);\n" +
+      "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +
       "    const app = req.headers.get(\"x-iterate-app\");\n" +

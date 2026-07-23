@@ -186,19 +186,22 @@ delegates to the local source instead of the published build.
 
 ## GitHub AI linter
 
-Project workers can register the packaged pull-request linter declaratively:
+Project workers can configure the packaged pull-request linter and call it
+explicitly from their event hook:
 
 ```ts
 import { GithubAiLinter } from "iterate/github-ai-linter";
-import { IterateWorkerEntrypoint } from "iterate/sdk";
+import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
-  protected override apps = [
-    GithubAiLinter.create({
-      policyVersion: "2",
-      rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
-    }),
-  ];
+  #aiLintApp = GithubAiLinter.create({
+    policyVersion: "2",
+    rules: { glob: "rules/**/*.md", repoPath: "/repos/iterate" },
+  });
+
+  protected override async processEvent(event: StreamEvent): Promise<void> {
+    await this.#aiLintApp.processEvent(event, this.env);
+  }
 }
 ```
 

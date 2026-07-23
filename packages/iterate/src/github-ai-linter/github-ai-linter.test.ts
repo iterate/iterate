@@ -1,6 +1,5 @@
 import { expect, test } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../sdk.ts";
-import { dispatchProjectApps } from "../project-apps.ts";
 import { GithubAiLinter } from "./index.ts";
 
 test("a declared GitHub AI linter subscribes each linked connection without config-owned plumbing", async () => {
@@ -73,25 +72,6 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   expect(entrypoint).toContain('"policyVersion":"2"');
   expect(entrypoint).toContain('"glob":"rules/**/*.md"');
   expect(entrypoint).toContain('"repoPath":"/repos/iterate"');
-});
-
-test("the project worker dispatches each event to its declared apps", async () => {
-  const received: StreamEvent[] = [];
-  const event = githubLinkConfigured("iterate-installation");
-
-  await dispatchProjectApps(
-    [
-      {
-        processEvent: async (event: StreamEvent) => {
-          received.push(event);
-        },
-      },
-    ],
-    event,
-    projectEnv(() => {}),
-  );
-
-  expect(received).toEqual([event]);
 });
 
 function githubLinkConfigured(connection: string): StreamEvent {

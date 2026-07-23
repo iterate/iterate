@@ -8,7 +8,7 @@ Status: The implementation and config migration are ported onto current `main`. 
 ## Plan
 
 - [x] Add a public `iterate/github-ai-linter` module with a declarative `GithubAiLinter.create(...)` app definition. *Implemented in `packages/iterate/src/github-ai-linter/index.ts`.*
-- [x] Teach `IterateWorkerEntrypoint` to dispatch project events to registered apps, so config declares the linter once and keeps no bot-specific event plumbing. *The SDK dispatches its protected `apps` list through `project-apps.ts`.*
+- [x] Keep event routing explicit in config while packaging the linter-specific reaction. *The worker keeps a private `#aiLintApp` and calls it from its existing `processEvent` hook; the SDK stays unchanged.*
 - [x] Move the review processor, durable host, subscription bootstrap, and GitHub webhook routing from `iterate/config` into the package while preserving durable keys, subscription keys, freshness, and idempotency. *The packaged worker keeps the existing review-bot identities and routing tests.*
 - [x] Load review rules from a repo glob descriptor; keep Iterate's canonical rule Markdown under root `rules/**/*.md` for both ordinary coding agents and the hosted linter. *Rule reads are pinned to the commit returned by `Repo.glob`; root agent instructions point to the same files.*
 - [x] Export/build/type the package submodule and cover its public behavior with integration-style package tests. *Both public exports build and the focused package suite passes.*
@@ -20,7 +20,7 @@ Status: The implementation and config migration are ported onto current `main`. 
 
 1. `packages/iterate` owns the generic GitHub AI linter runtime; config only composes it.
 2. Root `rules/**/*.md` is the one rule source. Config points the app at `/repos/iterate`; package artifacts do not duplicate the rule text.
-3. The package owns dynamic-worker refs, subscription bootstrap, and event dispatch behind one declaration.
+3. The package owns dynamic-worker refs and subscription bootstrap; config explicitly routes project events to the configured linter.
 4. Existing durable identities and idempotency semantics are migration invariants.
 5. PR iterate/config#17 is design input, not code to merge.
 
@@ -34,3 +34,4 @@ Status: The implementation and config migration are ported onto current `main`. 
 - 2026-07-22: Full monorepo typecheck, lint, format check, and tests pass on the worktree branch; package build and focused GitHub/template tests also pass.
 - 2026-07-22: The first preview exposed one stale E2E fixture assertion for the deleted seeded bot path. Removed that assertion, added the inverse check, and updated the GitHub-agent guide to describe the packaged runtime and Markdown rules; preview rerun pending.
 - 2026-07-23: Opened draft PRs iterate/iterate#2259 and iterate/config#18; the config PR consumes #2259's pkg.pr.new artifact until the package change reaches `main`.
+- 2026-07-23: Review rejected the generic project-app registry as premature. Restored the SDK's explicit `processEvent` seam and made both workers call their private configured linter directly.

@@ -88,10 +88,11 @@ re-run.
 
 Delivery is the guestbook's wake lane, with one difference: webhook streams
 are per connection and no user action touches them directly, so nothing can
-configure the subscription at creation time. Instead `GithubAiLinter.create`
-adds an app to the project worker's event lane. On a
-`repo/github-link-configured` event (whose payload names the connection), it
-idempotently appends the bot's `stream/subscription-configured` event to that
+configure the subscription at creation time. Instead the config worker keeps
+the result of `GithubAiLinter.create` in a private field and calls its
+`processEvent` method explicitly. On a `repo/github-link-configured` event
+(whose payload names the connection), it idempotently appends the bot's
+`stream/subscription-configured` event to that
 connection's webhook stream, once per (re-)link rather than once per webhook.
 The stream spine pokes the new wake subscriber immediately, and a fresh
 subscription replays from offset zero, so pull requests opened shortly before

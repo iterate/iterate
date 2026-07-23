@@ -24,7 +24,6 @@ import type {
   StreamPushEventBatch,
 } from "./itx-api.generated.ts";
 import type { ProcessorStream, ProcessorStreamPager } from "./processors/stream-handle.ts";
-import { dispatchProjectApps, type IterateProjectApp } from "./project-apps.ts";
 import type {
   ProcessorSnapshot,
   StreamSubscriberWakeRequest,
@@ -360,9 +359,6 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
 export class IterateWorkerEntrypoint<
   Env extends IterateEnv = IterateEnv,
 > extends WorkerEntrypoint<Env> {
-  /** Declarative project apps receive every committed event in registration order. */
-  protected apps: IterateProjectApp<Env>[] = [];
-
   constructor(ctx: ConstructorParameters<typeof WorkerEntrypoint<Env>>[0], env: Env) {
     super(ctx, env);
     this.env = wrapIterateEnv(env);
@@ -388,9 +384,7 @@ export class IterateWorkerEntrypoint<
 
   /** Called once per delivered event, in per-stream order, at-least-once.
    * Override to react; the default ignores everything. */
-  protected async processEvent(event: StreamEvent): Promise<void> {
-    await dispatchProjectApps(this.apps, event, this.env);
-  }
+  protected async processEvent(_event: StreamEvent): Promise<void> {}
 
   /** Platform entry point for flattened `itx.worker.<path>` capability
    * calls (see the class docstring). */
