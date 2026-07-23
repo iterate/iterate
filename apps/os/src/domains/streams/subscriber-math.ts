@@ -23,9 +23,16 @@ export const SKIP_CONFIRM_ATTEMPTS = 3;
 
 /**
  * Skipped-poison events in a row (no intervening success) after which a
- * skip-mode subscription parks anyway: three consecutive poison verdicts is
+ * skip-mode subscription stops skipping: three consecutive poison verdicts is
  * indistinguishable from "the receiver is down and everything fails", and
- * mass-skipping a down receiver's backlog would be silent data loss.
+ * mass-skipping a down receiver's backlog would be silent data loss. At the
+ * cap the subscription holds its cursor and rejoins the shared backoff/park
+ * machine (park only at MAX_DELIVERY_ATTEMPTS), because a down receiver is an
+ * outage to ride out, not a reason to give up: the verdicts arrive ~seconds
+ * apart, and parking on them once turned a ~10s transport blip into a
+ * permanently stalled config-worker feed. The streak is in-memory, so an
+ * eviction mid-outage resets it and up to MAX_CONSECUTIVE_SKIPS - 1 more
+ * events can be skipped per incarnation — same as before, just never a park.
  */
 export const MAX_CONSECUTIVE_SKIPS = 3;
 

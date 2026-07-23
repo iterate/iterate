@@ -662,7 +662,7 @@ describe("StreamSubscribers", () => {
     expect(h.row("k")).toMatchObject({ ackedOffset: 4, attempt: 0, nextAttemptAt: null });
   });
 
-  it("h. skip mode parks when everything fails instead of mass-skipping the backlog", async () => {
+  it("h. skip mode stops skipping when everything fails and rides out the outage in backoff", async () => {
     const h = makeHarness();
     h.configure(pushPayload({ onPoison: "skip" }), 0);
     h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"), evt(4, "a"));
@@ -672,8 +672,12 @@ describe("StreamSubscribers", () => {
 
     await driveUntilParked(h);
 
-    // Two consecutive poison verdicts skipped, then the third parks the
-    // subscription: a receiver that fails everything is down, not poisoned.
+    // Two consecutive poison verdicts skipped, then the streak cap converts
+    // "poison" into "the receiver is down": the cursor holds at 2 and the row
+    // rejoins the shared backoff machine — the attempt counter keeps growing
+    // past the confirm threshold, so the subscription parks only after
+    // MAX_DELIVERY_ATTEMPTS total consecutive failures (hours of outage
+    // tolerance), never on a third quick verdict.
     const skipFacts = h.factsOfType(ERROR_OCCURRED);
     expect(skipFacts.map((fact) => fact.idempotencyKey)).toEqual([
       "push-poison-skipped:k:1",
@@ -682,10 +686,63 @@ describe("StreamSubscribers", () => {
     const parkedFacts = h.factsOfType(PARKED);
     expect(parkedFacts).toHaveLength(1);
     expect(parkedFacts[0].idempotencyKey).toBeUndefined();
-    expect(parkedFacts[0].payload).toMatchObject({ subscriptionKey: "k", atOffset: 2 });
+    expect(parkedFacts[0].payload).toMatchObject({
+      subscriptionKey: "k",
+      atOffset: 2,
+      attempts: MAX_DELIVERY_ATTEMPTS,
+    });
+    // The held-back lone event was retried all the way to the attempt cap.
+    expect(
+      h.pushes.filter((batch) => batch.events.map((event) => event.offset).join() === "3"),
+    ).toHaveLength(MAX_DELIVERY_ATTEMPTS);
     // NOT all events were skipped: offsets 3 and 4 are still owed delivery.
     expect(h.row("k")?.ackedOffset).toBe(2);
     expect(h.configured["k"].parkedAtOffset).toBe(2);
+  });
+
+  it("h2. skip mode survives a transient receiver outage: backlog drains once the receiver heals", async () => {
+    const h = makeHarness();
+    h.configure(pushPayload({ onPoison: "skip" }), 0);
+    h.append(evt(1, "a"), evt(2, "a"), evt(3, "a"), evt(4, "a"));
+    let down = true;
+    h.dialImpl.push = async () => {
+      if (down) throw new Error("receiver is down");
+    };
+
+    // Drive alarms until the streak cap has been hit and the row is deep in
+    // backoff: attempt grows past the skip-confirm threshold because the cap
+    // branch keeps counting failures instead of parking.
+    h.subscribers.wake();
+    await h.settle();
+    for (
+      let round = 0;
+      round < 40 && (h.row("k")?.attempt ?? 0) < SKIP_CONFIRM_ATTEMPTS + 2;
+      round += 1
+    ) {
+      const next = h.store.minNextAttemptAt();
+      if (next === null) break;
+      h.advanceTo(Math.max(h.now(), next) + 1);
+      h.subscribers.onAlarm();
+      await h.settle();
+    }
+    expect(h.row("k")).toMatchObject({ ackedOffset: 2, attempt: SKIP_CONFIRM_ATTEMPTS + 2 });
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+
+    // Receiver heals: the next retry delivers the held-back event, the streak
+    // resets, and the rest of the backlog drains — nothing was mass-skipped
+    // and no human ever had to click Resume.
+    down = false;
+    const next = h.store.minNextAttemptAt();
+    h.advanceTo(Math.max(h.now(), next!) + 1);
+    h.subscribers.onAlarm();
+    await h.settle();
+
+    expect(h.factsOfType(PARKED)).toHaveLength(0);
+    expect(h.factsOfType(ERROR_OCCURRED).map((fact) => fact.idempotencyKey)).toEqual([
+      "push-poison-skipped:k:1",
+      "push-poison-skipped:k:2",
+    ]);
+    expect(h.row("k")).toMatchObject({ ackedOffset: 4, attempt: 0, nextAttemptAt: null });
   });
 
   it("i. wake mode: pokes on lag, streams after the checkpoint, idle teardown advances the watermark", async () => {

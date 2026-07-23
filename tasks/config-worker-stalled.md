@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done-pending-review
 size: small
 ---
 
@@ -7,10 +7,11 @@ size: small
 
 ## Status summary
 
-Diagnosed; prod remediated (subscription resumed by hand, caught up instantly).
-Code fix in progress: stop terminal-parking skip-mode subscriptions after a
-few seconds of receiver outage — route the "everything fails" case into the
-shared backoff/park machine so it tolerates hours like park mode does.
+Done, pending review (PR #2279). Prod remediated (subscription resumed by
+hand, caught up instantly). Code fix implemented with tests: skip-mode
+subscriptions no longer terminal-park after a few seconds of receiver outage —
+the consecutive-skip cap routes into the shared backoff/park machine, which
+tolerates hours like park mode does.
 
 ## Incident
 
@@ -50,19 +51,25 @@ config workers across the deployment until someone notices the red sidebar.
 
 ## Fix
 
-- [ ] In `stream-subscribers.ts#onPushFailure`, when the consecutive-skip cap
+- [x] In `stream-subscribers.ts#onPushFailure`, when the consecutive-skip cap
       is reached, treat the receiver as DOWN: keep the cursor, do not skip, and
       fall into the shared `#onDeliveryFailure` backoff/park machine (attempt
       counter keeps growing past `SKIP_CONFIRM_ATTEMPTS`, exponential backoff
       up to the 30-minute cap, park only at `MAX_DELIVERY_ATTEMPTS`).
       While in this state the UI shows the amber "Config worker retrying"
-      row instead of red "stalled".
-- [ ] Update the `MAX_CONSECUTIVE_SKIPS` doc comment in `subscriber-math.ts`
-      to describe the new behavior.
-- [ ] Tests in `stream-subscribers.test.ts`: at the skip cap the subscription
+      row instead of red "stalled". _One-line change at the cap branch: `#park`
+      → `#onDeliveryFailure(key, error, row.attempt)`; the row's attempt
+      counter carries the streak so the shared machine takes over seamlessly._
+- [x] Update the `MAX_CONSECUTIVE_SKIPS` doc comment in `subscriber-math.ts`
+      to describe the new behavior. _Also notes the in-memory streak reset on
+      eviction (pre-existing; now caps at more skips, never a park)._
+- [x] Tests in `stream-subscribers.test.ts`: at the skip cap the subscription
       backs off instead of parking; recovery mid-backoff resets the streak and
       delivery resumes; sustained failure still parks at
-      `MAX_DELIVERY_ATTEMPTS`.
+      `MAX_DELIVERY_ATTEMPTS`. _Test "h" reworked (parks at attempt 15 with the
+      cursor held, lone event retried to the cap), new "h2" heals the receiver
+      mid-backoff and asserts the backlog drains with no park and no extra
+      skips._
 
 ## Out of scope (noted for later)
 
