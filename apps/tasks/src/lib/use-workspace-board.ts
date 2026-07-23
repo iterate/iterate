@@ -43,6 +43,8 @@ export function changeMap(status: unknown): Map<string, TaskChangeStatus> {
 export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   const [files, setFiles] = useState<Record<string, string> | null>(null);
   const [changes, setChanges] = useState<Map<string, TaskChangeStatus>>(new Map());
+  // Fresh caret presence per path — "who has this card open" (clientIds).
+  const [viewers, setViewers] = useState<Map<string, string[]>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
 
@@ -117,8 +119,15 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
       void Promise.all([
         lane((ws) => ws.versions()),
         wantStatus ? lane((ws) => ws.status()) : Promise.resolve(null),
+        // Cheap in-memory read; failures just keep the previous dots.
+        lane((ws) => ws.presenceSummary()).catch(() => null),
       ])
-        .then(async ([rawVersions, status]) => {
+        .then(async ([rawVersions, status, presence]) => {
+          if (presence !== null && generation.current === mine) {
+            setViewers(
+              new Map(Object.entries(presence).map(([path, ids]) => [boardKey(path), ids])),
+            );
+          }
           if (generation.current !== mine) return;
           const changes = changesRef.current;
           const next = status === null ? changes : changeMap(status);
@@ -501,6 +510,7 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
 
   return {
     changes,
+    viewers,
     commit,
     deleteTask,
     discardAll,

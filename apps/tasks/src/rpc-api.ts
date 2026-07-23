@@ -292,12 +292,9 @@ type WorkspaceStub = {
     ): Promise<void>;
     changes(path: string): Promise<CollabChanges>;
     versions(): Promise<Record<string, number>>;
+    presenceSummary(): Promise<Record<string, string[]>>;
   };
   readBase(path: string): Promise<string | null>;
-  pointerPresent(clientId: string, payload: unknown): Promise<void>;
-  pointerWait(
-    afterGeneration: number,
-  ): Promise<{ clients: { at: number; clientId: string; payload: unknown }[]; generation: number }>;
   exists(path: string): Promise<boolean>;
   glob(pattern: string): Promise<string[]>;
   readFile(path: string): Promise<string | null>;
@@ -446,12 +443,8 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     return this.#withWorkspace((ws) => ws.collab.versions());
   }
 
-  pointerPresent(clientId: string, payload: unknown): Promise<void> {
-    return this.#withWorkspace((ws) => ws.pointerPresent(clientId, payload));
-  }
-
-  pointerWait(afterGeneration: number) {
-    return this.#withWorkspace((ws) => ws.pointerWait(afterGeneration));
+  presenceSummary(): Promise<Record<string, string[]>> {
+    return this.#withWorkspace((ws) => ws.collab.presenceSummary());
   }
 
   /** The newest page of the workspace's stream events, newest first. */

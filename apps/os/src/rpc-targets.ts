@@ -1972,16 +1972,6 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     return this.durableObjectStub.readBase(path);
   }
 
-  /** Announce (or clear, with null) this client's mouse pointer on the board. */
-  pointerPresent(clientId: string, payload: unknown) {
-    return this.durableObjectStub.pointerPresent(clientId, payload);
-  }
-
-  /** Long-poll for board pointer movement past a generation. */
-  pointerWait(afterGeneration: number) {
-    return this.durableObjectStub.pointerWait(afterGeneration);
-  }
-
   /** Batched file reads (board seeds): one RPC, missing paths map to null. */
   readFiles(paths: string[]): Promise<Record<string, string | null>> {
     return this.durableObjectStub.readFiles(paths);
@@ -2192,6 +2182,11 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   /** Attributed tracked changes since the last commit (redline segments). */
   changes(path: string): Promise<CollabChangesResult> {
     return this.durableObjectStub.collabChanges(path);
+  }
+
+  /** Fresh caret presence per live session — "who has this file open". */
+  presenceSummary(): Promise<Record<string, string[]>> {
+    return this.durableObjectStub.collabPresenceSummary();
   }
 }
 

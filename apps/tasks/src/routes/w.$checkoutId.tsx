@@ -17,8 +17,8 @@ import { StreamEventsSheet } from "../components/stream-events-sheet.tsx";
 import { WithTooltip } from "../components/checkout-header.tsx";
 import { WorkspaceTaskSheet } from "../components/workspace-task-sheet.tsx";
 import { useWorkspaceBoard } from "../lib/use-workspace-board.ts";
-import { usePointerPresence } from "../lib/pointer-presence.ts";
-import { PointerOverlay } from "../components/pointer-overlay.tsx";
+import { authorColor, authorLabel } from "../lib/collab-redline.ts";
+import { whoami } from "../lib/use-checkout.ts";
 import { useTaskCommit } from "../lib/use-task-commit.ts";
 import { projectBoard } from "../lib/board-engine.ts";
 import { taskPathInFolder, unclaimedPath, type BoardTask, type RowField } from "../lib/board-model.ts";
@@ -63,13 +63,6 @@ function WorkspaceBoardPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   const repoPath = normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH;
   const board = useWorkspaceBoard(checkoutId, repoPath);
-  // Everyone's mouse pointer, Figma-style (only ready boards announce —
-  // presence on a workspace that is still creating would force-create it).
-  const pointers = usePointerPresence(checkoutId, repoPath, {
-    group: search.group,
-    q: search.q,
-    task: search.task,
-  });
   // Auto-commit defaults OFF on the workspace board: every commit advances
   // the redline baseline, and a 60s autosave would wipe "what everyone did"
   // minute by minute. Committing is an explicit act here.
@@ -117,11 +110,21 @@ function WorkspaceBoardPage() {
   // Warm the editor + preview stacks while the board renders: the CM6 and
   // markdown chunks and the whoami identity round trip come off the first
   // sheet-open's critical path.
+  // Durable attribution for cards created here: "Name <email>".
+  const createdByRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     void import("../lib/use-collab-editor.ts").then(
       (module) => void module.ensureCollabIdentity(),
     );
     void import("../components/workspace-task-preview.tsx");
+    void whoami()
+      .then((me) => {
+        createdByRef.current =
+          me.name && me.email
+            ? `${me.name} <${me.email}>`
+            : (me.email ?? me.name ?? me.userId ?? undefined);
+      })
+      .catch(() => {});
   }, []);
   /** Prune expired claims and answer whether a path is spoken for. */
   const isTaken = useCallback((path: string): boolean => {
@@ -197,6 +200,21 @@ function WorkspaceBoardPage() {
     () => board.tasks.find((task) => task.path === search.task) ?? null,
     [board.tasks, search.task],
   );
+  /** Who has which card open, as the Board's presence dots. */
+  const viewersByPath = useMemo(
+    () =>
+      new Map(
+        [...board.viewers].map(([path, clientIds]) => [
+          path,
+          clientIds.map((clientId) => ({
+            color: authorColor(clientId, 1),
+            name: authorLabel(clientId),
+          })),
+        ]),
+      ),
+    [board.viewers],
+  );
+
   const deletedChanges = useMemo(
     () => board.taskChanges.filter((change) => change.status === "deleted"),
     [board.taskChanges],
@@ -314,11 +332,11 @@ function WorkspaceBoardPage() {
       // the path, the heading, and the later title-trailing rename all
       // stay distinct.
       let title = "New task";
-      let file = newTaskFile({ state, title });
+      let file = newTaskFile({ createdBy: createdByRef.current, state, title });
       let target = taskPathInFolder(file.path, folder ?? "tasks");
       for (let suffix = 2; isTaken(target); suffix++) {
         title = `New task ${suffix}`;
-        file = newTaskFile({ state, title });
+        file = newTaskFile({ createdBy: createdByRef.current, state, title });
         target = taskPathInFolder(file.path, folder ?? "tasks");
       }
       claimedRef.current.set(target, Date.now());
@@ -502,7 +520,7 @@ function WorkspaceBoardPage() {
         <Board
           projection={projection}
           taskChangeByPath={board.changes}
-          presenceByPath={new Map()}
+          presenceByPath={viewersByPath}
           recentByPath={new Map()}
           onMove={moveTask}
           onAdd={addTask}
@@ -514,12 +532,6 @@ function WorkspaceBoardPage() {
         streamPath={`/workspaces/tasks/${checkoutId}~${repoPath.replace(/^\/+/, "").replaceAll("/", "--")}`}
         subscribe={board.subscribeEvents}
         onClose={() => setEventsOpen(false)}
-      />
-      <PointerOverlay
-        pointers={pointers}
-        onJumpToView={(view) =>
-          patchSearch({ group: view.group === "none" || view.group === "label" ? view.group : "folder", q: view.q, task: view.task })
-        }
       />
       <WorkspaceTaskSheet
         task={openTask}
