@@ -548,6 +548,48 @@ const plugin: StrictPlugin = {
         };
       },
     },
+    "icon-button-has-hover-text": {
+      meta: {
+        docs: {
+          description:
+            "Require icon-size <Button>s to carry an aria-label (or title); Button turns it into hover text. " +
+            "The off-the-shelf jsx-a11y/control-has-associated-label rule can't do this: it assumes any " +
+            "uppercase-component child (e.g. a lucide icon) might render a text label.",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          JSXOpeningElement: (node: any) => {
+            if (node.name.type !== "JSXIdentifier" || node.name.name !== "Button") return;
+            // A spread might supply size and/or aria-label; can't tell statically.
+            if (node.attributes.some((attribute: any) => attribute.type !== "JSXAttribute")) return;
+
+            const findAttribute = (name: string) =>
+              node.attributes.find(
+                (attribute: any) => getJSXAttributeName(attribute.name) === name,
+              );
+            const sizeAttribute = findAttribute("size");
+            const size = sizeAttribute?.value;
+            if (size?.type !== "Literal" || typeof size.value !== "string") return;
+            if (!size.value.startsWith("icon")) return;
+
+            const hasLabel = ["aria-label", "aria-labelledby", "title"].some((name) => {
+              const value = findAttribute(name)?.value;
+              // Static string must be non-empty; assume any expression provides a label.
+              return value?.type === "Literal" ? !!String(value.value).trim() : value != null;
+            });
+            if (hasLabel) return;
+            context.report({
+              node,
+              message:
+                `An icon-only <Button size="${size.value}"> has no visible text, so screen readers and ` +
+                `hovering users get nothing. Add aria-label="..." - Button renders it as title (hover text) too.`,
+            });
+          },
+        };
+      },
+    },
     "no-single-use-types": {
       meta: {
         type: "suggestion",
