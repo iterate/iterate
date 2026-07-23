@@ -20,8 +20,9 @@ import type { CollabChangeSegment } from "./tasks-api.ts";
  * fold; no accept/reject machinery — the document is the document.
  */
 
-/** Stable, legible per-author hue (agents get the platform violet). */
-function authorColor(clientId: string, alpha = 0.35): string {
+/** Stable, legible per-author hue (agents get the platform violet). Shared
+ * with the live-cursor layer so a person's caret matches their redlines. */
+export function authorColor(clientId: string, alpha = 0.35): string {
   if (clientId === "external") return `hsla(262, 83%, 58%, ${alpha})`;
   let hash = 0;
   for (const char of clientId) hash = (hash * 31 + char.charCodeAt(0)) | 0;

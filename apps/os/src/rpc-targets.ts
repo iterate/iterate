@@ -2155,9 +2155,22 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   }
 
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
-   * snapshot when past the retained floor, or ended after a destructive op. */
-  wait(path: string, epoch: string, afterVersion: number, clientId?: string) {
-    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId);
+   * snapshot when past the retained floor, or ended after a destructive op.
+   * With afterPresence given, also resolves when cursors moved past that
+   * generation (delivered on the result's `presence`). */
+  wait(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+    afterPresence?: number,
+  ) {
+    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId, afterPresence);
+  }
+
+  /** Announce (or clear, with null) this client's cursor for one session. */
+  present(path: string, clientId: string, selection: { anchor: number; head: number } | null) {
+    return this.durableObjectStub.collabPresent(path, clientId, selection);
   }
 
   /** Head versions of every live session (a cheap board change cursor). */
