@@ -1,0 +1,4 @@
+# The platform your local vessel dials. https://os.iterate.com is the
+# develop-against-production loop (see README); point at a local os dev
+# server (http://localhost:<port>) to run fully local.
+OS_BASE_URL=https://os.iterate.com
