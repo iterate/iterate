@@ -177,13 +177,13 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       "AGENTS.md",
       "apps/guestbook/client.tsx",
       "apps/guestbook/server.tsx",
-      "apps/review-bot/src/review-bot.ts",
       "apps/todo/client.tsx",
       "apps/todo/server.tsx",
       "package.json",
       "worker.ts",
     ]),
   });
+  expect(tree.paths.some((path) => path.startsWith("apps/review-bot/"))).toBe(false);
   expect(tree.paths).not.toContain("sdk.ts");
   expect(await project.repo.readFile({ path: "nope.md" })).toBeNull();
 
