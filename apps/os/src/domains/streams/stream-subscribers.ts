@@ -859,7 +859,7 @@ export class StreamSubscribers {
   #onDeliveryFailure(subscriptionKey: string, error: unknown, previousAttempts?: number): void {
     const attempts = previousAttempts ?? this.#hooks.store.get(subscriptionKey)?.attempt ?? 0;
     const attempt = attempts + 1;
-    if (isTerminalDeliveryError(error)) {
+    if ((error as { retryable?: unknown } | null)?.retryable === false) {
       this.#park(subscriptionKey, attempt, error);
       return;
     }
@@ -1571,10 +1571,6 @@ function selectorMatchesSafely(selector: CompiledEventSelector, event: StreamEve
 
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)) || "unknown error";
-}
-
-function isTerminalDeliveryError(error: unknown): boolean {
-  return (error as { retryable?: unknown } | null)?.retryable === false;
 }
 
 function parseWakeDeliverySettlement(
