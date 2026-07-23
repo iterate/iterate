@@ -1,0 +1,23 @@
+{
+  "source": {
+    "project": "misha",
+    "stream": "/agents/web/2026-07-23t14-43-53-788z",
+    "requestOffset": 5141,
+    "failureOffset": 5147,
+    "metadataOffset": 5371,
+    "retryFailureOffset": 5723
+  },
+  "createRequest": {
+    "type": "github-private",
+    "connection": "install-114628444-bjinlk2pdykc",
+    "owner": "mmkal",
+    "repo": "lerna-learning"
+  },
+  "failure": "Could not read mmkal/lerna-learning#main from GitHub (missing branch or empty repository?): HTTP 404",
+  "githubRepository": {
+    "fullName": "mmkal/lerna-learning",
+    "defaultBranch": "master",
+    "private": true,
+    "repositoryId": 196831399
+  }
+}
