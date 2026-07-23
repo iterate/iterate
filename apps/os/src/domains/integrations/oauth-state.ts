@@ -24,6 +24,11 @@ const OAuthStateData = z.object({
   /** Tentative setup-URL input carried into GitHub's user OAuth callback.
    * It is not authority until the resulting user token proves access. */
   githubInstallationId: z.string().optional(),
+  /** Present only on a state minted after GitHub user OAuth proved access to
+   * `githubInstallationId`. This lets the dashboard ask for confirmation
+   * without making the user repeat OAuth; signature + project/user binding
+   * keep the installation id from becoming browser-supplied authority. */
+  githubInstallationAuthorized: z.literal(true).optional(),
   nonce: z.string(),
   projectId: z.string(),
   provider: z.enum(["github", "google", "slack"]),

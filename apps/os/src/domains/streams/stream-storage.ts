@@ -304,6 +304,14 @@ export type SubscriptionCursorStore = {
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
   ): void;
+  /**
+   * Parked: stop the retry schedule (a parked row must not drive the alarm)
+   * but KEEP the failure evidence — the attempt count and error the park fact
+   * recorded stay on the row, so runtime state can answer "why is this
+   * parked" without digging the fact back out of the event log. `ack`
+   * (resume) or `setCursor` clears them.
+   */
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void;
   /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
   delete(subscriptionKey: string): void;
@@ -438,6 +446,18 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
+      park: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          attempt: number;
+          error: string;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set attempt = :attempt, next_attempt_at = null, last_error = :error, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
       setCursor: sql.run<{
         parameters: {
           subscriptionKey: string;
@@ -539,6 +559,17 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
     this.#onMutation();
   }
 
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
+    this.#db.park({
+      subscriptionKey,
+      attempt: args.attempt,
+      // Same bound as nack: a pathological message must not bloat the row.
+      error: args.error.slice(0, 2_000),
+      updatedAt: new Date().toISOString(),
+    });
+    this.#onMutation();
+  }
+
   setCursor(subscriptionKey: string, ackedOffset: number): void {
     this.#db.setCursor({
       subscriptionKey,
@@ -568,15 +599,26 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
  * may blame code the new version replaced. Progress is kept — `ackedOffset`
  * is monotonic truth about the same immutable log — while failure state is
  * cleared so every survivor gets an immediate fresh try under the new fold.
+ * PARKED survivors are the exception: the fold keeps them parked, so there is
+ * no fresh try to prime, and their attempt/lastError is the evidence the
+ * stalled-warning sheet shows — it must survive the rebuild.
  */
 export function reconcileSubscriptionCursorRows(
   store: SubscriptionCursorStore,
   configuredKeys: ReadonlySet<string>,
+  parkedKeys: ReadonlySet<string>,
 ): void {
   for (const row of store.list()) {
     if (!configuredKeys.has(row.subscriptionKey)) {
       store.delete(row.subscriptionKey);
-    } else if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
+      continue;
+    }
+    // A parked row's retry schedule is already clear (park guarantees it), so
+    // there is nothing alarm-driving to reconcile away — keep its evidence.
+    // If storage somehow holds a stray next_attempt_at anyway, fall through
+    // to the ack: losing the evidence beats an eternally re-armed alarm.
+    if (parkedKeys.has(row.subscriptionKey) && row.nextAttemptAt === null) continue;
+    if (row.attempt !== 0 || row.nextAttemptAt !== null || row.lastError !== null) {
       // ack at the row's own offset: keeps the cursor, clears attempt/backoff.
       store.ack(row.subscriptionKey, row.ackedOffset);
     }

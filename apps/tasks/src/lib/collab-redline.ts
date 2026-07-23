@@ -8,10 +8,15 @@ import {
   type Tooltip,
   type ViewUpdate,
 } from "@codemirror/view";
-import { RangeSetBuilder } from "@codemirror/state";
+import { RangeSetBuilder, Transaction, type EditorState } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import type { CollabConnection } from "./collab-client.ts";
 import type { CollabChangeSegment } from "./tasks-api.ts";
+import {
+  attributionSegments,
+  foldAttribution,
+  type AttributionState,
+} from "~/domains/workspaces/collab-changes.ts";
 
 /**
  * The redline layer: WHERE somebody added text (author-tinted highlight),
@@ -20,8 +25,9 @@ import type { CollabChangeSegment } from "./tasks-api.ts";
  * fold; no accept/reject machinery — the document is the document.
  */
 
-/** Stable, legible per-author hue (agents get the platform violet). */
-function authorColor(clientId: string, alpha = 0.35): string {
+/** Stable, legible per-author hue (agents get the platform violet). Shared
+ * with the live-cursor layer so a person's caret matches their redlines. */
+export function authorColor(clientId: string, alpha = 0.35): string {
   if (clientId === "external") return `hsla(262, 83%, 58%, ${alpha})`;
   let hash = 0;
   for (const char of clientId) hash = (hash * 31 + char.charCodeAt(0)) | 0;
@@ -114,6 +120,17 @@ class DeletionFlag extends WidgetType {
   }
 }
 
+function insertionMark(clientId: string, createdAt: number | undefined): Decoration {
+  return Decoration.mark({
+    attributes: {
+      "data-author": clientId,
+      "data-when": String(createdAt ?? ""),
+      style: `background: ${authorColor(clientId, 0.18)}; border-bottom: 2px solid ${authorColor(clientId, 0.9)}`,
+    },
+    class: "cm-redline-ins",
+  });
+}
+
 function decorate(segments: CollabChangeSegment[], docLength: number): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   // RangeSetBuilder demands ascending positions; the server sorts, but
@@ -144,18 +161,7 @@ function decorate(segments: CollabChangeSegment[], docLength: number): Decoratio
       const from = Math.min(segment.from, docLength);
       const to = Math.min(segment.to, docLength);
       if (from >= to) continue;
-      builder.add(
-        from,
-        to,
-        Decoration.mark({
-          attributes: {
-            "data-author": segment.clientId,
-            "data-when": String(segment.createdAt ?? ""),
-            style: `background: ${authorColor(segment.clientId, 0.18)}; border-bottom: 2px solid ${authorColor(segment.clientId, 0.9)}`,
-          },
-          class: "cm-redline-ins",
-        }),
-      );
+      builder.add(from, to, insertionMark(segment.clientId, segment.createdAt));
     }
   }
   return builder.finish();
@@ -198,13 +204,52 @@ export function redlineExtension(connection: CollabConnection) {
         void this.refresh();
       }
 
+      /** The server-order fold of CONFIRMED ops — null until the first
+       * authoritative install. Display re-derives from it plus whatever is
+       * still unconfirmed, so own keystrokes and their backspaces render
+       * with EXACTLY the shape the server's next fold will produce: spans
+       * coalesce as you type, deleting fresh text nets away instead of
+       * stacking per-keystroke fragments that later "snap" together. */
+      confirmed: AttributionState | null = null;
+
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
-        // Keep marks visually anchored while the authoritative fold catches up.
-        this.decorations = this.decorations.map(update.changes);
+        if (this.confirmed === null) {
+          // Pre-install: keep whatever marks exist visually anchored.
+          this.decorations = this.decorations.map(update.changes);
+        } else {
+          const now = Date.now();
+          for (const tr of update.transactions) {
+            if (!tr.docChanged) continue;
+            if (tr.annotation(Transaction.remote)) {
+              // A delivery: fold the canonical ops (true authors; own echoes
+              // included — the unconfirmed overlay below re-derives from
+              // what REMAINS unacked, so nothing double-counts).
+              for (const op of connection.takeDeliveredOps() ?? []) {
+                this.confirmed = foldAttribution(this.confirmed, { ...op, createdAt: now });
+              }
+            }
+          }
+          this.render(update.state);
+        }
         this.futile = 0;
         if (this.timer) clearTimeout(this.timer);
         this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);
+      }
+
+      /** Display = confirmed ⊕ still-unconfirmed local ops, one shared fold. */
+      render(state: EditorState) {
+        if (this.confirmed === null) return;
+        const now = Date.now();
+        let display = this.confirmed;
+        for (const unconfirmed of sendableUpdates(state)) {
+          display = foldAttribution(display, {
+            changes: unconfirmed.changes.toJSON(),
+            clientId: connection.clientId,
+            createdAt: now,
+          });
+        }
+        this.decorations = decorate(attributionSegments(display), state.doc.length);
       }
 
       async refresh() {
@@ -227,11 +272,14 @@ export function redlineExtension(connection: CollabConnection) {
             return;
           }
           this.futile = 0;
-          const segments: CollabChangeSegment[] = [
-            ...changes.inserted.map((span) => ({ ...span, kind: "inserted" as const })),
-            ...changes.deleted.map((span) => ({ ...span, kind: "deleted" as const })),
-          ];
-          this.decorations = decorate(segments, this.view.state.doc.length);
+          // Adopt the server fold as the confirmed state (the install guard
+          // above proves the editor is AT that head with nothing unacked).
+          this.confirmed = {
+            deleted: changes.deleted.map((span) => ({ ...span })),
+            doc: this.view.state.doc,
+            inserted: changes.inserted.map((span) => ({ ...span })),
+          };
+          this.render(this.view.state);
           // Nudge a measure/paint without touching the doc.
           this.view.dispatch({});
         } catch {

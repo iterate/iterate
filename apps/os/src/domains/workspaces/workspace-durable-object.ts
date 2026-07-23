@@ -469,15 +469,28 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#collab.push(input);
   }
 
-  /** Long-poll lane: resolves when ops land past afterVersion (or ~20s). */
+  /** Long-poll lane: resolves when ops land past afterVersion (or ~20s);
+   * with afterPresence given, also when cursors moved past that generation. */
   async collabWait(
     path: string,
     epoch: string,
     afterVersion: number,
     clientId?: string,
+    afterPresence?: number,
   ): Promise<CollabPull> {
     await this.#assertCreated();
-    return this.#collab.wait(path, epoch, afterVersion, clientId);
+    return this.#collab.wait(path, epoch, afterVersion, clientId, afterPresence);
+  }
+
+  /** Announce (or clear, with null) one client's cursor — quiet decoration,
+   * fanned out to session waiters coalesced. */
+  async collabPresent(
+    path: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): Promise<void> {
+    await this.#assertCreated();
+    this.#collab.present(path, clientId, selection);
   }
 
   /** Head versions of every live session (the board's change cursor). */

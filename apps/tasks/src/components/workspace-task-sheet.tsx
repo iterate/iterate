@@ -114,6 +114,7 @@ export function WorkspaceTaskSheet({
             onChangeLabels={onChangeLabels}
             onRevert={onRevert}
             onDelete={onDelete}
+            onRequestClose={onClose}
           />
         )}
       </SheetContent>
@@ -139,6 +140,7 @@ function SheetBody({
   onChangeLabels,
   onRevert,
   onDelete,
+  onRequestClose,
 }: {
   task: BoardTask;
   checkoutId: string;
@@ -162,6 +164,8 @@ function SheetBody({
   onChangeLabels: (labels: string[]) => void;
   onRevert: () => void;
   onDelete: () => void;
+  /** Cmd/Ctrl+Enter inside the editor: done editing — close the sheet. */
+  onRequestClose: () => void;
 }) {
   const [status, setStatus] = useState("connecting…");
   // The path is editable in place; SheetBody is keyed by task.path, so a
@@ -211,12 +215,13 @@ function SheetBody({
           aria-label="Task file path"
           spellCheck={false}
           className={
-            "h-6 border-transparent px-1 font-mono text-xs shadow-none " +
+            "-ml-1 h-6 border-transparent px-1 font-mono text-xs shadow-none " +
             "hover:border-input focus-visible:border-input md:text-xs"
           }
         />
         {pathError !== null && <p className="text-xs text-red-700">{pathError}</p>}
       </SheetHeader>
+      <Tabs defaultValue="editor" className="flex min-h-0 flex-1 flex-col gap-0">
       <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">
         <Select
           items={columns.map((state) => ({ label: stateLabel(state), value: state }))}
@@ -284,15 +289,12 @@ function SheetBody({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-        </div>
-      </div>
-      <Tabs defaultValue="editor" className="flex min-h-0 flex-1 flex-col gap-0">
-        <div className="flex shrink-0 items-center border-b px-4 py-1.5">
-          <TabsList className="h-8">
+          <TabsList className="ml-1 h-8">
             <TabsTrigger value="editor">Editor</TabsTrigger>
             <TabsTrigger value="preview">Preview</TabsTrigger>
           </TabsList>
         </div>
+      </div>
         <TabsContent value="preview" className="flex min-h-0 flex-1 flex-col">
           <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Rendering…</p>}>
             <WorkspaceTaskPreview source={liveSource?.() ?? task.source} />
@@ -312,6 +314,7 @@ function SheetBody({
           apiRef={editorApiRef}
           onLiveContent={onLiveContent}
           onStatus={setStatus}
+          onRequestClose={onRequestClose}
         />
       </Suspense>
         </TabsContent>

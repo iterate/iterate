@@ -84,8 +84,14 @@ export type CollabAcceptResult =
   | { status: "epoch-mismatch"; epoch: string }
   | { status: "history-miss" }
   | { status: "too-large"; maxBytes: number };
+/** Ephemeral cursor presence for one session, in each sender's own head
+ * coordinates (receivers clamp and map through subsequent edits). */
+export type CollabPresence = {
+  clients: { anchor: number; at: number; clientId: string; head: number }[];
+  generation: number;
+};
 export type CollabWaitResult =
-  | { ops: { changes: unknown; clientId: string }[]; status: "ops" }
+  | { ops: { changes: unknown; clientId: string }[]; presence?: CollabPresence; status: "ops" }
   | { snapshot: { ackedSeq: number; content: string; epoch: string; version: number }; status: "snapshot" }
   /** The session was durably ended (deleted/replaced/reset) — reopen to resume. */
   | { status: "ended" };
@@ -125,13 +131,21 @@ export interface TasksWorkspace {
     ops: { changes: unknown; clientSeq: number }[];
     path: string;
   }): Promise<CollabAcceptResult>;
-  /** Long-poll: ops after a version (parking ~20s), or a snapshot past the floor. */
+  /** Long-poll: ops after a version (parking ~20s), or a snapshot past the
+   * floor; with afterPresence given, also resolves on cursor movement. */
   wait(
     filePath: string,
     epoch: string,
     afterVersion: number,
     clientId?: string,
+    afterPresence?: number,
   ): Promise<CollabWaitResult>;
+  /** Announce (or clear, with null) this client's cursor for one session. */
+  present(
+    filePath: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): Promise<void>;
   /** Head versions of every live session — the board's change cursor. */
   versions(): Promise<Record<string, number>>;
   /** The newest page of the workspace's stream events (the audit spine). */

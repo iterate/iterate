@@ -152,10 +152,15 @@ Google accounts / GitHub installations, each at
 - **Google/Gmail** — `{ accessToken, refreshToken }` + the
   `oauth-refresh-token` strategy against `oauth2.googleapis.com` with the
   platform client credential.
-- **GitHub** — a GitHub App installation (deep-link → `installation_id`
-  callback, no code exchange). Empty material + the `github-app-installation`
-  strategy; the token mints on first use and re-mints on 401. Inbound App
-  webhooks verify `x-hub-signature-256` and route on `installation_id`.
+- **GitHub** — a GitHub App installation. The setup callback's
+  `installation_id` is untrusted until GitHub user OAuth proves that the
+  signed-in user can access it. Empty material + the
+  `github-app-installation` strategy; the token mints on first use and
+  re-mints on 401. Inbound App webhooks verify `x-hub-signature-256` and route
+  on `installation_id`. If another project already holds the installation,
+  the OAuth proof becomes a short-lived project-and-user-bound confirmation
+  state. Explicit confirmation prepares the new connection, atomically swaps
+  the directory claim, then bricks and disconnects the old connection.
 
 ## 4. The userspace lane
 

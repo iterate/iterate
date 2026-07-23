@@ -660,4 +660,49 @@ describe("clean-session commit stamping", () => {
     expect(changes.inserted.length).toBeGreaterThan(0);
     expect(changes.baseVersion).toBe(1);
   });
+
+  test("presence: announces wake parked waits coalesced, deliver on the pull, and die with the session", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store } = fakeSessionStore();
+      const { fs } = fakeFs({ [PATH]: SEED });
+      const host = new CollabHost({ fs, store });
+      const opened = await host.open(PATH);
+
+      // A parked wait (no ops) that tracks presence from generation 0.
+      const parked = host.wait(PATH, opened.epoch, opened.version, "watcher", 0);
+      await vi.advanceTimersByTimeAsync(1);
+
+      host.present(PATH, "u-ada-abc123", { anchor: 3, head: 7 });
+      host.present(PATH, "u-ada-abc123", { anchor: 4, head: 8 }); // coalesces
+      await vi.advanceTimersByTimeAsync(150);
+      const pull = await parked;
+      if (pull.status !== "ops") throw new Error(`expected ops, got ${pull.status}`);
+      expect(pull.presence).toBeDefined();
+      expect(pull.presence!.clients).toEqual([
+        { anchor: 4, at: expect.any(Number), clientId: "u-ada-abc123", head: 8 },
+      ]);
+
+      // A wait already past the generation parks instead of spinning.
+      const caughtUp = host.wait(
+        PATH,
+        opened.epoch,
+        opened.version,
+        "watcher",
+        pull.presence!.generation,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      host.present(PATH, "u-ada-abc123", null); // leaving clears the caret
+      await vi.advanceTimersByTimeAsync(150);
+      const afterLeave = await caughtUp;
+      if (afterLeave.status !== "ops") throw new Error(`expected ops, got ${afterLeave.status}`);
+      expect(afterLeave.presence!.clients).toEqual([]);
+
+      // Destructive end wipes presence state with the session.
+      host.endSessions([PATH]);
+      expect(() => host.present(PATH, "u-ada-abc123", { anchor: 0, head: 0 })).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

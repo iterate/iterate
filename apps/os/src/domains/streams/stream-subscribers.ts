@@ -907,9 +907,13 @@ export class StreamSubscribers {
     // A parked row must not keep driving the alarm: the park was preceded by
     // a nack whose (now past) next_attempt_at would otherwise be re-armed by
     // every onAlarm forever — a permanent alarm hot loop per parked
-    // subscription. Clear the backoff, keep the cursor (the park fact carries
-    // the attempts + error for the audit trail).
-    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
+    // subscription. Clear the retry schedule but keep the cursor AND the
+    // failure evidence: the row mirrors the park fact's attempts + error so
+    // runtime state (and the sidebar warning sheet) can say WHY it parked
+    // without digging the fact back out of the event log.
+    if (row !== undefined) {
+      this.#hooks.store.park(subscriptionKey, { attempt: attempts, error: errorMessage(error) });
+    }
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
   }

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -6,6 +7,15 @@ import { defineConfig } from "vite";
 import captunVite from "captun/vite";
 
 export default defineConfig({
+  resolve: {
+    // Shared apps/os code rides the same `~` alias streams-example-app uses:
+    // os files become part of THIS app's module graph (their bare imports
+    // resolve here), which is what keeps react single-instance — a workspace
+    // dependency on apps/os would resolve os's own copy.
+    alias: {
+      "~": fileURLToPath(new URL("../os/src", import.meta.url)),
+    },
+  },
   server: {
     // The vessel is served through reverse proxies (a project's config
     // worker, a captun tunnel) whose Host headers vite's default allowlist

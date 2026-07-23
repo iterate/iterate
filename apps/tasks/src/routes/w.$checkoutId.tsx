@@ -26,6 +26,7 @@ import {
   fallbackCommitMessage,
   isTaskFilePath,
   newTaskFile,
+  parseTaskCard,
   setTaskCardLabels,
   setTaskCardState,
   taskColumnState,
@@ -71,14 +72,14 @@ function WorkspaceBoardPage() {
   // Track changes (redlines) is a board-level setting, default on.
   const [trackChanges, setTrackChanges] = useState(true);
   // A just-created task: the editor opens with the headline selected and the
-  // filename trails the title until the first commit (same UX as the Yjs
-  // board).
+  // filename trails the title — settled at REST POINTS (sheet close, commit),
+  // never mid-typing: on this lane a rename is write+delete, which ends the
+  // file's collab session and wipes its redline fold, so renaming under the
+  // open editor forced a remount that flashed the sheet and dropped the marks.
   const [draftPath, setDraftPath] = useState<string | null>(null);
-  /** How the editor should focus when the DRAFT's sheet (re)mounts:
-   * "select" = fresh draft (typing replaces the headline), "end" = renamed
-   * while the caret was in the headline, {caret} = renamed while typing in
-   * the body (restore the offset), undefined = don't steal focus. */
-  const draftFocusRef = useRef<"select" | "end" | { caret: number } | undefined>(undefined);
+  /** Fresh draft only: the editor opens with the headline selected so typing
+   * replaces it. Cleared on close/commit — reopening is an ordinary open. */
+  const draftFocusRef = useRef<"select" | undefined>(undefined);
   // The open sheet's live-doc API: mutations of the OPEN file go through the
   // live document (the board mirror is 200ms behind it — writing board state
   // over a live path would drop the newest keystrokes).
@@ -98,10 +99,21 @@ function WorkspaceBoardPage() {
   // on every keystroke reflect and poll tick).
   const boardRef = useRef(board);
   const searchTaskRef = useRef(search.task);
+  const draftPathRef = useRef(draftPath);
   useEffect(() => {
     boardRef.current = board;
     searchTaskRef.current = search.task;
+    draftPathRef.current = draftPath;
   });
+  // Warm the editor + preview stacks while the board renders: the CM6 and
+  // markdown chunks and the whoami identity round trip come off the first
+  // sheet-open's critical path.
+  useEffect(() => {
+    void import("../lib/use-collab-editor.ts").then(
+      (module) => void module.ensureCollabIdentity(),
+    );
+    void import("../components/workspace-task-preview.tsx");
+  }, []);
   /** Prune expired claims and answer whether a path is spoken for. */
   const isTaken = useCallback((path: string): boolean => {
     const now = Date.now();
@@ -192,8 +204,11 @@ function WorkspaceBoardPage() {
       setCommitError(null);
       setCommitPending(true);
       try {
+        // A draft's filename settles to its title BEFORE the commit records
+        // it — afterwards would leave a rename as instant new dirtiness.
+        await settleDraft();
         const result = await board.commit(
-          message?.trim() || fallbackCommitMessage(board.taskChanges),
+          message?.trim() || fallbackCommitMessage(boardRef.current.taskChanges),
         );
         // The redline baseline advanced: reseat an open editor so committed
         // work stops wearing marks (same lever revert/discard use). The
@@ -318,89 +333,46 @@ function WorkspaceBoardPage() {
     columnsRef.current = columns;
   });
 
-  // While the draft's sheet is open and it is still an uncommitted add, its
-  // filename trails the headline (debounced so half-typed titles don't churn
-  // paths). Dependencies are the TITLE and folder — not the board object,
-  // which changes every render and would reset the 700ms timer forever.
-  const draftTask = useMemo(
-    () =>
-      draftPath !== null && search.task === draftPath && board.changes.get(draftPath) === "added"
-        ? (board.tasks.find((candidate) => candidate.path === draftPath) ?? null)
-        : null,
-    [board.changes, board.tasks, draftPath, search.task],
-  );
-  const draftTitle = draftTask?.title;
-  const draftFolder = draftTask?.folder;
-  useEffect(() => {
-    if (draftPath === null || draftTitle === undefined || draftFolder === undefined) return;
-    const desired = taskPathInFolder(taskPathForTitle(draftTitle), draftFolder);
-    if (desired === draftPath) return;
-    let timer: ReturnType<typeof setTimeout>;
-    let cancelled = false;
-    const attempt = () => {
-      if (cancelled) return;
-      // Another rename lane holds the lock (a drag, a path edit on another
-      // task): re-arm instead of stalling until the next title change.
-      if (renamingRef.current) {
-        timer = setTimeout(attempt, 700);
-        return;
-      }
+  /** Settle a draft's title-trailing rename at a rest point. The live source
+   * (read before the editor unmounted) wins over the board mirror, which
+   * trails typing by up to 200ms. */
+  const settleDraftRename = useCallback(
+    async (path: string, liveSource: string | null): Promise<void> => {
       const current = boardRef.current;
-      const task = current.tasks.find((candidate) => candidate.path === draftPath);
-      if (task === undefined || current.changes.get(draftPath) !== "added") return;
-      // The LIVE doc, not the board mirror — the mirror is debounced and a
-      // rename must never persist a version missing the newest keystrokes.
-      const source = sourceOf(task);
-      // A sibling with this title already exists: suffix instead of bailing
-      // (the filename must keep trailing the title) — and never collapse.
+      // Only an uncommitted add still trails its title; and never interleave
+      // with another rename lane (a drag, a path-input edit).
+      if (current.changes.get(path) !== "added" || renamingRef.current) return;
+      const source = liveSource ?? current.files?.[path];
+      if (source === undefined) return;
+      const folder = path.split("/").slice(0, -1).join("/");
+      const desired = taskPathInFolder(taskPathForTitle(parseTaskCard(path, source).title), folder);
+      if (desired === path) return;
+      // A sibling with this title already exists: suffix, never collapse.
       const target = claimPath(desired);
-      // Navigation waits for the write to land (never open a not-yet-created
-      // path); on failure nothing moved, so nothing to roll back.
       renamingRef.current = true;
-      // Only steal focus back to the headline if the caret was still IN the
-      // headline when the rename fired — body typing keeps its flow.
-      const headlineEnd = (() => {
-        const heading = /^#\s+.*$/m.exec(source);
-        return heading === null ? -1 : heading.index + heading[0].length;
-      })();
-      const caret = editorApiRef.current?.path === draftPath
-        ? editorApiRef.current.selectionHead()
-        : -1;
-      // Three intents, not a boolean: headline-caret renames park at the
-      // headline end; body-caret renames RESTORE the body offset; a closed
-      // sheet steals nothing.
-      const focusIntent: "end" | { caret: number } | undefined =
-        caret < 0 ? undefined : caret <= headlineEnd ? "end" : { caret };
-      void current
-        .renameTask(draftPath, target, source, (final) => final, async () => {
-          // Flush the still-mounted editor FIRST: the hook awaits this, so
-          // the carry read sees the final keystrokes.
-          if (editorApiRef.current?.path === draftPath) {
-            await editorApiRef.current.flushPending();
-          }
-          draftFocusRef.current = focusIntent;
-          setDraftPath((currentDraft) => (currentDraft === draftPath ? target : currentDraft));
-          // Navigate by CURRENT truth: if the sheet still shows the source
-          // (even under a newer title effect), it must follow the moved file
-          // — but a closed sheet stays closed.
-          if (searchTaskRef.current === draftPath) patchSearch({ task: target });
-        })
-        .then((error) => {
-          // A failed rename left the draft in place — keep trailing the
-          // title instead of stalling until it changes again. Never past
-          // this effect's cleanup: a newer title owns the next attempt.
-          if (error !== null && !cancelled) timer = setTimeout(attempt, 700);
-        })
-        .finally(() => {
-          renamingRef.current = false;
+      try {
+        await current.renameTask(path, target, source, (final) => final, () => {
+          // A sheet still showing the source (commit keeps it open) follows
+          // the moved file; a closed sheet stays closed.
+          if (searchTaskRef.current === path) patchSearch({ task: target });
         });
-    };
-    timer = setTimeout(attempt, 700);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [draftPath, draftTitle, draftFolder, claimPath, patchSearch, sourceOf]);
+      } finally {
+        renamingRef.current = false;
+      }
+    },
+    [claimPath, patchSearch],
+  );
+
+  /** The commit-side rest point: flush the open editor's final keystrokes,
+   * then settle the filename, so the commit records the title's name. */
+  const settleDraft = useCallback(async (): Promise<void> => {
+    const path = draftPathRef.current;
+    if (path === null) return;
+    const api = editorApiRef.current;
+    const liveSource = api !== null && api.path === path ? api.source() : null;
+    if (api !== null && api.path === path) await api.flushPending().catch(() => {});
+    await settleDraftRename(path, liveSource);
+  }, [settleDraftRename]);
 
   // The sheet's path field: any rename the board can represent is allowed —
   // the file must stay a task (.md under a folder named "tasks").
@@ -444,7 +416,7 @@ function WorkspaceBoardPage() {
   return (
     <>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <SidebarTrigger className="-ml-1" />
+        <SidebarTrigger className="-ml-1 md:hidden" />
         <CheckoutBreadcrumbs repoPath={repoPath} checkoutId={checkoutId} />
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <div className="hidden items-center gap-1.5 sm:flex">
@@ -585,11 +557,20 @@ function WorkspaceBoardPage() {
           }
         }}
         onClose={() => {
-          // Closing ends the draft ritual (Yjs-board parity): reopening the
-          // same task is an ordinary open, no focus steal, no title trail.
+          // Closing ends the draft ritual AND settles the filename to the
+          // title — the rename runs now, with nothing mounted to flash, never
+          // under the open editor. Reopening is an ordinary open.
+          const path = draftPathRef.current;
+          const api = editorApiRef.current;
+          const liveSource = path !== null && api?.path === path ? api.source() : null;
+          const flushed =
+            path !== null && api?.path === path
+              ? api.flushPending().catch(() => {})
+              : Promise.resolve();
           setDraftPath(null);
           draftFocusRef.current = undefined;
           patchSearch({ task: "" });
+          if (path !== null) void flushed.then(() => settleDraftRename(path, liveSource));
         }}
       />
     </>

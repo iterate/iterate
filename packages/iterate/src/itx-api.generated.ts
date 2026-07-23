@@ -799,6 +799,7 @@ export interface ProjectIntegrations {
       children: {
         cf: string;
         completeConnect: string;
+        confirmGithubSteal: string;
         connectTelegram: string;
         disconnect: string;
         getConnection: string;
@@ -860,6 +861,9 @@ export interface ProjectIntegrations {
     state: string;
     userId: string | null;
   }): Promise<CompleteConnectResult>;
+  /** Move a GitHub installation after a signed, user-bound OAuth proof has
+   * been returned to the dashboard for explicit confirmation. */
+  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }>;
   /** Disconnect one connection: { provider, connection }. */
   disconnect(input: {
     connection: string;
@@ -1575,14 +1579,23 @@ export interface WorkspaceCollab {
     | (Promise<{ status: "too-large"; maxBytes: number } & Disposable> &
         Pick<{ status: Promise<"too-large">; maxBytes: Promise<number> }, "maxBytes" | "status">);
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
-   * snapshot when past the retained floor, or ended after a destructive op. */
+   * snapshot when past the retained floor, or ended after a destructive op.
+   * With afterPresence given, also resolves when cursors moved past that
+   * generation (delivered on the result's `presence`). */
   wait(
     path: string,
     epoch: string,
     afterVersion: number,
     clientId?: string,
+    afterPresence?: number,
   ):
-    | Promise<{ ops: { changes: unknown; clientId: string }[]; status: "ops" } & Disposable>
+    | Promise<
+        {
+          ops: { changes: unknown; clientId: string }[];
+          presence?: CollabPresence;
+          status: "ops";
+        } & Disposable
+      >
     | (Promise<
         {
           snapshot: { ackedSeq: number; content: string; epoch: string; version: number };
@@ -1608,6 +1621,12 @@ export interface WorkspaceCollab {
           "snapshot" | "status"
         >)
     | (Promise<{ status: "ended" } & Disposable> & Pick<{ status: Promise<"ended"> }, "status">);
+  /** Announce (or clear, with null) this client's cursor for one session. */
+  present(
+    path: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): Promise<void>;
   /** Head versions of every live session (a cheap board change cursor). */
   versions(): Promise<Record<string, number>>;
   /** Attributed tracked changes since the last commit (redline segments). */
@@ -2774,6 +2793,12 @@ export type OAuthProviderSlug = "github" | "google" | "slack";
  * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
+  | {
+      callbackUrl: string | null;
+      error: "github_installation_already_claimed";
+      githubStealState: string;
+      ok: false;
+    }
   | { callbackUrl: string | null; error: string; ok: false };
 
 /** Input to `itx.mcp.connect`: the MCP server's streamable-HTTP URL, optional
@@ -3830,6 +3855,15 @@ export type DynamicWorkerRefBase = {
    */
   path: string;
   source: DynamicWorkerSource;
+};
+
+/** Ephemeral cursor presence for one session: who has a caret where, in the
+ * sender's head coordinates. In-memory only — an eviction loses it and
+ * clients re-announce on their next throttle tick — delivered on the wait()
+ * long-poll when the generation advanced past the client's cursor. */
+export type CollabPresence = {
+  clients: { anchor: number; at: number; clientId: string; head: number }[];
+  generation: number;
 };
 
 /** Per-mount changes plus the unmounted local scratch (never committable). */

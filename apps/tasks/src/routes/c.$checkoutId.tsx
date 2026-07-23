@@ -197,7 +197,7 @@ function CheckoutPage() {
       ) : (
         <div className="flex flex-col gap-3">
           <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
-            <SidebarTrigger className="-ml-1" />
+            <SidebarTrigger className="-ml-1 md:hidden" />
             <CheckoutBreadcrumbs repoPath={repoPath} checkoutId={checkoutId} />
           </header>
           <div className="flex flex-1 flex-col items-center gap-3 bg-muted/30 p-4">
@@ -470,7 +470,7 @@ function ReadyCheckout({
   return (
     <>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <SidebarTrigger className="-ml-1" />
+        <SidebarTrigger className="-ml-1 md:hidden" />
         <CheckoutBreadcrumbs repoPath={repoPath} checkoutId={checkoutId} />
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <PresenceAvatars provider={provider} peers={peers} me={me} />

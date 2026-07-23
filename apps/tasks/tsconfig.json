@@ -12,7 +12,11 @@
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": ["@cloudflare/workers-types", "node", "vite/client"]
+    "types": ["@cloudflare/workers-types", "node", "vite/client"],
+    "paths": {
+      "~/*": ["../os/src/*"]
+    }
   },
+  // apps/os sources under ../os/src ride in transitively via the `~` alias.
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

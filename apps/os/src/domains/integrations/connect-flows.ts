@@ -546,43 +546,31 @@ async function completeGithubConnect(input: {
 
   const existingClaim = await lookupConnectionClaim("github", installationId);
   if (existingClaim !== null && existingClaim.projectId !== input.projectId) {
-    return { callbackUrl, error: "github_installation_already_claimed", ok: false };
+    return {
+      callbackUrl,
+      error: "github_installation_already_claimed",
+      githubStealState: await createGithubStealState({
+        callbackUrl: stateData.callbackUrl,
+        installationId,
+        projectId: input.projectId,
+        userId: stateData.userId,
+      }),
+      ok: false,
+    };
   }
 
   // The user token above is proof only and is discarded. The durable
-  // connection still acts as the App installation: the public installation id
-  // names the connection and refresh strategy, and the Secret DO mints its
-  // short-lived installation token with the platform App key on first use.
-  const connection =
-    existingClaim?.connection ?? `install-${sanitizeConnectionName(installationId)}`;
-  await recordConnection({
+  // connection still acts as the App installation. A fresh connection name
+  // fences delayed cleanup from every previous ownership generation; the
+  // public installation id remains in the refresh strategy, and the Secret DO
+  // mints its short-lived installation token with the platform App key.
+  const connection = existingClaim?.connection || newGithubConnectionName(installationId);
+  await recordGithubConnection({
     connection,
-    projectId: input.projectId,
-    slug: "github",
-    secrets: [
-      {
-        egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
-        material: {},
-        path: githubConnectionSecretPath(connection),
-        refresh: {
-          kind: "github-app-installation",
-          apiBase: "https://api.github.com",
-          appId: github.appId,
-          installationId,
-          privateKey: { platform: "integrations.github" },
-        },
-      },
-    ],
-    connectedEvent: {
-      type: "events.iterate.com/github/connected",
-      payload: {
-        connection,
-        externalId: installationId,
-        installationId,
-        projectId: input.projectId,
-      },
-    },
     directoryClaim: { externalId: installationId },
+    githubAppId: github.appId,
+    installationId,
+    projectId: input.projectId,
   });
 
   // The directory fold preserves the first live project owner. Re-check after
@@ -592,10 +580,342 @@ async function completeGithubConnect(input: {
   const recordedClaim = await lookupConnectionClaim("github", installationId);
   if (recordedClaim?.projectId !== input.projectId || recordedClaim.connection !== connection) {
     await disconnectGithub({ connection, projectId: input.projectId });
-    return { callbackUrl, error: "github_installation_already_claimed", ok: false };
+    return {
+      callbackUrl,
+      error: "github_installation_already_claimed",
+      githubStealState: await createGithubStealState({
+        callbackUrl: stateData.callbackUrl,
+        installationId,
+        projectId: input.projectId,
+        userId: stateData.userId,
+      }),
+      ok: false,
+    };
   }
 
   return { callbackUrl, ok: true };
+}
+
+function createGithubStealState(input: {
+  callbackUrl?: string;
+  installationId: string;
+  projectId: string;
+  userId: string;
+}): Promise<string> {
+  return createOAuthState(
+    {
+      callbackUrl: input.callbackUrl,
+      githubInstallationAuthorized: true,
+      githubInstallationId: input.installationId,
+      projectId: input.projectId,
+      provider: "github",
+      userId: input.userId,
+    },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+}
+
+/**
+ * Complete the explicit dashboard confirmation for moving a GitHub App
+ * installation. The signed state was minted only after GitHub user OAuth
+ * proved access to the installation; this call re-verifies its target project
+ * and user before changing either project.
+ */
+export async function confirmGithubSteal(input: {
+  config: AppConfig;
+  projectId: string;
+  state: string;
+  userId: string;
+}): Promise<{ connection: string; ok: true }> {
+  const stateData = await verifyOAuthState(
+    { provider: "github", state: input.state },
+    itxEnv.SECRET_ENCRYPTION_KEY,
+  );
+  if (
+    stateData === null ||
+    stateData.projectId !== input.projectId ||
+    stateData.userId !== input.userId ||
+    stateData.githubInstallationAuthorized !== true ||
+    stateData.githubInstallationId === undefined
+  ) {
+    throw new Error("Invalid or expired GitHub installation move confirmation.");
+  }
+
+  const installationId = stateData.githubInstallationId;
+  const github = requireGithubConfig(input.config);
+  if (!github.appId) throw new Error("GitHub App is not configured.");
+  const existingClaim = await lookupConnectionClaim("github", installationId);
+  if (
+    existingClaim?.projectId === input.projectId &&
+    (await restoreOwnedGithubConnection({
+      connection: existingClaim.connection,
+      githubAppId: github.appId,
+      installationId,
+      projectId: input.projectId,
+    }))
+  ) {
+    return { connection: existingClaim.connection, ok: true };
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const existingClaim = await lookupConnectionClaim("github", installationId);
+    if (existingClaim?.projectId === input.projectId) {
+      if (
+        await restoreOwnedGithubConnection({
+          connection: existingClaim.connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection: existingClaim.connection, ok: true };
+      }
+      continue;
+    }
+
+    // A connection name is an ownership fence, not only a display label.
+    // Every claim attempt gets a new one so cleanup delayed from an older
+    // transfer can brick only that older generation after this project (or a
+    // foreign project) has reclaimed and returned success.
+    const connection = newGithubConnectionName(installationId);
+    await recordGithubConnection({
+      connection,
+      directoryClaim: null,
+      githubAppId: github.appId,
+      installationId,
+      projectId: input.projectId,
+    });
+    const claim = await lookupConnectionClaim("github", installationId);
+    if (claim?.projectId === input.projectId) {
+      await recordDisconnection({
+        connection,
+        disconnectedEvent: {
+          type: "events.iterate.com/github/disconnected",
+          payload: {
+            connection,
+            projectId: input.projectId,
+            reason: "installation-move-race-lost",
+          },
+        },
+        projectId: input.projectId,
+        secretPath: githubConnectionSecretPath(connection),
+        slug: "github",
+      });
+      if (
+        await restoreOwnedGithubConnection({
+          connection: claim.connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection: claim.connection, ok: true };
+      }
+      continue;
+    }
+    await appendConnectionDirectoryEvents([
+      ...(claim === null
+        ? []
+        : [
+            {
+              claimed: false,
+              connection: claim.connection,
+              externalId: installationId,
+              projectId: claim.projectId,
+              slug: "github",
+            },
+          ]),
+      {
+        claimed: true,
+        connection,
+        externalId: installationId,
+        projectId: input.projectId,
+        slug: "github",
+      },
+    ]);
+    if (claim !== null) {
+      // Clean every owner this confirmation attempted to displace, not only
+      // the owner from the attempt that finally verifies. Another stealer can
+      // take ownership between this atomic directory batch and the read below;
+      // a retry must not leave the earlier owner's installation secret live.
+      await recordDisconnection({
+        connection: claim.connection,
+        disconnectedEvent: {
+          type: "events.iterate.com/github/disconnected",
+          payload: {
+            connection: claim.connection,
+            projectId: claim.projectId,
+            reason: "stolen-by-another-project",
+          },
+        },
+        projectId: claim.projectId,
+        secretPath: githubConnectionSecretPath(claim.connection),
+        slug: "github",
+      });
+    }
+    const recordedClaim = await lookupConnectionClaim("github", installationId);
+    if (recordedClaim?.projectId === input.projectId && recordedClaim.connection === connection) {
+      if (
+        await restoreOwnedGithubConnection({
+          connection,
+          githubAppId: github.appId,
+          installationId,
+          projectId: input.projectId,
+        })
+      ) {
+        return { connection, ok: true };
+      }
+      continue;
+    }
+    await recordDisconnection({
+      connection,
+      disconnectedEvent: {
+        type: "events.iterate.com/github/disconnected",
+        payload: {
+          connection,
+          projectId: input.projectId,
+          reason: "installation-move-race-lost",
+        },
+      },
+      projectId: input.projectId,
+      secretPath: githubConnectionSecretPath(connection),
+      slug: "github",
+    });
+  }
+
+  const recordedClaim = await lookupConnectionClaim("github", installationId);
+  if (recordedClaim?.projectId === input.projectId) {
+    if (
+      await restoreOwnedGithubConnection({
+        connection: recordedClaim.connection,
+        githubAppId: github.appId,
+        installationId,
+        projectId: input.projectId,
+      })
+    ) {
+      return { connection: recordedClaim.connection, ok: true };
+    }
+  }
+
+  throw new Error("GitHub installation ownership changed repeatedly; please try again.");
+}
+
+async function recordGithubConnection(input: {
+  connection: string;
+  directoryClaim: { externalId: string } | null;
+  githubAppId: string;
+  installationId: string;
+  projectId: string;
+}): Promise<void> {
+  const secret = githubConnectionSecret({
+    githubAppId: input.githubAppId,
+    installationId: input.installationId,
+  });
+  await recordConnection({
+    connection: input.connection,
+    projectId: input.projectId,
+    slug: "github",
+    secrets: [
+      {
+        ...secret,
+        path: githubConnectionSecretPath(input.connection),
+      },
+    ],
+    connectedEvent: githubConnectedEvent(input),
+    ...(input.directoryClaim ? { directoryClaim: input.directoryClaim } : {}),
+  });
+}
+
+/**
+ * A concurrent stealer can brick this project's secret after it briefly owns
+ * the directory claim. Restore the credential, then prove the exact fenced
+ * connection still owns the claim. If not, brick that obsolete generation
+ * again before the caller retries.
+ */
+async function restoreOwnedGithubConnection(input: {
+  connection: string;
+  githubAppId: string;
+  installationId: string;
+  projectId: string;
+}): Promise<boolean> {
+  const secret = githubConnectionSecret(input);
+  await itxEnv.SECRET.getByName(
+    DurableObjectNameCodec.stringify({
+      path: githubConnectionSecretPath(input.connection),
+      projectId: input.projectId,
+    }),
+  ).update({
+    egress: { urls: [...secret.egressUrls] },
+    material: secret.material,
+    refresh: secret.refresh,
+  });
+  const status = await getConnectionStatus({
+    connection: input.connection,
+    projectId: input.projectId,
+    provider: "github",
+  });
+  if (!status.connected) {
+    await integrationStreamStub(
+      input.projectId,
+      integrationConnectionStreamPath("github", input.connection),
+    ).append(githubConnectedEvent(input));
+  }
+  const restoredClaim = await lookupConnectionClaim("github", input.installationId);
+  if (
+    restoredClaim?.projectId === input.projectId &&
+    restoredClaim.connection === input.connection
+  ) {
+    return true;
+  }
+  await recordDisconnection({
+    connection: input.connection,
+    disconnectedEvent: {
+      type: "events.iterate.com/github/disconnected",
+      payload: {
+        connection: input.connection,
+        projectId: input.projectId,
+        reason: "installation-move-race-lost",
+      },
+    },
+    projectId: input.projectId,
+    secretPath: githubConnectionSecretPath(input.connection),
+    slug: "github",
+  });
+  return false;
+}
+
+function newGithubConnectionName(installationId: string): string {
+  return `install-${sanitizeConnectionName(installationId)}-${randomBase64Url(9)}`.toLowerCase();
+}
+
+function githubConnectedEvent(input: {
+  connection: string;
+  installationId: string;
+  projectId: string;
+}) {
+  return {
+    type: "events.iterate.com/github/connected",
+    payload: {
+      connection: input.connection,
+      externalId: input.installationId,
+      installationId: input.installationId,
+      projectId: input.projectId,
+    },
+  };
+}
+
+function githubConnectionSecret(input: { githubAppId: string; installationId: string }) {
+  return {
+    egressUrls: GITHUB_CONNECTION_EGRESS_URLS,
+    material: {},
+    refresh: {
+      kind: "github-app-installation" as const,
+      apiBase: "https://api.github.com",
+      appId: input.githubAppId,
+      installationId: input.installationId,
+      privateKey: { platform: "integrations.github" as const },
+    },
+  };
 }
 
 async function exchangeGithubUserCode(input: {

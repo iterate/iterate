@@ -283,7 +283,13 @@ type WorkspaceStub = {
       epoch: string,
       afterVersion: number,
       clientId?: string,
+      afterPresence?: number,
     ): Promise<CollabWaitResult>;
+    present(
+      path: string,
+      clientId: string,
+      selection: { anchor: number; head: number } | null,
+    ): Promise<void>;
     changes(path: string): Promise<CollabChanges>;
     versions(): Promise<Record<string, number>>;
   };
@@ -417,8 +423,19 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     epoch: string,
     afterVersion: number,
     clientId?: string,
+    afterPresence?: number,
   ): Promise<CollabWaitResult> {
-    return this.#withWorkspace((ws) => ws.collab.wait(filePath, epoch, afterVersion, clientId));
+    return this.#withWorkspace((ws) =>
+      ws.collab.wait(filePath, epoch, afterVersion, clientId, afterPresence),
+    );
+  }
+
+  present(
+    filePath: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): Promise<void> {
+    return this.#withWorkspace((ws) => ws.collab.present(filePath, clientId, selection));
   }
 
   versions(): Promise<Record<string, number>> {

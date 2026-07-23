@@ -4,11 +4,16 @@ import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { EditorView } from "@codemirror/view";
 import { CollabConnection, peerExtension, setCollabDisplayName } from "./collab-client.ts";
 import { whoami } from "./use-checkout.ts";
+import { redlineExtension } from "./collab-redline.ts";
+import { remoteCursorsExtension } from "./collab-cursors.ts";
+import type { CollabEditorApi } from "./collab-editor-api.ts";
 
 // The PROMISE is the memo: a second editor mounting mid-lookup awaits the
-// same whoami instead of opening with the default display slug.
+// same whoami instead of opening with the default display slug. Exported so
+// the board can warm it while the sheet is still closed — the first editor
+// open then skips the whoami round trip.
 let identityPromise: Promise<void> | null = null;
-function ensureCollabIdentity(): Promise<void> {
+export function ensureCollabIdentity(): Promise<void> {
   identityPromise ??= (async () => {
     try {
       const me = await whoami();
@@ -20,8 +25,6 @@ function ensureCollabIdentity(): Promise<void> {
   })();
   return identityPromise;
 }
-import { redlineExtension } from "./collab-redline.ts";
-import type { CollabEditorApi } from "./collab-editor-api.ts";
 
 /**
  * The ONE collaborative-editor state machine, shared by every surface that
@@ -104,6 +107,9 @@ export function useCollabEditor(input: {
           extensions,
           liveReflector,
           peerExtension(connection, version),
+          // Cursors are presence, not tracking — they stay on when the
+          // redline toggle is off.
+          remoteCursorsExtension(connection),
           redlineLayer.of(redlines),
         ],
       });

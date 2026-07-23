@@ -125,6 +125,7 @@ import {
 } from "./domains/secrets/utils.ts";
 import {
   completeConnect,
+  confirmGithubSteal,
   connectTelegram,
   disconnectProvider,
   getConnectionStatus,
@@ -2155,9 +2156,22 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   }
 
   /** Long-poll catch-up: ops after a version (parking ~20s for new ones), a
-   * snapshot when past the retained floor, or ended after a destructive op. */
-  wait(path: string, epoch: string, afterVersion: number, clientId?: string) {
-    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId);
+   * snapshot when past the retained floor, or ended after a destructive op.
+   * With afterPresence given, also resolves when cursors moved past that
+   * generation (delivered on the result's `presence`). */
+  wait(
+    path: string,
+    epoch: string,
+    afterVersion: number,
+    clientId?: string,
+    afterPresence?: number,
+  ) {
+    return this.durableObjectStub.collabWait(path, epoch, afterVersion, clientId, afterPresence);
+  }
+
+  /** Announce (or clear, with null) this client's cursor for one session. */
+  present(path: string, clientId: string, selection: { anchor: number; head: number } | null) {
+    return this.durableObjectStub.collabPresent(path, clientId, selection);
   }
 
   /** Head versions of every live session (a cheap board change cursor). */
@@ -3388,6 +3402,8 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
         cf: "Cloudflare first-party platform bindings: ai, browser, images, videos.",
         completeConnect:
           "OAuth callback completion; authority is the HMAC-signed state minted by startOAuthFlow.",
+        confirmGithubSteal:
+          "Move a GitHub installation after explicit confirmation: { state } — state is the signed user/project/installation proof returned by completeConnect.",
         connectTelegram:
           "Connect a Telegram bot by BotFather token: { botToken } — no OAuth, no redirect.",
         disconnect: "Disconnect one connection: { provider, connection }.",
@@ -3526,6 +3542,21 @@ class ProjectIntegrationsRpcTarget extends IterateRpcTarget<"ProjectIntegrations
       provider: input.provider,
       state: input.state,
       userId: input.userId,
+    });
+  }
+
+  /** Move a GitHub installation after a signed, user-bound OAuth proof has
+   * been returned to the dashboard for explicit confirmation. */
+  confirmGithubSteal(input: { state: string }): Promise<{ connection: string; ok: true }> {
+    const user = userPrincipalOf(this.props.auth);
+    if (!user) {
+      throw new Error("Confirming a GitHub installation move requires a signed-in user.");
+    }
+    return confirmGithubSteal({
+      config: parseConfig(env),
+      projectId: this.props.projectId,
+      state: input.state,
+      userId: user.userId,
     });
   }
 

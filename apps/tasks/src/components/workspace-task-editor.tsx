@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { useCollabEditor } from "../lib/use-collab-editor.ts";
@@ -16,6 +16,7 @@ export function WorkspaceTaskEditor({
   focusHeadline,
   onLiveContent,
   onStatus,
+  onRequestClose,
   apiRef,
 }: {
   checkoutId: string;
@@ -26,11 +27,29 @@ export function WorkspaceTaskEditor({
   apiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
   onLiveContent: (path: string, content: string) => void;
   onStatus?: (status: string) => void;
+  /** Cmd/Ctrl+Enter: done editing — close the sheet. */
+  onRequestClose?: () => void;
 }) {
+  // Through a ref so the keymap (inside the deps-free extensions memo) always
+  // sees the current handler without rebuilding the editor state.
+  const requestCloseRef = useRef(onRequestClose);
+  useEffect(() => {
+    requestCloseRef.current = onRequestClose;
+  }, [onRequestClose]);
   const extensions = useMemo(
     () => [
       history(),
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      keymap.of([
+        {
+          key: "Mod-Enter",
+          run: () => {
+            requestCloseRef.current?.();
+            return true;
+          },
+        },
+        ...defaultKeymap,
+        ...historyKeymap,
+      ]),
       EditorView.lineWrapping,
       placeholder("Write the task as markdown…"),
       EditorView.theme({
