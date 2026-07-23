@@ -110,6 +110,14 @@ class FakeCursorStore implements SubscriptionCursorStore {
     row.lastError = args.error.slice(0, 2_000);
   }
 
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
+    const row = this.rows.get(subscriptionKey);
+    if (row === undefined) return;
+    row.attempt = args.attempt;
+    row.nextAttemptAt = null;
+    row.lastError = args.error.slice(0, 2_000);
+  }
+
   setCursor(subscriptionKey: string, ackedOffset: number): void {
     const row = this.rows.get(subscriptionKey);
     if (row === undefined) return;
@@ -534,6 +542,15 @@ describe("StreamSubscribers", () => {
       error: "still down",
     });
     expect(h.configured["k"].parkedAtOffset).toBe(0);
+    // The row mirrors the park fact — retry schedule cleared (a parked row
+    // must not drive the alarm) but the failure evidence kept, so runtime
+    // state can say WHY it parked without digging the fact out of the log.
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 0,
+      attempt: MAX_DELIVERY_ATTEMPTS,
+      nextAttemptAt: null,
+      lastError: "still down",
+    });
 
     // Parked means parked: further wakes make no dial calls.
     h.subscribers.wake();
@@ -683,8 +700,14 @@ describe("StreamSubscribers", () => {
     expect(parkedFacts).toHaveLength(1);
     expect(parkedFacts[0].idempotencyKey).toBeUndefined();
     expect(parkedFacts[0].payload).toMatchObject({ subscriptionKey: "k", atOffset: 2 });
-    // NOT all events were skipped: offsets 3 and 4 are still owed delivery.
-    expect(h.row("k")?.ackedOffset).toBe(2);
+    // NOT all events were skipped: offsets 3 and 4 are still owed delivery,
+    // and the row keeps the parking error for runtime state to display.
+    expect(h.row("k")).toMatchObject({
+      ackedOffset: 2,
+      attempt: SKIP_CONFIRM_ATTEMPTS,
+      nextAttemptAt: null,
+      lastError: "receiver is down",
+    });
     expect(h.configured["k"].parkedAtOffset).toBe(2);
   });
 

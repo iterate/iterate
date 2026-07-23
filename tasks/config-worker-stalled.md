@@ -1,16 +1,17 @@
 ---
-status: in-progress
+status: done-pending-review
 size: small
 ---
 
-# "Config worker stalled" — skip-mode parks after seconds of receiver-down
+# "Config worker stalled" — show why it parked, make the fix obviously clickable
 
 ## Status summary
 
-Diagnosed; prod remediated (subscription resumed by hand, caught up instantly).
-Code fix in progress: stop terminal-parking skip-mode subscriptions after a
-few seconds of receiver outage — route the "everything fails" case into the
-shared backoff/park machine so it tolerates hours like park mode does.
+Done, pending review (PR #2279). Prod remediated (subscription resumed by
+hand, caught up instantly). Direction settled after discussion: keep the
+park-fast behavior (no customers yet — optimise for going red fast and
+visibly), and instead make the manual fix obvious: the sidebar warning now
+looks like a clickable button, and the sheet shows the recorded park error.
 
 ## Incident
 
@@ -32,50 +33,45 @@ Timeline (2026-07-22, UTC):
 - 2026-07-23 — appended `subscription-resumed`; delivery caught up 70 → 866
   with zero failures. Receiver was fine; the outage lasted seconds.
 
-## The flaw
+## Direction
 
-`onPoison: "skip"` confirms a poison event after `SKIP_CONFIRM_ATTEMPTS` (3)
-failures with ~1–2s backoffs, and parks after `MAX_CONSECUTIVE_SKIPS` (3)
-consecutive verdicts. The consecutive-skip guard is right to refuse
-mass-skipping a down receiver's backlog — but its response (terminal park,
-human must click Resume) is wildly disproportionate to the evidence (~10s of
-failures). Park-mode subscriptions tolerate `MAX_DELIVERY_ATTEMPTS` (15) with
-exponential backoff — roughly 3.5 hours of continuous outage — before parking.
-Skip mode should be at least as tolerant of a down receiver, since that is the
-exact case the guard exists to detect.
+A first attempt made skip-mode ride out receiver-down windows in backoff for
+hours before parking (like park mode does). Reverted after discussion: with no
+customers yet, fast-and-visible red beats self-healing that hides problems for
+hours. Instead:
 
-Every project's config-worker feed uses `onPoison: "skip"`, so any ~10s
-transient (Cloudflare rollout, worker redeploy hiccup) permanently stalls
-config workers across the deployment until someone notices the red sidebar.
-
-## Fix
-
-- [ ] In `stream-subscribers.ts#onPushFailure`, when the consecutive-skip cap
-      is reached, treat the receiver as DOWN: keep the cursor, do not skip, and
-      fall into the shared `#onDeliveryFailure` backoff/park machine (attempt
-      counter keeps growing past `SKIP_CONFIRM_ATTEMPTS`, exponential backoff
-      up to the 30-minute cap, park only at `MAX_DELIVERY_ATTEMPTS`).
-      While in this state the UI shows the amber "Config worker retrying"
-      row instead of red "stalled".
-- [ ] Update the `MAX_CONSECUTIVE_SKIPS` doc comment in `subscriber-math.ts`
-      to describe the new behavior.
-- [ ] Tests in `stream-subscribers.test.ts`: at the skip cap the subscription
-      backs off instead of parking; recovery mid-backoff resets the streak and
-      delivery resumes; sustained failure still parks at
-      `MAX_DELIVERY_ATTEMPTS`.
+- [x] Keep park-fast. _The ride-out change was committed then reverted in
+      this branch; see the revert commit for the rationale trail._
+- [x] Preserve the park evidence on the spine row: new
+      `SubscriptionCursorStore.park` clears the retry schedule (parked rows
+      must not drive the alarm) but keeps `attempt` + `last_error`, mirroring
+      the `subscription-parked` fact. Runtime state then shows why a parked
+      subscription parked. _`stream-storage.ts` (interface + SQL + method),
+      `#park` in `stream-subscribers.ts`; fakes in three test files._
+- [x] Show the recorded error in the warning sheet for parked rows (red text),
+      with the old "recorded on the stream's parked event" line as fallback
+      for rows parked before this shipped. Attempts row shown whenever > 0.
+      _`project-worker-health.tsx` + logic doc comments._
+- [x] Make the sidebar warning a clearly clickable button (border + fill +
+      "Fix…" affordance) so the path to Resume is obvious. The sheet's
+      Resume / Skip buttons already existed. _`project-worker-health.tsx`._
+- [x] Tests: store `park` semantics (`stream-storage.test.ts`), spine keeps
+      row evidence after park (tests d and h in
+      `stream-subscribers.test.ts`).
 
 ## Out of scope (noted for later)
 
-- The first two poison verdicts still each skip a healthy event during a short
-  outage (~3s per verdict). Slowing poison confirmation (e.g. requiring the
-  confirm attempts to span a minimum wall-clock window) would avoid that data
-  loss but changes genuinely-poison latency; separate task if wanted.
-- Auto-resume of parked subscriptions after a cooldown.
-- Error classification (treating workerd serialization errors as
-  receiver-unavailable) — brittle message-sniffing; the generic fix covers it.
+- Agent-driven resolution ("Investigate with agent" on a parked/poison row) —
+  discussed and deliberately dropped for now.
+- Auto-resume / ride-out of transient outages — reverted by choice; revisit
+  when there are customers and silent stalls cost more than hidden ambers.
+- Slowing poison confirmation so short outages don't skip healthy events.
 
 ## Implementation log
 
 - 2026-07-23: prod `misha` remediated via `subscription-resumed` append
   (`doppler run --config prd -- pnpm cli itx run --context misha -e ...`).
   Caught up 70 → 866 immediately, zero failures, confirming transience.
+- 2026-07-23: ride-out fix implemented, then reverted after discussion
+  (optimise for loud-and-fast red for now). Replaced with park-evidence
+  retention + UI affordance.

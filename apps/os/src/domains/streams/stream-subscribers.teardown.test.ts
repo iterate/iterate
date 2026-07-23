@@ -72,6 +72,11 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         lastError: args.error,
       });
     },
+    park: (k, args) => {
+      const row = rows.get(k);
+      if (!row) return;
+      Object.assign(row, { attempt: args.attempt, nextAttemptAt: null, lastError: args.error });
+    },
     setCursor: (k, acked) => {
       const row = rows.get(k);
       if (!row) return;

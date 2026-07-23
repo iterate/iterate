@@ -71,17 +71,22 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
         <SidebarGroupContent>
           <SidebarMenu>
             <SidebarMenuItem>
+              {/* Styled as a real button (border + fill), not a quiet menu row:
+                  this is the click that opens the resume/skip sheet, and it
+                  must read as clickable at a glance. */}
               <SidebarMenuButton
                 tooltip={label}
                 onClick={() => setOpen(true)}
                 className={cn(
+                  "border",
                   severe
-                    ? "text-destructive hover:bg-destructive/10 hover:text-destructive focus-visible:text-destructive"
-                    : "text-amber-600 hover:bg-amber-500/10 hover:text-amber-600 focus-visible:text-amber-600 dark:text-amber-500 dark:hover:text-amber-500 dark:focus-visible:text-amber-500",
+                    ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 hover:text-destructive focus-visible:text-destructive"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 hover:text-amber-600 focus-visible:text-amber-600 dark:text-amber-500 dark:hover:text-amber-500 dark:focus-visible:text-amber-500",
                 )}
               >
                 <TriangleAlert className="motion-safe:animate-pulse" />
-                <span className="font-medium">{label}</span>
+                <span className="flex-1 font-medium">{label}</span>
+                <span className="text-xs opacity-70">Fix…</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -179,22 +184,30 @@ function StrugglingSubscriptionsSheet({
                     <dd className="tabular-nums">
                       {subscription.lag} event{subscription.lag === 1 ? "" : "s"}
                     </dd>
-                    {/* attempt/lastError are cleared once parked — only real for backoff. */}
-                    {parked ? null : (
+                    {/* Parking keeps attempt on the row; 0 means the row
+                        predates that (or a wake-mode edge) — hide it then. */}
+                    {subscription.attempt > 0 ? (
                       <>
                         <dt>Attempts</dt>
                         <dd className="tabular-nums">{subscription.attempt}</dd>
                       </>
-                    )}
+                    ) : null}
                   </dl>
-                  {parked ? (
+                  {subscription.lastError ? (
+                    <div
+                      className={cn(
+                        "text-xs break-words whitespace-pre-wrap",
+                        parked ? "text-destructive" : "text-amber-600 dark:text-amber-500",
+                      )}
+                    >
+                      {subscription.lastError}
+                    </div>
+                  ) : parked ? (
+                    // Rows parked before the spine kept the error only have it
+                    // in the stream's parked event.
                     <div className="text-xs text-muted-foreground">
                       Delivery gave up here; the failure reason is recorded on the stream's parked
                       event.
-                    </div>
-                  ) : subscription.lastError ? (
-                    <div className="text-xs break-words whitespace-pre-wrap text-amber-600 dark:text-amber-500">
-                      {subscription.lastError}
                     </div>
                   ) : null}
                   <div className="flex gap-2 pt-1">

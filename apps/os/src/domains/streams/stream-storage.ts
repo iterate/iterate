@@ -304,6 +304,14 @@ export type SubscriptionCursorStore = {
     subscriptionKey: string,
     args: { attempt: number; nextAttemptAt: number; error: string },
   ): void;
+  /**
+   * Parked: stop the retry schedule (a parked row must not drive the alarm)
+   * but KEEP the failure evidence — the attempt count and error the park fact
+   * recorded stay on the row, so runtime state can answer "why is this
+   * parked" without digging the fact back out of the event log. `ack`
+   * (resume) or `setCursor` clears them.
+   */
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void;
   /** Explicit seek (cursor-set / resume-with-afterOffset). Clears failure state, bumps the epoch. */
   setCursor(subscriptionKey: string, ackedOffset: number): void;
   delete(subscriptionKey: string): void;
@@ -438,6 +446,18 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
         set attempt = :attempt, next_attempt_at = :nextAttemptAt, last_error = :error, updated_at = :updatedAt
         where subscription_key = :subscriptionKey
       `,
+      park: sql.run<{
+        parameters: {
+          subscriptionKey: string;
+          attempt: number;
+          error: string;
+          updatedAt: string;
+        };
+      }>`
+        update subscriptions
+        set attempt = :attempt, next_attempt_at = null, last_error = :error, updated_at = :updatedAt
+        where subscription_key = :subscriptionKey
+      `,
       setCursor: sql.run<{
         parameters: {
           subscriptionKey: string;
@@ -533,6 +553,17 @@ export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
       attempt: args.attempt,
       nextAttemptAt: args.nextAttemptAt,
       // Bound the stored error so a pathological message cannot bloat the row.
+      error: args.error.slice(0, 2_000),
+      updatedAt: new Date().toISOString(),
+    });
+    this.#onMutation();
+  }
+
+  park(subscriptionKey: string, args: { attempt: number; error: string }): void {
+    this.#db.park({
+      subscriptionKey,
+      attempt: args.attempt,
+      // Same bound as nack: a pathological message must not bloat the row.
       error: args.error.slice(0, 2_000),
       updatedAt: new Date().toISOString(),
     });

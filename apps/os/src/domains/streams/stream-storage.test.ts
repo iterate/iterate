@@ -424,6 +424,24 @@ describe("SqliteSubscriptionCursorStore epoch fencing", () => {
     expect(row.lastError).toBe("ingest failing");
     expect(row.nextAttemptAt).toBeNull(); // the poke consumed the retry
   });
+
+  it("park clears the retry schedule but keeps the cursor and failure evidence", () => {
+    const store = makeStore();
+    store.ensure("k", 5);
+    store.nack("k", { attempt: 14, nextAttemptAt: 12345, error: "still down" });
+
+    store.park("k", { attempt: 15, error: "still down" });
+    expect(store.get("k")).toMatchObject({
+      ackedOffset: 5,
+      attempt: 15, // mirrors the park fact, not the last nack
+      nextAttemptAt: null, // a parked row must not drive the alarm
+      lastError: "still down",
+    });
+
+    // Resume acks at the unmoved cursor: the evidence clears for a fresh start.
+    store.ack("k", 5);
+    expect(store.get("k")).toMatchObject({ attempt: 0, nextAttemptAt: null, lastError: null });
+  });
 });
 
 describe("SqliteSubscriptionCursorStore mutation observation", () => {
