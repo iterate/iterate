@@ -52,6 +52,31 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 15 (2026-07-23, post-#2284)
+
+This round starts from merged `origin/main` at
+`0d8f96f9298f46590f6a8f3bbae1825e03c9660a`. PR #2284 aligned public project
+creation with its real nested birth barriers and added one observable,
+pre-session recovery for a spawned CLI's initial WebSocket upgrade. The
+recovery boundary cannot replay authentication, capability lookup, or user
+code, and application/RPC errors remain non-retryable.
+
+The final #2284 exact-head preview was clean functional evidence: all six
+expected E2E sources finalized, all 245 runnable test records passed, and
+Depot artifacts plus PostHog recorded zero framework retries, zero
+passed-after-retry outcomes, and zero initial-connection recovery markers. It
+does not count toward this round's consecutive proof because it took 359
+seconds from aggregate dispatch (346 seconds for the preview check), above the
+five-minute acceptance ceiling.
+
+That run also isolated the leading time floor. OS deployment took 79.45
+seconds and OS E2E took 171.99 seconds, while OS Vitest itself took 63.55
+seconds. Fresh project creation was held until the deployment-wide Durable
+Object rollout clock reached 90 seconds, and Vitest began only after that
+boundary plus onboarding smoke settled. Round 15 begins at 0/25 and first
+measures unchanged warm-slot runs through the canonical Depot workflow before
+changing the rollout critical path.
+
 ## Round 14 (2026-07-23, post-#2275)
 
 PR #2275 made preview worker builds fail closed when the dependency installer
