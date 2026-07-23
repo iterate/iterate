@@ -468,7 +468,7 @@ export type ProjectProcessorState = ProcessorState<ProjectProcessorContract>;
 type ProjectCreationRequest = Pick<NonNullable<ProjectProcessorState["createRequest"]>, "config">;
 
 /** Exact equality for the immutable creation facts carried through the saga. */
-export function sameProjectCreationRequest(
+function sameProjectCreationRequest(
   left: ProjectCreationRequest,
   right: ProjectCreationRequest,
 ): boolean {
