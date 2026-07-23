@@ -164,6 +164,44 @@ failure remains authoritative. Focused tests cover both lifecycle recovery and
 the application-error exclusion; the full OS unit suite and typecheck pass.
 The rejected run resets the consecutive counter to 0/25.
 
+### Round 15 shared Playwright admin connection
+
+Exact head `eb887acb553a66eb5bfe7c4402807ff429457ea9` first passed two
+canonical runs in 275 and 320 seconds with zero retries. Run three
+(`mv74spgz2j`, attempt `x6zqb8b8jj`) completed in 344 seconds but is rejected:
+`stream-resume-after-suspend.spec.ts` passed only on Playwright's second
+attempt after its control case reported `WebSocket connection failed.` The
+accepted streak therefore remains 0/25.
+
+The retained Playwright trace localizes the first failure before navigation or
+any project RPC. The fixture project
+`prj_9860ba1c2eb34ad39cd4bcc76663fbce` was created, described, and made ready
+successfully. Immediately afterward, `connectAdminItx` failed its initial
+WebSocket dial. Exact-version Cloudflare traces contain the successful fixture
+creation and simultaneous successful sessions from other tests, but no Worker
+invocation matching this failed dial. The connection therefore died locally
+or at the edge before the OS Worker accepted it; the named stream assertion
+never ran.
+
+PostHog confirms that the victim test is incidental. In the available history,
+the exact generic connection error occurred three times across two unrelated
+Playwright files: this stream control case and two REPL catalogue cases on
+other branches. All three use the shared `connectAdminItx` helper and all three
+passed on one framework retry. The stream control case itself had 196 recorded
+attempts across 186 workflow runs; its three other historical failed attempts
+were distinct stream-wait timeouts, not this transport signature.
+
+The shared Playwright helper now uses the same bounded `connectItxReady`
+boundary already proven for the CLI. It may make one fresh dial only before a
+Cap'n Web session exists, so authentication and test operations cannot be
+replayed. Project-fixture creation uses the same safe boundary before issuing
+`Project.create`. Any recovery adds an `itx: initial connection retry`
+Playwright step, a test annotation, and the structured
+`[itx-initial-connection-retry]` diagnostic with the original error and
+timings. Those records flow through the canonical artifact into PostHog, while
+the marathon ledger explicitly counts the structured marker and rejects the
+run. A second dial failure and every post-session failure remain authoritative.
+
 ## Round 14 (2026-07-23, post-#2275)
 
 PR #2275 made preview worker builds fail closed when the dependency installer
