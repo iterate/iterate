@@ -239,16 +239,46 @@ silent-failure hole (violates "no silent failure"). Turn it into a telemetry
 event (keep the non-throwing control flow — it self-heals on reveal). **~+2 LOC,
 pure observability upside**, folded into the lean fix.
 
-### Verdict: this is the floor
+### Verdict: safe floor ~−300 LOC; up to ~−455 with a marathon-gated extra
 
-Four rounds converge. The lean fix — **delete the gate (−305), reuse the one-retry
-helper on the one uncovered wait (+12/−7), a clear "retry later" error (+6), two
-freebies (−32), the seed-telemetry line (+2)** ≈ **−300 LOC net, validated** — is
-the floor for "less code + less clutter + more robustness + little faff." Further
-cuts either (a) can't beat Cloudflare's eventual-consistency model, (b) relocate
-complexity rather than remove it, or (c) are the separate medium-faff
+Both independent codex rounds converge: round 4 confirms **"the ~−300 lean fix is
+the floor — stop cutting"** (you can't beat Cloudflare's model; always-async
+`create()` would need ~133 explicit readiness waits across the repo). Round 3 —
+**built and unit-validated in an isolated copy (59/59 tests, typecheck,
+`git diff --check`)** — showed the floor can go to **~−455 cumulative** (−178
+beyond round 2) with three cuts I under-credited, the first two clean and safe,
+the third marathon-gated:
+
+- **A machine-readable `retryable: true` at the itx boundary** — strictly better
+  than my prose "retry later" message. It **keeps** the internal
+  `stream-unavailable:` string tag (confirming the native-RPC-strips-own-props
+  finding) but attaches `retryable: true` at `itx-observability.ts`, where the
+  error is normalized _before_ the capnweb hop (which the fork preserves). Callers
+  do `error.retryable === true` — no custom class, no result union, no codegen
+  churn. This is the cleanest form of "clearly tell the caller to retry."
+- **Delete the generic `retryIdempotentDurableObjectOperation` abstraction** — it
+  has one production caller (`retryLoggedIdempotentOperation`); inline the 7-line
+  body and drop the wrapper + its tests. Removes an abstraction, not a retry.
+- **Delete `waitForOnboardingGreeting`** + its tests (round 3 already had this)
+  and the workspace `#read` dedupe.
+
+**One contested piece:** codex also restructures `create()` to background the seed
+
+- 75 s birth-drive via `ctx.waitUntil` so the foreground awaits only
+  `project/ready`, making the 15 s-vs-75 s ambiguity vanish structurally (not just a
+  renamed timeout). It keeps the return contract (no caller churn) and passed unit
+  tests — but it changes `create()`'s internal completion semantics, and the round-4
+  analysis flags create-reshapes as needing care. **Land that piece only behind the
+  live preview marathon**, not on unit-green alone; the other three cuts are safe.
+
+So the floor is lower than I said, and the extra ~155 LOC is genuine clutter
+removal (a redundant abstraction, a redundant recovery helper, a clean caller
+signal) — not churn. What remains truly off-limits is unchanged: (a) you can't beat
+Cloudflare's eventual-consistency model, (b) flipping the create _default_
+relocates complexity, and (c) the
 [DO-failure-signal unification](../tasks/unify-durable-object-failure-signal.md)
-that doesn't move robustness. Recommendation: **ship the lean fix; stop cutting.**
+is separate medium-faff. Recommendation: **ship the safe cuts (~−300); gate the
+create-restructure (~another −155 incl. its deletions) on the marathon.**
 
 ---
 
