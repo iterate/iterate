@@ -207,6 +207,7 @@ describe("resolveWorkerSource", () => {
 
     const first = resolveWorkerSource({ projectId: "prj_broken", source });
     await expect(first).rejects.toSatisfy(isWorkerBuildFailedError);
+    await expect(first).rejects.toMatchObject({ retryable: false });
     expect(h.state.buildCalls).toEqual(["BROKEN"]);
     expect(h.kv.data.size).toBe(0);
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../../env.ts";
 import { WorkerBuildFailedError, type WorkerBuildArtifact } from "./artifact-store.ts";
 import type { WorkerBuildRequest } from "./worker-build-capability.ts";
@@ -35,8 +35,8 @@ const artifact: WorkerBuildArtifact = {
   modules: { "worker.js": "built" },
 };
 
-function coordinator() {
-  const records = new Map<string, unknown>();
+function coordinator(records: Map<string, unknown>) {
+  h.execute.mockReset().mockResolvedValue(artifact);
   const setAlarm = vi.fn(async () => undefined);
   const ctx = {
     id: { name: request.buildKey },
@@ -53,13 +53,9 @@ function coordinator() {
   return { records, setAlarm, value };
 }
 
-beforeEach(() => {
-  h.execute.mockReset().mockResolvedValue(artifact);
-});
-
 describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
   it("serves a zero-budget follower from the settled coordinator artifact", async () => {
-    const { records, setAlarm, value } = coordinator();
+    const { records, setAlarm, value } = coordinator(new Map());
 
     await expect(value.build(request)).resolves.toBe(artifact);
     await expect(value.build(request, 0)).resolves.toBe(artifact);
@@ -70,7 +66,7 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
   });
 
   it("persists an alarm handoff before a budgeted build call returns", async () => {
-    const { records, setAlarm, value } = coordinator();
+    const { records, setAlarm, value } = coordinator(new Map());
     const build = Promise.withResolvers<WorkerBuildArtifact>();
     h.execute.mockImplementationOnce(async () => await build.promise);
 
@@ -87,7 +83,7 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
   });
 
   it("persists and arms without starting the build in the caller RPC", async () => {
-    const { records, setAlarm, value } = coordinator();
+    const { records, setAlarm, value } = coordinator(new Map());
 
     await value.enqueue(request);
 
@@ -102,7 +98,7 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
   });
 
   it("leaves durable work queued when infrastructure fails for native alarm retry", async () => {
-    const { records, value } = coordinator();
+    const { records, value } = coordinator(new Map());
     const failure = new Error("worker bundler unavailable");
     h.execute.mockRejectedValueOnce(failure);
     await value.enqueue(request);
@@ -115,11 +111,33 @@ describe("WorkerBuildCoordinatorDurableObject background handoff", () => {
   });
 
   it("classifies invalid source as terminal instead of starting an alarm retry storm", async () => {
-    const { records, value } = coordinator();
+    const { records, value } = coordinator(new Map());
     h.execute.mockRejectedValueOnce(new WorkerBuildFailedError("invalid source"));
     await value.enqueue(request);
 
     await expect(value.alarm()).resolves.toBeUndefined();
-    expect(records.size).toBe(0);
+    expect([...records.values()]).toEqual([
+      { message: "invalid source", name: "WorkerBuildFailedError" },
+    ]);
+  });
+
+  it("surfaces an alarm's terminal source failure after coordinator eviction", async () => {
+    const records = new Map<string, unknown>();
+    const first = coordinator(records);
+    h.execute.mockRejectedValueOnce(
+      new WorkerBuildFailedError(
+        'Entry point "github-ai-linter-worker.ts" was not found in files.',
+      ),
+    );
+    await first.value.enqueue(request);
+    await first.value.alarm();
+
+    const nextIncarnation = coordinator(records);
+    await expect(nextIncarnation.value.build(request, 0)).rejects.toMatchObject({
+      name: "WorkerBuildFailedError",
+      message: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+    });
+    expect(h.execute).not.toHaveBeenCalled();
+    expect(nextIncarnation.setAlarm).not.toHaveBeenCalled();
   });
 });
