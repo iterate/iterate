@@ -61,6 +61,14 @@ export interface CollabSessionStore extends CollabStore {
   endSession(path: string): void;
 }
 
+/** Fresh caret presence as index-matched flat arrays (one entry per
+ * path+client pair) — named so the generated capnweb surface references it
+ * instead of structurally promise-mapping raw string arrays (illegal). */
+export interface CollabPresenceFlat {
+  clientIds: string[];
+  paths: string[];
+}
+
 /** Attributed tracked changes since the last commit: author-tagged inserted
  * spans and deleted-text markers in current-head coordinates, plus the ONE
  * baseline both redline layers render against. */

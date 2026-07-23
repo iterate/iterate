@@ -292,7 +292,9 @@ type WorkspaceStub = {
     ): Promise<void>;
     changes(path: string): Promise<CollabChanges>;
     versions(): Promise<Record<string, number>>;
-    presenceSummary(): Promise<Record<string, string[]>>;
+    presenceSummary(): Promise<{ clientIds: string[]; paths: string[] }>;
+    boardViewers(): Promise<Record<string, string>>;
+    boardPresent(clientId: string, name: string | null): Promise<void>;
   };
   readBase(path: string): Promise<string | null>;
   exists(path: string): Promise<boolean>;
@@ -443,8 +445,24 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     return this.#withWorkspace((ws) => ws.collab.versions());
   }
 
-  presenceSummary(): Promise<Record<string, string[]>> {
-    return this.#withWorkspace((ws) => ws.collab.presenceSummary());
+  async presenceSummary(): Promise<Record<string, string[]>> {
+    // The platform hop speaks index-matched flat arrays (generator-legal);
+    // the browser keeps the natural Record shape.
+    const flat = await this.#withWorkspace((ws) => ws.collab.presenceSummary());
+    const summary: Record<string, string[]> = {};
+    flat.paths.forEach((path, index) => {
+      const clientId = flat.clientIds[index];
+      if (clientId !== undefined) (summary[path] ??= []).push(clientId);
+    });
+    return summary;
+  }
+
+  boardViewers(): Promise<Record<string, string>> {
+    return this.#withWorkspace((ws) => ws.collab.boardViewers());
+  }
+
+  boardPresent(clientId: string, name: string | null): Promise<void> {
+    return this.#withWorkspace((ws) => ws.collab.boardPresent(clientId, name));
   }
 
   /** The newest page of the workspace's stream events, newest first. */

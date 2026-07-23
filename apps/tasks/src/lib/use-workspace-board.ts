@@ -45,6 +45,9 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   const [changes, setChanges] = useState<Map<string, TaskChangeStatus>>(new Map());
   // Fresh caret presence per path — "who has this card open" (clientIds).
   const [viewers, setViewers] = useState<Map<string, string[]>>(new Map());
+  // Everyone with the BOARD open (heartbeats), self included once announced.
+  const [boardClients, setBoardClients] = useState<{ clientId: string; name: string }[]>([]);
+  const [self, setSelf] = useState<{ clientId: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
 
@@ -119,13 +122,19 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
       void Promise.all([
         lane((ws) => ws.versions()),
         wantStatus ? lane((ws) => ws.status()) : Promise.resolve(null),
-        // Cheap in-memory read; failures just keep the previous dots.
+        // Cheap in-memory reads; failures just keep the previous dots.
         lane((ws) => ws.presenceSummary()).catch(() => null),
+        lane((ws) => ws.boardViewers()).catch(() => null),
       ])
-        .then(async ([rawVersions, status, presence]) => {
+        .then(async ([rawVersions, status, presence, board]) => {
           if (presence !== null && generation.current === mine) {
             setViewers(
               new Map(Object.entries(presence).map(([path, ids]) => [boardKey(path), ids])),
+            );
+          }
+          if (board !== null && generation.current === mine) {
+            setBoardClients(
+              Object.entries(board).map(([clientId, name]) => ({ clientId, name })),
             );
           }
           if (generation.current !== mine) return;
@@ -183,6 +192,38 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
         );
     }, POLL_MS);
     return () => clearInterval(timer);
+  }, [lane]);
+
+  // Board-viewer heartbeat: announce on join (and every 25s — the server
+  // ages entries at 45s), clear on leave. Identity via whoami; the clientId
+  // wears the display slug so colors/labels match redlines and carets.
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let clientId: string | null = null;
+    void withProject((project) => (project as { whoami(): Promise<{ name: string | null; email: string | null; userId: string | null }> }).whoami())
+      .then((me) => {
+        if (stopped) return;
+        const name = me.name ?? me.email ?? me.userId ?? "someone";
+        const slug =
+          name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 24) || "someone";
+        clientId = `u-${slug}-${Math.random().toString(36).slice(2, 8)}`;
+        setSelf({ clientId, name });
+        const announce = () =>
+          void lane((ws) => ws.boardPresent(clientId!, name)).catch(() => {});
+        announce();
+        timer = setInterval(announce, 25_000);
+      })
+      .catch(() => {});
+    return () => {
+      stopped = true;
+      if (timer !== null) clearInterval(timer);
+      if (clientId !== null) void lane((ws) => ws.boardPresent(clientId!, null)).catch(() => {});
+    };
   }, [lane]);
 
   // Per-file parse cache: a poll refetch or one live keystroke must cost
@@ -509,7 +550,9 @@ export function useWorkspaceBoard(checkoutId: string, repoPath: string) {
   );
 
   return {
+    boardClients,
     changes,
+    self,
     viewers,
     commit,
     deleteTask,

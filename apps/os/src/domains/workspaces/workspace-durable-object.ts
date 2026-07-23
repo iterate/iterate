@@ -39,7 +39,7 @@ import {
 } from "./workspace-core.ts";
 import { normalizeWorkspaceMountKeys } from "./utils.ts";
 import type { CollabPull, CollabPush, CollabPushResult } from "./collab-engine.ts";
-import { CollabHost } from "./collab-host.ts";
+import { CollabHost, type CollabPresenceFlat } from "./collab-host.ts";
 import { sqliteCollabStore } from "./collab-store.ts";
 
 const PROCESSOR_SLUG = WorkspaceProcessorContract.slug;
@@ -505,10 +505,48 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
     return this.#collab.changes(path);
   }
 
-  /** Fresh caret presence per live session — "who has this file open". */
-  async collabPresenceSummary(): Promise<Record<string, string[]>> {
+  // Board-level viewer presence: who has the BOARD open (sheet or not),
+  // heartbeat-refreshed, in-memory (rebuilds from heartbeats after eviction).
+  readonly #boardClients = new Map<string, { at: number; name: string }>();
+
+  /** Announce (or clear, with null name) one client viewing the board. */
+  async boardPresent(clientId: string, name: string | null): Promise<void> {
     await this.#assertCreated();
-    return this.#collab.presenceSummary();
+    if (name === null) this.#boardClients.delete(clientId);
+    else this.#boardClients.set(clientId, { at: Date.now(), name: name.slice(0, 80) });
+  }
+
+  /** Fresh caret presence per live session — "who has this file open".
+   * Index-matched flat arrays on the wire (one entry per path+client pair):
+   * Record-of-array values break the generated capnweb promise-mapped
+   * types, the same family of rule CollabChanges documents. */
+  async collabPresenceSummary(): Promise<CollabPresenceFlat> {
+    await this.#assertCreated();
+    const paths: string[] = [];
+    const clientIds: string[] = [];
+    for (const [path, ids] of Object.entries(this.#collab.presenceSummary())) {
+      for (const clientId of ids) {
+        paths.push(path);
+        clientIds.push(clientId);
+      }
+    }
+    return { clientIds, paths };
+  }
+
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name.
+   * A flat Record on the wire — nesting breaks the generated capnweb
+   * promise-mapped types (same family of rule as CollabChanges). */
+  async collabBoardViewers(): Promise<Record<string, string>> {
+    await this.#assertCreated();
+    const now = Date.now();
+    for (const [clientId, client] of this.#boardClients) {
+      if (now - client.at > 45_000) this.#boardClients.delete(clientId);
+    }
+    return Object.fromEntries(
+      [...this.#boardClients]
+        .map(([clientId, client]) => [clientId, client.name] as const)
+        .sort(([left], [right]) => left.localeCompare(right)),
+    );
   }
 
   // -- git -------------------------------------------------------------------------

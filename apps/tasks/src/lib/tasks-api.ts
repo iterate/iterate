@@ -140,9 +140,12 @@ export interface TasksWorkspace {
     clientId?: string,
     afterPresence?: number,
   ): Promise<CollabWaitResult>;
-  /** Fresh caret presence per open file — the board's "who has this card
-   * open" dots (clientIds; labels/colors derive client-side). */
+  /** Fresh caret presence per open file — the card dots (clientIds). */
   presenceSummary(): Promise<Record<string, string[]>>;
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
+  boardViewers(): Promise<Record<string, string>>;
+  /** Heartbeat (or clear, with null name) this client viewing the board. */
+  boardPresent(clientId: string, name: string | null): Promise<void>;
   /** Announce (or clear, with null) this client's cursor for one session. */
   present(
     filePath: string,
