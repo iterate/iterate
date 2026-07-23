@@ -828,6 +828,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    },\n" +
       "  });\n" +
       "\n" +
+      "  // The base class delivers committed events on ANY stream here at least once and in\n" +
+      "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    await this.#aiLintApp.processEvent(event, this.env);\n" +
       "  }\n" +

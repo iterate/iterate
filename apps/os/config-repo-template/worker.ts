@@ -21,6 +21,8 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     },
   });
 
+  // The base class delivers committed events on ANY stream here at least once and in
+  // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     await this.#aiLintApp.processEvent(event, this.env);
   }
