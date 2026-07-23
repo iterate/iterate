@@ -2,10 +2,11 @@
 
 import type { WorkerBundlerAssetConfig } from "./schemas.ts";
 
-// v9 stores successful artifacts separately from the failure records written
-// by an earlier implementation. Failures are deliberately not cached: the
-// bundler cannot distinguish broken source from transient infrastructure.
-export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 9;
+// v10 invalidates artifacts emitted after dependency-install warnings. Those
+// bundles could retain unresolved bare imports and were never runnable.
+// Failures are deliberately not cached: the bundler cannot distinguish
+// broken source from transient infrastructure.
+export const WORKER_BUILD_ARTIFACT_SCHEMA_VERSION = 10;
 
 const ARTIFACT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const KV_PREFIX = `worker-build/v${WORKER_BUILD_ARTIFACT_SCHEMA_VERSION}`;

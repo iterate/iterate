@@ -1,0 +1,43 @@
+// Checked in (unlike the fleet apps' generated configs): this app deploys
+// manually to tasks.iterate.workers.dev (`pnpm deploy` with
+// CLOUDFLARE_ACCOUNT_ID set) and is not wired into envs.ts / the deploy
+// fleet. No routes: per-project access goes through each project's config
+// worker proxy (tasks--<slug>.iterate.app), never a domain on this worker.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tasks",
+  "main": "./src/worker.ts",
+  "compatibility_date": "2026-06-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "exports": {
+    // Tombstone: the pre-checkout board DO, retired (superseded by
+    // checkouts + the checkout index).
+    "TasksBoardDurableObject": {
+      "type": "durable-object",
+      "state": "deleted",
+    },
+    "TasksCheckoutDurableObject": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+    "TasksCheckoutIndexDurableObject": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CHECKOUT",
+        "class_name": "TasksCheckoutDurableObject",
+      },
+      {
+        "name": "INDEX",
+        "class_name": "TasksCheckoutIndexDurableObject",
+      },
+    ],
+  },
+  "vars": {
+    "OS_BASE_URL": "https://os.iterate.com",
+  },
+}
