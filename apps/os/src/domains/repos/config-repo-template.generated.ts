@@ -1474,17 +1474,15 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    using itx = await this.env.ITX.get();\n" +
       "    const configured = await itx.scheduler.list();\n" +
       "    const desiredKeys = new Set(heartbeatSchedules.map((schedule) => schedule.key));\n" +
-      "    await Promise.all([\n" +
-      "      ...heartbeatSchedules.map((schedule) =>\n" +
-      "        itx.scheduler.ensure({ ...schedule, script: HEARTBEAT_SCRIPT }),\n" +
-      "      ),\n" +
-      "      ...configured\n" +
-      "        .filter(\n" +
-      "          (schedule) =>\n" +
-      "            schedule.key.startsWith(HEARTBEAT_SCHEDULE_PREFIX) && !desiredKeys.has(schedule.key),\n" +
-      "        )\n" +
-      "        .map((schedule) => itx.scheduler.cancel(schedule.key)),\n" +
-      "    ]);\n" +
+      "    const operations: Promise<unknown>[] = heartbeatSchedules.map((schedule) =>\n" +
+      "      itx.scheduler.ensure({ ...schedule, script: HEARTBEAT_SCRIPT }),\n" +
+      "    );\n" +
+      "    for (const schedule of configured) {\n" +
+      "      if (schedule.key.startsWith(HEARTBEAT_SCHEDULE_PREFIX) && !desiredKeys.has(schedule.key)) {\n" +
+      "        operations.push(itx.scheduler.cancel(schedule.key));\n" +
+      "      }\n" +
+      "    }\n" +
+      "    await Promise.all(operations);\n" +
       "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +

@@ -283,8 +283,20 @@ export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
     ? parsed
     : {
         ...parsed,
-        metadata: JSON.parse(JSON.stringify(parsed.metadata)) as ScheduleSetPayload["metadata"],
+        metadata: canonicalJson(parsed.metadata) as ScheduleSetPayload["metadata"],
       };
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (typeof value === "number") return value === 0 ? 0 : value;
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+      key,
+      canonicalJson(item),
+    ]),
+  );
 }
 
 /**

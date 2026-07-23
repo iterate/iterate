@@ -100,17 +100,15 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     using itx = await this.env.ITX.get();
     const configured = await itx.scheduler.list();
     const desiredKeys = new Set(heartbeatSchedules.map((schedule) => schedule.key));
-    await Promise.all([
-      ...heartbeatSchedules.map((schedule) =>
-        itx.scheduler.ensure({ ...schedule, script: HEARTBEAT_SCRIPT }),
-      ),
-      ...configured
-        .filter(
-          (schedule) =>
-            schedule.key.startsWith(HEARTBEAT_SCHEDULE_PREFIX) && !desiredKeys.has(schedule.key),
-        )
-        .map((schedule) => itx.scheduler.cancel(schedule.key)),
-    ]);
+    const operations: Promise<unknown>[] = heartbeatSchedules.map((schedule) =>
+      itx.scheduler.ensure({ ...schedule, script: HEARTBEAT_SCRIPT }),
+    );
+    for (const schedule of configured) {
+      if (schedule.key.startsWith(HEARTBEAT_SCHEDULE_PREFIX) && !desiredKeys.has(schedule.key)) {
+        operations.push(itx.scheduler.cancel(schedule.key));
+      }
+    }
+    await Promise.all(operations);
   }
 
   async fetch(req: Request): Promise<Response> {
