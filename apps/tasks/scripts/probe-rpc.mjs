@@ -46,9 +46,12 @@ const humanFiles = () => humanDoc.getMap("files");
 const humanMeta = () => humanDoc.getMap("meta");
 
 // --- the agent: a live capnweb session on /api -------------------------------
+// Authed upgrade: the vessel host ignores it (authenticate(token) is the
+// credential there), but a project host's config-worker gate rejects a bare
+// upgrade before the vessel ever sees it.
 const wsUrl = new URL("/api", base);
 wsUrl.protocol = base.protocol === "https:" ? "wss:" : "ws:";
-const socket = new NodeWebSocket(wsUrl.toString());
+const socket = new AuthedWebSocket(wsUrl.toString());
 const api = newWebSocketRpcSession(socket);
 
 // Pipelined: authenticate → project stub, no explicit await needed between.
