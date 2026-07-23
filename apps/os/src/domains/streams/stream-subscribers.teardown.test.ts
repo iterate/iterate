@@ -9,7 +9,7 @@
 // the log, every fact-append triggers wake(), parked facts fold.
 
 import { describe, expect, it } from "vitest";
-import type { StreamEvent, StreamEventInput } from "iterate/processors";
+import type { StreamEvent, StreamEventInput, StreamWakeEventBatch } from "iterate/processors";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
@@ -20,7 +20,7 @@ import type { SubscriptionCursorRow, SubscriptionCursorStore } from "./stream-st
 
 type PokeImpl = (request: { subscriptionKey: string }) => Promise<{
   checkpointOffset: number;
-  sink: RetainedProcessEventBatch;
+  sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
 }>;
 
 function makeFaithfulHarness(pokeImpl?: PokeImpl) {
@@ -133,11 +133,16 @@ function makeFaithfulHarness(pokeImpl?: PokeImpl) {
         poke: async (_expression, request) => {
           pokes.push(request.subscriptionKey);
           if (pokeImpl !== undefined) return pokeImpl(request);
-          const sink = Object.assign(() => undefined, {
-            [Symbol.dispose]() {
-              sinkAlive = false;
+          const sink = Object.assign(
+            (batch: StreamWakeEventBatch) => {
+              batch.settleDelivery({ outcome: "ok" });
             },
-          }) as RetainedProcessEventBatch;
+            {
+              [Symbol.dispose]() {
+                sinkAlive = false;
+              },
+            },
+          ) as RetainedProcessEventBatch<StreamWakeEventBatch>;
           sinkAlive = true;
           return { checkpointOffset: log.length, sink };
         },
@@ -233,10 +238,10 @@ describe("StreamSubscribers with a DO-faithful (log-appending) harness", () => {
     let pokes = 0;
     const h = makeFaithfulHarness(async () => {
       pokes += 1;
-      const sink = Object.assign(() => undefined, {
-        pendingDeliveries: () => 1, // permanently unsettled delivery
+      const sink = Object.assign((_batch: StreamWakeEventBatch) => undefined, {
+        // Deliberately never invokes `settleDelivery`.
         [Symbol.dispose]() {},
-      }) as RetainedProcessEventBatch;
+      }) as RetainedProcessEventBatch<StreamWakeEventBatch>;
       return { checkpointOffset: 0, sink };
     });
     h.configured["k"] = {

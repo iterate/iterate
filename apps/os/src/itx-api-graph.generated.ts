@@ -1185,10 +1185,14 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "StreamSubscriberWakeResponse",
     kind: "typeAlias",
     sourceText:
-      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /** The live delivery callback the stream retains and invokes per batch. */\n  sink: ProcessEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
+      "/**\n * What the poked subscriber hands back — the entire handshake in one return\n * value. The stream retains `sink` (ownership of a returned stub transfers to\n * the caller) and streams one-way batches into it from `checkpointOffset + 1`;\n * there is no subscribe-back call and therefore no handshake race to fence.\n */\nexport type StreamSubscriberWakeResponse = {\n  /** The processor's durable checkpoint offset — replay resumes after it. */\n  checkpointOffset: number;\n  /**\n   * The live delivery callback the stream retains and invokes per batch.\n   * Calls are one-way; each batch reports completion through its independent\n   * `settleDelivery` capability.\n   */\n  sink: ProcessStreamWakeEventBatch;\n  /**\n   * Serializable subscriber identity (validated against\n   * `StreamSubscriberDescriptor` by the stream) appended as the\n   * subscriber-connected presence fact; carries the processor's contract\n   * announcement for the stream's `processorsBySlug` registry.\n   */\n  subscriber?: unknown;\n  /** Live runtime-state capability, retained for the connection lifetime. */\n  getRuntimeState?: GetProcessorRuntimeState;\n  /** Optional ping capability, retained for the connection lifetime (see {@link StreamSubscriberPing}). */\n  ping?: StreamSubscriberPing;\n};",
     summary: "What the poked subscriber hands back — the entire handshake in one return value.",
     memberSummaries: {},
-    referencedTypeNames: ["ProcessEventBatch", "GetProcessorRuntimeState", "StreamSubscriberPing"],
+    referencedTypeNames: [
+      "ProcessStreamWakeEventBatch",
+      "GetProcessorRuntimeState",
+      "StreamSubscriberPing",
+    ],
   },
   {
     name: "LiveUpdate",
@@ -1906,6 +1910,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "ProcessStreamWakeEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/** Durable wake-mode sink. Its call result is always disposed unpulled. */\nexport type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;",
+    summary: "Durable wake-mode sink.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamWakeEventBatch"],
+  },
+  {
     name: "LiveStatePatch",
     kind: "typeAlias",
     sourceText:
@@ -2189,7 +2202,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ConnectionRuntimeState",
     kind: "typeAlias",
     sourceText:
-      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the pulled batch result settling (the subscriber's\n   * ingest resolved). Durable (wake) lane only — ephemeral results are\n   * disposed unpulled, so ephemeral consumption is self-reported by the host\n   * through `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while the last batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
+      "/** Serializable debug view of one live connection, for `runtimeState()`. */\nexport type ConnectionRuntimeState = {\n  subscriptionType: StreamSubscriptionType;\n  startedAt: string;\n  cursor: number;\n  /** `maxOffset - cursor` — real offset lag for EVERY connection kind, ephemeral included. */\n  lag: number;\n  batchesSent: number;\n  eventsSent: number;\n  /** Serialized payload bytes delivered into this connection's sink (cumulative). */\n  bytesSent: number;\n  lastDeliveredAt?: string;\n  /**\n   * Commit-to-settled latency, stream clock only: `createdAt` of the newest\n   * event in a batch → the subscriber's explicit settlement callback.\n   * Durable (wake) lane only — ephemeral results are disposed unpulled, so\n   * ephemeral consumption is self-reported by the host through\n   * `getRuntimeState` instead. Absent until a sample exists.\n   */\n  settleLatencyMs?: LatencyStats;\n  /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */\n  pingRttMs?: LatencyStats;\n  /**\n   * The connect-time identity descriptor. The runtime table is the ONLY home\n   * for ephemeral identity — ephemeral connections don't fold into the\n   * reduced `connectionsByKey` roster (core state v14) — so debug surfaces\n   * read who's connected from here.\n   */\n  subscriber?: StreamSubscriberDescriptor;\n  /**\n   * True while any batch handed to this connection's sink is unsettled —\n   * exactly the signal idle teardown consults to classify a sink as wedged.\n   */\n  hasPendingDelivery: boolean;\n};",
     summary: "Serializable debug view of one live connection, for `runtimeState()`.",
     memberSummaries: {},
     referencedTypeNames: ["StreamSubscriptionType", "LatencyStats", "StreamSubscriberDescriptor"],
@@ -2241,6 +2254,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "The mutual ping's reply half: the responder echoes `t0` and reports when it received the request (`t1`) and sent the reply (`t2`) on ITS clock.",
     memberSummaries: {},
     referencedTypeNames: [],
+  },
+  {
+    name: "StreamWakeEventBatch",
+    kind: "typeAlias",
+    sourceText:
+      "/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */\nexport type StreamWakeEventBatch = StreamEventBatch & {\n  settleDelivery: SettleStreamWakeDelivery;\n};",
+    summary: "Internal wake-mode frame: an ordinary batch plus its one-shot settlement door.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamEventBatch", "SettleStreamWakeDelivery"],
   },
   {
     name: "TypedStreamEventInput",
@@ -2406,6 +2428,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["MinuteWindow", "ThroughputSeries"],
   },
   {
+    name: "SettleStreamWakeDelivery",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * One-shot acknowledgement capability owned by a single durable wake batch.\n *\n * It is deliberately independent of the sink call's return value. A\n * processor may append back to the stream that delivered the batch; making\n * the stream pull that sink result creates a cyclic actor-drain dependency.\n */\nexport type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;",
+    summary: "One-shot acknowledgement capability owned by a single durable wake batch.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamWakeDeliverySettlement"],
+  },
+  {
     name: "CfImageTransformOptions",
     kind: "typeAlias",
     sourceText:
@@ -2502,6 +2533,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
+    name: "StreamWakeDeliverySettlement",
+    kind: "typeAlias",
+    sourceText:
+      '/** The subscriber\'s terminal verdict for one durable wake delivery. */\nexport type StreamWakeDeliverySettlement =\n  | { outcome: "ok" }\n  | { outcome: "error"; error: StreamWakeDeliveryError };',
+    summary: "The subscriber's terminal verdict for one durable wake delivery.",
+    memberSummaries: {},
+    referencedTypeNames: ["StreamWakeDeliveryError"],
+  },
+  {
     name: "WorkerBundlerCreateAppOptions",
     kind: "typeAlias",
     sourceText:
@@ -2518,6 +2558,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "Serializable `createWorker` input.",
     memberSummaries: {},
     referencedTypeNames: ["WorkerBundlerOptions", "WorkerFileSource"],
+  },
+  {
+    name: "StreamWakeDeliveryError",
+    kind: "typeAlias",
+    sourceText:
+      "/**\n * Serializable failure reported after a durable wake delivery finishes.\n *\n * The settlement crosses an independent one-way RPC hop, so preserve the\n * lifecycle flags the stream uses to distinguish a dead Durable Object from\n * an application failure. Error prototypes and arbitrary properties do not\n * survive that hop reliably.\n */\nexport type StreamWakeDeliveryError = {\n  name: string;\n  message: string;\n  durableObjectReset?: true;\n  overloaded?: true;\n  retryable?: true;\n};",
+    summary: "Serializable failure reported after a durable wake delivery finishes.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "WorkerBundlerOptions",

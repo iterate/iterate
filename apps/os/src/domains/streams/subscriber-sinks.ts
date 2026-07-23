@@ -19,26 +19,26 @@
 // - Return values: ownership transfers to the caller (us). We retain what the
 //   poke returned and are responsible for disposing it.
 //
-// Delivery is fire-and-forget by design (the pump never awaits a batch); the
-// asymmetry between ephemeral and durable subscribers is WHO PULLS THE RESULT:
-// ephemeral batch results are disposed unpulled — zero subscriber-originated
-// return frames on the wire — while durable batch results are pulled (never
-// awaited) purely as the prompt dead-connection signal. See
-// `retainProcessEventBatch` below and the wire tests in
-// stream-wire.e2e.test.ts.
+// Delivery is fire-and-forget by design (the pump never awaits a batch).
+// Every live sink result is disposed unpulled. Durable wake subscribers report
+// success/failure through the batch's independent settlement capability; this
+// keeps the sink call genuinely one-way even when the processor appends back
+// to the delivering stream. See `retainProcessEventBatch` below and the wire
+// tests in stream-wire.e2e.test.ts.
 
 import { disposeIgnoredRpcResult, isThenable, retainCallback } from "iterate/sdk/capnweb";
 import { StreamReceiverUnavailableError } from "iterate/processors";
 import type {
   GetProcessorRuntimeState,
-  ProcessEventBatch,
   ProcessorRuntimeState,
+  StreamEventBatch,
   StreamPingInput,
   StreamPingReply,
   StreamPushEventBatch,
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
   StreamSubscriberWakeResponse,
+  StreamWakeEventBatch,
   StreamWebhookDelivery,
 } from "iterate/processors";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -77,48 +77,28 @@ function rethrowPushEvaluationError(error: unknown): never {
   throw error;
 }
 
-/**
- * Per-call delivery options, consumed LOCALLY by the retained wrapper — never
- * serialized, never on the wire. `onSettled` fires when the durable lane's
- * pulled result settles (the subscriber's ingest resolved/rejected); on the
- * ephemeral lane, where results are disposed unpulled by design, it never
- * fires.
- */
-export type DeliveryOptions = {
-  onSettled?: (outcome: "ok" | "error") => void;
-};
-
 /** The pump-facing delivery callback: fire-and-forget, disposable, broken-transport aware. */
-export type RetainedProcessEventBatch = ((
-  batch: Parameters<ProcessEventBatch>[0],
-  opts?: DeliveryOptions,
+export type RetainedProcessEventBatch<Batch extends StreamEventBatch = StreamEventBatch> = ((
+  batch: Batch,
 ) => void) &
   Disposable & {
     onRpcBroken?(callback: (error: unknown) => void): void;
-    /**
-     * Dispatched-but-unsettled deliveries (durable lane only, where results
-     * are pulled). Idle teardown consults this: a sink with an unsettled
-     * batch belongs to a wedged subscriber, and its watermark must not be
-     * advanced as if the batch were digested.
-     */
-    pendingDeliveries?(): number;
   };
 
 /**
  * Retains a delivery sink and wraps it in the pump's fire-and-forget calling
  * convention.
  *
- * Without `onDeliveryError` (ephemeral subscribers) the batch result is
- * disposed WITHOUT ever being pulled, so the remote never ships a resolution —
- * frames flow in one direction only. With it (durable subscribers) the result
- * is pulled — never awaited, never gating the pump — because a dead stub
- * rejects every call, and observing that rejection is the only reliable,
- * PROMPT "this connection is a corpse" signal (`onRpcBroken` is best-effort
- * and can be a pipelined fake). One resolve frame per batch is the price of
- * millisecond-grade dead-connection detection on the lane voice rides.
+ * The batch result is disposed WITHOUT ever being pulled, so the remote never
+ * ships a resolution and frames flow in one direction only. Durable wake
+ * subscribers carry a separate per-batch settlement capability; pulling the
+ * sink result itself would create an actor-drain cycle whenever processing
+ * appends back to this same stream. `onDeliveryError` therefore covers only a
+ * synchronous dead-stub throw; `onRpcBroken` remains the prompt best-effort
+ * transport hint.
  */
-export function retainProcessEventBatch(
-  processEventBatch: ProcessEventBatch,
+export function retainProcessEventBatch<Batch extends StreamEventBatch>(
+  processEventBatch: (batch: Batch) => unknown,
   opts: {
     onDeliveryError?: (error: unknown) => void;
     /**
@@ -128,59 +108,25 @@ export function retainProcessEventBatch(
      */
     onDisposed?: () => void;
   } = {},
-): RetainedProcessEventBatch {
+): RetainedProcessEventBatch<Batch> {
   // `retainCallback` owns the transport dance (dup, idempotent dispose, and
   // the defensive onRpcBroken wiring — see iterate/sdk/capnweb/retain.ts for why that
   // wiring is subtle); this layer adds only the pump's delivery semantics.
-  const retained = retainCallback<Parameters<ProcessEventBatch>[0]>(processEventBatch);
+  const retained = retainCallback<Batch>(processEventBatch);
   const onDeliveryError = opts.onDeliveryError;
-  let pendingDeliveries = 0;
-  const callback: RetainedProcessEventBatch = Object.assign(
-    (batch: Parameters<ProcessEventBatch>[0], opts?: DeliveryOptions) => {
+  const callback: RetainedProcessEventBatch<Batch> = Object.assign(
+    (batch: Batch) => {
       let result: unknown;
       try {
         result = retained(batch);
       } catch (error) {
         // A disposed/broken stub can throw synchronously at call time.
         onDeliveryError?.(error);
-        opts?.onSettled?.("error");
-        return;
-      }
-      if (onDeliveryError !== undefined && isThenable(result)) {
-        // Delivery stays fire-and-forget (the pump never awaits the remote
-        // result), but the rejection must be observed: a dead stub rejects
-        // every call, and swallowing that left broken connections in place
-        // forever. Dispose only after settle; disposing before the result is
-        // pulled opts out of observing the rejection signal this path needs.
-        pendingDeliveries += 1;
-        void Promise.resolve(result)
-          .then(
-            () => {
-              pendingDeliveries -= 1;
-              opts?.onSettled?.("ok");
-            },
-            (error: unknown) => {
-              pendingDeliveries -= 1;
-              try {
-                onDeliveryError(error);
-              } finally {
-                opts?.onSettled?.("error");
-              }
-            },
-          )
-          .finally(() => {
-            disposeIgnoredRpcResult(result);
-          });
         return;
       }
       disposeIgnoredRpcResult(result);
-      // Ephemeral lane (results disposed unpulled): "settled" is meaningless
-      // here — the subscriber's consumption is self-reported instead — but a
-      // LOCAL sink's synchronous return is a genuine settle.
-      if (onDeliveryError !== undefined) opts?.onSettled?.("ok");
     },
     {
-      pendingDeliveries: () => pendingDeliveries,
       [Symbol.dispose]() {
         try {
           retained[Symbol.dispose]();
@@ -255,7 +201,7 @@ export type RetainedSubscriberPing = ((
 
 type RetainedWakeHandshakeResponse = {
   checkpointOffset: number;
-  sink: RetainedProcessEventBatch;
+  sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
   subscriber?: unknown;
   getRuntimeState?: GetProcessorRuntimeState & Disposable;
   ping?: RetainedSubscriberPing;
@@ -283,7 +229,7 @@ export function retainWakeHandshakeResponse(args: {
 
   let getRuntimeState: (GetProcessorRuntimeState & Disposable) | undefined;
   let ping: RetainedSubscriberPing | undefined;
-  let sink: RetainedProcessEventBatch | undefined;
+  let sink: RetainedProcessEventBatch<StreamWakeEventBatch> | undefined;
   let retainedReleased = false;
   const releaseRetained = () => {
     if (retainedReleased) return;
@@ -364,9 +310,10 @@ export function createSubscriberDial(deps: {
      * checkpoint plus a live sink whose ownership transfers to this stream
      * (returned-stub semantics:
      * https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/).
-     * The sink is retained with the durable lane's result-pulling liveness
-     * policy attached. The local root owns no remote lifetime; the returned
-     * handshake value still transfers its own RPC disposal group.
+     * The sink is retained with best-effort broken-transport detection; each
+     * delivered batch carries its own explicit settlement capability. The
+     * local root owns no remote lifetime; the returned handshake value still
+     * transfers its own RPC disposal group.
      */
     async poke(expression: ItxExpression, request: StreamSubscriberWakeRequest) {
       const { value } = await evaluateItxExpression(

@@ -2050,8 +2050,12 @@ export type StreamSubscriberWakeRequest = {
 export type StreamSubscriberWakeResponse = {
   /** The processor's durable checkpoint offset — replay resumes after it. */
   checkpointOffset: number;
-  /** The live delivery callback the stream retains and invokes per batch. */
-  sink: ProcessEventBatch;
+  /**
+   * The live delivery callback the stream retains and invokes per batch.
+   * Calls are one-way; each batch reports completion through its independent
+   * `settleDelivery` capability.
+   */
+  sink: ProcessStreamWakeEventBatch;
   /**
    * Serializable subscriber identity (validated against
    * `StreamSubscriberDescriptor` by the stream) appended as the
@@ -3252,6 +3256,9 @@ export type ProcessorSnapshot<State> = {
   state: State;
 };
 
+/** Durable wake-mode sink. Its call result is always disposed unpulled. */
+export type ProcessStreamWakeEventBatch = (batch: StreamWakeEventBatch) => unknown;
+
 /**
  * A structural patch turning a previous JSON value into the next one. Two
  * shapes, discriminated by whether the `set` key is present:
@@ -3625,10 +3632,10 @@ export type ConnectionRuntimeState = {
   lastDeliveredAt?: string;
   /**
    * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
+   * event in a batch → the subscriber's explicit settlement callback.
+   * Durable (wake) lane only — ephemeral results are disposed unpulled, so
+   * ephemeral consumption is self-reported by the host through
+   * `getRuntimeState` instead. Absent until a sample exists.
    */
   settleLatencyMs?: LatencyStats;
   /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
@@ -3641,7 +3648,7 @@ export type ConnectionRuntimeState = {
    */
   subscriber?: StreamSubscriberDescriptor;
   /**
-   * True while the last batch handed to this connection's sink is unsettled —
+   * True while any batch handed to this connection's sink is unsettled —
    * exactly the signal idle teardown consults to classify a sink as wedged.
    */
   hasPendingDelivery: boolean;
@@ -3714,6 +3721,11 @@ export type StreamPingInput = { t0: number };
  * ping failures drop the sample and never affect delivery or liveness.
  */
 export type StreamPingReply = { t0: number; t1: number; t2: number };
+
+/** Internal wake-mode frame: an ordinary batch plus its one-shot settlement door. */
+export type StreamWakeEventBatch = StreamEventBatch & {
+  settleDelivery: SettleStreamWakeDelivery;
+};
 
 /** `StreamEventInput` with `type`/`payload` narrowed to one event definition. */
 type TypedStreamEventInput<Type extends string = string, Payload = Record<string, unknown>> = Omit<
@@ -3925,6 +3937,15 @@ export type ThroughputReport = {
   series: ThroughputSeries;
 };
 
+/**
+ * One-shot acknowledgement capability owned by a single durable wake batch.
+ *
+ * It is deliberately independent of the sink call's return value. A
+ * processor may append back to the stream that delivered the batch; making
+ * the stream pull that sink result creates a cyclic actor-drain dependency.
+ */
+export type SettleStreamWakeDelivery = (settlement: StreamWakeDeliverySettlement) => unknown;
+
 /** One Cloudflare Images transform step (width, height, fit, rotate, …),
  * passed through to the Images binding verbatim. */
 export type CfImageTransformOptions = { [x: string]: unknown };
@@ -3992,6 +4013,11 @@ export type ThroughputSeries = {
   bytes: number[];
 };
 
+/** The subscriber's terminal verdict for one durable wake delivery. */
+export type StreamWakeDeliverySettlement =
+  | { outcome: "ok" }
+  | { outcome: "error"; error: StreamWakeDeliveryError };
+
 /** Serializable `createApp` input. The generated browser bundles and explicit
  * text assets are retained in the host and served by worker-bundler's own
  * asset handler. ArrayBuffer assets and the esbuild plugin callback are the
@@ -4012,6 +4038,22 @@ export type WorkerBundlerCreateWorkerOptions = WorkerBundlerOptions & {
   files: WorkerFileSource;
   entryPoint?: string;
   virtualModules?: Record<string, string>;
+};
+
+/**
+ * Serializable failure reported after a durable wake delivery finishes.
+ *
+ * The settlement crosses an independent one-way RPC hop, so preserve the
+ * lifecycle flags the stream uses to distinguish a dead Durable Object from
+ * an application failure. Error prototypes and arbitrary properties do not
+ * survive that hop reliably.
+ */
+export type StreamWakeDeliveryError = {
+  name: string;
+  message: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
 };
 
 /**

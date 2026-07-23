@@ -18,7 +18,8 @@ export type RetainedCallback<Arg> = ((arg: Arg) => unknown) &
  * Web stubs expose no own property descriptors and a Workers RPC property access
  * can fabricate a pipelined method that rejects at call time, so we wire whatever
  * the stub claims and swallow registration failures. `onRpcBroken` is only a
- * prompt hint; observing a delivery rejection is the reliable death signal.
+ * prompt hint; callers that need a terminal verdict must model one explicitly
+ * (for example, the durable wake lane's independent settlement capability).
  */
 export function retainCallback<Arg>(callback: (arg: Arg) => unknown): RetainedCallback<Arg> {
   const retainable = callback as ((arg: Arg) => unknown) &

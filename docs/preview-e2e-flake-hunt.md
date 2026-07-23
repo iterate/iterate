@@ -108,6 +108,24 @@ alarm, proves the worker-side and host-side readbacks equal the exact scheduled
 time, and immediately disarms it. A second near-term fire added no distinct
 platform coverage and made a due timer the synchronization primitive.
 
+### Round 12 proof restart after #2270
+
+PR #2270 merged that alarm-test fix to `main` at
+`78ba8ad61b3eeeba0cbdd77193510061f8466865`. Its final exact-head preview check
+ran all five app suites with zero failures and zero retries in a 254-second
+Depot run envelope: run `gdkz9dw86w`, attempt `c7zv439zvz`. The changed alarm
+test passed first try in 33.4 seconds.
+
+PostHog recorded 310 preview outcomes and 3,046 unit outcomes on that head with
+zero failures or retries. Both finalizers were complete: the preview job found
+all 9 expected artifact sources, and the unit job found all 10 expected
+workspaces. The `depot`, `github-actions`, and `github-reviews` source syncs
+were all fresh and healthy.
+
+That run accepted the fix before its squash merge; it is not part of the
+post-merge consecutive proof. The strict counter restarts at 0/25 on a fresh
+PR head based exactly on `78ba8ad61b3eeeba0cbdd77193510061f8466865`.
+
 ## Round 11 (2026-07-23, post-#2265)
 
 This round starts from `origin/main` at
