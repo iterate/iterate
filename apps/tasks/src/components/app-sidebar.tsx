@@ -1,10 +1,7 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { FolderGit2Icon, PlusIcon } from "lucide-react";
-import { DEFAULT_REPO_PATH, newCheckoutId } from "../lib/checkout-shared.ts";
-import { listCheckouts, listRepos } from "../lib/use-checkout.ts";
-import type { CheckoutIndexEntry } from "../lib/tasks-api.ts";
-import { IterateLogo } from "./ui/iterate-logo.tsx";
+import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   Sidebar,
   SidebarContent,
@@ -17,7 +14,10 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "./ui/sidebar.tsx";
+} from "@iterate-com/ui/components/sidebar";
+import { DEFAULT_REPO_PATH, newCheckoutId } from "../lib/checkout-shared.ts";
+import { listCheckouts, listRepos } from "../lib/use-checkout.ts";
+import type { CheckoutIndexEntry } from "../lib/tasks-api.ts";
 
 /**
  * The two-stage navigation: repos are the top-level hierarchy, checkouts the

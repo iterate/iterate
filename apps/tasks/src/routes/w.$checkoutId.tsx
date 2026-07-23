@@ -1,8 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIcon } from "lucide-react";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { Button } from "@iterate-com/ui/components/button";
 import type { CollabEditorApi } from "../lib/collab-editor-api.ts";
-import { SidebarTrigger } from "../components/ui/sidebar.tsx";
 import { Board } from "../components/board.tsx";
 import {
   CheckoutBreadcrumbs,
@@ -11,7 +12,6 @@ import {
   ShareButton,
 } from "../components/checkout-header.tsx";
 import { BoardSettings } from "../components/board-settings.tsx";
-import { Button } from "../components/ui/button.tsx";
 import { CommitControls, DeletedTasksStrip } from "../components/commit-controls.tsx";
 import { StreamEventsSheet } from "../components/stream-events-sheet.tsx";
 import { WithTooltip } from "../components/checkout-header.tsx";

@@ -1,8 +1,8 @@
 import { SlidersHorizontalIcon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import type { RowField } from "../lib/board-model.ts";
-import { Button } from "./ui/button.tsx";
-import { Checkbox } from "./ui/checkbox.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import { WithTooltip } from "./checkout-header.tsx";
 
 const GROUPINGS: { label: string; value: RowField }[] = [

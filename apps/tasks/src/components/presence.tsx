@@ -1,9 +1,9 @@
 import type YProvider from "y-partyserver/provider";
+import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { localCollabUser, renameCollabUser, type CollabUser } from "../lib/use-checkout.ts";
 import type { TasksUser } from "../lib/tasks-api.ts";
 import type { Peer } from "../lib/board-model.ts";
-import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 
 /**
  * Everyone in the checkout as overlapping avatars, the apps/os

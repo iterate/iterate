@@ -2,6 +2,8 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import type YProvider from "y-partyserver/provider";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { Skeleton } from "@iterate-com/ui/components/skeleton";
 import {
   DEFAULT_REPO_PATH,
   applyTextEdit,
@@ -54,8 +56,6 @@ import {
   MobileOverflow,
   ShareButton,
 } from "../components/checkout-header.tsx";
-import { SidebarTrigger } from "../components/ui/sidebar.tsx";
-import { Skeleton } from "../components/ui/skeleton.tsx";
 
 /**
  * Every piece of view state rides in the URL so any view is deep-linkable:

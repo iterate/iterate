@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Sheet, SheetContent, SheetTitle } from "@iterate-com/ui/components/sheet";
 import type { WorkspaceStreamEvent } from "../lib/tasks-api.ts";
-import { Sheet, SheetContent, SheetTitle } from "./ui/sheet.tsx";
 
 /**
  * The workspace's platform stream, LIVE: `itx.streams.get(path).subscribe`

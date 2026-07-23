@@ -9,8 +9,6 @@ import {
   TagIcon,
   XIcon,
 } from "lucide-react";
-import type { RowField } from "../lib/board-model.ts";
-import { ProjectLabelContext } from "../lib/project-label.ts";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -18,18 +16,20 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "./ui/breadcrumb.tsx";
-import { Button } from "./ui/button.tsx";
+} from "@iterate-com/ui/components/breadcrumb";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "./ui/dropdown-menu.tsx";
-import { Input } from "./ui/input.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
+} from "@iterate-com/ui/components/dropdown-menu";
+import { Input } from "@iterate-com/ui/components/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import { ProjectLabelContext } from "../lib/project-label.ts";
+import type { RowField } from "../lib/board-model.ts";
 
 /** project › repo › checkout — the header's orientation line. */
 export function CheckoutBreadcrumbs({

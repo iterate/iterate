@@ -2,6 +2,26 @@ import { lazy, Suspense, useState } from "react";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { BotIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@iterate-com/ui/components/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@iterate-com/ui/components/alert-dialog";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
 import type { TaskChangeStatus } from "../state.ts";
 import { stateLabel, type BoardTask, type PresenceUser } from "../lib/board-model.ts";
 import type { RecentSpan } from "../lib/recency.ts";
@@ -14,26 +34,6 @@ import { TagPicker } from "./tag-picker.tsx";
 const TaskEditor = lazy(() =>
   import("./task-editor.tsx").then((module) => ({ default: module.TaskEditor })),
 );
-import { Button } from "./ui/button.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select.tsx";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "./ui/alert-dialog.tsx";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./ui/sheet.tsx";
 
 /**
  * The task detail panel: a right-side sheet in the apps/os dialect, except

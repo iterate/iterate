@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, PlusIcon, TagIcon } from "lucide-react";
-import { Button } from "./ui/button.tsx";
-import { Input } from "./ui/input.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
-import { cn } from "./ui/utils.ts";
+import { Button } from "@iterate-com/ui/components/button";
+import { Input } from "@iterate-com/ui/components/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
+import { cn } from "@iterate-com/ui/lib/utils";
 
 /**
  * The tag combobox: shows the task's tags, proposes every tag that already
