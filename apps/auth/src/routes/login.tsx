@@ -40,6 +40,7 @@ export const Route = createFileRoute("/login")({
     // `login_hint=email` doubles as the deep-linkable "email code" mode of
     // this page; `login_hint=google` auto-starts the Google flow once.
     login_hint: z.enum(["email", "google"]).optional().catch(undefined),
+    account_chooser_method: z.literal("email").optional().catch(undefined),
     sig: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
@@ -99,9 +100,8 @@ function RouteComponent() {
             <LoginActions
               redirectTo={redirectTo}
               emailOtpEnabled={emailOtpEnabled}
-              loginHint={
-                search.login_hint === "email" && emailOtpEnabled ? search.login_hint : undefined
-              }
+              loginHint={search.account_chooser_method}
+              emailModeSearchKey="account_chooser_method"
               methodDivider="before"
             />
           </AccountChooser>
@@ -110,6 +110,7 @@ function RouteComponent() {
             redirectTo={redirectTo}
             emailOtpEnabled={emailOtpEnabled}
             loginHint={loginHint}
+            emailModeSearchKey="login_hint"
             methodDivider="between"
           />
         )}
@@ -122,11 +123,13 @@ function LoginActions({
   redirectTo,
   emailOtpEnabled,
   loginHint,
+  emailModeSearchKey,
   methodDivider,
 }: {
   redirectTo: string;
   emailOtpEnabled: boolean;
   loginHint?: "email" | "google";
+  emailModeSearchKey: "login_hint" | "account_chooser_method";
   methodDivider: "before" | "between";
 }) {
   const navigate = Route.useNavigate();
@@ -152,14 +155,16 @@ function LoginActions({
     },
   });
 
-  const setEmailMode = (expanded: boolean) =>
-    navigate({
-      search: (previous) => ({
-        ...previous,
-        login_hint: expanded ? ("email" as const) : undefined,
-      }),
+  const setEmailMode = (expanded: boolean) => {
+    const emailMode = expanded ? ("email" as const) : undefined;
+    return navigate({
+      search: (previous) =>
+        emailModeSearchKey === "account_chooser_method"
+          ? { ...previous, account_chooser_method: emailMode }
+          : { ...previous, login_hint: emailMode },
       replace: true,
     });
+  };
 
   useEffect(() => {
     setIsHydrated(true);
@@ -417,6 +422,7 @@ function getPostLoginRedirectUrl(fallbackRedirect: string) {
   const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
   searchParams.delete("exp");
   searchParams.delete("sig");
+  searchParams.delete("account_chooser_method");
   const remainingPrompts = searchParams
     .get("prompt")
     ?.split(" ")
