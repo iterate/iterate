@@ -139,7 +139,9 @@ case "approve":
   if !secretPaths.isEmpty {
     lines.append("spends secret\(secretPaths.count > 1 ? "s" : ""): \(secretPaths.joined(separator: ", "))")
   }
-  if let preview = request["bodyPreview"] as? String {
+  if let body = request["body"] as? [String: Any], let content = body["content"] as? String {
+    let prefix = body["encoding"] as? String == "base64" ? "[base64] " : ""
+    let preview = prefix + content
     lines.append("body: \(preview.count > 200 ? String(preview.prefix(200)) + "…" : preview)")
   }
   if let ruleKey = request["ruleKey"] as? String { lines.append("rule: \(ruleKey)") }

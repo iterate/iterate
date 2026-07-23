@@ -9,7 +9,7 @@
 // | lane       | sink arrives as                       | call result            |
 // |------------|---------------------------------------|------------------------|
 // | ephemeral  | `subscribe()` parameter               | disposed unpulled — zero return frames |
-// | wake       | returned from the expression-named poke| pulled, never awaited — prompt corpse detection |
+// | wake       | returned from the expression-named poke| disposed unpulled; independent per-batch settlement |
 // | push       | named by a persisted itx expression   | awaited — the ack that advances the cursor |
 // | webhook    | the configured URL (per-event POST)   | awaited 2xx — the ack that advances the cursor |
 //
@@ -24,7 +24,7 @@
 //
 // Runtime metrics: every connection carries real counters (events/bytes
 // delivered, lag from cursor), the durable lanes record commit→settled
-// latency on the stream's own clock (wake: the pulled result settling; push/
+// latency on the stream's own clock (wake: the settlement callback; push/
 // webhook: the awaited ack), and subscribers that hand over a ping capability
 // get NTP-style RTT sampled when runtime observation begins, throttled, and
 // purely observational (a failed ping drops the sample, nothing else).
@@ -48,6 +48,9 @@ import type {
   StreamPushEventBatch,
   StreamSubscriberPing,
   StreamSubscriberWakeRequest,
+  StreamWakeDeliveryError,
+  StreamWakeDeliverySettlement,
+  StreamWakeEventBatch,
   StreamWebhookDelivery,
 } from "iterate/processors";
 import {
@@ -101,10 +104,10 @@ export type ConnectionRuntimeState = {
   lastDeliveredAt?: string;
   /**
    * Commit-to-settled latency, stream clock only: `createdAt` of the newest
-   * event in a batch → the pulled batch result settling (the subscriber's
-   * ingest resolved). Durable (wake) lane only — ephemeral results are
-   * disposed unpulled, so ephemeral consumption is self-reported by the host
-   * through `getRuntimeState` instead. Absent until a sample exists.
+   * event in a batch → the subscriber's explicit settlement callback.
+   * Durable (wake) lane only — ephemeral results are disposed unpulled, so
+   * ephemeral consumption is self-reported by the host through
+   * `getRuntimeState` instead. Absent until a sample exists.
    */
   settleLatencyMs?: LatencyStats;
   /** Mutual-ping transport RTT to this subscriber (observer-driven sampling). Absent until pinged. */
@@ -117,7 +120,7 @@ export type ConnectionRuntimeState = {
    */
   subscriber?: StreamSubscriberDescriptor;
   /**
-   * True while the last batch handed to this connection's sink is unsettled —
+   * True while any batch handed to this connection's sink is unsettled —
    * exactly the signal idle teardown consults to classify a sink as wedged.
    */
   hasPendingDelivery: boolean;
@@ -178,11 +181,8 @@ type Connection = {
 };
 
 /** Everything `open()` needs to start one delivery connection. */
-type OpenConnectionArgs = {
+type OpenConnectionBase = {
   subscriptionKey: string;
-  subscriptionType: StreamSubscriptionType;
-  /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
-  sink: RetainedProcessEventBatch;
   replayAfterOffset?: number;
   /** Stable stream creation identity observed by the caller; null binds to an unborn stream. */
   expectedIncarnation?: string | null;
@@ -199,6 +199,18 @@ type OpenConnectionArgs = {
   ping?: StreamSubscriberPing;
 };
 
+type OpenConnectionArgs =
+  | (OpenConnectionBase & {
+      subscriptionType: "ephemeral";
+      /** Already-retained sink (subscriber-sinks.ts owns retention semantics). */
+      sink: RetainedProcessEventBatch<StreamEventBatch>;
+    })
+  | (OpenConnectionBase & {
+      subscriptionType: "configured";
+      /** One-way durable sink; completion arrives through each batch's settlement door. */
+      sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
+    });
+
 /**
  * The transport quarantine's face: how the spine reaches subscribers. Wake and
  * push are BOTH itx-expression evaluations against the stream's authority root
@@ -213,7 +225,7 @@ export type SubscriberDial = {
     request: StreamSubscriberWakeRequest,
   ): Promise<{
     checkpointOffset: number;
-    sink: RetainedProcessEventBatch;
+    sink: RetainedProcessEventBatch<StreamWakeEventBatch>;
     subscriber?: unknown;
     getRuntimeState?: GetProcessorRuntimeState;
     ping?: StreamSubscriberPing;
@@ -895,9 +907,13 @@ export class StreamSubscribers {
     // A parked row must not keep driving the alarm: the park was preceded by
     // a nack whose (now past) next_attempt_at would otherwise be re-armed by
     // every onAlarm forever — a permanent alarm hot loop per parked
-    // subscription. Clear the backoff, keep the cursor (the park fact carries
-    // the attempts + error for the audit trail).
-    if (row !== undefined) this.#hooks.store.ack(subscriptionKey, row.ackedOffset);
+    // subscription. Clear the retry schedule but keep the cursor AND the
+    // failure evidence: the row mirrors the park fact's attempts + error so
+    // runtime state (and the sidebar warning sheet) can say WHY it parked
+    // without digging the fact back out of the event log.
+    if (row !== undefined) {
+      this.#hooks.store.park(subscriptionKey, { attempt: attempts, error: errorMessage(error) });
+    }
     this.#consecutiveSkips.delete(subscriptionKey);
     this.#batchLimits.delete(subscriptionKey);
   }
@@ -1057,6 +1073,8 @@ export class StreamSubscribers {
     let initialBatchPending = true;
     let draining = false;
     let open = true;
+    const pendingDeliveries = new Set<symbol>();
+    let connection!: Connection;
 
     const pump = async () => {
       if (draining) return;
@@ -1118,45 +1136,59 @@ export class StreamSubscribers {
               "Cannot deliver stream batch before stream coordinates are initialized.",
             );
           }
-          // Wake-lane batches have their results pulled anyway (corpse
-          // detection), so the settle doubles as a free commit→consumed
-          // sample on the stream's own clock. Ephemeral results stay
-          // unpulled: no onSettled ever fires there (see subscriber-sinks.ts).
+          // A wake batch reports completion through an independent one-shot
+          // capability. Its sink result is disposed unpulled, exactly like an
+          // ephemeral batch, so a processor that appends back to this stream
+          // cannot close a cyclic actor-drain dependency through its return
+          // value.
           const newestCreatedAtMs =
             events.length === 0 ? undefined : Date.parse(events.at(-1)!.createdAt);
-          sink(
-            {
-              projectId: currentState.projectId,
-              path: currentState.path,
-              events,
-              scannedAfterOffset,
-              scannedThroughOffset: cursor,
-              streamMaxOffset: currentState.maxOffset,
-              // Read in the same synchronous block as streamMaxOffset, so the
-              // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
-              state: currentState,
-            } satisfies StreamEventBatch,
-            {
-              onSettled: (outcome) => {
-                if (
-                  outcome === "ok" &&
-                  newestCreatedAtMs !== undefined &&
-                  Number.isFinite(newestCreatedAtMs)
-                ) {
-                  const settledAtMs = this.#hooks.now();
-                  connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+          const batch = {
+            projectId: currentState.projectId,
+            path: currentState.path,
+            events,
+            scannedAfterOffset,
+            scannedThroughOffset: cursor,
+            streamMaxOffset: currentState.maxOffset,
+            // Read in the same synchronous block as streamMaxOffset, so the
+            // two always correspond (state-at-streamMaxOffset; see rpc-types.ts).
+            state: currentState,
+          } satisfies StreamEventBatch;
+          if (args.subscriptionType === "configured") {
+            const delivery = Symbol("stream wake delivery");
+            pendingDeliveries.add(delivery);
+            // Publish the pending state BEFORE dispatch. A local sink can
+            // settle synchronously, and debug state must still observe the
+            // real pending → settled transition.
+            this.#hooks.runtimeChanged();
+            args.sink({
+              ...batch,
+              settleDelivery: (settlement) => {
+                // One callback capability belongs to one batch. Duplicates
+                // and late reports after close/replacement are harmless.
+                if (!pendingDeliveries.delete(delivery)) return;
+                if (open && this.#connections.get(subscriptionKey) === connection) {
+                  const parsed = parseWakeDeliverySettlement(settlement);
+                  if (parsed.outcome === "ok") {
+                    if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
+                      const settledAtMs = this.#hooks.now();
+                      connection.settleLatency.record(settledAtMs - newestCreatedAtMs, settledAtMs);
+                    }
+                  } else {
+                    // Fence on the exact connection above: a late failure
+                    // from a replaced sink must never close its successor.
+                    this.onDurableDeliveryError(subscriptionKey, parsed.error);
+                  }
                 }
-                // `hasPendingDelivery` changed on every durable settle,
-                // including empty/state-only and rejected deliveries that
-                // record no latency sample.
+                // Includes empty/state-only, rejected, stale, and duplicate-
+                // fenced deliveries: pending state changed for the first
+                // terminal report even when no latency sample was recorded.
                 this.#hooks.runtimeChanged();
               },
-            },
-          );
-          // The durable wrapper increments its pending count synchronously;
-          // publish that transition before its eventual settle callback
-          // publishes the return to idle.
-          this.#hooks.runtimeChanged();
+            } satisfies StreamWakeEventBatch);
+          } else {
+            args.sink(batch);
+          }
           await Promise.resolve();
         }
       } finally {
@@ -1164,7 +1196,7 @@ export class StreamSubscribers {
       }
     };
 
-    const connection: Connection = {
+    connection = {
       subscriptionType,
       startedAt: new Date(this.#hooks.now()).toISOString(),
       ...(args.presence === undefined ? {} : { subscriber: args.presence }),
@@ -1180,10 +1212,11 @@ export class StreamSubscribers {
       pingRtt: new LatencyRing(),
       wake: () => void pump(),
       isLive: () => open,
-      hasPendingDelivery: () => (sink.pendingDeliveries?.() ?? 0) > 0,
+      hasPendingDelivery: () => pendingDeliveries.size > 0,
       close: (reason) => {
         if (!open) return;
         open = false;
+        pendingDeliveries.clear();
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
           this.#hooks.runtimeChanged();
@@ -1218,7 +1251,20 @@ export class StreamSubscribers {
         ...(args.presence === undefined ? {} : { subscriber: args.presence }),
       },
     });
-    sink.onRpcBroken?.(() => connection.close("rpc-broken"));
+    sink.onRpcBroken?.((error) => {
+      if (subscriptionType === "configured") {
+        // A disposed predecessor can report its transport break late. Fence
+        // the hint to this exact connection so it cannot nack and close the
+        // replacement currently stored under the same subscription key.
+        if (this.#connections.get(subscriptionKey) === connection) {
+          this.#onDurableSinkFailure(subscriptionKey, error, "rpc-broken");
+        }
+      } else {
+        // Session-scoped ephemerals have no durable cursor to nack or retry;
+        // disconnecting forgets them exactly as their ownership contract says.
+        connection.close("rpc-broken");
+      }
+    });
     connection.wake();
     return connection;
   }
@@ -1233,20 +1279,31 @@ export class StreamSubscribers {
    * see #poke) and parks at the same threshold as every other lane.
    */
   onDurableDeliveryError(subscriptionKey: string, error: unknown): void {
+    this.#onDurableSinkFailure(subscriptionKey, error, "delivery-failed");
+  }
+
+  #onDurableSinkFailure(
+    subscriptionKey: string,
+    error: unknown,
+    reason: Extract<StreamSubscriberDisconnectReason, "rpc-broken" | "delivery-failed">,
+  ): void {
     const connection = this.#connections.get(subscriptionKey);
     if (connection === undefined) return;
-    const details = { subscriptionKey, error };
-    if (isDurableObjectLifecycleError(error)) {
+    const details = { subscriptionKey, reason, error };
+    if (reason === "rpc-broken" || isDurableObjectLifecycleError(error)) {
       // A killed, evicted, deployed, or overloaded subscriber is a modelled
-      // availability transition: the durable cursor stays put and the
-      // bounded backoff below reconnects it. Keep that expected transition
-      // out of the error signal while retaining an observable warning.
+      // availability transition. `onRpcBroken` is itself the transport's
+      // authoritative availability signal even when its Error lost workerd's
+      // lifecycle flags crossing an RPC boundary. The durable cursor stays
+      // put and the bounded backoff below reconnects it; keep that expected
+      // transition out of the error signal while retaining an observable
+      // warning.
       console.warn("stream durable sink unavailable; backing off before re-poke", details);
     } else {
       console.error("stream durable sink delivery failed; backing off before re-poke", details);
     }
     this.#onDeliveryFailure(subscriptionKey, error);
-    connection.close("delivery-failed");
+    connection.close(reason);
   }
 
   // ===========================================================================
@@ -1272,8 +1329,8 @@ export class StreamSubscribers {
    * runtime LiveState observer attaching triggers it. A stream with no debug
    * observer is never pinged. Purely
    * observational: a failed/garbage/slow ping drops the sample and NOTHING
-   * else (liveness stays owned by result-pulling and onRpcBroken); it never
-   * wakes pumps and never re-arms the idle timer.
+   * else (liveness stays owned by explicit delivery settlement and
+   * onRpcBroken); it never wakes pumps and never re-arms the idle timer.
    */
   samplePingsSoon(): void {
     const now = this.#hooks.now();
@@ -1510,4 +1567,34 @@ function selectorMatchesSafely(selector: CompiledEventSelector, event: StreamEve
 
 function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)) || "unknown error";
+}
+
+function parseWakeDeliverySettlement(
+  value: StreamWakeDeliverySettlement,
+): { outcome: "ok" } | { outcome: "error"; error: Error } {
+  const candidate = value as Partial<StreamWakeDeliverySettlement> | null;
+  if (candidate?.outcome === "ok") return { outcome: "ok" };
+  if (candidate?.outcome !== "error" || !("error" in candidate)) {
+    return {
+      outcome: "error",
+      error: new Error("wake delivery reported an invalid settlement"),
+    };
+  }
+  const serialized = candidate.error as Partial<StreamWakeDeliveryError> | null;
+  if (typeof serialized?.name !== "string" || typeof serialized.message !== "string") {
+    return {
+      outcome: "error",
+      error: new Error("wake delivery reported an invalid failure"),
+    };
+  }
+  const error = new Error(serialized.message);
+  error.name = serialized.name;
+  return {
+    outcome: "error",
+    error: Object.assign(error, {
+      ...(serialized.durableObjectReset === true ? { durableObjectReset: true } : {}),
+      ...(serialized.overloaded === true ? { overloaded: true } : {}),
+      ...(serialized.retryable === true ? { retryable: true } : {}),
+    }),
+  };
 }

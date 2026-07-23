@@ -214,7 +214,8 @@ GitHub connects as a **GitHub App installation** (deep-link to
 `installation_id`; no code exchange, no user token):
 
 - **Connect**: the callback claims the installation — connection named
-  `install-<id>`, empty material in the connection secret plus the
+  `install-<id>-<fence>` so delayed cleanup from an older ownership generation
+  cannot brick a later winner, empty material in the connection secret plus the
   `github-app-installation` refresh strategy (App id + installation id are
   public strategy config; the App private key resolves from
   `APP_CONFIG_INTEGRATIONS__GITHUB` at mint time), `github/connected` on the

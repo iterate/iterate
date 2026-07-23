@@ -276,32 +276,18 @@ export const ProjectProcessorContract = defineProcessorContract({
         headers: z.record(z.string(), z.string()).meta({
           description: "All headers as they would be forwarded, placeholder form.",
         }),
-        bodySha256: z.string().nullable().default(null).meta({
-          description: "Hex SHA-256 of the body bytes; null for bodyless requests.",
-        }),
-        bodyPreview: z.string().nullable().default(null).meta({
-          description: "First ~2KB of a UTF-8 body, for the approval UI only (NOT signed).",
-        }),
         body: z
-          .discriminatedUnion("encoding", [
-            z.strictObject({
-              encoding: z.literal("utf8"),
-              content: z.string(),
-              originalByteLength: z.number().int().nonnegative().optional(),
-              truncated: z.boolean().default(false),
-            }),
-            z.strictObject({
-              encoding: z.literal("base64"),
-              content: z.string(),
-              originalByteLength: z.number().int().nonnegative().optional(),
-              truncated: z.boolean().default(false),
-            }),
-          ])
-          .nullable()
-          .optional()
+          .object({
+            encoding: z.enum(["utf8", "base64"]),
+            content: z.string(),
+            originalByteLength: z.number().int().nonnegative().optional(),
+            sha256: z.string(),
+            truncated: z.boolean().default(false),
+          })
+          .nullish()
           .meta({
             description:
-              "A bounded inspection prefix of the held body in placeholder form. The signature binds the complete bytes by bodySha256.",
+              "A bounded inspection prefix in placeholder form plus the complete body's SHA-256.",
           }),
         secretPaths: z.array(z.string()).default([]).meta({
           description: 'Secret paths the request references — the "spends this secret" headline.',

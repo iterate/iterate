@@ -14,7 +14,7 @@
 //  - recovery revival: a runner that died owing work is revived by the alarm,
 //    and on a two-processor DO only the runner that owes work revives.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/processors";
 import { StreamProcessor } from "iterate/processors";
@@ -25,6 +25,10 @@ import {
   type StreamProcessorRegistry,
 } from "iterate/processors/cloudflare";
 import { STREAM_PROCESSOR_REVIVED_EVENT_TYPE } from "iterate/processors";
+import type {
+  StreamSubscriberWakeResponse,
+  StreamWakeDeliverySettlement,
+} from "iterate/processors";
 
 const HOME = "/tests/registry";
 const REQUESTED = "events.iterate.com/registry-test/requested";
@@ -190,7 +194,7 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
       const woken = await harness.wake(slug);
       const events = stream.events.filter((event) => event.offset > woken.checkpointOffset);
       if (events.length > 0) {
-        await woken.sink({
+        const settlement = await deliverWakeBatch(woken, {
           projectId: null,
           path: HOME,
           events,
@@ -199,6 +203,9 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
           streamMaxOffset: head(),
           state: null,
         });
+        if (settlement.outcome === "error") {
+          throw new Error(settlement.error.message);
+        }
       }
       await settle();
       return woken;
@@ -220,6 +227,21 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
 }
 
 const hang = () => new Promise<never>(() => {});
+
+async function deliverWakeBatch(
+  woken: StreamSubscriberWakeResponse,
+  batch: Omit<Parameters<StreamSubscriberWakeResponse["sink"]>[0], "settleDelivery">,
+): Promise<StreamWakeDeliverySettlement> {
+  let settle!: (value: StreamWakeDeliverySettlement) => void;
+  const settled = new Promise<StreamWakeDeliverySettlement>((resolve) => {
+    settle = resolve;
+  });
+  woken.sink({
+    ...batch,
+    settleDelivery: (value) => settle(value),
+  });
+  return await settled;
+}
 
 /** The processorSlugs of every journaled revival fact, sorted — revivals share
  * the ONE core type, so the payload's slug is what identifies the runner. */
@@ -427,16 +449,19 @@ describe("wakeStreamSubscriber", () => {
     };
     expect(subscriber.processor.announcement.slug).toBe("alpha-proc");
 
-    // The returned sink IS the runner's: driving it advances durable progress.
-    await woken.sink({
-      projectId: null,
-      path: HOME,
-      events: h.stream.events.slice(),
-      scannedAfterOffset: woken.checkpointOffset,
-      scannedThroughOffset: h.head(),
-      streamMaxOffset: h.head(),
-      state: null,
-    });
+    // The returned sink is one-way. Its independent settlement reports when
+    // the runner has durably advanced progress.
+    await expect(
+      deliverWakeBatch(woken, {
+        projectId: null,
+        path: HOME,
+        events: h.stream.events.slice(),
+        scannedAfterOffset: woken.checkpointOffset,
+        scannedThroughOffset: h.head(),
+        streamMaxOffset: h.head(),
+        state: null,
+      }),
+    ).resolves.toEqual({ outcome: "ok" });
     const runtime = await woken.getRuntimeState!();
     expect(runtime.snapshot).toEqual({ offset: 1, state: { ids: ["a"] } });
     // The frame commit notified the registry's observer, which reassembled
@@ -446,6 +471,84 @@ describe("wakeStreamSubscriber", () => {
     // A fresh wake resumes from the durably committed cursor.
     const rewoken = await h.wake("alpha-proc");
     expect(rewoken.checkpointOffset).toBe(1);
+  });
+
+  it("returns the sink call before blocking processor work and settles independently", async () => {
+    const h = makeHarness();
+    let releaseBlocker!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    h.hooks.alpha.onProcess = (args) => {
+      if (args.event?.type === REQUESTED) {
+        args.blockProcessorWhile(() => blocker);
+      }
+    };
+    await h.stream.append({ type: REQUESTED, payload: { id: "slow" } });
+    const woken = await h.wake("alpha-proc");
+    let settlement: StreamWakeDeliverySettlement | undefined;
+
+    const returned = woken.sink({
+      projectId: null,
+      path: HOME,
+      events: h.stream.events.slice(),
+      scannedAfterOffset: 0,
+      scannedThroughOffset: h.head(),
+      streamMaxOffset: h.head(),
+      state: null,
+      settleDelivery: (value) => {
+        settlement = value;
+      },
+    });
+
+    expect(returned).toBeUndefined();
+    await h.settle();
+    expect(settlement).toBeUndefined();
+
+    releaseBlocker();
+    await expect.poll(() => settlement).toEqual({ outcome: "ok" });
+    await expect(woken.getRuntimeState!()).resolves.toMatchObject({
+      snapshot: { offset: 1 },
+    });
+  });
+
+  it("reports processor failures with lifecycle classification intact", async () => {
+    const h = makeHarness();
+    const lifecycleReset = Object.assign(new Error("subscriber incarnation reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    h.hooks.alpha.onProcess = (args) => {
+      if (args.event?.type === REQUESTED) {
+        args.blockProcessorWhile(() => Promise.reject(lifecycleReset));
+      }
+    };
+    await h.stream.append({ type: REQUESTED, payload: { id: "reset" } });
+    const woken = await h.wake("alpha-proc");
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        deliverWakeBatch(woken, {
+          projectId: null,
+          path: HOME,
+          events: h.stream.events.slice(),
+          scannedAfterOffset: 0,
+          scannedThroughOffset: h.head(),
+          streamMaxOffset: h.head(),
+          state: null,
+        }),
+      ).resolves.toEqual({
+        outcome: "error",
+        error: {
+          name: "Error",
+          message: "subscriber incarnation reset",
+          durableObjectReset: true,
+          retryable: true,
+        },
+      });
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it("rejects a wake whose stream coordinate does not match the registry's own (isolation fence)", async () => {

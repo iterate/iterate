@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
@@ -30,7 +29,6 @@ export function AccountChooser({
   refreshCurrentPage: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [showLoginActions, setShowLoginActions] = useState(false);
 
   const deviceSessionsQuery = useQuery({
     queryKey: DEVICE_SESSIONS_QUERY_KEY,
@@ -83,7 +81,6 @@ export function AccountChooser({
               <AccountRow
                 key={token ?? account.user.id}
                 user={account.user}
-                isCurrent={isCurrent}
                 isDisabled={isAccountActionPending}
                 isBusy={
                   token !== null &&
@@ -115,28 +112,7 @@ export function AccountChooser({
         )}
       </div>
 
-      {showLoginActions ? (
-        <div className="space-y-3 pt-2">
-          {children}
-          <Button
-            className="w-full"
-            variant="ghost"
-            disabled={isAccountActionPending}
-            onClick={() => setShowLoginActions(false)}
-          >
-            Back to accounts
-          </Button>
-        </div>
-      ) : (
-        <Button
-          className="w-full"
-          variant="outline"
-          disabled={isAccountActionPending}
-          onClick={() => setShowLoginActions(true)}
-        >
-          Log in as someone else
-        </Button>
-      )}
+      <div className="space-y-3 pt-2">{children}</div>
     </div>
   );
 }
@@ -173,7 +149,6 @@ function AccountStateMessage({ children }: { children: ReactNode }) {
 
 function AccountRow({
   user,
-  isCurrent,
   isDisabled,
   isBusy,
   isRevoking,
@@ -181,7 +156,6 @@ function AccountRow({
   onSignOut,
 }: {
   user: LoginUser;
-  isCurrent: boolean;
   isDisabled: boolean;
   isBusy: boolean;
   isRevoking: boolean;
@@ -206,11 +180,6 @@ function AccountRow({
           <span className="block truncate text-sm font-medium">{user.name ?? "User"}</span>
           <span className="block truncate text-xs text-muted-foreground">{user.email}</span>
         </button>
-        {isCurrent ? (
-          <span className="shrink-0 rounded-md bg-foreground px-2 py-1 text-xs font-medium text-background">
-            Current
-          </span>
-        ) : null}
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:mt-0 sm:flex sm:shrink-0 sm:items-center">
         <Button size="sm" className="w-full" disabled={isDisabled} onClick={onContinue}>

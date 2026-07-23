@@ -15,7 +15,7 @@ test("a phone-generated key signs a message the OS's real verifier accepts", asy
       method: "POST",
       url: "https://api.stripe.com/v1/transfers",
       headers: {},
-      bodySha256: null,
+      body: null,
       secretPaths: ["/secrets/stripe/prod"],
     },
     decision: "granted",

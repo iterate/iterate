@@ -183,4 +183,38 @@ describe("executeWorkerBuild", () => {
     createWorker.mockRejectedValueOnce(transportFailure);
     await expect(execute({ "worker.ts": "export default {};" })).rejects.toBe(transportFailure);
   });
+
+  it.each([
+    "Failed to parse package.json: Unexpected token",
+    "Could not resolve version for example@next",
+    "Version 9.9.9 not found for example",
+    "Failed to install iterate: Failed to fetch tarball: 404 Not Found",
+  ])("rejects unusable output after a dependency-install warning: %s", async (warning) => {
+    createWorker.mockResolvedValueOnce({
+      result: {
+        mainModule: "bundle.js",
+        modules: { "bundle.js": 'export * from "iterate/sdk";' },
+        warnings: [warning],
+      },
+    });
+
+    await expect(execute({ "worker.ts": 'export * from "iterate/sdk";' })).rejects.toMatchObject({
+      message: warning,
+      name: "WorkerBuildFailedError",
+    });
+  });
+
+  it("preserves ordinary compiler warnings on a usable build", async () => {
+    createWorker.mockResolvedValueOnce({
+      result: {
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "export default {};" },
+        warnings: ["This comparison is always false"],
+      },
+    });
+
+    await expect(execute({ "worker.ts": "export default {};" })).resolves.toMatchObject({
+      warnings: ["This comparison is always false"],
+    });
+  });
 });

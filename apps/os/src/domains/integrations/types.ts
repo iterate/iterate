@@ -151,4 +151,10 @@ export type IntegrationConnectionListEntry =
  * human-readable `error`. */
 export type CompleteConnectResult =
   | { callbackUrl: string | null; ok: true }
+  | {
+      callbackUrl: string | null;
+      error: "github_installation_already_claimed";
+      githubStealState: string;
+      ok: false;
+    }
   | { callbackUrl: string | null; error: string; ok: false };

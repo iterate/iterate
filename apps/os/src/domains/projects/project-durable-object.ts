@@ -417,9 +417,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
       method: request.method,
       url: request.url,
       headers: Object.fromEntries(request.headers),
-      bodySha256: bodyBytes === null ? null : await sha256Hex(bodyBytes),
-      bodyPreview: bodyBytes === null ? null : utf8Preview(bodyBytes),
-      body: bodyBytes === null ? null : approvalRequestBody(bodyBytes),
+      body: bodyBytes === null ? null : approvalRequestBody(bodyBytes, await sha256Hex(bodyBytes)),
       secretPaths: input.secretPaths,
       ruleKey: rule.ruleKey,
       ruleDescription: rule.description,
@@ -782,13 +780,4 @@ function approvalGateResponse(body: {
   ruleKey: string;
 }): Response {
   return Response.json({ error: body.code, ...body }, { status: 403 });
-}
-
-/** First 2KB of a body as UTF-8 for the approval UI; null when it does not decode. */
-function utf8Preview(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(0, 2048));
-  } catch {
-    return null;
-  }
 }

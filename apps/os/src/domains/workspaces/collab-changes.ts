@@ -24,17 +24,36 @@ type CollabChangeSegment =
   | { clientId: string; createdAt?: number; from: number; kind: "inserted"; to: number }
   | { at: number; clientId: string; createdAt?: number; kind: "deleted"; text: string };
 
-type InsertedSpan = { clientId: string; createdAt?: number; from: number; to: number };
+export type InsertedSpan = { clientId: string; createdAt?: number; from: number; to: number };
+
+/** The fold's running state, exposed so a CLIENT can run the SAME fold
+ * incrementally per keystroke (instant marks that already look exactly like
+ * the server's next answer — no consolidation "snap"). */
+export type AttributionState = {
+  deleted: { at: number; clientId: string; createdAt?: number; text: string }[];
+  doc: Text;
+  inserted: InsertedSpan[];
+};
 
 export function attributedChanges(
   base: Text,
   ops: { changes: unknown; clientId: string; createdAt?: number }[],
 ): CollabChangeSegment[] {
-  let doc = base;
-  let inserted: InsertedSpan[] = [];
-  let deleted: { at: number; clientId: string; createdAt?: number; text: string }[] = [];
+  let state: AttributionState = { deleted: [], doc: base, inserted: [] };
+  for (const op of ops) state = foldAttribution(state, op);
+  return attributionSegments(state);
+}
 
-  for (const op of ops) {
+/** ONE op folded over the state — the loop body of {@link attributedChanges},
+ * pure and reusable per keystroke. */
+export function foldAttribution(
+  state: AttributionState,
+  op: { changes: unknown; clientId: string; createdAt?: number },
+): AttributionState {
+  const doc = state.doc;
+  let inserted = state.inserted;
+  let deleted = state.deleted;
+  {
     const changes = ChangeSet.fromJSON(op.changes);
     const ranges: { fromA: number; fromB: number; toA: number; toB: number }[] = [];
     changes.iterChanges((fromA, toA, fromB, toB) => ranges.push({ fromA, fromB, toA, toB }));
@@ -93,9 +112,13 @@ export function attributedChanges(
         });
       }
     });
-    doc = changes.apply(doc);
+    return { deleted, doc: changes.apply(doc), inserted };
   }
+}
 
+/** Render the state as ordered segments (coalesced spans, non-empty marks). */
+export function attributionSegments(state: AttributionState): CollabChangeSegment[] {
+  const { deleted, inserted } = state;
   const position = (segment: CollabChangeSegment) =>
     segment.kind === "inserted" ? segment.from : segment.at;
   return [

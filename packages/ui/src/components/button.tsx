@@ -46,11 +46,15 @@ function Button({
   size = "default",
   ...props
 }: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+  // Icon-only buttons have no visible text, so give them hover text from
+  // their aria-label unless the caller passes an explicit title.
+  const title = props.title || (size?.startsWith("icon") ? props["aria-label"] : undefined);
   return (
     <ButtonPrimitive
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
+      title={title}
     />
   );
 }
