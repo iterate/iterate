@@ -121,6 +121,49 @@ The retry resets the accepted streak to 0/25. Merging current `origin/main` at
 immutable head, so the next accepted proof starts from the merged corrective
 head with the same seven-minute ceiling.
 
+### Round 15 Secret create storage reset
+
+The automatic preview on exact head
+`52bfeb9c7d9857d2612ecbcdff294484651f4ba2` was clean in 324 seconds. PostHog
+recorded 310 preview and 3,106 unit outcomes with zero failures or retries. It
+is baseline evidence rather than a counted marathon iteration because it was
+not dispatched into the immutable proof ledger.
+
+The first ledgered run (`bmd2z9ncsd`, attempt `hs0vk1fzrm`) completed in 252
+seconds but is rejected. `waitrose-session strategy: username/password secret
+mints on first use, re-mints on 401, session works on the API` passed only on
+Vitest's second attempt after Cloudflare returned `Durable Object storage
+operation exceeded timeout which caused object to be reset.` The failure was
+therefore unrelated to the seven-minute ceiling.
+
+The raw Vitest artifact and exact-version Cloudflare events agree on the
+boundary. Project `prj_17684080138441f18be4338ddcb1be0e` was created and
+described successfully; its following `Secret.create` ran from
+`14:22:59.842Z` to `14:23:34.111Z` and failed after 34.269 seconds. The test
+retry addressed the same project and secret, and the repeated create completed
+in 449 milliseconds. At the same instant, a different project recorded a
+36.611-second project-api-key Secret seed reset. The paired stalls rule out a
+Waitrose assertion or credential failure and localize the incident to Secret
+Durable Object storage availability.
+
+PostHog supplies the recurrence bound. The named test ran 224 times in the
+available 30-day window: seven runs retried (3.12%) and two failed after their
+retry. Its prior errors include stream wait and Durable Object storage resets.
+The same storage-reset family reached unrelated stream lifecycle, dynamic
+worker, remote-app, and browser tests, so changing this test's timeout or
+quarantining it would only move the symptom.
+
+`Secret.create` already documents and implements the necessary replay
+semantics: the birth append is idempotency-keyed, an identical-policy duplicate
+keeps the first material, and a different egress, refresh, or visibility
+policy still fails. The missing piece was the outer Secret RPC boundary. It now
+uses the existing availability helper for exactly one observable replay while
+workerd's lifecycle flags are still present. Application rejections are never
+replayed, the first reset is logged with project and path context, and a second
+failure remains authoritative. Focused tests cover both lifecycle recovery and
+the application-error exclusion; the full OS unit suite and typecheck pass.
+The rejected run resets the consecutive counter to 0/25.
+
 ## Round 14 (2026-07-23, post-#2275)
 
 PR #2275 made preview worker builds fail closed when the dependency installer

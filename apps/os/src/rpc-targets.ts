@@ -2357,7 +2357,11 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
    * a create with a DIFFERENT egress/refresh/visibility policy fails loudly.
    */
   async create(input: SecretCreateInput): Promise<SecretRpcTarget> {
-    await this.durableObjectStub.create(input);
+    await retryLoggedIdempotentOperation({
+      context: { path: this.props.path, projectId: this.props.projectId },
+      message: "secret create retrying after Durable Object reset",
+      operation: () => Promise.resolve(this.durableObjectStub.create(input)),
+    });
     return this;
   }
 
