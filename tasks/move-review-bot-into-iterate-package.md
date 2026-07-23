@@ -1,9 +1,9 @@
-status: ready-for-review
+status: fixing-production-repro
 size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: The implementation and config migration are complete. Local checks, package publication, and the full preview deployment/E2E suite pass; config must switch its temporary branch package URL back to `@main` after this PR merges.
+Status: End-to-end testing exposed an invalid `:` in the packaged linter's durable worker key and a stale-subscription migration hazard. A production-derived regression now covers both; the implementation fix and renewed verification are in progress.
 
 ## Plan
 
@@ -15,6 +15,7 @@ Status: The implementation and config migration are complete. Local checks, pack
 - [x] Update the seeded config template and generated seed to import/register the package app; keep unrelated app routing and schedules out of scope. *The real template and generated file now contain the declaration.*
 - [x] Update `iterate/config` from `main` to the same declaration and remove its local review-bot source. *The clean main checkout imports the package and deletes `apps/review-bot`.*
 - [x] Run focused tests/typechecks plus config typecheck; record any production-shaped verification that cannot run locally. *Full monorepo typecheck, lint, format check, and tests pass; 29 focused OS tests, the package build, and the preview-10 deployment/E2E suite pass.*
+- [ ] Repair the production-derived Misha failure and ensure an existing v1 subscription can migrate. *Regression added for the runtime worker-ref schema and subscription idempotency revision; implementation fix pending.*
 
 ## Approved decisions
 
@@ -37,3 +38,4 @@ Status: The implementation and config migration are complete. Local checks, pack
 - 2026-07-23: Review rejected the generic project-app registry as premature. Restored the SDK's explicit `processEvent` seam and made both workers call their private configured linter directly.
 - 2026-07-23: Replaced iterate/iterate#2259 with #2277 after pkg.pr.new lost the reopened PR's workflow mapping. Carried the resolved human review into the replacement PR and updated config#18 to consume its branch artifact.
 - 2026-07-23: Preview-10 deployed the exact implementation SHA for all five apps; every E2E lane passed, including OS Playwright and 47 OS Vitest files.
+- 2026-07-23: Misha's end-to-end trial exposed `app-review-bot:<connection>` being rejected by the runtime durable-worker-key schema. The existing v1 config event would also conflict with a changed replacement event, so the production-derived regression covers both failures.

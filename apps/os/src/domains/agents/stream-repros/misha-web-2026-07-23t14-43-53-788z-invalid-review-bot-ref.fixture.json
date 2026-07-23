@@ -1,0 +1,7 @@
+{
+  "connection": "install-114628444-bjinlk2pdykc",
+  "existingSubscription": {
+    "durableWorkerKey": "app-review-bot:install-114628444-bjinlk2pdykc",
+    "idempotencyKey": "review-bot/subscription:v1"
+  }
+}
