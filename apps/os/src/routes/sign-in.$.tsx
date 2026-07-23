@@ -42,12 +42,12 @@ function SignInRoute() {
 
   function startEmailSignIn() {
     setRedirectingTo("email");
-    signIn({ returnTo, loginHint: "email" });
+    signIn({ returnTo, loginHint: "email", prompt: "select_account" });
   }
 
   function startGoogleSignIn() {
     setRedirectingTo("google");
-    signIn({ returnTo, loginHint: "google" });
+    signIn({ returnTo, loginHint: "google", prompt: "select_account" });
   }
 
   return (

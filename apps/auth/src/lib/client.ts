@@ -19,6 +19,8 @@ type LoginOptions = {
   returnTo?: string;
   /** Preferred sign-in method for the auth server login page. */
   loginHint?: "email" | "google";
+  /** Require the authorization server to let the user choose an account. */
+  prompt?: "select_account";
 };
 
 type RefreshOptions = {
@@ -83,6 +85,9 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
       }
       if (options.loginHint) {
         url.searchParams.set("login_hint", options.loginHint);
+      }
+      if (options.prompt) {
+        url.searchParams.set("prompt", options.prompt);
       }
       window.location.href = url.toString();
     },
