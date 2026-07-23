@@ -5,6 +5,7 @@ import { EditorView } from "@codemirror/view";
 import { CollabConnection, peerExtension, setCollabDisplayName } from "./collab-client.ts";
 import { whoami } from "./use-checkout.ts";
 import { redlineExtension } from "./collab-redline.ts";
+import { remoteCursorsExtension } from "./collab-cursors.ts";
 import type { CollabEditorApi } from "./collab-editor-api.ts";
 
 // The PROMISE is the memo: a second editor mounting mid-lookup awaits the
@@ -106,6 +107,9 @@ export function useCollabEditor(input: {
           extensions,
           liveReflector,
           peerExtension(connection, version),
+          // Cursors are presence, not tracking — they stay on when the
+          // redline toggle is off.
+          remoteCursorsExtension(connection),
           redlineLayer.of(redlines),
         ],
       });

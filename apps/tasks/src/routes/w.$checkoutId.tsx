@@ -105,12 +105,14 @@ function WorkspaceBoardPage() {
     searchTaskRef.current = search.task;
     draftPathRef.current = draftPath;
   });
-  // Warm the editor stack while the board renders: the CM6 chunk and the
-  // whoami identity round trip come off the first sheet-open's critical path.
+  // Warm the editor + preview stacks while the board renders: the CM6 and
+  // markdown chunks and the whoami identity round trip come off the first
+  // sheet-open's critical path.
   useEffect(() => {
     void import("../lib/use-collab-editor.ts").then(
       (module) => void module.ensureCollabIdentity(),
     );
+    void import("../components/workspace-task-preview.tsx");
   }, []);
   /** Prune expired claims and answer whether a path is spoken for. */
   const isTaken = useCallback((path: string): boolean => {

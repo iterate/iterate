@@ -215,7 +215,7 @@ function firstHeadingTitle(body: string): string | undefined {
   return match?.[1]?.trim();
 }
 
-export function parseMarkdownFrontmatter(content: string): {
+function parseMarkdownFrontmatter(content: string): {
   body: string;
   document: Document;
   exists: boolean;

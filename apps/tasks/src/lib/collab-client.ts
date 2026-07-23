@@ -8,7 +8,12 @@ import {
 import { ChangeSet, type Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { withProject, withProjectOnce } from "./use-checkout.ts";
-import type { CollabChanges, CollabWaitResult, TasksWorkspace } from "./tasks-api.ts";
+import type {
+  CollabChanges,
+  CollabPresence,
+  CollabWaitResult,
+  TasksWorkspace,
+} from "./tasks-api.ts";
 
 /**
  * The browser's end of the no-Yjs collab lane (PoC): @codemirror/collab's
@@ -48,6 +53,26 @@ export class CollabConnection {
     snapshot: { ackedSeq: number; content: string; epoch: string; version: number },
     unsynced: string | null,
   ) => void = () => {};
+  /** Set by the cursor layer: everyone's latest cursors (self included —
+   * the layer filters). The pull loop keeps `presenceGeneration` current. */
+  onPresence: ((clients: CollabPresence["clients"]) => void) | null = null;
+  presenceGeneration = 0;
+  /** The raw ops of the delivery currently being dispatched, in canonical
+   * server order with true clientIds. receiveUpdates builds a finished
+   * Transaction (no annotation can be added), so the redline fold reads the
+   * delivery through this side channel DURING the dispatch — set just
+   * before, consumed once by takeDeliveredOps(), cleared after. */
+  #deliveredOps: { changes: unknown; clientId: string }[] | null = null;
+
+  stageDeliveredOps(ops: { changes: unknown; clientId: string }[]): void {
+    this.#deliveredOps = ops;
+  }
+
+  takeDeliveredOps(): { changes: unknown; clientId: string }[] | null {
+    const ops = this.#deliveredOps;
+    this.#deliveredOps = null;
+    return ops;
+  }
 
   constructor(
     readonly checkoutId: string,
@@ -105,9 +130,28 @@ export class CollabConnection {
   }
 
   async wait(afterVersion: number): Promise<CollabWaitResult> {
-    return withProject((project) =>
-      this.#lane(project).wait(this.filePath, this.epoch, afterVersion, this.clientId),
+    const result = await withProject((project) =>
+      this.#lane(project).wait(
+        this.filePath,
+        this.epoch,
+        afterVersion,
+        this.clientId,
+        this.presenceGeneration,
+      ),
     );
+    if (result.status === "ops" && result.presence !== undefined) {
+      this.presenceGeneration = result.presence.generation;
+      this.onPresence?.(result.presence.clients);
+    }
+    return result;
+  }
+
+  /** Fire-and-forget cursor announce — one quiet try on the live session
+   * (presence is decoration; a dropped update self-heals on the next move). */
+  present(selection: { anchor: number; head: number } | null): void {
+    void withProjectOnce((project) =>
+      this.#lane(project).present(this.filePath, this.clientId, selection),
+    ).catch(() => {});
   }
 
   async changes(): Promise<CollabChanges> {
@@ -229,7 +273,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               return;
             }
             if (result.ops.length === 0) continue;
-            this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
+            connection.stageDeliveredOps(result.ops);
+            try {
+              this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
+            } finally {
+              connection.takeDeliveredOps(); // drop if no layer consumed it
+            }
             if (this.recovering) {
               // History was intact after all — catching up via ops advanced
               // our base past the miss, so pushing can resume (the snapshot

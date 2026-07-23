@@ -8,6 +8,7 @@ import {
   type CollabBroadcast,
   MAX_DOC_BYTES,
   minimalSplice,
+  type CollabPresence,
   type CollabPull,
   type CollabPush,
   type CollabPushResult,
@@ -84,6 +85,12 @@ const FLUSH_IDLE_MS = 2_000;
 const FLUSH_MAX_MS = 15_000;
 const WAIT_TIMEOUT_MS = 20_000;
 const IDLE_END_MS = 5 * 60_000;
+/** Cursor moves coalesce into one waiter wake per window — ten people
+ * typing at once cost the session at most ten wakes a second, not one per
+ * keystroke per person. */
+const PRESENCE_WAKE_COALESCE_MS = 100;
+/** A cursor nobody refreshed for this long belongs to a departed client. */
+const PRESENCE_STALE_MS = 45_000;
 /** Sweeps are periodic housekeeping, not per-keystroke work. */
 const SWEEP_INTERVAL_MS = 60_000;
 /** Ops retained since the last commit; past this, pushes refuse until a
@@ -114,6 +121,11 @@ export class CollabHost {
   readonly #waiters = new Map<string, Set<() => void>>();
   readonly #flushTimers = new Map<string, { max: number; timer: ReturnType<typeof setTimeout> }>();
   readonly #lastActivity = new Map<string, number>();
+  // Ephemeral cursor presence: per-path client map + a generation the wait
+  // lane compares against, with one coalesced wake per change window.
+  readonly #presence = new Map<string, Map<string, { anchor: number; at: number; head: number }>>();
+  readonly #presenceGeneration = new Map<string, number>();
+  readonly #presenceWake = new Map<string, ReturnType<typeof setTimeout>>();
 
   readonly #onBroadcast?: (event: CollabBroadcast) => void;
 
@@ -265,11 +277,20 @@ export class CollabHost {
     epoch: string,
     afterVersion: number,
     clientId?: string,
+    afterPresence?: number,
   ): Promise<CollabPull> {
     const path = CollabHost.canonical(rawPath);
     this.#assertLive(path);
     this.#lastActivity.set(path, Date.now()); // a parked watcher IS activity
     await this.#opened(path);
+    // A client that tracks presence (afterPresence given) gets the current
+    // map attached whenever its generation moved — piggybacked on ops
+    // deliveries, or alone when only cursors moved.
+    const withPresence = (pull: CollabPull): CollabPull => {
+      if (pull.status !== "ops" || afterPresence === undefined) return pull;
+      const generation = this.#presenceGeneration.get(path) ?? 0;
+      return generation > afterPresence ? { ...pull, presence: this.#presenceFor(path) } : pull;
+    };
     // Register BEFORE the first pull: an update landing between pull and
     // registration would otherwise be silently missed for a whole timeout.
     let finish!: () => void;
@@ -288,11 +309,65 @@ export class CollabHost {
     const first = await this.#engine.pull(path, epoch, afterVersion, clientId);
     if (first.status !== "ops" || first.ops.length > 0) {
       finish(); // release OUR registration only — no spurious wake of peers
-      return first;
+      return withPresence(first);
+    }
+    if (afterPresence !== undefined && (this.#presenceGeneration.get(path) ?? 0) > afterPresence) {
+      finish(); // cursor news is already waiting — no park needed
+      return withPresence(first);
     }
     await woke;
     if (!this.isLive(path)) return { status: "ended" };
-    return this.#engine.pull(path, epoch, afterVersion, clientId);
+    return withPresence(await this.#engine.pull(path, epoch, afterVersion, clientId));
+  }
+
+  /**
+   * Announce (or clear, with null) one client's cursor. Quiet by design:
+   * presence during teardown or after a destructive end is dropped, never an
+   * error — cursors are decoration, not state.
+   */
+  present(
+    rawPath: string,
+    clientId: string,
+    selection: { anchor: number; head: number } | null,
+  ): void {
+    const path = CollabHost.canonical(rawPath);
+    if (!this.isLive(path)) return;
+    this.#lastActivity.set(path, Date.now());
+    const clients = this.#presence.get(path) ?? new Map();
+    this.#presence.set(path, clients);
+    if (selection === null) clients.delete(clientId);
+    else clients.set(clientId, { anchor: selection.anchor, at: Date.now(), head: selection.head });
+    this.#presenceGeneration.set(path, (this.#presenceGeneration.get(path) ?? 0) + 1);
+    if (!this.#presenceWake.has(path)) {
+      this.#presenceWake.set(
+        path,
+        setTimeout(() => {
+          this.#presenceWake.delete(path);
+          this.#wake(path);
+        }, PRESENCE_WAKE_COALESCE_MS),
+      );
+    }
+  }
+
+  #presenceFor(path: string): CollabPresence {
+    const clients = this.#presence.get(path);
+    const now = Date.now();
+    if (clients !== undefined) {
+      for (const [clientId, cursor] of clients) {
+        if (now - cursor.at > PRESENCE_STALE_MS) clients.delete(clientId);
+      }
+    }
+    return {
+      clients: [...(clients ?? new Map<string, { anchor: number; at: number; head: number }>())]
+        .map(([clientId, cursor]) => ({
+          anchor: cursor.anchor,
+          at: cursor.at,
+          clientId,
+          head: cursor.head,
+        }))
+        .sort((left, right) => left.clientId.localeCompare(right.clientId)),
+      generation: this.#presenceGeneration.get(path) ?? 0,
+    };
   }
 
   // -- the live-file gateway (agent RPC routes through the session) ------------
@@ -493,6 +568,11 @@ export class CollabHost {
     for (const path of (paths ?? this.livePaths()).map(CollabHost.canonical)) {
       this.#destroyed.set(path, (this.#destroyed.get(path) ?? 0) + 1);
       this.#lastActivity.delete(path);
+      this.#presence.delete(path);
+      this.#presenceGeneration.delete(path);
+      const pendingWake = this.#presenceWake.get(path);
+      if (pendingWake !== undefined) clearTimeout(pendingWake);
+      this.#presenceWake.delete(path);
       if (!this.isLive(path)) continue;
       this.#engine.discard(path);
       this.#store.endSession(path);
