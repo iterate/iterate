@@ -80,6 +80,34 @@ That run was PR acceptance evidence before the squash merge, not part of this
 post-merge consecutive proof. The round-12 counter therefore starts at 0/25 on
 this new immutable PR head.
 
+### Round 12 rejected attempt: self-alarm readback races a due alarm
+
+Run 1 on the initial proof head was clean in 281 seconds (Depot run
+`zq6s3vngt8`, attempt `sslv41jkrl`). Run 2 completed in 250 seconds but
+`stateful-worker-alarm.e2e.test.ts` failed once and passed on Vitest's single
+retry (Depot run `fgl4xv672n`, attempt `pf1mx7sj0s`). The harness rejected the
+run and reset the streak to 0/25 even though GitHub's ordinary check was green.
+
+The failing assertion expected `armSelf(3_000)` to return an armed timestamp
+but received `null`. This was a test race, not a missing alarm: the worker
+computes the due time before `ctx.storage.setAlarm` crosses the facet, project
+itx, and outer `StatefulWorkerDurableObject`; its following
+`ctx.storage.getAlarm` is another traversal. Cloudflare traces show the
+self-arm invocation already in flight by `04:09:16.843Z`, while the outer
+Durable Object did not receive `setAlarm` until `04:09:19.318Z`. About 2.5 of
+the test's 3 seconds had therefore elapsed before the real alarm was armed,
+leaving its readback free to race normal alarm consumption.
+
+PostHog shows 131 executions of this test since 2026-07-22: 129 passed first
+try and 2 absorbed a retry. The normal duration was 38.7 seconds at p50 and
+45.8 seconds at p95; the earlier retried execution took 142.4 seconds and this
+one took 75.3 seconds. The fix separates the two contracts already present in
+the test. The first alarm continues to prove delivery, deliberate handler
+failure, and native retry. Self-addressed arming now uses a safely non-due
+alarm, proves the worker-side and host-side readbacks equal the exact scheduled
+time, and immediately disarms it. A second near-term fire added no distinct
+platform coverage and made a due timer the synchronization primitive.
+
 ## Round 11 (2026-07-23, post-#2265)
 
 This round starts from `origin/main` at
