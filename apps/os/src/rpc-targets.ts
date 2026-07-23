@@ -421,7 +421,13 @@ const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // A wedged processor must fail the caller loudly instead of parking an RPC
 // forever; the durable birth events remain committed for ordinary redelivery.
 const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
-const PROJECT_CREATE_READY_TIMEOUT_MS = 15_000;
+// Project birth is heavier than the other creation barriers: it includes the
+// config repository's Artifacts write and terminal cross-post. Keep explicit
+// headroom between the nested sibling barrier (75s), the Project processor
+// acknowledgement, and the caller's end-to-ready deadline. Healthy creates
+// still resolve immediately; these values only bound an unhealthy tail.
+const PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 90_000;
+const PROJECT_CREATE_READY_TIMEOUT_MS = 100_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -5306,20 +5312,20 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           },
         );
     // Both lanes drive processor birth through the same wait; they differ
-    // only in who pays for it. The processor acknowledgement has its own
-    // bounded recovery window, while the ready lane below gives the caller a
-    // much tighter project-level deadline. The birth facts remain committed
-    // and durable delivery can finish the project after a caller times out.
+    // only in who pays for it. Project birth owns a wider bounded recovery
+    // window than ordinary processor births because its config repository
+    // performs an Artifacts write. The birth facts remain committed for
+    // ordinary durable redelivery if this acknowledgement fails.
     const driveBirth = (step: string) =>
       timedStep("create-timing", timing, step, () =>
         Promise.all([
           this.processor.waitUntilProcessed({
             offset: maxOffset,
-            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+            timeoutMs: PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
           this.notificationProcessor.waitUntilProcessed({
             offset: maxOffset,
-            timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+            timeoutMs: PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),
         ]),
       );
@@ -5336,11 +5342,11 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
 
     // Ready lane: start the terminal project/ready wait alongside the sibling
-    // work. Its deadline is measured from entry to create(), so a slow
-    // processor or control-plane call fails the caller after roughly 15s
-    // instead of consuming an entire test timeout. Promise.all rejects at that
-    // boundary; the already-committed birth facts continue through durable
-    // delivery and an explicit caller/test retry can redial cleanly.
+    // work. Its deadline is measured from entry to create() and owns the whole
+    // public operation. It deliberately exceeds the nested Project-processor
+    // deadline: the original caller observes either one fully ready project or
+    // one bounded failure, never a short timeout that relies on a whole-call
+    // retry creating a replacement project.
     const remainingReadyTimeoutMs = Math.max(1, projectCreateDeadline - Date.now());
     await Promise.all([
       timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
@@ -5433,9 +5439,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     await rootStream({ auth: this.#props.auth, projectId: this.#projectId }).waitForEvent({
       afterOffset: 0,
       eventTypes: ["events.iterate.com/project/ready"],
-      // Tight on purpose: the saga should complete in seconds (see
-      // tasks/os-cold-create-latency.md for the cold-slot outliers that must
-      // be fixed, not waited out). Preview CI warms slots before the suites.
+      // The default covers the complete project birth saga, including the
+      // config repository's bounded Artifacts tail. Healthy calls still
+      // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
+      // the tail without making this correctness boundary dishonest.
       timeoutMs: args?.timeoutMs ?? PROJECT_CREATE_READY_TIMEOUT_MS,
     });
   }

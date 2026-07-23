@@ -167,6 +167,17 @@ for (const example of MATRIX_EXAMPLES) {
           const result = await runExampleCode(runtime, {
             code: example.code,
             id: example.id,
+            onInitialConnectionRetry: async (retry) => {
+              await annotate(
+                JSON.stringify({
+                  name: "cli: initial connection retry",
+                  category: "retry",
+                  durationMs: retry.attemptDurationMs + retry.delayMs,
+                  startedAt: retry.startedAt,
+                }),
+                "e2e-phase",
+              );
+            },
             projectId,
             timeoutMs: remainingMs,
             vars,

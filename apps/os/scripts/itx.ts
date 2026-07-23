@@ -15,10 +15,15 @@ import repl from "node:repl";
 import { RpcTarget } from "capnweb";
 
 import { cloudflareWorkerVersionOverrideHeaders } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
-import { connectItx } from "iterate/node";
+import {
+  connectItxReady,
+  type ConnectItxReadyOptions,
+  type ItxInitialConnectionRetry,
+} from "iterate/node";
 import { readDevServerInfo } from "./lib/dev-server-info.ts";
 
 const ASSISTANT_RESPONSE_TYPE = "events.iterate.com/agents/web-message-sent";
+export const ITX_INITIAL_CONNECTION_RETRY_PREFIX = "[itx-initial-connection-retry] ";
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -55,8 +60,11 @@ export async function run(options: RunOptions) {
   const script = new AsyncFunction("itx", "vars", "RpcTarget", code);
 
   using itx = options.context
-    ? connectItx({ ...connection, projectId: options.context })
-    : connectItx(connection);
+    ? await connectItxReady(
+        { ...connection, projectId: options.context },
+        initialConnectionRetryOptions(),
+      )
+    : await connectItxReady(connection, initialConnectionRetryOptions());
   const result = await script(itx, vars, RpcTarget).catch((error: unknown) => {
     process.stderr.write(formatScriptError(error));
     process.exit(1);
@@ -103,8 +111,11 @@ type ReplOptions = {
 export async function startRepl(options: ReplOptions) {
   const connection = adminConnection(options);
   const itx = options.context
-    ? connectItx({ ...connection, projectId: options.context })
-    : connectItx(connection);
+    ? await connectItxReady(
+        { ...connection, projectId: options.context },
+        initialConnectionRetryOptions(),
+      )
+    : await connectItxReady(connection, initialConnectionRetryOptions());
 
   process.stdout.write(
     [
@@ -151,11 +162,14 @@ export async function agentSmoke(options: AgentSmokeOptions) {
   }
 
   const startedAt = Date.now();
-  using agent = connectItx({
-    ...adminConnection(options),
-    agentPath,
-    projectId: project,
-  });
+  using agent = await connectItxReady(
+    {
+      ...adminConnection(options),
+      agentPath,
+      projectId: project,
+    },
+    initialConnectionRetryOptions(),
+  );
 
   // `ask` is the server-side send-and-wait: append the user message, resolve
   // on the agent's web reply. Waiting is bounded client-side as well.
@@ -206,6 +220,33 @@ function adminConnection(options: { baseUrl?: string }) {
     auth: { type: "admin-secret" as const, secret },
     baseUrl,
     headers: cloudflareWorkerVersionOverrideHeaders(process.env),
+  };
+}
+
+function initialConnectionRetryOptions(): ConnectItxReadyOptions {
+  return {
+    retryInitialConnection: {
+      delayMs: 250,
+      onRetry(retry) {
+        process.stderr.write(
+          `${ITX_INITIAL_CONNECTION_RETRY_PREFIX}${JSON.stringify(initialConnectionRetryLog(retry))}\n`,
+        );
+      },
+    },
+  };
+}
+
+function initialConnectionRetryLog(retry: ItxInitialConnectionRetry) {
+  const code =
+    "code" in retry.error && typeof retry.error.code === "string" ? retry.error.code : undefined;
+  return {
+    attemptDurationMs: Math.round(retry.attemptDurationMs),
+    delayMs: retry.delayMs,
+    error: retry.error.message,
+    ...(code === undefined ? {} : { errorCode: code }),
+    failedAttempt: retry.failedAttempt,
+    nextAttempt: retry.nextAttempt,
+    startedAt: retry.startedAt,
   };
 }
 
