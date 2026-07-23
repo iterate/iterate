@@ -1,5 +1,5 @@
 ---
-status: ready
+status: in-progress
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status
 
-Not started. The screenshot repro and expected rendering contract are defined;
-implementation, tests, and preview proof remain.
+The error notice and regression tests are implemented. Package checks and
+production-shaped preview proof remain.
 
 ## Problem
 
@@ -32,10 +32,10 @@ normal visits without an error remain unchanged.
 
 ## Checklist
 
-- [ ] Add a failing UI-level regression test for the screenshot URL.
-- [ ] Render `error_description`, falling back to a humanized `error` code.
-- [ ] Verify arbitrary query text is rendered as text and the no-error state is unchanged.
-- [ ] Run Auth tests, typecheck, lint, and formatting checks.
+- [x] Add a failing UI-level regression test for the screenshot URL. _A server-rendered component test reproduces the missing notice for the exact error value._
+- [x] Render `error_description`, falling back to a humanized `error` code. _The signed-in home validates both search fields and renders a destructive alert._
+- [x] Verify arbitrary query text is rendered as text and the no-error state is unchanged. _The regression test covers escaped markup and the empty render._
+- [x] Run Auth tests, typecheck, lint, and formatting checks. _All 75 Auth tests pass, including the three new UI cases; Auth typecheck and touched-file lint/format checks pass._
 - [ ] Verify the error notice against a production-shaped preview.
 - [ ] Update the draft PR with browser proof.
 
@@ -45,3 +45,5 @@ normal visits without an error remain unchanged.
   `/?error=Sign_up_is_not_available_for_this_email_address`
 - Better Auth converts OAuth callback failures to underscore-separated `error`
   values and may also supply `error_description`.
+- The root cause was the Auth home route having no search validation or
+  rendering path for Better Auth's redirect error fields.
