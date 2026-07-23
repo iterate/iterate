@@ -3,7 +3,7 @@ size: large
 
 # Move the GitHub review bot into the iterate package
 
-Status: Misha's bare-module failure is fixed locally: the configured worker is now a standalone workerd-targeted artifact, and the package build rejects any future consumer-supplied imports. Package verification and a second production smoke remain.
+Status: The standalone artifact reached rule loading in production, exposing that `Repo.glob()` exists only on this PR's undeployed OS. A red production-shaped rule-loader spec now requires the package to use the existing `Repo.listFiles()` API; the compatibility fix and another smoke remain.
 
 ## Plan
 
@@ -48,3 +48,4 @@ Status: Misha's bare-module failure is fixed locally: the configured worker is n
 - 2026-07-23: Added a one-shot durable terminal-failure receipt to the keyed build coordinator. The next foreground call consumes it, the loader restores the non-retryable verdict after Workers RPC, and the stream parks on the first exact source error without another alarm; explicit resume can still retry a potentially transient package-install failure.
 - 2026-07-23: Misha successfully emitted the v3 subscription from config commit `5247613a`, then workerd rejected the packaged graph with `No such module "yaml"`. Added a post-build module-graph check so a configured worker with consumer-supplied bare imports cannot publish again.
 - 2026-07-23: Split the configured worker into its own workerd-targeted tsdown build, bundling `yaml`, `zod`, and `@iterate-com/capnweb` while leaving only `cloudflare:*` and `iterate:github-ai-linter-config` external. The emitted 508 kB module passes the graph gate.
+- 2026-07-23: Misha's next retry loaded the standalone worker, then failed with `The RPC receiver does not implement the method "glob"`. Production already exposes the equivalent snapshot primitive as `Repo.listFiles()`; added a production-shaped regression before removing the new host-only method.

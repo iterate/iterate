@@ -9,5 +9,10 @@
     "error": "No such module \"yaml\".\n  imported from \"bundle.js\"",
     "policyVersion": "misha-smoke-2",
     "subscriptionOffset": 78
+  },
+  "productionHostFailure": {
+    "configCommit": "eb18d383b7902f481c833e4b50846abf9a18d1a0",
+    "error": "The RPC receiver does not implement the method \"glob\".",
+    "subscriptionResumeOffset": 85
   }
 }

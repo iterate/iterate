@@ -1,14 +1,18 @@
 import { expect, test } from "vitest";
 import { loadGithubAiLinterRules } from "./rules.ts";
 
-test("the linter loads its configured Markdown rules from one repository glob", async () => {
+test("the linter filters one production-shaped repository snapshot into configured Markdown rules", async () => {
   const calls: Array<{ method: string; value: string }> = [];
   const repo = {
-    glob: async (pattern: string) => {
-      calls.push({ method: "glob", value: pattern });
+    listFiles: async () => {
+      calls.push({ method: "listFiles", value: "/repos/iterate" });
       return {
         commitOid: "abc123",
-        paths: ["rules/typescript/no-inferable-type-annotation.md"],
+        paths: [
+          "README.md",
+          "rules/typescript/no-inferable-type-annotation.md",
+          "rules/typescript/not-markdown.txt",
+        ],
       };
     },
     readFile: async ({ commitOid, path }: { commitOid: string; path: string }) => {
@@ -40,7 +44,7 @@ test("the linter loads its configured Markdown rules from one repository glob", 
   });
 
   expect(calls).toEqual([
-    { method: "glob", value: "rules/**/*.md" },
+    { method: "listFiles", value: "/repos/iterate" },
     {
       method: "readFile",
       value: "abc123:rules/typescript/no-inferable-type-annotation.md",
