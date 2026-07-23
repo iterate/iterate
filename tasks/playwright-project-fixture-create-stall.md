@@ -60,19 +60,41 @@ The relevant client path is:
 `packages/iterate/src/itx/itx-node-client.ts` already configures a 15-second
 WebSocket handshake timeout. A local socket that accepted TCP but never
 answered the upgrade rejected an in-flight RPC after `15,011ms` with
-`WebSocket connection failed.`, so the basic client handshake bound works;
-the preview failure needs stage-level evidence before changing that client.
+`WebSocket connection failed.`, so the basic client handshake bound works.
+The recurrence below identifies a server-side terminal failure instead of a
+client-handshake defect.
 
-## Work
+## 2026-07-23 recurrence: server-side terminal failure identified
 
-- Attach named, timed fixture stages (config, admin itx connect/create,
-  description/readiness, token mint, cookie install) to Playwright results so
-  an outer timeout identifies the pending operation and fixture slug.
-- Capture a failed first-attempt trace (or equivalent client frame/transport
-  evidence) without relying on the retry trace.
-- Reproduce against a preview with normal CI concurrency; correlate the slug,
-  WebSocket session, `ProjectCollection.create` RPC, and `create-timing` steps.
-- Fix the demonstrated pending operation. Keep recovery bounded and observable;
-  do not turn the fixture into an unreported inner retry loop.
+PR #2265's second formal preview run reproduced the outer 90-second fixture
+timeout in `empty agent feeds distinguish waiting from filtered zero matches`.
+This time the named timing and trace evidence identify the exact project and
+terminal state:
+
+- Failed project: `prj_ddc2a50bba2941878bed307b207417ea` (slug
+  `agent-initializing-mrwsg32j-f065698a`).
+- Root trace: `eb26b8dc5ae96c5da9373abef6e8606d` on `os-preview-11`.
+- `Project.create` remained pending for 88.3 seconds until Playwright canceled
+  the request. Project birth took 37.7 seconds; config-repo birth took 36.3
+  seconds.
+- Inside config-repo birth, `artifact-get-or-create` failed after 32.7 seconds.
+  The config stream then recorded `repos/create-failed` with `An internal error
+  occurred.` and cross-posted it to the root stream. It never recorded
+  `repos/created` or `project/ready`, including after later processor wakes.
+- The test retry created `prj_20587…`, completed birth in 3.8 seconds, and
+  passed. The test retry therefore hid a defective first project; this was not
+  merely a slow browser or a lost readiness notification.
+
+Cloudflare's binding contract classifies this as Artifacts `INTERNAL_ERROR`.
+Repo creation previously treated every Artifacts error except a
+still-materializing repo as a permanent domain failure. PR #2265 changes the
+processor to redeliver the already-idempotent creation obligation for
+`INTERNAL_ERROR` and `UPSTREAM_UNAVAILABLE`, while preserving terminal
+fail-closed behavior for invalid input and other domain errors. The focused
+recovery test proves that the first service error appends no `create-failed`,
+the next delivery succeeds, and exactly one `repos/created` fact is recorded.
+
+## Remaining proof
+
 - Prove the fix with repeated retry-disabled preview runs and zero unexplained
   error/retry telemetry.

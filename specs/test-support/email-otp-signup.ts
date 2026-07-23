@@ -1,5 +1,6 @@
-import type { Page } from "@playwright/test";
+import type { Page, TestInfo } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
+import { waitForPreviewRolloutBeforeProjectCreation } from "@iterate-com/shared/test-support/preview-rollout-gate";
 
 /**
  * Real signup through the apps/auth email-OTP lane. Non-production auth
@@ -42,7 +43,7 @@ export async function startEmailOtpSignIn(page: Page) {
  */
 export async function signUpWithEmailOtp(
   page: Page,
-  input: { email: string; projectSlug: string },
+  input: { email: string; projectSlug: string; testInfo: TestInfo },
 ) {
   await page.getByTestId("email-input").fill(input.email);
   await page.getByTestId("email-submit-button").click();
@@ -58,6 +59,9 @@ export async function signUpWithEmailOtp(
       .getByLabel("Organization name")
       .fill(`Playwright ${input.email.split("@")[0]}`, { timeout: 30_000 });
     await page.getByLabel("Project slug").fill(input.projectSlug, { timeout: 15_000 });
+    await waitForPreviewRolloutBeforeProjectCreation({
+      beforeWait: (waitMs) => input.testInfo.setTimeout(input.testInfo.timeout + waitMs),
+    });
     await page.getByRole("button", { name: "Get started" }).click({ timeout: 15_000 });
   });
 }
