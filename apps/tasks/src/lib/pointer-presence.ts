@@ -123,7 +123,11 @@ export function usePointerPresence(
     const poll = async (): Promise<void> => {
       while (!stopped) {
         try {
-          const snapshot = await lane((ws) => ws.pointerWait(generation));
+          // ONE quiet try on the live session: withProject's retry lane
+          // DISPOSES the shared WS on failure — a pointer poll hiccup must
+          // never tear down the board's session (the board poll heals it;
+          // this loop's backoff rides the healed session next iteration).
+          const snapshot = await lane((ws) => ws.pointerWait(generation), true);
           if (stopped) return;
           failures = 0;
           generation = snapshot.generation;
