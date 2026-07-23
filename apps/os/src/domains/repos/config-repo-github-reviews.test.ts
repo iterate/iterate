@@ -178,7 +178,7 @@ function harness(input?: {
   };
   const repoList = vi.fn(async () => Object.keys(routes).map((path) => ({ path })));
   const repoGet = vi.fn((path: string) => ({
-    glob: async () => ({ commitOid: "rules-abc", paths: Object.keys(ruleFiles) }),
+    listFiles: async () => ({ commitOid: "rules-abc", paths: Object.keys(ruleFiles) }),
     readFile: async ({ path: filePath }: { path: string }) => {
       const content = ruleFiles[filePath];
       return content === undefined ? null : { commitOid: "rules-abc", content, path: filePath };
