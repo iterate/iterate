@@ -718,6 +718,135 @@ describe("ProcessorRelayRpcTarget", () => {
     }
   });
 
+  it("re-acquires within the public deadline after repeated availability failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const lifecycleReset = new Error(
+      "stream-unavailable: Durable Object is overloaded. Requests queued for too long.",
+    );
+    const waits: { offset: number; timeoutMs?: number }[] = [];
+    const disposals: number[] = [];
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        const acquisition = acquisitions;
+        return Promise.resolve({
+          [Symbol.dispose]: () => disposals.push(acquisition),
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: async (input: { offset: number; timeoutMs?: number }) => {
+            waits.push(input);
+            if (acquisition <= 6) throw lifecycleReset;
+          },
+        });
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 5_000 });
+    const completed = expect(waiting).resolves.toBeUndefined();
+    try {
+      await vi.advanceTimersByTimeAsync(700);
+      await completed;
+      expect(waits).toEqual([
+        { offset: 3, timeoutMs: 5_000 },
+        { offset: 3, timeoutMs: 5_000 },
+        { offset: 3, timeoutMs: 4_900 },
+        { offset: 3, timeoutMs: 4_900 },
+        { offset: 3, timeoutMs: 4_700 },
+        { offset: 3, timeoutMs: 4_700 },
+        { offset: 3, timeoutMs: 4_300 },
+      ]);
+      expect(disposals).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    } finally {
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-acquire a wait after a processor application error", async () => {
+    const applicationError = new Error("project birth was rejected");
+    const dispose = vi.fn();
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        return Promise.resolve({
+          [Symbol.dispose]: dispose,
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: async () => {
+            throw applicationError;
+          },
+        });
+      },
+    });
+
+    await expect(relay.waitUntilProcessed({ offset: 3, timeoutMs: 30_000 })).rejects.toBe(
+      applicationError,
+    );
+    expect(acquisitions).toBe(1);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("bounds repeated availability re-acquisition by the public timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const lifecycleReset = new Error(
+      "stream-unavailable: Durable Object is overloaded. Requests queued for too long.",
+    );
+    const dispose = vi.fn();
+    let acquisitions = 0;
+    const relay = new ProcessorRelayRpcTarget({
+      auth: { principal: "trusted-internal" } as never,
+      host: () => ({
+        processor: Promise.resolve({}),
+        wakeStreamSubscriber: async () => {
+          throw new Error("not used");
+        },
+      }),
+      processorFacade: () => {
+        acquisitions += 1;
+        return Promise.resolve({
+          [Symbol.dispose]: dispose,
+          getRuntimeState: async () => ({ snapshot: { offset: 0, state: {} } }),
+          snapshot: async () => ({ offset: 0, state: {} }),
+          waitUntilProcessed: async () => {
+            throw lifecycleReset;
+          },
+        });
+      },
+    });
+
+    const waiting = relay.waitUntilProcessed({ offset: 3, timeoutMs: 500 });
+    const rejected = expect(waiting).rejects.toThrow(
+      "waitUntilProcessed timed out after 500ms waiting for offset 3",
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(500);
+      await rejected;
+      expect(acquisitions).toBe(6);
+      expect(dispose).toHaveBeenCalledTimes(6);
+    } finally {
+      await waiting.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
   it("re-acquires when a remote processor waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<void>();

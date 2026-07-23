@@ -6683,6 +6683,8 @@ type ProjectRouterProcessorHostStub = ProcessorHostStub & {
 };
 
 const PROCESSOR_WAIT_REACQUIRE_MS = 10_000;
+const PROCESSOR_WAIT_AVAILABILITY_BACKOFF_INITIAL_MS = 100;
+const PROCESSOR_WAIT_AVAILABILITY_BACKOFF_MAX_MS = 1_000;
 
 /**
  * Isolate-side relay for a Durable-Object-hosted processor facade.
@@ -6840,6 +6842,7 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
       new Error(
         `waitUntilProcessed timed out after ${input.timeoutMs}ms waiting for offset ${input.offset}`,
       );
+    let consecutiveAvailabilityFailures = 0;
     while (Date.now() < deadline) {
       // A remote RpcTarget call can be orphaned when its hosting DO is
       // replaced without workerd rejecting the caller. Bound the LOCAL
@@ -6855,7 +6858,34 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
           : processor.waitUntilProcessed({ ...input, timeoutMs });
       }, attemptDeadline);
       if (outcome.status === "fulfilled") return outcome.value;
-      if (outcome.status === "rejected") throw outcome.error;
+      if (outcome.status === "rejected") {
+        if (!isRetryableDurableObjectAvailabilityError(outcome.error)) throw outcome.error;
+
+        // Waiting for durable progress is idempotent. A short run of overload
+        // or lifecycle resets must therefore reacquire the processor facade
+        // under the SAME caller deadline, just like an orphaned remote waiter.
+        // Exponential backoff caps the retry rate; the public deadline caps
+        // both total attempts and elapsed recovery time.
+        consecutiveAvailabilityFailures += 1;
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        const backoffMs = Math.min(
+          PROCESSOR_WAIT_AVAILABILITY_BACKOFF_INITIAL_MS *
+            2 ** Math.min(consecutiveAvailabilityFailures - 1, 4),
+          PROCESSOR_WAIT_AVAILABILITY_BACKOFF_MAX_MS,
+          remainingMs,
+        );
+        console.info("processor relay re-acquiring after transient availability failure", {
+          offset: input.offset,
+          consecutiveAvailabilityFailures,
+          backoffMs,
+          remainingMs,
+          error: outcome.error,
+        });
+        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+      consecutiveAvailabilityFailures = 0;
       if (attemptDeadline >= deadline) break;
       console.info("processor relay re-acquiring after bounded wait slice", {
         offset: input.offset,

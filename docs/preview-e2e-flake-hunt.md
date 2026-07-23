@@ -52,6 +52,47 @@ normal telemetry; if the workstation sleeps or exits, no running test is
 misclassified and no later run is silently counted. Resume by explicitly
 starting a new proof—accepted streaks are never inferred across ledgers.
 
+## Round 11 (2026-07-23, post-#2265)
+
+This round starts from `origin/main` at
+`56fdbd4e447ab53f3011a60417349f76223db30d`. PR #2265's final exact-head
+canonical check ran all five suites successfully in 291 seconds from pickup to
+finish (the GitHub check itself reported 4m40s): Depot run
+[`79jc4l57lt`](https://depot.dev/orgs/0p91s0lz49/workflows/37tr66gdxx?job=nk8k8jvb81),
+attempt `c2mnb0ph28`. Playwright had zero retries, but OS Vitest absorbed one,
+so this is a useful ordinary green and a rejected formal proof; the accepted
+counter remains 0/25.
+
+The retry was `itx expression replacement records the recipe without
+evaluating it`. Its first attempt failed during fresh-project creation with
+`stream-unavailable: Durable Object is overloaded. Requests queued for too
+long.`; the full-test retry created a second project and passed. PostHog records
+153 executions of this exact case over the preceding 30 days and only this one
+retry (0.65%). Duration was normally 9.0s at p50 and 14.9s at p95; the retried
+run took 19.3s. That history does not justify quarantine, serialization, or
+project reuse.
+
+Cloudflare traces locate the first failure in project
+`prj_d2cb39d19139488fba1c5236b17d61da`, not in deployment-global state. Its
+root Project Durable Object repeatedly rejected delivery while
+`ProjectProcessor.#createSiblingProcessors` waited for the root capability-host
+birth. The stream sink durably backed off and re-poked the subscription, and
+the same project subsequently reached ready about nine seconds after
+registration. The caller nevertheless failed earlier: the processor relay
+performed its one immediate lifecycle retry, received another availability
+rejection, and threw even though `waitUntilProcessed` still had most of its
+75-second public deadline available.
+
+The round-11 fix makes only that idempotent wait operation reacquire a fresh
+processor facade after repeated availability failures. It retains one caller
+deadline, applies exponential backoff capped at one second, disposes every
+transient facade, and fails when the deadline expires. Application errors still
+propagate immediately, and non-wait processor calls keep their existing single
+retry. Focused tests cover recovery after more than two availability failures,
+decreasing timeout propagation, application-error fail-fast behavior, and
+bounded exhaustion. This pays off the product-layer wait contract instead of
+adding a test retry, longer timeout, quarantine, or global Vitest throttle.
+
 ## Round 10 (2026-07-23, post-#2263)
 
 This round starts from `origin/main` at
