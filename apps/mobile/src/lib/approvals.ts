@@ -13,7 +13,6 @@
 import type { RpcStub } from "capnweb";
 import type { Stream, StreamEvent } from "iterate/sdk/itx/react";
 import {
-  approvalBodySha256,
   buildApprovalMessage,
   type HumanApprovalRequestedPayload,
 } from "../../../os/src/domains/projects/egress-approvals.ts";
@@ -71,11 +70,6 @@ export function approvalBodyForDisplay(payload: RequestedPayload): {
       truncated: payload.body.truncated,
     };
   }
-}
-
-/** Complete-body hash for display. */
-export function approvalBodyHash(payload: RequestedPayload): string | null {
-  return approvalBodySha256(payload);
 }
 
 export function scriptCodeForApproval(

@@ -22,7 +22,6 @@ import {
 import { CodeBlock } from "../../../components/activity-card.tsx";
 import { enrollApproverKey, loadApproverKey, signWithApproverKey } from "../../../lib/approver.ts";
 import {
-  approvalBodyHash,
   deriveOpenRequests,
   deriveRecentResolvedRequests,
   EVENT,
@@ -332,7 +331,7 @@ function ApprovalCard({
             <Text style={styles.secretLine}>spends {request.payload.secretPaths.join(", ")}</Text>
           ) : null}
           <Text style={styles.meta} selectable>
-            body sha256: {approvalBodyHash(request.payload) || "none"}
+            body sha256: {request.payload.body?.sha256 || "none"}
           </Text>
 
           {body ? (

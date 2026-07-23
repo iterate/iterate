@@ -17,8 +17,8 @@
 // Out (stdout):
 //   {"type":"status","loggedIn":true,"principal":"jane@acme.com",
 //    "projectId":"prj_…","key":{"kind":"secure-enclave","keyId":"…"}|null}
-//   {"type":"requested","offset":42,"method":"POST","url":"…","host":"…",
-//    "secretPaths":[…],"ruleKey":"…","expiresAt":"…","bodyPreview":"…"|null,
+//   {"type":"requested","offset":42,"method":"POST","url":"…",
+//    "secretPaths":[…],"ruleKey":"…","expiresAt":"…","body":{…}|null,
 //    "submitted":false}   // submitted=true ⇒ a grant already exists (awaiting the door)
 //   {"type":"submitted","offset":42}   // a grant landed; the row is now awaiting the door
 //   {"type":"settled","offset":42,"outcome":"released","status":200}
@@ -37,14 +37,12 @@ import type { RpcStub } from "@iterate-com/capnweb";
 import type { ItxAuthCredentials, Stream, StreamEvent } from "./itx-api.generated.ts";
 import { loadApprovalKey } from "./approval-keys.ts";
 import {
-  approvalBodyPreview,
   awaitSettlement,
   connectApproval,
   EVENT,
   grant,
   reconcileBacklog,
   reject,
-  safeHost,
   type RequestedPayload,
 } from "./approve-core.ts";
 
@@ -299,13 +297,7 @@ function emitRequested(offset: number, payload: RequestedPayload, submitted: boo
   emit({
     type: "requested",
     offset,
-    method: payload.method,
-    url: payload.url,
-    host: safeHost(payload.url),
-    secretPaths: payload.secretPaths,
-    ruleKey: payload.ruleKey,
-    expiresAt: payload.expiresAt,
-    bodyPreview: approvalBodyPreview(payload),
+    ...payload,
     submitted, // a grant already exists — awaiting the door, not fresh
   });
 }

@@ -146,7 +146,7 @@ export function buildApprovalMessage(input: {
       method: input.requested.method,
       url: input.requested.url,
       headers: input.requested.headers,
-      bodySha256: approvalBodySha256(input.requested),
+      bodySha256: input.requested.body?.sha256,
       secretPaths: input.requested.secretPaths,
       decision: input.decision,
     }),
@@ -178,13 +178,6 @@ export function approvalRequestBody(
   } catch {
     return { encoding: "base64", content: bytesToBase64(inspectionBytes), ...metadata };
   }
-}
-
-/** Complete-body hash used by approval.v1. */
-export function approvalBodySha256(
-  requested: Pick<HumanApprovalRequestedPayload, "body">,
-): string | null {
-  return requested.body?.sha256 || null;
 }
 
 function decodeUtf8InspectionBytes(bytes: Uint8Array, truncated: boolean): string {
