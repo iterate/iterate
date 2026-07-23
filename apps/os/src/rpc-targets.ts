@@ -362,6 +362,7 @@ import type {
   WorkspaceMount,
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
+import type { CollabPresenceFlat } from "./domains/workspaces/collab-host.ts";
 import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
   DynamicWorkerRunner,
@@ -2373,8 +2374,18 @@ class WorkspaceCollabRpcTarget extends IterateRpcTarget<"WorkspaceCollab"> {
   }
 
   /** Fresh caret presence per live session — "who has this file open". */
-  presenceSummary(): Promise<Record<string, string[]>> {
+  presenceSummary(): Promise<CollabPresenceFlat> {
     return this.durableObjectStub.collabPresenceSummary();
+  }
+
+  /** Everyone with the BOARD open (heartbeats): clientId -> display name. */
+  boardViewers() {
+    return this.durableObjectStub.collabBoardViewers();
+  }
+
+  /** Announce (or clear, with null name) one client viewing the board. */
+  boardPresent(clientId: string, name: string | null) {
+    return this.durableObjectStub.boardPresent(clientId, name);
   }
 }
 
