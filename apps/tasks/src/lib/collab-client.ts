@@ -57,6 +57,22 @@ export class CollabConnection {
    * the layer filters). The pull loop keeps `presenceGeneration` current. */
   onPresence: ((clients: CollabPresence["clients"]) => void) | null = null;
   presenceGeneration = 0;
+  /** The raw ops of the delivery currently being dispatched, in canonical
+   * server order with true clientIds. receiveUpdates builds a finished
+   * Transaction (no annotation can be added), so the redline fold reads the
+   * delivery through this side channel DURING the dispatch — set just
+   * before, consumed once by takeDeliveredOps(), cleared after. */
+  #deliveredOps: { changes: unknown; clientId: string }[] | null = null;
+
+  stageDeliveredOps(ops: { changes: unknown; clientId: string }[]): void {
+    this.#deliveredOps = ops;
+  }
+
+  takeDeliveredOps(): { changes: unknown; clientId: string }[] | null {
+    const ops = this.#deliveredOps;
+    this.#deliveredOps = null;
+    return ops;
+  }
 
   constructor(
     readonly checkoutId: string,
@@ -257,7 +273,12 @@ export function peerExtension(connection: CollabConnection, startVersion: number
               return;
             }
             if (result.ops.length === 0) continue;
-            this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
+            connection.stageDeliveredOps(result.ops);
+            try {
+              this.view.dispatch(receiveUpdates(this.view.state, connection.absorb(result.ops)));
+            } finally {
+              connection.takeDeliveredOps(); // drop if no layer consumed it
+            }
             if (this.recovering) {
               // History was intact after all — catching up via ops advanced
               // our base past the miss, so pushing can resume (the snapshot

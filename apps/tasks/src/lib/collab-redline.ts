@@ -8,10 +8,15 @@ import {
   type Tooltip,
   type ViewUpdate,
 } from "@codemirror/view";
-import { RangeSetBuilder, Transaction, type Range } from "@codemirror/state";
+import { RangeSetBuilder, Transaction, type EditorState } from "@codemirror/state";
 import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import type { CollabConnection } from "./collab-client.ts";
 import type { CollabChangeSegment } from "./tasks-api.ts";
+import {
+  attributionSegments,
+  foldAttribution,
+  type AttributionState,
+} from "~/domains/workspaces/collab-changes.ts";
 
 /**
  * The redline layer: WHERE somebody added text (author-tinted highlight),
@@ -199,36 +204,52 @@ export function redlineExtension(connection: CollabConnection) {
         void this.refresh();
       }
 
+      /** The server-order fold of CONFIRMED ops — null until the first
+       * authoritative install. Display re-derives from it plus whatever is
+       * still unconfirmed, so own keystrokes and their backspaces render
+       * with EXACTLY the shape the server's next fold will produce: spans
+       * coalesce as you type, deleting fresh text nets away instead of
+       * stacking per-keystroke fragments that later "snap" together. */
+      confirmed: AttributionState | null = null;
+
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
-        // Keep marks visually anchored while the authoritative fold catches up.
-        this.decorations = this.decorations.map(update.changes);
-        // Own keystrokes wear marks IMMEDIATELY — the authoritative fold
-        // replaces them with the server's identical segments once edits
-        // settle, so tracking never lags typing. Remote batches skip the
-        // optimism: their authors' marks arrive with the refresh.
-        if (update.transactions.every((tr) => !tr.annotation(Transaction.remote))) {
+        if (this.confirmed === null) {
+          // Pre-install: keep whatever marks exist visually anchored.
+          this.decorations = this.decorations.map(update.changes);
+        } else {
           const now = Date.now();
-          const adds: Range<Decoration>[] = [];
-          update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
-            const deleted = update.startState.doc.sliceString(fromA, toA);
-            if (deleted.length > 0) {
-              adds.push(
-                Decoration.widget({
-                  side: -1,
-                  widget: new DeletionFlag(connection.clientId, deleted, now),
-                }).range(fromB),
-              );
+          for (const tr of update.transactions) {
+            if (!tr.docChanged) continue;
+            if (tr.annotation(Transaction.remote)) {
+              // A delivery: fold the canonical ops (true authors; own echoes
+              // included — the unconfirmed overlay below re-derives from
+              // what REMAINS unacked, so nothing double-counts).
+              for (const op of connection.takeDeliveredOps() ?? []) {
+                this.confirmed = foldAttribution(this.confirmed, { ...op, createdAt: now });
+              }
             }
-            if (inserted.length > 0) {
-              adds.push(insertionMark(connection.clientId, now).range(fromB, toB));
-            }
-          });
-          if (adds.length > 0) this.decorations = this.decorations.update({ add: adds, sort: true });
+          }
+          this.render(update.state);
         }
         this.futile = 0;
         if (this.timer) clearTimeout(this.timer);
         this.timer = setTimeout(() => void this.refresh(), REFRESH_DEBOUNCE_MS);
+      }
+
+      /** Display = confirmed ⊕ still-unconfirmed local ops, one shared fold. */
+      render(state: EditorState) {
+        if (this.confirmed === null) return;
+        const now = Date.now();
+        let display = this.confirmed;
+        for (const unconfirmed of sendableUpdates(state)) {
+          display = foldAttribution(display, {
+            changes: unconfirmed.changes.toJSON(),
+            clientId: connection.clientId,
+            createdAt: now,
+          });
+        }
+        this.decorations = decorate(attributionSegments(display), state.doc.length);
       }
 
       async refresh() {
@@ -251,11 +272,14 @@ export function redlineExtension(connection: CollabConnection) {
             return;
           }
           this.futile = 0;
-          const segments: CollabChangeSegment[] = [
-            ...changes.inserted.map((span) => ({ ...span, kind: "inserted" as const })),
-            ...changes.deleted.map((span) => ({ ...span, kind: "deleted" as const })),
-          ];
-          this.decorations = decorate(segments, this.view.state.doc.length);
+          // Adopt the server fold as the confirmed state (the install guard
+          // above proves the editor is AT that head with nothing unacked).
+          this.confirmed = {
+            deleted: changes.deleted.map((span) => ({ ...span })),
+            doc: this.view.state.doc,
+            inserted: changes.inserted.map((span) => ({ ...span })),
+          };
+          this.render(this.view.state);
           // Nudge a measure/paint without touching the doc.
           this.view.dispatch({});
         } catch {
