@@ -96,7 +96,7 @@ export const SchedulerProcessorContract = defineProcessorContract({
                   "key can never dedupe against a spent request from a past incarnation).",
               }),
             metadata: z
-              .record(z.string(), z.unknown())
+              .record(z.string(), z.json())
               .optional()
               .meta({
                 description:
@@ -158,7 +158,7 @@ export const SchedulerProcessorContract = defineProcessorContract({
           description: "The Schedule's stable identity — upserts and cancels address this key.",
         }),
         metadata: z
-          .record(z.string(), z.unknown())
+          .record(z.string(), z.json())
           .optional()
           .meta({
             description:
@@ -268,6 +268,24 @@ export type SchedulerProcessorState = ProcessorState<SchedulerProcessorContract>
 export type ScheduleSetPayload = z.output<
   (typeof SchedulerProcessorContract.events)["events.iterate.com/scheduler/schedule-set"]["payloadSchema"]
 >;
+
+/**
+ * Validate and lower a command to the exact JSON shape the stream persists.
+ * The round-trip intentionally normalizes JSON edge cases such as `-0` before
+ * ensure() compares them with a previously stored definition.
+ */
+export function parseScheduleSetPayload(input: unknown): ScheduleSetPayload {
+  const parsed =
+    SchedulerProcessorContract.events[
+      "events.iterate.com/scheduler/schedule-set"
+    ].payloadSchema.parse(input);
+  return parsed.metadata === undefined
+    ? parsed
+    : {
+        ...parsed,
+        metadata: JSON.parse(JSON.stringify(parsed.metadata)) as ScheduleSetPayload["metadata"],
+      };
+}
 
 /**
  * When a Schedule triggers — used twice (the `schedule-set` payload and the

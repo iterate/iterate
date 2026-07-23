@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import { newHttpBatchRpcSession } from "capnweb";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { RepoArtifactNameCodec } from "../../src/domains/repos/utils.ts";
+import type { CoreProcessorState } from "../../src/domains/streams/core-processor-contract.ts";
 import type { UnauthenticatedOs } from "../../src/itx-api.generated.ts";
 import { adminSecret, buildUrl, withItxSession } from "./test-helpers.ts";
 import type { ItxWebSocketMessage } from "./test-helpers.ts";
@@ -38,7 +39,9 @@ test("Authenticated session __describe returns principal", async () => {
     organizationId: null,
     organizationName: null,
   });
-  expect(["ready", "missing", "unknown"]).toContain(list[0]?.deploymentStatus);
+  expect(["created", "creating", "failed", "missing", "unknown"]).toContain(
+    list[0]?.deploymentStatus,
+  );
 });
 
 test("Authenticated internal auth itx can create project and append to stream", async () => {
@@ -98,18 +101,20 @@ test("Authenticated internal auth itx can create project and append to stream", 
       "events.iterate.com/stream/created",
       "events.iterate.com/stream/woken",
       "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/project/create-requested",
       "events.iterate.com/project/created",
       "events.iterate.com/repos/created",
-      "events.iterate.com/project/ready",
       "events.iterate.com/stream/subscriber-disconnected",
     ]),
   );
 
   const repoCreated = events.find((event) => event.type === "events.iterate.com/repos/created");
+  const projectCreateRequested = events.find(
+    (event) => event.type === "events.iterate.com/project/create-requested",
+  );
   const projectCreated = events.find(
     (event) => event.type === "events.iterate.com/project/created",
   );
-  const projectReady = events.find((event) => event.type === "events.iterate.com/project/ready");
   expect(repoCreated).toMatchObject({
     payload: {
       request: { type: "empty" },
@@ -131,10 +136,69 @@ test("Authenticated internal auth itx can create project and append to stream", 
       ],
     },
   });
+  expect(projectCreateRequested).toBeTruthy();
   expect(projectCreated).toBeTruthy();
-  expect(projectReady).toBeTruthy();
-  expect(projectCreated!.offset).toBeLessThan(repoCreated!.offset);
-  expect(repoCreated!.offset).toBeLessThan(projectReady!.offset);
+  expect(projectCreated!.payload).toMatchObject({
+    createRequestedAtOffset: projectCreateRequested!.offset,
+  });
+  expect(projectCreateRequested!.offset).toBeLessThan(repoCreated!.offset);
+  expect(repoCreated!.offset).toBeLessThan(projectCreated!.offset);
+
+  const workerConfigurations = events.filter(
+    (event) =>
+      event.type === "events.iterate.com/stream/subscription-configured" &&
+      (event.payload as { subscriptionKey?: string }).subscriptionKey === "project-worker",
+  );
+  const creationWorkerConfiguration = workerConfigurations.find(
+    (event) =>
+      event.idempotencyKey === `project-worker-creation-subscription:${description.projectId}`,
+  );
+  const permanentWorkerConfiguration = workerConfigurations.find(
+    (event) => event.idempotencyKey === `project-worker-subscription:${description.projectId}`,
+  );
+  expect(creationWorkerConfiguration).toMatchObject({
+    payload: {
+      subscriptionKey: "project-worker",
+      delivery: { mode: "push", expression: ["processEventBatch"] },
+      deliver: { afterOffset: projectCreateRequested!.offset - 1 },
+      selector: {
+        condition: `offset = ${projectCreateRequested!.offset}`,
+        eventTypes: ["events.iterate.com/project/create-requested"],
+      },
+      onPoison: "park",
+    },
+  });
+  expect(permanentWorkerConfiguration).toMatchObject({
+    payload: {
+      subscriptionKey: "project-worker",
+      delivery: { mode: "push", expression: ["processEventBatch"] },
+      deliver: { afterOffset: projectCreateRequested!.offset },
+      onPoison: "skip",
+    },
+  });
+  expect(permanentWorkerConfiguration!.payload).not.toHaveProperty("selector");
+  expect(repoCreated!.offset).toBeLessThan(creationWorkerConfiguration!.offset);
+  expect(creationWorkerConfiguration!.offset).toBeLessThan(permanentWorkerConfiguration!.offset);
+  expect(permanentWorkerConfiguration!.offset + 1).toBe(projectCreated!.offset);
+
+  const rootRuntime = await stream.runtimeState();
+  const workerConfiguration = (rootRuntime.coreProcessorState as CoreProcessorState)
+    .configuredSubscribersByKey["project-worker"];
+  expect(workerConfiguration?.latestConfiguredEvent).toMatchObject({
+    payload: {
+      subscriptionKey: "project-worker",
+      delivery: { mode: "push", expression: ["processEventBatch"] },
+      deliver: { afterOffset: projectCreateRequested!.offset },
+      onPoison: "skip",
+    },
+  });
+  expect(workerConfiguration!.latestConfiguredEvent.payload).not.toHaveProperty("selector");
+  expect(workerConfiguration!.latestConfiguredEvent).toMatchObject({
+    offset: permanentWorkerConfiguration!.offset,
+  });
+  expect(rootRuntime.runtime.subscriptions["project-worker"]!.ackedOffset).toBeGreaterThanOrEqual(
+    projectCreateRequested!.offset,
+  );
 
   // First-hand on the config repo's own stream: the same facts, no
   // provenance chain, plus the repo processor + cross-post subscriptions.

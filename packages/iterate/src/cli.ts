@@ -368,13 +368,10 @@ export const verifyOsSession = async (input: {
 const setupMissingProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
   let projectItx: RpcStub<Project> | undefined;
   try {
-    projectItx = (await session.projects.get(project.slug).create(
-      {
-        projectId: project.id,
-        ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
-      },
-      { waitUntilReady: false },
-    )) as unknown as RpcStub<Project>;
+    projectItx = (await session.projects.get(project.slug).create({
+      projectId: project.id,
+      ...(project.organizationSlug ? { organizationSlug: project.organizationSlug } : {}),
+    })) as unknown as RpcStub<Project>;
   } catch (error) {
     throw new Error(
       `Project "${project.slug}" (${project.id}) exists in auth but is missing in OS. Failed to set it up for chat: ${errorMessage(error)}`,
@@ -383,6 +380,37 @@ const setupMissingProjectForChat = async (session: RpcStub<Session>, project: Pr
     disposeRpc(projectItx);
   }
   return project.id;
+};
+
+const prepareProjectForChat = async (session: RpcStub<Session>, project: ProjectListEntry) => {
+  switch (project.deploymentStatus) {
+    case "created":
+      return project.id;
+    case "missing":
+      return await setupMissingProjectForChat(session, project);
+    case "creating": {
+      let projectItx: RpcStub<Project> | undefined;
+      try {
+        projectItx = (await session.projects.get(project.slug)) as unknown as RpcStub<Project>;
+        await projectItx.waitUntilCreated();
+      } catch (error) {
+        throw new Error(
+          `Project "${project.slug}" (${project.id}) is still being created and could not finish creation for chat: ${errorMessage(error)}`,
+        );
+      } finally {
+        disposeRpc(projectItx);
+      }
+      return project.id;
+    }
+    case "failed":
+      throw new Error(
+        `Project "${project.slug}" (${project.id}) could not be selected for chat because its creation failed.`,
+      );
+    case "unknown":
+      throw new Error(
+        `Project "${project.slug}" (${project.id}) could not be selected for chat because its deployment status is unknown.`,
+      );
+  }
 };
 
 const accessibleProjectsMessage = (projects: ProjectListEntry[]) =>
@@ -434,20 +462,13 @@ export const resolveChatProject = async (input: {
             `Project "${configured}" was not found among accessible projects for config "${input.configName}" in ${input.configPath}. ${accessibleProjectsMessage(projects)}`,
           );
         }
-        if (project.deploymentStatus === "missing") {
-          return await setupMissingProjectForChat(session, project);
-        }
-        return project.id;
+        return await prepareProjectForChat(session, project);
       }
 
-      const readyProjects = projects.filter((project) => project.deploymentStatus === "ready");
-      const candidates = readyProjects.length > 0 ? readyProjects : projects;
+      const createdProjects = projects.filter((project) => project.deploymentStatus === "created");
+      const candidates = createdProjects.length > 0 ? createdProjects : projects;
       if (candidates.length === 1) {
-        const project = candidates[0]!;
-        if (project.deploymentStatus === "missing") {
-          return await setupMissingProjectForChat(session, project);
-        }
-        return project.id;
+        return await prepareProjectForChat(session, candidates[0]!);
       }
 
       throw new Error(

@@ -30,6 +30,15 @@ export const STREAM_UNAVAILABLE_MESSAGE_PREFIX = "stream-unavailable: ";
 export const STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX = "stream-wait-timeout: ";
 
 /**
+ * Identifies a creation-delivery fence that can never become true without a
+ * new configuration decision: the subscription was replaced, removed,
+ * parked, explicitly sought, or configured with the wrong exact-target
+ * policy. Unlike availability failures and timeouts, retrying the same
+ * creation frame cannot heal one of these outcomes.
+ */
+export const STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX = "stream-delivery-rejected: ";
+
+/**
  * Whether workerd rejected a Durable Object stub call because the target
  * incarnation disappeared or was temporarily unavailable, rather than
  * because application code threw. Keep this classifier local and
@@ -114,4 +123,11 @@ export function isStreamUnavailableError(error: unknown): boolean {
 /** Whether a rejection is the stream DO's explicitly modelled waiter timeout. */
 export function isStreamWaitTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith(STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX);
+}
+
+/** Whether a stream-owned exact-delivery fence rejected its durable policy. */
+export function isStreamDeliveryRejectedError(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.startsWith(STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX)
+  );
 }

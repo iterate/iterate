@@ -48,8 +48,9 @@ const createFakeSession = (input: {
   onConnect?: (connectInput: { auth: unknown; baseUrl: string }) => void;
   description?: { principal: string };
   onProjectCreate?: (args: unknown, options: unknown) => void;
+  onProjectWaitUntilCreated?: () => void;
   projects?: Array<{
-    deploymentStatus: "missing" | "ready" | "unknown";
+    deploymentStatus: "created" | "creating" | "failed" | "missing" | "unknown";
     id: string;
     organizationId: string | null;
     organizationName: string | null;
@@ -77,6 +78,8 @@ const createFakeSession = (input: {
               [Symbol.dispose]: disposeProject,
             };
           },
+          waitUntilCreated: async () => input.onProjectWaitUntilCreated?.(),
+          [Symbol.dispose]: disposeProject,
         }),
         list: async () => {
           if (input.listError) throw input.listError;
@@ -380,11 +383,11 @@ describe("ensureBearerAuthHeadersForChat", () => {
 });
 
 describe("resolveChatProject", () => {
-  test("uses the only ready accessible project when no config default is set", async () => {
+  test("uses the only created accessible project when no config default is set", async () => {
     const fake = createFakeSession({
       projects: [
         {
-          deploymentStatus: "ready",
+          deploymentStatus: "created",
           id: "prj_only",
           organizationId: null,
           organizationName: null,
@@ -438,7 +441,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_missing",
     });
-    expect(createOptions).toEqual({ waitUntilReady: false });
+    expect(createOptions).toBeUndefined();
     expect(fake.disposeProject).toHaveBeenCalledOnce();
   });
 
@@ -476,7 +479,7 @@ describe("resolveChatProject", () => {
     expect(createArgs).toEqual({
       projectId: "prj_default",
     });
-    expect(createOptions).toEqual({ waitUntilReady: false });
+    expect(createOptions).toBeUndefined();
   });
 
   test("passes the organization slug when setting up a missing project", async () => {
@@ -513,14 +516,69 @@ describe("resolveChatProject", () => {
       organizationSlug: "acme",
       projectId: "prj_org_project",
     });
-    expect(createOptions).toEqual({ waitUntilReady: false });
+    expect(createOptions).toBeUndefined();
+  });
+
+  test("waits for the only creating project before selecting it for chat", async () => {
+    const onProjectWaitUntilCreated = vi.fn();
+    const fake = createFakeSession({
+      onProjectWaitUntilCreated,
+      projects: [
+        {
+          deploymentStatus: "creating",
+          id: "prj_creating",
+          organizationId: null,
+          organizationName: null,
+          organizationSlug: null,
+          slug: "creating",
+        },
+      ],
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        createSession: fake.createSession,
+      }),
+    ).resolves.toBe("prj_creating");
+
+    expect(onProjectWaitUntilCreated).toHaveBeenCalledOnce();
+    expect(fake.disposeProject).toHaveBeenCalledOnce();
+  });
+
+  test("rejects a project whose creation failed", async () => {
+    const fake = createFakeSession({
+      projects: [
+        {
+          deploymentStatus: "failed",
+          id: "prj_failed",
+          organizationId: null,
+          organizationName: null,
+          organizationSlug: null,
+          slug: "failed",
+        },
+      ],
+    });
+
+    await expect(
+      resolveChatProject({
+        auth: { credentials: { type: "bearer", token: "token_123" } },
+        baseUrl: "https://os.iterate.com",
+        configName: "prd",
+        configPath: "/tmp/config.json",
+        createSession: fake.createSession,
+      }),
+    ).rejects.toThrow(/creation failed/);
   });
 
   test("rejects a configured project slug that is not accessible", async () => {
     const fake = createFakeSession({
       projects: [
         {
-          deploymentStatus: "ready",
+          deploymentStatus: "created",
           id: "prj_other",
           organizationId: null,
           organizationName: null,
@@ -540,7 +598,7 @@ describe("resolveChatProject", () => {
         createSession: fake.createSession,
       }),
     ).rejects.toThrow(
-      /Project "missing-slug" was not found among accessible projects.*other \(prj_other, ready\)/,
+      /Project "missing-slug" was not found among accessible projects.*other \(prj_other, created\)/,
     );
   });
 
@@ -601,7 +659,7 @@ describe("resolveChatProject", () => {
     const fake = createFakeSession({
       projects: [
         {
-          deploymentStatus: "ready",
+          deploymentStatus: "created",
           id: "prj_one",
           organizationId: null,
           organizationName: null,
@@ -609,7 +667,7 @@ describe("resolveChatProject", () => {
           slug: "one",
         },
         {
-          deploymentStatus: "ready",
+          deploymentStatus: "created",
           id: "prj_two",
           organizationId: null,
           organizationName: null,
@@ -627,6 +685,6 @@ describe("resolveChatProject", () => {
         configPath: "/tmp/config.json",
         createSession: fake.createSession,
       }),
-    ).rejects.toThrow(/Accessible projects: one \(prj_one, ready\), two \(prj_two, ready\)/);
+    ).rejects.toThrow(/Accessible projects: one \(prj_one, created\), two \(prj_two, created\)/);
   });
 });

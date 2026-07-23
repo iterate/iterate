@@ -9,12 +9,12 @@ const project = (
   overrides: Partial<RootRedirectProject> & Pick<RootRedirectProject, "id" | "slug">,
 ): RootRedirectProject => ({
   organizationId: "org_1",
-  deploymentStatus: "ready",
+  deploymentStatus: "created",
   ...overrides,
 });
 
 describe("chooseRootProjectRedirect", () => {
-  test("opens a preferred ready project at its home", () => {
+  test("opens a preferred created project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: "beta",
@@ -27,7 +27,7 @@ describe("chooseRootProjectRedirect", () => {
     });
   });
 
-  test("opens the only ready project at its home", () => {
+  test("opens the only created project at its home", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -37,6 +37,19 @@ describe("chooseRootProjectRedirect", () => {
       kind: "project",
       project: { slug: "alpha" },
       welcome: false,
+    });
+  });
+
+  test("resumes the only creating project on its live creation checklist", () => {
+    expect(
+      chooseRootProjectRedirect({
+        preferredProjectSlug: null,
+        projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "creating" })],
+      }),
+    ).toMatchObject({
+      kind: "project",
+      project: { slug: "alpha" },
+      welcome: true,
     });
   });
 
@@ -53,7 +66,7 @@ describe("chooseRootProjectRedirect", () => {
     });
   });
 
-  test("leaves ambiguous or unknown project sets on the projects page", () => {
+  test("leaves ambiguous, failed, or unknown project sets on the projects page", () => {
     expect(
       chooseRootProjectRedirect({
         preferredProjectSlug: null,
@@ -70,6 +83,13 @@ describe("chooseRootProjectRedirect", () => {
         projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "unknown" })],
       }),
     ).toEqual({ kind: "projects" });
+
+    expect(
+      chooseRootProjectRedirect({
+        preferredProjectSlug: null,
+        projects: [project({ id: "prj_a", slug: "alpha", deploymentStatus: "failed" })],
+      }),
+    ).toEqual({ kind: "projects" });
   });
 });
 
@@ -83,6 +103,6 @@ test("the missing-project SSR bootstrap does not wait for project readiness", as
 
   expect(create).toHaveBeenCalledWith(
     { organizationSlug: "acme", projectId: "prj_missing" },
-    { waitUntilReady: false },
+    { waitUntilCreated: false },
   );
 });

@@ -84,6 +84,7 @@ export class ProjectDurableObject extends DurableObject<Env> {
   readonly #stream = new StreamRpcTarget({
     auth: trustedInternalAuthContext(),
     path: this.#name.path,
+    platformProcessorHost: true,
     projectId: this.#name.projectId,
   });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
@@ -126,6 +127,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
         env: this.env,
         projectId: this.#name.projectId,
       }),
+      waitUntilSubscriptionDelivered: (input) =>
+        this.#stream.durableObjectStub.waitUntilSubscriptionDelivered(input),
       itx: itxForScope({
         auth: trustedInternalAuthContext(),
         ctx: this.ctx,

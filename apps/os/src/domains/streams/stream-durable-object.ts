@@ -179,9 +179,10 @@ export class StreamDeliveryAlarmBoundary {
 }
 
 /**
- * The subscription key of the birth-certificate worker feed every
- * project-scoped stream configures on itself (see the constructor). Userspace
- * overrides it by re-appending `subscription-configured` with this same key.
+ * The subscription key of the worker feed every project-scoped stream uses.
+ * Child streams configure it at birth. The project creation saga configures
+ * it on `/` only after the default worker has built, then waits for that
+ * exact configuration to deliver `project/create-requested`.
  */
 const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
 
@@ -228,7 +229,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    * the freshly folded config — see #readCoreProcessorState.
    */
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
-    onMutation: () => this.#refreshLiveState(),
+    onMutation: () => {
+      this.#refreshLiveState();
+      this.#subscribers.notifyDeliveryStateChanged();
+    },
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
@@ -321,10 +325,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     // (fetch, RPC, alarm) appends a `woken` fact, whose post-commit fan-out is
     // also what re-establishes durable deliveries after hibernation.
     //
-    // Project streams are born with their ordinary platform feeds. Declaring
-    // both here means there is no asynchronous wiring window before the first
-    // user event, while the subscription facts remain removable/replaceable
-    // through the same public lifecycle as any other subscription.
+    // Child project streams are born with their ordinary platform feeds. The
+    // root is deliberately different: its project-worker feed is installed by
+    // the project creation saga only after the seeded worker has built. That
+    // keeps an unavailable worker from looking broken during its own build and
+    // gives project/created a precise delivery barrier.
     if (this.#coreProcessorState.eventCount === 0) {
       this.append({
         type: "events.iterate.com/stream/created",
@@ -334,19 +339,21 @@ export class StreamDurableObject extends DurableObject<Env> {
       // project worker. Do not invent a fake subscriber there: OS's PROJECT
       // binding is the capability that makes this feed real.
       if (this.name.projectId !== null && "PROJECT" in this.env) {
-        this.append({
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: {
-            subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
-            delivery: { mode: "push", expression: ["processEventBatch"] },
-            // Everything, from the beginning: the worker sees the stream's
-            // full history once it first builds. No default selector —
-            // selection is the worker's own code (or a same-key override).
-            deliver: "all",
-            // One poison event must not silence a project's entire feed.
-            onPoison: "skip",
-          } satisfies SubscriptionConfiguredPayload,
-        });
+        if (this.name.path !== "/") {
+          this.append({
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
+              delivery: { mode: "push", expression: ["processEventBatch"] },
+              // Everything, from the beginning: the worker sees the stream's
+              // full history once it first builds. No default selector —
+              // selection is the worker's own code (or a same-key override).
+              deliver: "all",
+              // One poison event must not silence a project's entire feed.
+              onPoison: "skip",
+            } satisfies SubscriptionConfiguredPayload,
+          });
+        }
         // The standalone streams playground also has no PostHog credential or
         // receiver. Deployed OS environments require the credential, so its
         // presence is the integration boundary.
@@ -478,6 +485,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       byteLengths.reduce((sum, bytes) => sum + bytes, 0),
     );
     this.#refreshLiveState();
+    this.#subscribers.notifyDeliveryStateChanged();
 
     // 3. Post-commit fan-out. Core side effects are fire-and-forget where
     // async, so nothing here can fail the append. One wake covers every lane:
@@ -873,10 +881,29 @@ export class StreamDurableObject extends DurableObject<Env> {
         });
       }
 
-      case "events.iterate.com/stream/subscription-cursor-set":
+      case "events.iterate.com/stream/subscription-cursor-set": {
         // The seek itself is a side effect on the spine's cursor row (see
-        // #processEvent); the fold only validates and counts the fact.
-        return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        // #processEvent). Remember the fact on the exact active
+        // configuration as well, so a delivery fence cannot mistake a seek
+        // that happened before its wait began for a receiver acknowledgement.
+        const existing = next.configuredSubscribersByKey[event.payload.subscriptionKey];
+        if (existing === undefined) {
+          return this.#reduceCircuitBreaker({ event: args.event, state: next });
+        }
+        return this.#reduceCircuitBreaker({
+          event: args.event,
+          state: {
+            ...next,
+            configuredSubscribersByKey: {
+              ...next.configuredSubscribersByKey,
+              [event.payload.subscriptionKey]: {
+                ...existing,
+                cursorSetAtOffset: event.offset,
+              },
+            },
+          },
+        });
+      }
 
       case "events.iterate.com/stream/child-stream-created": {
         if (next.path === undefined) {
@@ -1389,6 +1416,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       clearTimeout(timer);
       handle.unsubscribe();
     }
+  }
+
+  /** Internal creation-saga fence; delivery proof lives with the subscriber spine. */
+  async waitUntilSubscriptionDelivered(args: {
+    configuredAtOffset: number;
+    eventType: string;
+    expression: ["processEventBatch"];
+    subscriptionKey: string;
+    targetOffset: number;
+    timeoutMs: number;
+  }): Promise<void> {
+    await this.#subscribers.waitUntilDelivered(args);
   }
 
   getProcessorRuntimeState(args: {

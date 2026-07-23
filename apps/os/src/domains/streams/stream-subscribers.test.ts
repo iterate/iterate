@@ -33,6 +33,7 @@ import {
   computeBackoffMs,
 } from "./subscriber-math.ts";
 import { retainProcessEventBatch, type RetainedProcessEventBatch } from "./subscriber-sinks.ts";
+import { isStreamDeliveryRejectedError, isStreamWaitTimeoutError } from "./stream-unavailable.ts";
 
 const PARKED = "events.iterate.com/stream/subscription-parked";
 const ERROR_OCCURRED = "events.iterate.com/stream/error-occurred";
@@ -155,6 +156,7 @@ type ConfiguredEntry = {
     createdAt: string;
   };
   parkedAtOffset?: number;
+  cursorSetAtOffset?: number;
 };
 
 function makeHarness(
@@ -350,6 +352,18 @@ function pushPayload(
   };
 }
 
+function exactBarrierPayload(): SubscriptionConfiguredPayload {
+  return pushPayload({
+    delivery: { mode: "push", expression: ["processEventBatch"] },
+    deliver: { afterOffset: 0 },
+    selector: {
+      eventTypes: ["events.iterate.com/project/create-requested"],
+      condition: "offset = 1",
+    },
+    onPoison: "park",
+  });
+}
+
 function wakePayload(): SubscriptionConfiguredPayload {
   return {
     subscriptionKey: "k",
@@ -387,6 +401,114 @@ function makeSink() {
 }
 
 describe("StreamSubscribers", () => {
+  describe("exact delivery fence", () => {
+    const wait = (h: ReturnType<typeof makeHarness>) =>
+      h.subscribers.waitUntilDelivered({
+        configuredAtOffset: 3,
+        eventType: "events.iterate.com/project/create-requested",
+        expression: ["processEventBatch"],
+        subscriptionKey: "k",
+        targetOffset: 1,
+        timeoutMs: 1_000,
+      });
+
+    it("proves only the selected target event was in the acknowledged receiver call", async () => {
+      const h = makeHarness();
+      h.configure(exactBarrierPayload(), 3);
+      h.append(
+        evt(1, "events.iterate.com/project/create-requested"),
+        evt(2, "events.iterate.com/project/later-command"),
+      );
+
+      h.subscribers.wake();
+      await h.settle();
+      await expect(wait(h)).resolves.toBeUndefined();
+
+      expect(h.pushes).toHaveLength(1);
+      expect(h.pushes[0]!.events.map((event) => event.offset)).toEqual([1]);
+      // Selector filtering is skip-not-defer: the cursor can pass later
+      // events, but the receiver call whose resolution advanced it contained
+      // only the exact creation event.
+      expect(h.row("k")?.ackedOffset).toBe(2);
+    });
+
+    it("rejects a pre-existing explicit seek", async () => {
+      const h = makeHarness();
+      h.configure(exactBarrierPayload(), 3);
+      h.configured.k!.cursorSetAtOffset = 2;
+      h.store.ensure("k", 0);
+
+      await expect(wait(h)).rejects.toSatisfy(isStreamDeliveryRejectedError);
+    });
+
+    it.each([
+      {
+        name: "replacement",
+        mutate: (h: ReturnType<typeof makeHarness>) => h.configure(exactBarrierPayload(), 4),
+      },
+      {
+        name: "removal",
+        mutate: (h: ReturnType<typeof makeHarness>) => {
+          delete h.configured.k;
+        },
+      },
+      {
+        name: "parking",
+        mutate: (h: ReturnType<typeof makeHarness>) => {
+          h.configured.k!.parkedAtOffset = 1;
+        },
+      },
+      {
+        name: "cursor epoch change",
+        mutate: (h: ReturnType<typeof makeHarness>) => h.store.setCursor("k", 0),
+      },
+    ])("rejects $name while waiting", async ({ mutate }) => {
+      const h = makeHarness();
+      h.configure(exactBarrierPayload(), 3);
+      h.store.ensure("k", 0);
+      const pending = wait(h);
+
+      mutate(h);
+      h.subscribers.notifyDeliveryStateChanged();
+
+      await expect(pending).rejects.toSatisfy(isStreamDeliveryRejectedError);
+    });
+
+    it("classifies expiry as a retryable waiter timeout", async () => {
+      const h = makeHarness();
+      h.configure(exactBarrierPayload(), 3);
+      h.store.ensure("k", 0);
+
+      const pending = h.subscribers.waitUntilDelivered({
+        configuredAtOffset: 3,
+        eventType: "events.iterate.com/project/create-requested",
+        expression: ["processEventBatch"],
+        subscriptionKey: "k",
+        targetOffset: 1,
+        timeoutMs: 1,
+      });
+      h.advanceTo(2);
+      h.subscribers.notifyDeliveryStateChanged();
+
+      await expect(pending).rejects.toSatisfy(isStreamWaitTimeoutError);
+    });
+
+    it("rejects a configuration that is not selector-pinned to the target", async () => {
+      const h = makeHarness();
+      h.configure(
+        pushPayload({
+          delivery: { mode: "push", expression: ["processEventBatch"] },
+          deliver: { afterOffset: 0 },
+          onPoison: "park",
+        }),
+        3,
+      );
+      h.store.ensure("k", 0);
+
+      await expect(wait(h)).rejects.toSatisfy(isStreamDeliveryRejectedError);
+    });
+  });
+
   it("hands durable delivery to its scheduler without starting the receiver call", async () => {
     const scheduled: (() => Promise<unknown>)[] = [];
     const h = makeHarness({ runDurable: (work) => scheduled.push(work) });

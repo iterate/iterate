@@ -8,7 +8,42 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "AGENTS.md",
     content:
-      "iterate project config repo — worker.ts is the project worker ({ fetch, processEvent }); apps/ holds its apps. Real docs coming soon.\n",
+      "# Project configuration\n" +
+      "\n" +
+      "This repository is the project's executable configuration. `worker.ts` is the\n" +
+      "default project worker (`fetch` plus `processEvent`); `apps/` contains the apps\n" +
+      "and stateful processors it hosts.\n" +
+      "\n" +
+      "## Creation and reconciliation\n" +
+      "\n" +
+      "The `processEvent` switch in `worker.ts` has two deliberate hooks:\n" +
+      "\n" +
+      "- `project/create-requested` is the creation-only hook. Put initial\n" +
+      "  subscriptions and appends in that case, with stable idempotency keys because\n" +
+      "  delivery is at least once. The platform does not commit terminal\n" +
+      "  `project/created` until this event has been processed successfully.\n" +
+      "- `reconcileProject()` is the idempotent desired-state hook. It runs during\n" +
+      "  creation, whenever the root stream wakes after an OS deployment or\n" +
+      "  hibernation, after a config-repo commit finishes, and when a configured\n" +
+      "  heartbeat fires. Add `ensure … exists` work here; it must be safe to run\n" +
+      "  repeatedly.\n" +
+      "\n" +
+      "`heartbeatSchedules` uses the scheduler's normal recurrence union:\n" +
+      "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Add\n" +
+      "multiple entries for multiple cadences, use `{ every: 1 }` in a fast test\n" +
+      "project, or use `[]` for no periodic reconciliation. The default is one\n" +
+      "15-minute schedule. Missed interval occurrences coalesce; the scheduler does\n" +
+      "not backfill one heartbeat per missed interval.\n" +
+      "\n" +
+      "Heartbeat schedules owned by this file use the\n" +
+      "`iterate/config/heartbeat/` key prefix. Reconciliation calls\n" +
+      "`scheduler.ensure(...)` for each desired definition; the Scheduler leaves a\n" +
+      "matching schedule's clock, run count, and defining event untouched. It removes\n" +
+      "stale owned keys and never removes unrelated customer schedules. A trigger appends\n" +
+      "`events.iterate.com/project/reconciliation-requested` to `/` with only\n" +
+      "`{ scheduleKey }`; the scheduler execution ID is the append idempotency key.\n" +
+      "The root `project-worker` subscription key is platform-owned; creation hooks\n" +
+      "install any additional subscriptions under their own distinct keys.\n",
   },
   {
     path: "ONBOARDING.md",
@@ -51,7 +86,42 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "README.md",
     content:
-      "iterate project config repo — worker.ts is the project worker ({ fetch, processEvent }); apps/ holds its apps. Real docs coming soon.\n",
+      "# Project configuration\n" +
+      "\n" +
+      "This repository is the project's executable configuration. `worker.ts` is the\n" +
+      "default project worker (`fetch` plus `processEvent`); `apps/` contains the apps\n" +
+      "and stateful processors it hosts.\n" +
+      "\n" +
+      "## Creation and reconciliation\n" +
+      "\n" +
+      "The `processEvent` switch in `worker.ts` has two deliberate hooks:\n" +
+      "\n" +
+      "- `project/create-requested` is the creation-only hook. Put initial\n" +
+      "  subscriptions and appends in that case, with stable idempotency keys because\n" +
+      "  delivery is at least once. The platform does not commit terminal\n" +
+      "  `project/created` until this event has been processed successfully.\n" +
+      "- `reconcileProject()` is the idempotent desired-state hook. It runs during\n" +
+      "  creation, whenever the root stream wakes after an OS deployment or\n" +
+      "  hibernation, after a config-repo commit finishes, and when a configured\n" +
+      "  heartbeat fires. Add `ensure … exists` work here; it must be safe to run\n" +
+      "  repeatedly.\n" +
+      "\n" +
+      "`heartbeatSchedules` uses the scheduler's normal recurrence union:\n" +
+      "`{ every: seconds }`, `{ cron, timezone? }`, or `{ at: ISO timestamp }`. Add\n" +
+      "multiple entries for multiple cadences, use `{ every: 1 }` in a fast test\n" +
+      "project, or use `[]` for no periodic reconciliation. The default is one\n" +
+      "15-minute schedule. Missed interval occurrences coalesce; the scheduler does\n" +
+      "not backfill one heartbeat per missed interval.\n" +
+      "\n" +
+      "Heartbeat schedules owned by this file use the\n" +
+      "`iterate/config/heartbeat/` key prefix. Reconciliation calls\n" +
+      "`scheduler.ensure(...)` for each desired definition; the Scheduler leaves a\n" +
+      "matching schedule's clock, run count, and defining event untouched. It removes\n" +
+      "stale owned keys and never removes unrelated customer schedules. A trigger appends\n" +
+      "`events.iterate.com/project/reconciliation-requested` to `/` with only\n" +
+      "`{ scheduleKey }`; the scheduler execution ID is the append idempotency key.\n" +
+      "The root `project-worker` subscription key is platform-owned; creation hooks\n" +
+      "install any additional subscriptions under their own distinct keys.\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -1302,12 +1372,31 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
   {
     path: "worker.ts",
     content:
-      "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
+      "import { IterateWorkerEntrypoint, type SchedulerRecurrence, type StreamEvent } from \"iterate/sdk\";\n" +
       "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
       "import {\n" +
       "  githubConnectionStreamPath,\n" +
       "  reviewBotSubscriptionEvents,\n" +
       "} from \"./apps/review-bot/src/review-bot-ref.ts\";\n" +
+      "\n" +
+      "const HEARTBEAT_SCHEDULE_PREFIX = \"iterate/config/heartbeat/\";\n" +
+      "const HEARTBEAT_SCRIPT = `async (itx, schedule, trigger) => {\n" +
+      "  await itx.streams.get(\"/\").append({\n" +
+      "    type: \"events.iterate.com/project/reconciliation-requested\",\n" +
+      "    idempotencyKey: \"iterate/config/heartbeat:\" + trigger.executionId,\n" +
+      "    payload: { scheduleKey: schedule.key },\n" +
+      "  });\n" +
+      "}`;\n" +
+      "\n" +
+      "// Project-owned configuration: use the scheduler's native recurrence shape.\n" +
+      "// Add entries for multiple cadences, use `{ every: 1 }` in a fast test\n" +
+      "// project, or set this to `[]` when the project needs no periodic heartbeat.\n" +
+      "const heartbeatSchedules: Array<{ key: string; recurrence: SchedulerRecurrence }> = [\n" +
+      "  {\n" +
+      "    key: `${HEARTBEAT_SCHEDULE_PREFIX}every-15-minutes`,\n" +
+      "    recurrence: { every: 15 * 60 },\n" +
+      "  },\n" +
+      "];\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
       "// HTTP clients on the internet can send us Requests, and we will send responses and\n" +
@@ -1324,6 +1413,39 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  // per-stream order.\n" +
       "  protected override async processEvent(event: StreamEvent): Promise<void> {\n" +
       "    switch (event.type) {\n" +
+      "      case \"events.iterate.com/project/create-requested\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        // Put literal, once-per-creation subscription configuration and\n" +
+      "        // initial appends here. Returning from this case is the platform's\n" +
+      "        // project/created barrier.\n" +
+      "        await this.reconcileProject();\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/project/reconciliation-requested\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        console.log(\"Project heartbeat fired\", { scheduleKey: event.payload?.scheduleKey });\n" +
+      "        await this.reconcileProject();\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/stream/woken\": {\n" +
+      "        if (event.path !== \"/\") break;\n" +
+      "        await this.reconcileProject();\n" +
+      "        break;\n" +
+      "      }\n" +
+      "      case \"events.iterate.com/repo/commit-completed\": {\n" +
+      "        const origin = event.source?.crossPostedFrom?.at(-1);\n" +
+      "        if (\n" +
+      "          event.path !== \"/\" ||\n" +
+      "          origin?.path !== \"/repos/config\" ||\n" +
+      "          origin.projectId === null ||\n" +
+      "          origin.subscriptionKey !== \"cross-post:/\" ||\n" +
+      "          origin.type !== event.type\n" +
+      "        ) {\n" +
+      "          break;\n" +
+      "        }\n" +
+      "        await this.reconcileProject();\n" +
+      "        break;\n" +
+      "      }\n" +
       "      case \"events.iterate.com/repo/github-link-configured\": {\n" +
       "        // The pull-request review bot (apps/review-bot) is a stream processor\n" +
       "        // on each GitHub connection's webhook stream. A repo link is the rare\n" +
@@ -1346,6 +1468,23 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      default:\n" +
       "        break;\n" +
       "    }\n" +
+      "  }\n" +
+      "\n" +
+      "  private async reconcileProject(): Promise<void> {\n" +
+      "    using itx = await this.env.ITX.get();\n" +
+      "    const configured = await itx.scheduler.list();\n" +
+      "    const desiredKeys = new Set(heartbeatSchedules.map((schedule) => schedule.key));\n" +
+      "    await Promise.all([\n" +
+      "      ...heartbeatSchedules.map((schedule) =>\n" +
+      "        itx.scheduler.ensure({ ...schedule, script: HEARTBEAT_SCRIPT }),\n" +
+      "      ),\n" +
+      "      ...configured\n" +
+      "        .filter(\n" +
+      "          (schedule) =>\n" +
+      "            schedule.key.startsWith(HEARTBEAT_SCHEDULE_PREFIX) && !desiredKeys.has(schedule.key),\n" +
+      "        )\n" +
+      "        .map((schedule) => itx.scheduler.cancel(schedule.key)),\n" +
+      "    ]);\n" +
       "  }\n" +
       "\n" +
       "  async fetch(req: Request): Promise<Response> {\n" +

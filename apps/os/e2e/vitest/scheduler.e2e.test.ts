@@ -5,12 +5,12 @@
 
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/processors";
-import type { ScheduleView } from "../../src/domains/scheduler/types.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const SCHEDULER_STREAM_PATH = "/scheduler/primary";
+const SCHEDULE_SET_TYPE = "events.iterate.com/scheduler/schedule-set";
 const COMPLETED_TYPE = "events.iterate.com/scheduler/trigger-completed";
 const MARKER_TYPE = "events.iterate.test/scheduler-e2e/marker";
 
@@ -54,7 +54,7 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
   expect("at" in view.recurrence).toBe(true);
 
   const listed = await project.scheduler.list();
-  expect(listed.map((schedule: ScheduleView) => schedule.key)).toContain(key);
+  expect(listed.map((schedule) => schedule.key)).toContain(key);
 
   using schedulerStream = project.streams.get(SCHEDULER_STREAM_PATH);
   let completed: StreamEvent | undefined;
@@ -96,7 +96,7 @@ test("a near-future schedule triggers, runs its itx script, and records the outc
   await waitFor(
     async () => {
       const remaining = await project.scheduler.list();
-      return !remaining.some((schedule: ScheduleView) => schedule.key === key);
+      return !remaining.some((schedule) => schedule.key === key);
     },
     () => `one-shot ${key} to leave the schedule list`,
   );
@@ -112,14 +112,52 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
     .get(`scheduler-manual-e2e-${RUN_SUFFIX}-${marker.slice(0, 8)}`)
     .create({});
 
-  await project.scheduler.set({
+  const definition = {
     key,
     recurrence: { cron: "0 3 1 1 *", timezone: "Europe/London" }, // far future: yearly
     script: `async (itx, schedule, trigger) => "manual-" + trigger.runCount`,
+    metadata: { purpose: "manual e2e", nested: { a: 1, b: 2 }, negativeZero: -0 },
+  } as const;
+  const concurrentlyEnsured = await Promise.all(
+    Array.from({ length: 5 }, () => project.scheduler.ensure(definition)),
+  );
+  const initial = concurrentlyEnsured[0]!;
+  expect(new Set(concurrentlyEnsured.map((schedule) => schedule.definedAtOffset))).toMatchObject({
+    size: 1,
   });
+  using schedulerStream = project.streams.get(SCHEDULER_STREAM_PATH);
+  const setEvents = (await schedulerStream.getEvents({ afterOffset: 0 })).filter(
+    (event) =>
+      event.type === SCHEDULE_SET_TYPE &&
+      (event.payload as { key?: string }).key === definition.key,
+  );
+  expect(setEvents).toHaveLength(1);
+
+  const unchanged = await project.scheduler.ensure({
+    ...definition,
+    // Object key order and JSON's persisted -0 → 0 normalization are not
+    // configuration changes.
+    metadata: { negativeZero: -0, nested: { b: 2, a: 1 }, purpose: "manual e2e" },
+  });
+  expect(unchanged).toMatchObject({
+    definedAtOffset: initial.definedAtOffset,
+    setAt: initial.setAt,
+  });
+  expect(
+    (await schedulerStream.getEvents({ afterOffset: 0 })).filter(
+      (event) =>
+        event.type === SCHEDULE_SET_TYPE &&
+        (event.payload as { key?: string }).key === definition.key,
+    ),
+  ).toHaveLength(1);
+
+  const changed = await project.scheduler.ensure({
+    ...definition,
+    recurrence: { cron: "0 4 1 1 *", timezone: "Europe/London" },
+  });
+  expect(changed.definedAtOffset).toBeGreaterThan(initial.definedAtOffset);
 
   const { executionId } = await project.scheduler.trigger(key);
-  using schedulerStream = project.streams.get(SCHEDULER_STREAM_PATH);
   let completed: StreamEvent | undefined;
   await waitFor(
     async () => {
@@ -137,7 +175,7 @@ test("manual trigger runs a far-future schedule now; cancel removes it", async (
 
   await project.scheduler.cancel(key);
   const listed = await project.scheduler.list();
-  expect(listed.map((schedule: ScheduleView) => schedule.key)).not.toContain(key);
+  expect(listed.map((schedule) => schedule.key)).not.toContain(key);
 });
 
 function waitFor(

@@ -26,7 +26,7 @@ That is weaker than project creation, which is an explicit multi-step saga:
 - birth certificate + durable subscriptions
 - sibling births (capability host, scheduler, config repo, email, …)
 - waits / cross-posts
-- terminal `project/ready`
+- terminal `project/created`
 
 Custom domains need the same discipline: **desired state is not live traffic**,
 progress is event-sourced and observable, recovery is bounded, and the UI

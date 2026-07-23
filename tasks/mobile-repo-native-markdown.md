@@ -33,7 +33,7 @@ This supersedes the Expo Go proof of concept in #2065. It must build on the nati
 
 - [x] Route away from the server picker immediately after OAuth succeeds. _The success transition now resets the ITX/query context and replaces the route with the project picker._
 - [x] Prevent remembered projects leaking across deployments or sign-ins. _The storage key now includes the OS URL, auth issuer, and interactive OAuth client registration; boot also verifies the project remains in the current principal's catalogue._
-- [x] Make mobile-created projects expose their config repo before they open. _Backfill now waits for `project/ready`, which is committed only after `/repos/config` becomes ready._
+- [x] Make mobile-created projects expose their config repo before they open. _Creation now waits for terminal `project/created`, which is committed only after `/repos/config` exists and the project worker consumes `project/create-requested`._
 - [x] Highlight parsed TypeScript/JSON in chat without showing the model's duplicate fenced source. _Activities with an execution step show only that canonical parsed code through read-only CodeMirror, using its complete VS Code Dark theme._
 - [x] Make copy confirmation non-blocking. _Copying a stream URL now shows a short-lived accessible in-app toast instead of an alert dialog._
 

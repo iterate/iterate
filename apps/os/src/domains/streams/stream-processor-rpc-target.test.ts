@@ -8,6 +8,42 @@ import {
 } from "../../rpc-targets.ts";
 
 describe("StreamRpcTarget", () => {
+  it("reserves platform processor authority for streams owned by processor hosts", async () => {
+    const append = vi.fn(async () => []);
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        return { append } as never;
+      }
+    }
+    const props = {
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    };
+    const processor = {
+      slug: "project",
+      version: "1.0.0",
+      stream: { path: "/", projectId: "prj_test" },
+    };
+
+    await expect(
+      new TestStreamRpcTarget(props).append({
+        type: "events.iterate.com/test/forged",
+        source: { processor: { ...processor, authority: "platform" } },
+      }),
+    ).rejects.toThrow("source.processor.authority is reserved");
+    expect(append).not.toHaveBeenCalled();
+
+    await new TestStreamRpcTarget({ ...props, platformProcessorHost: true }).append({
+      type: "events.iterate.com/test/emitted",
+      source: { processor },
+    });
+    expect(append).toHaveBeenCalledWith({
+      type: "events.iterate.com/test/emitted",
+      source: { processor: { ...processor, authority: "platform" } },
+    });
+  });
+
   it("relays the stream runtime LiveState property without polling runtimeState", async () => {
     const runtimeState = {
       coreProcessorState: { maxOffset: 4 },

@@ -1,9 +1,28 @@
-import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { IterateWorkerEntrypoint, type SchedulerRecurrence, type StreamEvent } from "iterate/sdk";
 import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 import {
   githubConnectionStreamPath,
   reviewBotSubscriptionEvents,
 } from "./apps/review-bot/src/review-bot-ref.ts";
+
+const HEARTBEAT_SCHEDULE_PREFIX = "iterate/config/heartbeat/";
+const HEARTBEAT_SCRIPT = `async (itx, schedule, trigger) => {
+  await itx.streams.get("/").append({
+    type: "events.iterate.com/project/reconciliation-requested",
+    idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId,
+    payload: { scheduleKey: schedule.key },
+  });
+}`;
+
+// Project-owned configuration: use the scheduler's native recurrence shape.
+// Add entries for multiple cadences, use `{ every: 1 }` in a fast test
+// project, or set this to `[]` when the project needs no periodic heartbeat.
+const heartbeatSchedules: Array<{ key: string; recurrence: SchedulerRecurrence }> = [
+  {
+    key: `${HEARTBEAT_SCHEDULE_PREFIX}every-15-minutes`,
+    recurrence: { every: 15 * 60 },
+  },
+];
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
@@ -20,6 +39,39 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     switch (event.type) {
+      case "events.iterate.com/project/create-requested": {
+        if (event.path !== "/") break;
+        // Put literal, once-per-creation subscription configuration and
+        // initial appends here. Returning from this case is the platform's
+        // project/created barrier.
+        await this.reconcileProject();
+        break;
+      }
+      case "events.iterate.com/project/reconciliation-requested": {
+        if (event.path !== "/") break;
+        console.log("Project heartbeat fired", { scheduleKey: event.payload?.scheduleKey });
+        await this.reconcileProject();
+        break;
+      }
+      case "events.iterate.com/stream/woken": {
+        if (event.path !== "/") break;
+        await this.reconcileProject();
+        break;
+      }
+      case "events.iterate.com/repo/commit-completed": {
+        const origin = event.source?.crossPostedFrom?.at(-1);
+        if (
+          event.path !== "/" ||
+          origin?.path !== "/repos/config" ||
+          origin.projectId === null ||
+          origin.subscriptionKey !== "cross-post:/" ||
+          origin.type !== event.type
+        ) {
+          break;
+        }
+        await this.reconcileProject();
+        break;
+      }
       case "events.iterate.com/repo/github-link-configured": {
         // The pull-request review bot (apps/review-bot) is a stream processor
         // on each GitHub connection's webhook stream. A repo link is the rare
@@ -42,6 +94,23 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       default:
         break;
     }
+  }
+
+  private async reconcileProject(): Promise<void> {
+    using itx = await this.env.ITX.get();
+    const configured = await itx.scheduler.list();
+    const desiredKeys = new Set(heartbeatSchedules.map((schedule) => schedule.key));
+    await Promise.all([
+      ...heartbeatSchedules.map((schedule) =>
+        itx.scheduler.ensure({ ...schedule, script: HEARTBEAT_SCRIPT }),
+      ),
+      ...configured
+        .filter(
+          (schedule) =>
+            schedule.key.startsWith(HEARTBEAT_SCHEDULE_PREFIX) && !desiredKeys.has(schedule.key),
+        )
+        .map((schedule) => itx.scheduler.cancel(schedule.key)),
+    ]);
   }
 
   async fetch(req: Request): Promise<Response> {

@@ -59,7 +59,11 @@ import {
 } from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
-import { isDurableObjectLifecycleError } from "./stream-unavailable.ts";
+import {
+  isDurableObjectLifecycleError,
+  STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX,
+  STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX,
+} from "./stream-unavailable.ts";
 import type {
   CoreProcessorState,
   StreamSubscriberDescriptor,
@@ -284,6 +288,7 @@ export class StreamSubscribers {
   /** How long a quiet configured connection may stay open. */
   readonly #idleTeardownMs: number;
   readonly #connections = new Map<string, Connection>();
+  readonly #deliveryWaiters = new Set<() => void>();
   /**
    * In-memory deadline multiplexed onto the Stream DO's existing alarm.
    *
@@ -374,6 +379,140 @@ export class StreamSubscribers {
     }
     this.wake();
     this.#armAlarmFromStore();
+  }
+
+  /**
+   * Wake every exact-delivery fence after either half of its durable proof
+   * changes: folded subscription state or the stream-owned cursor row.
+   *
+   * The owning Stream DO calls this synchronously after those mutations. A
+   * Set is enough because waiters always re-read both durable halves before
+   * deciding; notifications carry no state of their own.
+   */
+  notifyDeliveryStateChanged(): void {
+    for (const resolve of this.#deliveryWaiters) resolve();
+    this.#deliveryWaiters.clear();
+  }
+
+  /**
+   * Resolve only when one exact push configuration has acknowledged one exact
+   * event. This deliberately lives beside the delivery cursor machinery: its
+   * proof is the conjunction of folded desired state and the cursor row.
+   *
+   * The selector makes the receiver call contain only the target event, even
+   * when later offsets already exist. Replacement, removal, parking, an
+   * explicit seek, or a cursor-epoch change rejects as a durable policy
+   * failure; a timeout remains retryable by the creation saga.
+   */
+  async waitUntilDelivered(args: {
+    configuredAtOffset: number;
+    eventType: string;
+    expression: ItxExpression;
+    subscriptionKey: string;
+    targetOffset: number;
+    timeoutMs: number;
+  }): Promise<void> {
+    if (!Number.isSafeInteger(args.configuredAtOffset) || args.configuredAtOffset <= 0) {
+      throw new Error("configuredAtOffset must be a positive safe integer.");
+    }
+    if (args.eventType.length === 0) throw new Error("eventType must be non-empty.");
+    if (!Number.isSafeInteger(args.targetOffset) || args.targetOffset <= 0) {
+      throw new Error("targetOffset must be a positive safe integer.");
+    }
+    if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+      throw new Error("timeoutMs must be a positive number.");
+    }
+
+    const rejected = (message: string) =>
+      new Error(`${STREAM_DELIVERY_REJECTED_MESSAGE_PREFIX}${message}`);
+    const readFence = () => {
+      const configured = this.#hooks.coreState().configuredSubscribersByKey[args.subscriptionKey];
+      if (configured === undefined) {
+        throw rejected(`subscription "${args.subscriptionKey}" was removed before delivery`);
+      }
+      if (configured.latestConfiguredEvent.offset !== args.configuredAtOffset) {
+        throw rejected(
+          `subscription "${args.subscriptionKey}" was replaced before delivery ` +
+            `(expected config offset ${args.configuredAtOffset}, got ${configured.latestConfiguredEvent.offset})`,
+        );
+      }
+      const payload = configured.latestConfiguredEvent.payload;
+      const selector = payload.selector;
+      if (
+        payload.delivery.mode !== "push" ||
+        JSON.stringify(payload.delivery.expression) !== JSON.stringify(args.expression) ||
+        typeof payload.deliver !== "object" ||
+        payload.deliver.afterOffset !== args.targetOffset - 1 ||
+        selector?.eventTypes?.length !== 1 ||
+        selector.eventTypes[0] !== args.eventType ||
+        selector.condition !== `offset = ${args.targetOffset}` ||
+        payload.onPoison !== "park"
+      ) {
+        throw rejected(
+          `subscription "${args.subscriptionKey}" does not satisfy the exact-delivery policy`,
+        );
+      }
+      if (configured.parkedAtOffset !== undefined) {
+        throw rejected(
+          `subscription "${args.subscriptionKey}" parked at offset ${configured.parkedAtOffset}`,
+        );
+      }
+      if (configured.cursorSetAtOffset !== undefined) {
+        throw rejected(
+          `subscription "${args.subscriptionKey}" cursor was explicitly moved at offset ${configured.cursorSetAtOffset}`,
+        );
+      }
+      const cursor = this.#hooks.store.get(args.subscriptionKey);
+      if (cursor === undefined) {
+        throw rejected(`subscription "${args.subscriptionKey}" has no delivery cursor`);
+      }
+      return cursor;
+    };
+
+    const initialEpoch = readFence().epoch;
+    const deadline = this.#hooks.now() + args.timeoutMs;
+    for (;;) {
+      const cursor = readFence();
+      if (cursor.epoch !== initialEpoch) {
+        throw rejected(`subscription "${args.subscriptionKey}" cursor moved by an explicit seek`);
+      }
+      if (cursor.ackedOffset >= args.targetOffset) return;
+
+      const remainingMs = deadline - this.#hooks.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}Timed out after ${args.timeoutMs}ms waiting for ` +
+            `subscription "${args.subscriptionKey}" to deliver event ${args.eventType} at offset ${args.targetOffset}.`,
+        );
+      }
+
+      const changed = Promise.withResolvers<void>();
+      this.#deliveryWaiters.add(changed.resolve);
+      // Close the check/register race: config and cursor changes are
+      // synchronous within one Stream DO turn. Re-read after registration and
+      // self-wake if the condition changed in that narrow interval.
+      try {
+        const afterRegister = readFence();
+        if (
+          afterRegister.epoch !== initialEpoch ||
+          afterRegister.ackedOffset >= args.targetOffset
+        ) {
+          changed.resolve();
+        }
+      } catch (error) {
+        this.#deliveryWaiters.delete(changed.resolve);
+        throw error;
+      }
+
+      const timer = setTimeout(changed.resolve, remainingMs);
+      try {
+        // eslint-disable-next-line react-doctor/async-await-in-loop -- Each iteration must re-read the durable cursor/config fence after one observed mutation.
+        await changed.promise;
+      } finally {
+        clearTimeout(timer);
+        this.#deliveryWaiters.delete(changed.resolve);
+      }
+    }
   }
 
   // ===========================================================================

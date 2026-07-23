@@ -284,9 +284,9 @@ advancing watermarks past its own disconnect facts so teardown doesn't
 immediately re-poke. The spine's RETRY alarm is the opposite case on purpose:
 its state is durable rows, so waking a hibernated DO is exactly the point.
 
-## The worker feed: born, not wired
+## The worker feed
 
-Every project-scoped stream appends its own worker feed in its birth
+Every non-root project stream appends its own worker feed in its birth
 certificate — `created (1)`, `subscription-configured (2)`, `woken (3)`:
 
 ```ts
@@ -302,6 +302,14 @@ overridable by re-appending the same key (narrow the selector, park it,
 whatever). The worker returns → ack; throws → redelivery with backoff.
 `${event.path}@${event.offset}` is the idempotency idiom that makes
 at-least-once redelivery a no-op.
+
+The root `/` stream is the deliberate exception. The project creation saga
+waits for the config repo's worker to build, then appends the same literal
+subscription starting immediately before `project/create-requested`, with
+`onPoison: "park"`. It waits for that exact cursor to acknowledge the creation
+request before appending terminal `project/created`. This both avoids treating
+the worker as broken while it is being built and makes the userspace creation
+hook part of the project's creation boundary.
 
 ## Hosting processors in a Durable Object
 

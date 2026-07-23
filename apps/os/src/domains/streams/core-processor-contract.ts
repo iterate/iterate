@@ -63,7 +63,10 @@ import { EventSelector } from "./event-selector.ts";
 //      Live ephemeral consumers are runtime state (the in-memory connection
 //      table); dead ones used to linger here forever when their disconnect
 //      fact was lost to an eviction or deploy rollover.
-export const CORE_STATE_VERSION = 14;
+// - 15: configured subscriptions remember a later explicit cursor seek's
+//      event offset. The project-creation delivery fence uses that durable
+//      fact to reject a seek that happened before its RPC wait began.
+export const CORE_STATE_VERSION = 15;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -349,6 +352,12 @@ export const CoreProcessorContract = defineProcessorContract({
            * not facts — see the streams README doctrine.
            */
           parkedAtOffset: z.number().int().min(0).optional(),
+          /**
+           * Offset of the newest explicit cursor seek after this exact
+           * configuration. A fresh subscription-configured event replaces
+           * the entry and clears it.
+           */
+          cursorSetAtOffset: z.number().int().positive().optional(),
         }),
       )
       .default({}),

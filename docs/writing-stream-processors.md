@@ -87,6 +87,41 @@ branch in `AgentProcessor.processEvent` (start/settle LLM obligations, then
 derive scheduling) and `CapabilityHostProcessor` (scripts — same shape,
 different settle policy).
 
+## Userspace project configuration reconciliation
+
+The default worker in each project's config repo has a smaller desired-state
+loop for project-owned configuration. Keep the event ceremony visible in its
+literal `processEvent` switch:
+
+- `project/create-requested` is the creation-only hook for initial
+  subscriptions and appends. Delivery is at least once, so use stable
+  idempotency keys. Project creation does not commit terminal `project/created`
+  until this delivery returns successfully. The root `project-worker`
+  subscription key is platform-owned; use distinct keys for subscriptions
+  installed by this hook.
+- `stream/woken` on `/` re-runs reconciliation after the stream Durable Object
+  wakes, including after an OS deployment.
+- a config-repo `repo/commit-completed` cross-posted to `/` re-runs it after
+  the source change and dynamic-worker rebuild;
+- `project/reconciliation-requested` re-runs it on a scheduler heartbeat.
+
+All four call the same idempotent `reconcileProject()` function. For schedules,
+call `scheduler.ensure(...)`: the Scheduler owns definition equality and
+preserves the clock, run count, and defining event when the requested
+definition already matches. (`set(...)` deliberately re-anchors a recurring
+clock.) Configuration owned by this loop uses a reserved key prefix so stale
+owned entries can be removed without touching unrelated customer schedules.
+
+The seeded `heartbeatSchedules` array uses the Scheduler's public recurrence
+shape directly. It can contain multiple entries, a test-speed
+`{ every: 1 }`, or no entries. A trigger appends one durable
+`project/reconciliation-requested` event to `/`, carrying only the schedule
+key and using the scheduler execution ID for append idempotency. This is a
+recovery clock, not a hidden setup service: the desired state and all hooks
+remain editable, versioned userspace code in `/repos/config`. Missed interval
+occurrences coalesce into the scheduler's next trigger; there is no heartbeat
+backfill.
+
 ## Two primitives, two guarantees
 
 This is the normal delivery-semantics trade-off, spelled as two helpers.

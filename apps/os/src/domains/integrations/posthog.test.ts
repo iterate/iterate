@@ -218,6 +218,7 @@ describe("first-party PostHog stream integration", () => {
       metadata: undefined,
       source: undefined,
       payload: {
+        createRequestedAtOffset: 1,
         config: {
           creatorEmail: "owner@example.com",
           onboardingActive: true,

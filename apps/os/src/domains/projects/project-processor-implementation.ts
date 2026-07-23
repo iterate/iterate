@@ -11,8 +11,10 @@ import { SCHEDULER_PRIMARY_PATH } from "../scheduler/utils.ts";
 import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { isStreamDeliveryRejectedError } from "../streams/stream-unavailable.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import {
+  parseProjectCreationTerminal,
   ProjectProcessorContract,
   type ProjectProcessorState,
 } from "./project-processor-contract.ts";
@@ -23,6 +25,7 @@ import {
 // dispatch errors around that first build.
 const PROJECT_WORKER_READY_ATTEMPTS = 20;
 const PROJECT_WORKER_READY_RETRY_MS = 100;
+const PROJECT_WORKER_DELIVERY_TIMEOUT_MS = 60_000;
 // Bounds each sibling-birth wait so a broken sibling fails the frame into
 // ordinary durable redelivery instead of pinning project creation forever;
 // the config repo's birth includes a git artifact push and has produced an
@@ -34,24 +37,31 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * The project root processor. It lives on the project's `/` stream and does
  * four jobs, end to end:
  *
- * BOOTSTRAP. `project/created` is the birth certificate. Its one blocking
+ * BOOTSTRAP. `project/create-requested` is the durable intent. Its blocking
  * reaction creates every sibling processor a project is born with — the root
  * capability host on `/`, the primary scheduler on `/scheduler/primary`, the
- * config repo on `/repos/config` (its `repos/create-requested` batch also
- * arms the `cross-post:/` rule that copies later config-repo events back
- * onto `/`), and the email router on `/integrations/email` (seeded with the
- * creator's email as the first sender-allowlist entry). Every appended event
- * carries a deterministic idempotency key, so a redelivered birth frame
- * dedupes instead of double-creating. The frame then WAITS (bounded by
+ * config repo on `/repos/config` (its `repos/create-requested` batch also arms
+ * the `cross-post:/` rule that copies later config-repo events back onto `/`),
+ * and the email router on `/integrations/email` (seeded with the creator's
+ * email as the first sender-allowlist entry). Every append has a deterministic
+ * idempotency key, so redelivery dedupes instead of double-creating. The frame
+ * then WAITS (bounded by
  * SIBLING_BIRTH_BARRIER_TIMEOUT_MS) for each sibling to reduce its own birth
- * batch: `projects.get(slug).create()` blocks on this Project frame, and the boundary
- * must not race the capabilities it promises.
+ * batch.
  *
- * READY. The config repo's creation saga commits its terminal
- * `repos/created` certificate on its own stream; the cross-post rule copies
- * it here. The reaction probes the default project worker (each probe
- * attempt blocks on the worker's cold build) and then appends
- * `project/ready` — the fact `projects.get(slug).create()` callers await.
+ * TERMINAL. The config repo's creation saga commits `repos/created` on its own
+ * stream; the cross-post rule copies it here. The reaction probes the default
+ * project worker, temporarily configures the root `project-worker` feed to
+ * select only the exact `project/create-requested`, and waits for that
+ * configuration's cursor to acknowledge it. It then atomically replaces the
+ * temporary feed with the ordinary all-events feed and appends the terminal
+ * `project/created` certificate that create() callers await.
+ *
+ * A config-repo failure or a durable rejection of that exact delivery policy
+ * closes the saga with `project/create-failed`. Worker-build and availability
+ * errors, an in-progress build, and wait timeouts leave the reaction open for
+ * durable redelivery: the bundler does not yet classify source failures apart
+ * from infrastructure failures, so neither is terminal here.
  *
  * CATALOGS. `reduce` projects cross-posted domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -68,9 +78,10 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  * events (`human-approval-*`) are appended by the DO and the approve CLI,
  * not by this processor.
  *
- * Side-effect lanes: the bootstrap, ready and custom-domain reactions are
- * per-event consequences (each triggering event is delivered once; a lost
- * append would lose the reaction forever) and use `blockProcessorWhile`.
+ * Side-effect lanes: the bootstrap, terminal and custom-domain reactions are
+ * at-least-once per-event consequences. Their appends have stable idempotency
+ * keys, and `blockProcessorWhile` keeps the event cursor behind every
+ * consequence until it commits.
  */
 export class ProjectProcessor extends StreamProcessor<
   ProjectProcessorContract,
@@ -81,49 +92,162 @@ export class ProjectProcessor extends StreamProcessor<
   // ------------------------------------------------------------ processEvent
   protected override processEvent(args: ProcessEventArgs<ProjectProcessorContract>): undefined {
     const { event, state, append, blockProcessorWhile } = args;
-    // Project worker delivery is NOT here: every project stream (this one
-    // included) pumps its own events into the worker's `processEventBatch`
-    // with a durable checkpoint (see streams/project-worker-delivery.ts).
-
-    // Nothing reacts before birth (the created event itself excepted).
+    // Nothing reacts before the request. Once it reduces, its blocking frame
+    // has birthed every sibling before the cursor can reach a later command,
+    // so commands appended during a non-blocking create remain actionable
+    // instead of being acknowledged and lost while project/created is open.
     if (
-      event !== null &&
-      event.type !== "events.iterate.com/project/created" &&
-      state.birthCertificate === null
-    ) {
+      state.createRequest === null &&
+      event?.type !== "events.iterate.com/project/create-requested"
+    )
       return;
-    }
+    if (state.createFailure !== null) return;
 
     switch (event?.type) {
-      case "events.iterate.com/project/created": {
+      case "events.iterate.com/project/create-requested": {
+        if (event.offset !== state.createRequestedAtOffset) break;
         blockProcessorWhile(() => this.#createSiblingProcessors(args, event.payload.config));
         break;
       }
-      case "events.iterate.com/repos/created": {
+      case "events.iterate.com/repos/created":
+      case "events.iterate.com/repos/create-failed": {
         // Arrives as a cross-posted copy: the config repo commits its
-        // terminal certificate on its own stream, and the `cross-post:/`
-        // rule armed at create copies it here — this saga only ever reacts
-        // to events ON `/`. The certificate payload carries no path, so the
-        // config repo is recognized by cross-post provenance.
+        // terminal result on its own stream, and the `cross-post:/` rule
+        // armed at create copies it here — this saga only ever reacts to
+        // events ON `/`. The payload carries no path, so the config repo is
+        // recognized by exact cross-post provenance.
         const origin = event.source?.crossPostedFrom?.at(-1);
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          state.ready
+          origin.subscriptionKey !== "cross-post:/" ||
+          origin.type !== event.type ||
+          state.birthCertificate !== null ||
+          state.createRequest === null ||
+          state.createRequestedAtOffset === null
         ) {
           break;
         }
+        const createRequest = state.createRequest;
+        const createRequestedAtOffset = state.createRequestedAtOffset;
+        if (event.type === "events.iterate.com/repos/create-failed") {
+          blockProcessorWhile(() =>
+            append({
+              type: "events.iterate.com/project/create-failed",
+              idempotencyKey: this.idempotencyKey("create-failed"),
+              payload: {
+                createRequestedAtOffset,
+                error: `Config repo creation failed: ${event.payload.error}`,
+                request: createRequest,
+              },
+            }),
+          );
+          break;
+        }
         blockProcessorWhile(async () => {
+          const projectCreatedIdempotencyKey = `project-created:${this.deps.itx.projectId}`;
+          const existingProjectCreated = await this.stream.getEvent({
+            idempotencyKey: projectCreatedIdempotencyKey,
+          });
+          if (existingProjectCreated !== undefined) {
+            const terminal = parseProjectCreationTerminal({
+              event: existingProjectCreated,
+              projectId: this.deps.itx.projectId,
+              request: createRequest,
+              requestOffset: createRequestedAtOffset,
+            });
+            if (terminal?.type !== "events.iterate.com/project/created") {
+              throw new Error(
+                `idempotency key "${projectCreatedIdempotencyKey}" is not this creation request's certificate`,
+              );
+            }
+            // The permanent feed and certificate are one append batch. Seeing
+            // the certificate therefore also proves the feed was committed;
+            // this is the lost-ack retry path.
+            return;
+          }
+
           const timing = { projectId: this.deps.itx.projectId };
           await timedStep("create-timing", timing, "worker-probe", () =>
             this.#waitForDefaultProjectWorker(),
           );
-          await timedStep("create-timing", timing, "project-ready-append", () =>
-            append({
-              type: "events.iterate.com/project/ready",
-              idempotencyKey: this.idempotencyKey("ready"),
-              payload: {},
-            }),
+
+          try {
+            const [configured] = await timedStep(
+              "create-timing",
+              timing,
+              "project-worker-create-subscribe",
+              () =>
+                append({
+                  type: "events.iterate.com/stream/subscription-configured",
+                  idempotencyKey: `project-worker-creation-subscription:${this.deps.itx.projectId}`,
+                  payload: {
+                    subscriptionKey: "project-worker",
+                    description:
+                      "Temporary project-creation barrier: deliver only this project's exact create-requested event.",
+                    delivery: { mode: "push", expression: ["processEventBatch"] },
+                    deliver: { afterOffset: createRequestedAtOffset - 1 },
+                    selector: {
+                      eventTypes: ["events.iterate.com/project/create-requested"],
+                      condition: `offset = ${createRequestedAtOffset}`,
+                    },
+                    onPoison: "park",
+                  },
+                }),
+            );
+            if (configured === undefined) {
+              throw new Error("project worker subscription append committed no event");
+            }
+            await timedStep("create-timing", timing, "wait-project-worker-create-requested", () =>
+              this.deps.waitUntilSubscriptionDelivered({
+                configuredAtOffset: configured.offset,
+                eventType: "events.iterate.com/project/create-requested",
+                expression: ["processEventBatch"],
+                subscriptionKey: "project-worker",
+                targetOffset: createRequestedAtOffset,
+                timeoutMs: PROJECT_WORKER_DELIVERY_TIMEOUT_MS,
+              }),
+            );
+          } catch (error) {
+            if (!isStreamDeliveryRejectedError(error)) throw error;
+            await append(
+              {
+                type: "events.iterate.com/stream/subscription-removed",
+                idempotencyKey: `project-worker-subscription-removed:${this.deps.itx.projectId}`,
+                payload: { subscriptionKey: "project-worker" },
+              },
+              {
+                type: "events.iterate.com/project/create-failed",
+                idempotencyKey: this.idempotencyKey("create-failed"),
+                payload: {
+                  createRequestedAtOffset,
+                  error: `Default project worker bootstrap failed: ${errorMessage(error)}`,
+                  request: createRequest,
+                },
+              },
+            );
+            return;
+          }
+          await timedStep("create-timing", timing, "project-created-append", () =>
+            append(
+              {
+                type: "events.iterate.com/stream/subscription-configured",
+                idempotencyKey: `project-worker-subscription:${this.deps.itx.projectId}`,
+                payload: {
+                  subscriptionKey: "project-worker",
+                  description:
+                    "Default project worker: every root event after project/create-requested.",
+                  delivery: { mode: "push", expression: ["processEventBatch"] },
+                  deliver: { afterOffset: createRequestedAtOffset },
+                  onPoison: "skip",
+                },
+              },
+              {
+                type: "events.iterate.com/project/created",
+                idempotencyKey: projectCreatedIdempotencyKey,
+                payload: { ...createRequest, createRequestedAtOffset },
+              },
+            ),
           );
         });
         break;
@@ -206,21 +330,21 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      // created/ready/onboarding-completed/notification/created, the catalog
-      // facts, egress rules and approval events: no per-event effect — they
-      // matter through reduce.
+      // created/reconciliation-requested/onboarding-completed/notification
+      // facts, catalog facts, egress rules and approval events: no platform
+      // side effect — userspace handles reconciliation-requested.
     }
   }
 
   /**
-   * The birth reaction for `project/created`: create the sibling processors
+   * The opening reaction for `project/create-requested`: create the sibling processors
    * every project is born with, then wait (bounded) for each to reduce its
    * own birth batch. Every append is idempotency-keyed, so a redelivered
    * birth frame dedupes to the committed events and only re-runs the waits.
    */
   async #createSiblingProcessors(
     args: ProcessEventArgs<ProjectProcessorContract>,
-    config: NonNullable<ProjectProcessorState["birthCertificate"]>["config"],
+    config: NonNullable<ProjectProcessorState["createRequest"]>["config"],
   ): Promise<void> {
     const { append, appendTo } = args;
     const timing = { projectId: this.deps.itx.projectId };
@@ -252,8 +376,8 @@ export class ProjectProcessor extends StreamProcessor<
       // starter seed), the repo processor subscription, and the cross-post
       // rule that copies subsequent config-repo events onto the project
       // stream `/` — including the saga's terminal `repos/created`
-      // certificate, which is what marks the project ready and catalogs the
-      // repo (so no dedicated catalog subscription here).
+      // certificate, which is what starts the worker delivery barrier and
+      // catalogs the repo (so no dedicated catalog subscription here).
       timedStep("create-timing", timing, "config-repo-append", () =>
         appendTo(
           CONFIG_REPO_PATH,
@@ -313,11 +437,10 @@ export class ProjectProcessor extends StreamProcessor<
       throw new Error("project birth saga committed an incomplete sibling birth batch");
     }
 
-    // `projects.get(slug).create()` waits for this Project processor to finish the
-    // birth reaction. Do not let that boundary race the sibling processors
-    // it created: once the Project birth is processed, every universally
-    // available project capability must have reduced its own complete birth
-    // batch too. These remote processor facades are nested inside the
+    // The terminal project/created event must not race the sibling processors
+    // created by this request: every universally available project capability
+    // must have reduced its complete birth batch before the worker bootstrap
+    // begins. These remote processor facades are nested inside the
     // Project processor's own blocking frame. Keep one acknowledgement in
     // flight at a time: the sibling streams already start concurrently from
     // the append batch above, so this does not serialize their processing;
@@ -361,51 +484,37 @@ export class ProjectProcessor extends StreamProcessor<
     );
   }
 
-  /**
-   * Probe the default project worker until it answers without the
-   * still-building marker. Each probe attempt BLOCKS on the seeded worker's
-   * cold build (npm install included); the retry window only papers over
-   * transient dispatch errors around that first build.
-   */
+  /** Probe until the default worker answers without its still-building marker. */
   async #waitForDefaultProjectWorker(): Promise<void> {
-    let lastError: unknown;
     for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
+      // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
+      // method call whose Response comes back as a serialized copy — exactly
+      // enough for "the worker built, loaded, and answered". Protocol traffic
+      // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
+      // protocol needs (docs/dynamic-worker-dispatch.md).
+      const response = await this.deps.itx.worker.fetch(
+        new Request("https://iterate-project.localhost/__itx_project_ready"),
+      );
       try {
-        // Capability dispatch, on purpose: `worker.fetch` here is an ordinary
-        // method call whose Response comes back as a serialized copy — exactly
-        // enough for "the worker built, loaded, and answered". Protocol traffic
-        // (real HTTP, WebSockets) rides the fetch lane instead; a probe has no
-        // protocol needs (docs/dynamic-worker-dispatch.md).
-        const response = await this.deps.itx.worker.fetch(
-          new Request("https://iterate-project.localhost/__itx_project_ready"),
-        );
-        try {
-          if (response.headers.get(WORKER_BUILDING_HEADER) === "1") {
-            throw new Error("Default project worker is still building");
-          }
-          if (!response.ok) {
-            throw new Error(
-              `Default project worker readiness probe returned HTTP ${response.status}`,
-            );
-          }
+        if (response.headers.get(WORKER_BUILDING_HEADER) !== "1") {
+          // Any application response proves the module built and loaded. Its
+          // HTTP status belongs to userspace fetch behavior, not bootstrap.
           return;
-        } finally {
-          // The returned Response can be a Cap'n Web RPC stub, and keeping
-          // that stub alive after the probe finishes is exactly the lifecycle
-          // pattern these stream tests are trying to avoid. Dispose on every
-          // attempt; local/miniflare Response objects without the hook are a
-          // no-op here.
-          disposeRpcResult(response);
         }
-      } catch (error) {
-        lastError = error;
-        if (attempt === PROJECT_WORKER_READY_ATTEMPTS) break;
+      } finally {
+        // The returned Response can be a Cap'n Web RPC stub, and keeping that
+        // stub alive after the probe finishes pins the JS-RPC session.
+        disposeRpcResult(response);
+      }
+      if (attempt < PROJECT_WORKER_READY_ATTEMPTS) {
         await this.#sleep(PROJECT_WORKER_READY_RETRY_MS);
       }
     }
-    throw new Error("Default project worker did not become ready before project/ready.", {
-      cause: lastError,
-    });
+    const error = new Error(
+      "Default project worker is still building after the bounded readiness probe.",
+    );
+    error.name = "WorkerBuildInProgressError";
+    throw error;
   }
 
   #customDomainProvisioner(): ProjectCustomDomainDeps {
@@ -417,15 +526,35 @@ export class ProjectProcessor extends StreamProcessor<
   // Pure reduction, one switch, cases inline.
   protected override reduce({ event, state }: ReduceArgs<ProjectProcessorContract>) {
     switch (event.type) {
-      case "events.iterate.com/project/created":
-        if (state.birthCertificate !== null) return state;
+      case "events.iterate.com/project/create-requested":
+        if (state.createRequest !== null) return state;
         return {
           ...state,
-          birthCertificate: event.payload,
+          createRequest: event.payload,
+          createRequestedAtOffset: event.offset,
           onboardingActive: event.payload.config.onboardingActive === true,
         };
-      case "events.iterate.com/project/ready":
-        return { ...state, ready: true };
+      case "events.iterate.com/project/created":
+      case "events.iterate.com/project/create-failed": {
+        if (
+          state.createRequest === null ||
+          state.createRequestedAtOffset === null ||
+          state.birthCertificate !== null ||
+          state.createFailure !== null
+        ) {
+          return state;
+        }
+        const terminal = parseProjectCreationTerminal({
+          event,
+          projectId: this.deps.itx.projectId,
+          request: state.createRequest,
+          requestOffset: state.createRequestedAtOffset,
+        });
+        if (terminal === null) return state;
+        return terminal.type === "events.iterate.com/project/created"
+          ? { ...state, birthCertificate: terminal.payload }
+          : { ...state, createFailure: terminal.payload };
+      }
       case "events.iterate.com/project/onboarding-completed":
         return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
       case "events.iterate.com/notification/created":
@@ -607,6 +736,15 @@ export class ProjectProcessor extends StreamProcessor<
 type ProjectProcessorDeps = {
   /** The project's own itx surface: sibling processor facades + worker dispatch. */
   itx: ProjectRpcTarget;
+  /** Internal root-stream cursor fence used only by the creation saga. */
+  waitUntilSubscriptionDelivered(input: {
+    configuredAtOffset: number;
+    eventType: string;
+    expression: ["processEventBatch"];
+    subscriptionKey: string;
+    targetOffset: number;
+    timeoutMs: number;
+  }): Promise<void>;
   /** Cloudflare custom-hostname provisioning; absent in hosts without it. */
   customDomains?: ProjectCustomDomainDeps;
   /** Injectable clock and sleep — virtual time in tests, real time in prod. */

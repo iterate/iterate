@@ -369,6 +369,7 @@ export abstract class SandboxDurableObject extends Sandbox<Env> {
     const stream = new StreamRpcTarget({
       auth: trustedInternalAuthContext(),
       path,
+      platformProcessorHost: true,
       projectId,
     });
     const registry = createStreamProcessorRegistry<SandboxProcessorState>(this.ctx, {

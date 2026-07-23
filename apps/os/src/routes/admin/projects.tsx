@@ -143,8 +143,12 @@ function AdminProjectsPage() {
 
 function ProjectStatusBadge({ project }: { project: ProjectListEntry }) {
   switch (project.deploymentStatus) {
-    case "ready":
-      return <Badge>Ready</Badge>;
+    case "created":
+      return <Badge>Created</Badge>;
+    case "creating":
+      return <Badge variant="secondary">Creating</Badge>;
+    case "failed":
+      return <Badge variant="destructive">Creation failed</Badge>;
     case "missing":
       return <Badge variant="secondary">Not set up in this deployment</Badge>;
     case "unknown":

@@ -200,10 +200,10 @@ using agent = connectItx({ agentPath: "/agents/demo", auth, baseUrl, projectId }
 without creating anything. `handle.create({ organizationSlug?, projectId? })`
 registers that slug with the auth worker (the project directory — OS has no
 database of its own), adopts the directory-issued project ID, primes the KV
-cache, then appends the Project and notification birth certificates plus both
-processor subscriptions onto the project's root stream in one atomic batch.
-It waits both processors through that batch and then waits for `project/ready`
-before returning the same handle. The Project processor
+cache, then appends `project/create-requested` plus Notification's birth and
+the two platform processor subscriptions onto the project's root stream. By
+default it waits for terminal `project/created`; callers rendering live
+bootstrap progress pass `{ waitUntilCreated: false }`. The Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at
@@ -211,14 +211,37 @@ shorthand). The config repo is seeded from the template folder at
 apps under `apps/`, and `package.json` — platform types come from its
 `iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
 codegen keeps the seeded file map in
-`domains/repos/config-repo-template.generated.ts` in sync), builds and loads
-the seeded project worker through the worker build pipeline, and then emits
-`project/ready`. The onboarding agent is created separately and explicitly
-when its dashboard chat opens; its path alone never creates it. The config
-repo's stream carries a `cross-post:/` subscription from birth, so every
-config-repo event (including `repos/created`) is copied onto the project stream
-`/` with provenance. Streams are the coordination layer for all of this —
-bootstrap is events and processors, not a setup RPC.
+`domains/repos/config-repo-template.generated.ts` in sync). Once that repo is
+built, the Project processor installs a temporary root `project-worker`
+subscription selecting only the exact creation request and waits for its cursor
+to prove that the seeded worker processed it. The worker's creation hook
+performs its first idempotent configuration reconciliation. The processor then
+atomically replaces that temporary subscription with the ordinary all-events
+feed (starting after the creation request) and emits terminal
+`project/created`. A config-repo failure or durable rejection of the exact
+delivery policy instead emits terminal `project/create-failed`; worker-build
+errors are not yet classified as source versus infrastructure failures, so
+they stay open for durable redelivery alongside transient availability,
+in-progress builds, and wait timeouts. The
+onboarding agent is created separately and explicitly when its dashboard chat
+opens; its path alone never creates it. The config repo's stream carries a
+`cross-post:/` subscription from birth, so every config-repo event (including
+`repos/created`) is copied onto the project stream `/` with provenance.
+Streams are the coordination layer for all of this — bootstrap is events and
+processors, not a setup RPC.
+
+The seeded worker keeps project-owned desired state in the config repo. Its
+literal `project/create-requested` switch case is the creation-only hook.
+Delivery is at least once, so subscriptions and appends there still need stable
+idempotency keys. The root `project-worker` key is platform-owned; creation
+hooks add their own literal subscription events under distinct keys.
+`reconcileProject()` is the repeatable hook, run at creation, on root-stream wake
+(including OS upgrades), after config-repo commits (including dynamic worker
+rebuilds), and from scheduler heartbeats. The editable
+`heartbeatSchedules` list uses the normal Scheduler recurrence union, supports
+multiple schedules and test-speed `{ every: 1 }`, and may be `[]`. Its default
+entry requests reconciliation every 15 minutes. Interval schedules coalesce
+missed occurrences; they do not backfill one event per missed interval.
 
 ## Events
 

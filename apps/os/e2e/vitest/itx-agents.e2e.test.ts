@@ -718,7 +718,7 @@ test("Project worker processEventBatch receives events from every project stream
     .get(uniqueFixtureSlug("project-worker-process-event"))
     .create({});
   const marker = `cross-post-${crypto.randomUUID()}`;
-  // NOT the root stream: every project stream self-configures the
+  // NOT the root stream: every project child stream self-configures the
   // project-worker push feed at birth, so a freshly minted child stream must
   // reach the worker with no wiring at all.
   const sourcePath = `/sources/ping-${crypto.randomUUID()}`;

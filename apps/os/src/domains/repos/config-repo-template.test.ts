@@ -5,7 +5,8 @@
 // Behavior is proven where it runs: worker-build.e2e.test.ts edits and
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import ProjectWorker from "../../../config-repo-template/worker.ts";
 import {
   guestbookAppRef,
   guestbookCreationEvents,
@@ -23,6 +24,27 @@ import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts"
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
+}
+
+function deliver(
+  worker: ProjectWorker,
+  event: {
+    type: string;
+    path: string;
+    payload?: Record<string, unknown>;
+    source?: {
+      crossPostedFrom?: Array<{
+        subscriptionKey: string;
+        createdAt: string;
+        offset: number;
+        path: string;
+        projectId: string | null;
+        type: string;
+      }>;
+    };
+  },
+): Promise<void> {
+  return worker.processEventBatch({ events: [event] } as never);
 }
 
 test("template ships modular apps under apps/ and a thin worker router", () => {
@@ -70,6 +92,158 @@ test("template ships modular apps under apps/ and a thin worker router", () => {
     react: expect.any(String),
     zod: expect.any(String),
   });
+});
+
+test("project reconciliation ensures desired heartbeats and removes only stale owned keys", async () => {
+  const obsolete = {
+    key: "iterate/config/heartbeat/obsolete",
+    recurrence: { every: 5 },
+    action: { kind: "itx-script", script: "async () => {}" },
+  };
+  const unrelated = {
+    key: "customer/daily-report",
+    recurrence: { every: 86_400 },
+    action: { kind: "itx-script", script: "async () => {}" },
+  };
+  const list = vi
+    .fn()
+    .mockResolvedValueOnce([obsolete, unrelated])
+    .mockResolvedValueOnce([unrelated])
+    .mockResolvedValueOnce([unrelated])
+    .mockResolvedValueOnce([unrelated]);
+  const ensure = vi.fn(
+    async (input: { key: string; recurrence: unknown; script: string }) => input,
+  );
+  const cancel = vi.fn(async () => undefined);
+  const dispose = vi.fn();
+  const project = {
+    scheduler: { cancel, ensure, list },
+    [Symbol.dispose]: dispose,
+  };
+  const worker = new ProjectWorker(
+    {} as never,
+    {
+      ITERATE_WORKER_VERSION: "test",
+      ITX: { get: async () => project },
+    } as never,
+  );
+
+  await deliver(worker, {
+    type: "events.iterate.com/project/create-requested",
+    path: "/",
+  });
+
+  expect(ensure).toHaveBeenCalledOnce();
+  const configured = ensure.mock.calls[0]![0];
+  expect(configured).toMatchObject({
+    key: "iterate/config/heartbeat/every-15-minutes",
+    recurrence: { every: 900 },
+  });
+  expect(cancel).toHaveBeenCalledExactlyOnceWith("iterate/config/heartbeat/obsolete");
+  expect(cancel).not.toHaveBeenCalledWith("customer/daily-report");
+
+  // Reconciliation always states the desired definition through ensure();
+  // the Scheduler owns exact equality and preserves an unchanged clock.
+  const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  await deliver(worker, {
+    type: "events.iterate.com/project/reconciliation-requested",
+    path: "/",
+    payload: { scheduleKey: configured.key },
+  });
+  expect(ensure).toHaveBeenCalledTimes(2);
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(log).toHaveBeenCalledWith("Project heartbeat fired", {
+    scheduleKey: configured.key,
+  });
+
+  await deliver(worker, {
+    type: "events.iterate.com/stream/woken",
+    path: "/",
+  });
+  expect(ensure).toHaveBeenCalledTimes(3);
+  expect(ensure.mock.calls[2]![0]).not.toHaveProperty("metadata");
+
+  await deliver(worker, {
+    type: "events.iterate.com/repo/commit-completed",
+    path: "/",
+    source: {
+      crossPostedFrom: [
+        {
+          subscriptionKey: "cross-post:/",
+          createdAt: new Date(1).toISOString(),
+          offset: 1,
+          path: "/repos/config",
+          projectId: "prj_test",
+          type: "events.iterate.com/repo/commit-completed",
+        },
+      ],
+    },
+  });
+  expect(ensure).toHaveBeenCalledTimes(4);
+
+  // Pin the exact source handed to the Scheduler; the Scheduler's own tests
+  // prove that it invokes action strings with (itx, schedule, trigger).
+  expect(configured.script).toBe(`async (itx, schedule, trigger) => {
+  await itx.streams.get("/").append({
+    type: "events.iterate.com/project/reconciliation-requested",
+    idempotencyKey: "iterate/config/heartbeat:" + trigger.executionId,
+    payload: { scheduleKey: schedule.key },
+  });
+}`);
+  expect(dispose).toHaveBeenCalledTimes(4);
+
+  const ignored = [
+    {
+      type: "events.iterate.com/project/create-requested",
+      path: "/agents/not-the-project-root",
+    },
+    {
+      type: "events.iterate.com/project/reconciliation-requested",
+      path: "/agents/not-the-project-root",
+    },
+    {
+      type: "events.iterate.com/stream/woken",
+      path: "/agents/not-the-project-root",
+    },
+    {
+      type: "events.iterate.com/repo/commit-completed",
+      path: "/",
+    },
+    {
+      type: "events.iterate.com/repo/commit-completed",
+      path: "/",
+      source: {
+        crossPostedFrom: [
+          {
+            subscriptionKey: "wrong-rule",
+            createdAt: new Date(1).toISOString(),
+            offset: 1,
+            path: "/repos/config",
+            projectId: "prj_test",
+            type: "events.iterate.com/repo/commit-completed",
+          },
+        ],
+      },
+    },
+    {
+      type: "events.iterate.com/repo/commit-completed",
+      path: "/",
+      source: {
+        crossPostedFrom: [
+          {
+            subscriptionKey: "cross-post:/",
+            createdAt: new Date(1).toISOString(),
+            offset: 1,
+            path: "/repos/config",
+            projectId: "prj_test",
+            type: "events.iterate.com/repo/different",
+          },
+        ],
+      },
+    },
+  ];
+  for (const event of ignored) await deliver(worker, event);
+  expect(list).toHaveBeenCalledTimes(4);
 });
 
 test("browser pairs stay two-file createApp apps behind the thin router", () => {

@@ -335,14 +335,25 @@ been circling:
 - **Project creation is event-sourced and explicitly born.**
   `projects.get(slug)` returns a prospective handle without side effects.
   `handle.create()` registers the slug, adopts the directory-issued project
-  ID, then atomically appends the Project and Notification birth certificates
-  plus both subscriptions. The Project processor explicitly births the root
-  capability host, scheduler, config repo, and email router; `project/ready`
-  records completion. Create always waits both root processors through the
-  batch, then waits for readiness by default and returns the same handle.
+  ID, then atomically appends `project/create-requested`, Notification's birth,
+  and both platform processor subscriptions. The Project processor explicitly
+  births the root capability host, scheduler, config repo, and email router.
+  After the config repo builds it installs a temporary root project-worker
+  feed selecting only the exact request and waits for that worker to consume
+  it. The saga then atomically replaces the temporary configuration with the
+  ordinary all-events feed and appends terminal `project/created`. A
+  config-repo failure or durable delivery-policy rejection appends terminal
+  `project/create-failed`; worker-build errors remain unclassified, so they
+  join availability, build-in-progress, and timeout outcomes in staying open
+  for durable redelivery. Create waits for
+  either terminal fact by default, returning the same handle on success and
+  throwing the recorded failure.
   Callers that render bootstrap progress themselves pass
-  `{ waitUntilReady: false }` as the second argument to skip only the final
-  ready barrier.
+  `{ waitUntilCreated: false }` as the second argument to skip only the final
+  creation barrier.
+  This lifecycle change is an empty-state cutover: production projects are
+  erased and recreated, so there is deliberately no reducer fallback for
+  journals that predate `project/create-requested`.
   The processor is a public RpcTarget getter on the DO, and
   `itx.project` is a path proxy (replayPathCall awaits intermediate
   segments), so deep traversal works in one expression even though workerd

@@ -74,7 +74,10 @@ import {
   resolveProjectIdBySlug,
   type ProjectIdentity,
 } from "./project-directory.ts";
-import { deploymentStatusesFromProbes } from "./project-deployment-status.ts";
+import {
+  deploymentStatusFromState,
+  deploymentStatusesFromProbes,
+} from "./project-deployment-status.ts";
 import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
@@ -268,6 +271,7 @@ import {
   settleByDeadline,
   type DeadlineOutcome,
 } from "./domains/capability-host/execution-deadline.ts";
+import { parseScheduleSetPayload } from "./domains/scheduler/scheduler-processor-contract.ts";
 import type { ScheduleView, SetScheduleInput } from "./domains/scheduler/types.ts";
 import { unwrapBrowserRunQuickAction } from "./domains/itx/cf-capabilities.ts";
 import type {
@@ -305,7 +309,7 @@ import type {
 } from "./domains/itx/mcp-client.ts";
 import { beginMcpOAuth, fetchLikeFromFetcher } from "./domains/itx/mcp-oauth.ts";
 import type { OpenApiConnectInput, OpenApiRpc } from "./domains/itx/openapi-types.ts";
-import type { ProjectListEntry } from "./project-deployment-status.ts";
+import type { ProjectDeploymentStatus, ProjectListEntry } from "./project-deployment-status.ts";
 import type {
   EgressResponse,
   ProjectEgressIntercept,
@@ -329,7 +333,11 @@ import type {
 } from "./domains/devices/types.ts";
 import type { StreamRuntimeDebugState } from "./domains/streams/stream-runtime-state.ts";
 import { withStreamContext, type StreamContext } from "./domains/projects/stream-context.ts";
-import type { ProjectProcessorState } from "./domains/projects/project-processor-contract.ts";
+import {
+  parseProjectCreationTerminal,
+  ProjectProcessorContract,
+  type ProjectProcessorState,
+} from "./domains/projects/project-processor-contract.ts";
 import type { ProjectLiveState } from "./domains/projects/project-live-state.ts";
 import type { TouchInput } from "./domains/projects/stream-database.ts";
 import type { RepoProcessorState } from "./domains/repos/repo-processor-contract.ts";
@@ -424,12 +432,12 @@ const PARALLEL_API_BASE_URL = "https://api.parallel.ai";
 // forever; the durable birth events remain committed for ordinary redelivery.
 const PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 75_000;
 // Project birth is heavier than the other creation barriers: it includes the
-// config repository's Artifacts write and terminal cross-post. Keep explicit
+// config repository's Artifacts write and terminal event. Keep explicit
 // headroom between the nested sibling barrier (75s), the Project processor
-// acknowledgement, and the caller's end-to-ready deadline. Healthy creates
+// acknowledgement, and the caller's end-to-created deadline. Healthy creates
 // still resolve immediately; these values only bound an unhealthy tail.
 const PROJECT_PROCESSOR_BIRTH_WAIT_TIMEOUT_MS = 90_000;
-const PROJECT_CREATE_READY_TIMEOUT_MS = 100_000;
+const PROJECT_CREATE_TIMEOUT_MS = 100_000;
 
 function parallelOpenApiTarget(input: { egress: FetchOnly; parent: string }): OpenApiRpc {
   if (!parseConfig(env).integrations.parallel?.apiKey) {
@@ -527,7 +535,15 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  constructor(readonly props: { auth: ItxAuth; projectId: string | null; path: string }) {
+  constructor(
+    readonly props: {
+      auth: ItxAuth;
+      projectId: string | null;
+      path: string;
+      /** @internal Marks provenance from processors hosted by an OS Durable Object. */
+      platformProcessorHost?: true;
+    },
+  ) {
     super();
     props.auth.assertCanAccessProject(props.projectId);
   }
@@ -566,7 +582,24 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    const append = () => Promise.resolve(this.durableObjectStub.append(...events));
+    const prepared = events.map((event) => {
+      const processor = event.source?.processor;
+      if (this.props.platformProcessorHost === true) {
+        if (processor === undefined) return event;
+        return {
+          ...event,
+          source: {
+            ...event.source,
+            processor: { ...processor, authority: "platform" as const },
+          },
+        };
+      }
+      if (processor?.authority === "platform") {
+        throw new Error("source.processor.authority is reserved for platform processor hosts");
+      }
+      return event;
+    });
+    const append = () => Promise.resolve(this.durableObjectStub.append(...prepared));
     const result = await (
       events.every(
         (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
@@ -587,6 +620,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       auth: this.props.auth,
       projectId: this.props.projectId,
       path: resolveStreamPath(this.props.path, path),
+      ...(this.props.platformProcessorHost === true ? { platformProcessorHost: true } : {}),
     });
   }
 
@@ -970,9 +1004,10 @@ class ProjectStreamCollectionRpcTarget extends StreamCollectionRpcTarget<"Projec
 
 /**
  * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
- * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
- * append, `list` reads reduced state, and every Trigger's request and outcome
- * are appended back, so the stream is the complete audit log. Scripts run
+ * a durable alarm. Everything it does is events on that stream — `set`/
+ * `ensure`/`cancel` append when desired state changes, `list` reads reduced
+ * state, and every Trigger's request and outcome are appended back, so the
+ * stream is the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append
  * idempotency keys from `trigger.executionId`).
  *
@@ -993,6 +1028,8 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
       children: {
         cancel: "Remove a Schedule by key (idempotent).",
         create: "Create the Scheduler on this stream and wait until it has processed its birth.",
+        ensure:
+          "Make a Schedule definition present; preserve its clock and run count when unchanged.",
         kill: "Restart the scheduler's server-side object; the next request boots it fresh.",
         list: "Every Schedule, reduced from the stream.",
         processor: "The scheduler stream processor (snapshot/state).",
@@ -1052,12 +1089,32 @@ class SchedulerRpcTarget extends IterateRpcTarget<"Scheduler"> {
 
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView> {
-    return this.#durableObjectStub.setSchedule({
-      action: { kind: "itx-script", script: input.script },
-      key: input.key,
-      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
-      recurrence: canonicalRecurrence(input.recurrence, Date.now()),
-    });
+    return this.#durableObjectStub.setSchedule(
+      parseScheduleSetPayload({
+        action: { kind: "itx-script", script: input.script },
+        key: input.key,
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        recurrence: canonicalRecurrence(input.recurrence, Date.now()),
+      }),
+    );
+  }
+
+  /**
+   * Idempotently make a Schedule definition present. Unlike `set`, an exact
+   * match preserves its current clock, run count, and defining event; a
+   * missing or changed definition is set normally. Relative `{ in }` input is
+   * re-resolved against each call's current time, so use canonical `{ at }`
+   * when a one-shot definition itself must reconcile unchanged.
+   */
+  ensure(input: SetScheduleInput): Promise<ScheduleView> {
+    return this.#durableObjectStub.ensureSchedule(
+      parseScheduleSetPayload({
+        action: { kind: "itx-script", script: input.script },
+        key: input.key,
+        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        recurrence: canonicalRecurrence(input.recurrence, Date.now()),
+      }),
+    );
   }
 
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
@@ -4719,7 +4776,8 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
-   * engine probe (`state.ready` on each project's processor snapshot). A
+   * engine probe (the terminal birth certificate on each project's processor
+   * snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
@@ -4731,9 +4789,12 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     const outcomes = await Promise.allSettled(bases.map((base) => projectProcessorState(base.id)));
     const statuses = deploymentStatusesFromProbes(
       bases.map((base) => base.id),
-      outcomes.map((outcome): PromiseSettledResult<boolean> => {
+      outcomes.map((outcome): PromiseSettledResult<Exclude<ProjectDeploymentStatus, "unknown">> => {
         if (outcome.status === "rejected") return outcome;
-        return { status: "fulfilled", value: outcome.value.ready === true };
+        return {
+          status: "fulfilled",
+          value: deploymentStatusFromState(outcome.value),
+        };
       }),
     );
     return bases.map((base) => ({
@@ -5238,11 +5299,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * Register (for a prospective slug) and append the complete root birth
-   * batch. By default this resolves once the bootstrap saga has committed
-   * `project/ready` — the right shape for scripts that use the project
-   * immediately. `waitUntilReady: false` resolves as soon as the project
-   * EXISTS (identity registered, directory primed, birth events appended):
+   * Register (for a prospective slug) and append the complete root creation
+   * request batch. By default this resolves once the bootstrap saga has
+   * committed terminal `project/created` — the right shape for scripts that
+   * use the project immediately. `waitUntilCreated: false` resolves as soon
+   * as the identity is registered, directory primed, and request events
+   * appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -5252,9 +5314,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    */
   async create(
     args: { organizationSlug?: string; projectId?: string } = {},
-    options?: { waitUntilReady?: boolean },
+    options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
-    const projectCreateDeadline = Date.now() + PROJECT_CREATE_READY_TIMEOUT_MS;
+    const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -5376,30 +5438,29 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           }),
         ]),
       );
-    // Fast path: identity + directory + committed birth events are enough for
+    // Fast path: identity + directory + committed request events are enough for
     // callers that watch the saga as live state. The seed and the birth drive
     // run behind the response: the durable-delivery subscriptions committed in
-    // the birth batch are what guarantee the saga runs; these nudges only
+    // the request batch are what guarantee the saga runs; these nudges only
     // accelerate it, so the caller no longer pays for either.
-    if (options?.waitUntilReady === false) {
+    if (options?.waitUntilCreated === false) {
       const ctx = this.#props.ctx;
       ctx.waitUntil(timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey));
       ctx.waitUntil(driveBirth("nudge-project-birth").catch(() => undefined));
       return this;
     }
 
-    // Ready lane: start the terminal project/ready wait alongside the sibling
-    // work. Its deadline is measured from entry to create() and owns the whole
-    // public operation. It deliberately exceeds the nested Project-processor
-    // deadline: the original caller observes either one fully ready project or
-    // one bounded failure, never a short timeout that relies on a whole-call
-    // retry creating a replacement project.
-    const remainingReadyTimeoutMs = Math.max(1, projectCreateDeadline - Date.now());
+    // Created lane: start the authenticated terminal project/created wait
+    // alongside the sibling work. Its deadline is measured from entry to
+    // create() and owns the whole public operation. It deliberately exceeds
+    // the nested Project-processor deadline: the original caller observes
+    // either one fully created project or one bounded failure.
+    const remainingCreateTimeoutMs = Math.max(1, projectCreateDeadline - Date.now());
     await Promise.all([
       timedStep("create-timing", timing, "seed-project-api-key", seedProjectApiKey),
       driveBirth("wait-project-birth"),
-      timedStep("create-timing", timing, "wait-project-ready", () =>
-        this.waitUntilReady({ timeoutMs: remainingReadyTimeoutMs }),
+      timedStep("create-timing", timing, "wait-project-created", () =>
+        this.waitUntilCreated({ timeoutMs: remainingCreateTimeoutMs }),
       ),
     ]);
     return this;
@@ -5465,14 +5526,35 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   }
 
   /**
-   * Resolve once the bootstrap saga has committed `project/ready`. Replays
-   * stream history first, so an already-ready project resolves immediately,
+   * Resolve once the bootstrap saga has committed terminal `project/created`,
+   * or throw the durable `project/create-failed` explanation.
+   * Replays stream history first, so an already-created project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
    * observing. `create()` waits here by default; this remains useful after a
    * non-blocking create or when a caller receives an existing handle while a
    * bootstrap is in flight.
    */
-  async waitUntilReady(args?: { timeoutMs?: number }): Promise<void> {
+  async waitUntilCreated(args?: { timeoutMs?: number }): Promise<void> {
+    const timeoutMs = args?.timeoutMs ?? PROJECT_CREATE_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
+    const stream = rootStream({
+      auth: this.#props.auth,
+      projectId: this.#projectId,
+    });
+    const request = await stream.getEvent({
+      idempotencyKey: `project-create-requested:${this.#projectId}`,
+    });
+    if (request?.type !== "events.iterate.com/project/create-requested") {
+      throw new Error(`Project ${this.#projectId} has no creation request.`);
+    }
+    const createRequest = ProjectProcessorContract.events[
+      "events.iterate.com/project/create-requested"
+    ].payloadSchema.parse(request.payload);
+    const waitForTerminalMs = deadline - Date.now();
+    if (waitForTerminalMs <= 0) {
+      throw new Error(`Project creation timed out after ${timeoutMs}ms.`);
+    }
+
     // snapshot() pulls the journal through the registry's catch-up, so this
     // wait drives a stalled saga instead of just watching it. Post-response
     // work (waitUntil), never awaited: a wedged DO dial must not burn the
@@ -5483,15 +5565,46 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         () => undefined,
       ),
     );
-    await rootStream({ auth: this.#props.auth, projectId: this.#projectId }).waitForEvent({
-      afterOffset: 0,
-      eventTypes: ["events.iterate.com/project/ready"],
+    const terminal = await stream.waitForEvent({
+      afterOffset: request.offset,
+      eventTypes: [
+        "events.iterate.com/project/created",
+        "events.iterate.com/project/create-failed",
+      ],
+      predicate: (event) =>
+        parseProjectCreationTerminal({
+          event,
+          projectId: this.#projectId,
+          request: createRequest,
+          requestOffset: request.offset,
+        }) !== null,
       // The default covers the complete project birth saga, including the
       // config repository's bounded Artifacts tail. Healthy calls still
       // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
       // the tail without making this correctness boundary dishonest.
-      timeoutMs: args?.timeoutMs ?? PROJECT_CREATE_READY_TIMEOUT_MS,
+      timeoutMs: waitForTerminalMs,
     });
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(`Project creation timed out after ${timeoutMs}ms.`);
+    }
+    await this.processor.waitUntilProcessed({
+      offset: terminal.offset,
+      timeoutMs: remainingMs,
+    });
+    const settled = parseProjectCreationTerminal({
+      event: terminal,
+      projectId: this.#projectId,
+      request: createRequest,
+      requestOffset: request.offset,
+    });
+    if (settled === null) {
+      throw new Error("Project creation terminal event changed while it was being processed.");
+    }
+    if (settled.type === "events.iterate.com/project/create-failed") {
+      throw new Error(`Project could not be created: ${settled.payload.error}`);
+    }
   }
 
   /** @internal */
@@ -5574,7 +5687,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return Promise.resolve(this.durableObjectStub.kill());
   }
 
-  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
+  /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */
   get processor(): WakeableStreamProcessorRpc<ProjectProcessorState> {
     return new ProcessorRelayRpcTarget<ProjectProcessorState>({
       auth: this.#props.auth,

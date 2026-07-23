@@ -81,11 +81,12 @@ export interface Project {
   /** The project this itx is scoped into. */
   projectId: string;
   /**
-   * Register (for a prospective slug) and append the complete root birth
-   * batch. By default this resolves once the bootstrap saga has committed
-   * `project/ready` — the right shape for scripts that use the project
-   * immediately. `waitUntilReady: false` resolves as soon as the project
-   * EXISTS (identity registered, directory primed, birth events appended):
+   * Register (for a prospective slug) and append the complete root creation
+   * request batch. By default this resolves once the bootstrap saga has
+   * committed terminal `project/created` — the right shape for scripts that
+   * use the project immediately. `waitUntilCreated: false` resolves as soon
+   * as the identity is registered, directory primed, and request events
+   * appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -95,7 +96,7 @@ export interface Project {
    */
   create(
     args: { organizationSlug?: string; projectId?: string },
-    options?: { waitUntilReady?: boolean },
+    options?: { waitUntilCreated?: boolean },
   ): Promise<Project>;
   /**
    * Canonical identity from the project directory: id, slug (the auth
@@ -106,14 +107,15 @@ export interface Project {
    */
   identity(): Promise<ProjectIdentity>;
   /**
-   * Resolve once the bootstrap saga has committed `project/ready`. Replays
-   * stream history first, so an already-ready project resolves immediately,
+   * Resolve once the bootstrap saga has committed terminal `project/created`,
+   * or throw the durable `project/create-failed` explanation.
+   * Replays stream history first, so an already-created project resolves immediately,
    * and dialing the processor here heals a lost birth wake rather than just
    * observing. `create()` waits here by default; this remains useful after a
    * non-blocking create or when a caller receives an existing handle while a
    * bootstrap is in flight.
    */
-  waitUntilReady(args?: { timeoutMs?: number }): Promise<void>;
+  waitUntilCreated(args?: { timeoutMs?: number }): Promise<void>;
   /**
    * Identity + full capability inventory: `projectId`/`name`, every reachable
    * capability (built-ins + dynamic mounts), the children map, and the
@@ -125,7 +127,7 @@ export interface Project {
   debug(): Promise<string>;
   /** Restart the project's server-side object; the next request boots it fresh. */
   kill(): Promise<void>;
-  /** The project stream processor (snapshot/state; `state.ready` flips when bootstrap lands). */
+  /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */
   processor: WakeableStreamProcessorRpc<ProjectProcessorState>;
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   liveState: LiveStateRpc<ProjectLiveState>;
@@ -248,7 +250,8 @@ export interface ProjectCollection {
   /**
    * The session's projects, enriched: identity (id/slug/org) from the auth
    * claims or the project directory, deployment status from a concurrent
-   * engine probe (`state.ready` on each project's processor snapshot). A
+   * engine probe (the terminal birth certificate on each project's processor
+   * snapshot). A
    * probe failure degrades THAT entry to "unknown" — the list always renders.
    * Scope is explicit: "mine" (default for user principals) is the caller's
    * own claims even when admin credentials ride the same socket;
@@ -936,9 +939,10 @@ export interface SandboxCollection {
 
 /**
  * One Scheduler: keyed Schedules on one `/scheduler/**` stream, triggered by
- * a durable alarm. Everything it does is events on that stream — `set`/`cancel`
- * append, `list` reads reduced state, and every Trigger's request and outcome
- * are appended back, so the stream is the complete audit log. Scripts run
+ * a durable alarm. Everything it does is events on that stream — `set`/
+ * `ensure`/`cancel` append when desired state changes, `list` reads reduced
+ * state, and every Trigger's request and outcome are appended back, so the
+ * stream is the complete audit log. Scripts run
  * with project-root itx authority, at least once per Trigger (derive append
  * idempotency keys from `trigger.executionId`).
  *
@@ -954,6 +958,14 @@ export interface Scheduler {
   create(_input: Record<string, never>): Promise<Scheduler>;
   /** Upsert by key; returns after the Scheduler has ingested the set (read-your-writes, alarm armed). */
   set(input: SetScheduleInput): Promise<ScheduleView>;
+  /**
+   * Idempotently make a Schedule definition present. Unlike `set`, an exact
+   * match preserves its current clock, run count, and defining event; a
+   * missing or changed definition is set normally. Relative `{ in }` input is
+   * re-resolved against each call's current time, so use canonical `{ at }`
+   * when a one-shot definition itself must reconcile unchanged.
+   */
+  ensure(input: SetScheduleInput): Promise<ScheduleView>;
   /** Remove a key. Idempotent; an in-flight Trigger completes as `skipped`. */
   cancel(key: string): Promise<void>;
   /** Restart the scheduler's server-side object; the next request boots it fresh. */
@@ -1836,19 +1848,38 @@ export type WakeableStreamProcessorRpc<State = unknown> = StreamProcessorRpc<Sta
 
 /**
  * The project processor's reduced state, inferred from the contract's
- * `stateSchema` — the one definition of the shape. `ready` flips when the
- * bootstrap saga lands; the list fields are what the collection `list()`
- * methods read.
+ * `stateSchema` — the one definition of the shape. A non-null
+ * `birthCertificate` is the terminal creation marker; the list fields are
+ * what the collection `list()` methods read.
  */
 export type ProjectProcessorState = {
-  birthCertificate: {
+  createRequest: {
     config: {
       slug: string;
       onboardingActive?: boolean | undefined;
       creatorEmail?: string | undefined;
     };
   } | null;
-  ready: boolean;
+  createRequestedAtOffset: number | null;
+  createFailure: {
+    createRequestedAtOffset: number;
+    error: string;
+    request: {
+      config: {
+        slug: string;
+        onboardingActive?: boolean | undefined;
+        creatorEmail?: string | undefined;
+      };
+    };
+  } | null;
+  birthCertificate: {
+    config: {
+      slug: string;
+      onboardingActive?: boolean | undefined;
+      creatorEmail?: string | undefined;
+    };
+    createRequestedAtOffset: number;
+  } | null;
   onboardingActive: boolean;
   onboardingCompletedAt: string | null;
   devices: { createdAt: string; path: string }[];
@@ -2526,6 +2557,7 @@ export type StreamEvent = {
     | {
         processor?:
           | {
+              authority?: "platform" | undefined;
               slug: string;
               version: string;
               stream: { path: string; projectId: string | null };
@@ -2895,7 +2927,7 @@ export type SchedulerProcessorState = {
       [x: string]: unknown;
       action: { [x: string]: unknown; kind: "itx-script"; script: string };
       definedAtOffset: number;
-      metadata?: Record<string, unknown> | undefined;
+      metadata?: Record<string, JsonValue> | undefined;
       path: string;
       nextTriggerAt: number | null;
       recurrence:
@@ -2909,13 +2941,17 @@ export type SchedulerProcessorState = {
 };
 
 /**
- * Input to `scheduler.set(...)`: a keyed upsert. `recurrence` additionally
- * accepts `{ in: seconds }` sugar, converted to a canonical `{ at }` before
- * anything is appended — the event log has exactly one spelling of every
- * schedule.
+ * Input to `scheduler.set(...)` and `scheduler.ensure(...)`: a keyed desired
+ * definition. `recurrence` additionally accepts `{ in: seconds }` sugar,
+ * converted to a canonical `{ at }` before anything is appended — the event
+ * log has exactly one spelling of every schedule.
  */
 export type SetScheduleInput = {
   key: string;
+  /**
+   * Caller-owned JSON annotations. The RPC boundary validates and canonicalizes
+   * this recursively before comparing or committing it.
+   */
   metadata?: Record<string, unknown>;
   recurrence: SchedulerRecurrence | { in: number };
   /**
@@ -3176,6 +3212,7 @@ export type StreamEventInput = {
     | {
         processor?:
           | {
+              authority?: "platform" | undefined;
               slug: string;
               version: string;
               stream: { path: string; projectId: string | null };
@@ -3282,12 +3319,14 @@ export type StreamSubscriptionHandle = Disposable & {
 /**
  * Whether a project the directory knows about actually exists in THIS
  * deployment's engine:
- * - `ready` — the project stream's bootstrap saga ran (`state.ready`).
+ * - `created` — the project stream's bootstrap saga committed `project/created`.
+ * - `creating` — `project/create-requested` exists but no terminal fact does.
+ * - `failed` — the saga committed terminal `project/create-failed`.
  * - `missing` — the engine has no state for it (e.g. the deployment was reset
  *   while the auth worker kept its rows); it can be set up again.
  * - `unknown` — the probe failed (engine hiccup); don't block the list on it.
  */
-export type ProjectDeploymentStatus = "ready" | "missing" | "unknown";
+export type ProjectDeploymentStatus = "created" | "creating" | "failed" | "missing" | "unknown";
 
 /** One consistent read of a processor (what `snapshot()` returns): the folded
  * state pinned to the offset of the last event folded into it. */
