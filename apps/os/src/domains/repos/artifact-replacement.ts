@@ -11,11 +11,12 @@ export async function replaceArtifactWithEmptyRepo(
   artifacts: Pick<Artifacts, "create" | "delete" | "get">,
   name: string,
   options: {
+    defaultBranch: string;
     beforeDelete?: () => void;
     pollAttempts?: number;
     pollIntervalMs?: number;
     sleep?: (ms: number) => Promise<void>;
-  } = {},
+  },
 ): Promise<void> {
   const pollAttempts = options.pollAttempts ?? DELETE_POLL_ATTEMPTS;
   const pollIntervalMs = options.pollIntervalMs ?? DELETE_POLL_INTERVAL_MS;
@@ -54,7 +55,7 @@ export async function replaceArtifactWithEmptyRepo(
   // delete), then wait for the create plane to release the name as well.
   for (let attempt = 0; attempt < pollAttempts; attempt++) {
     try {
-      await artifacts.create(name, { setDefaultBranch: "main" });
+      await artifacts.create(name, { setDefaultBranch: options.defaultBranch });
       return;
     } catch (error) {
       if ((error as { code?: unknown })?.code !== "ALREADY_EXISTS") throw error;

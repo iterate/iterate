@@ -14,6 +14,7 @@ import {
 
 const route = {
   connection: "install-789",
+  defaultBranch: "main",
   installationId: "789",
   owner: "acme",
   repo: "widgets",

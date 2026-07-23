@@ -90,6 +90,7 @@ const REPO_DIR = "/repo";
 // on the repo stream are the record of TRUTH for inspection; this key is
 // written in the same methods that append them, so the two cannot drift.
 const GITHUB_LINK_KV_KEY = "github-link:v1";
+const REPO_DEFAULT_BRANCH_KV_KEY = "repo-default-branch:v1";
 
 // The durable HEAD-tree cache's materialized commit oid (default branch only).
 // Presence doubles as the "materialized once" sentinel; every HEAD read
@@ -142,7 +143,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       // Creation and public mutations all move the same branch. A recovered
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
-      createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
+      createEmptyArtifact: (defaultBranch) =>
+        this.#serializeWrite(() => this.createEmptyArtifactRepo(defaultBranch)),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
       linkGithub: async (input) => {
@@ -232,7 +234,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * run and npm install.
    */
   async getHead(input: { branch?: string } = {}): Promise<RepoHead> {
-    const branch = input.branch ?? REPO_DEFAULT_BRANCH;
+    const branch = input.branch ?? this.#defaultBranch();
     const cached = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     if (isRepoHeadRecord(cached)) return { branch, ...cached };
 
@@ -282,9 +284,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       paths?: string[];
     } = {},
   ): Promise<{ commitOid: string; files: Record<string, string> }> {
-    const branch = input.branch ?? REPO_DEFAULT_BRANCH;
+    const defaultBranch = this.#defaultBranch();
+    const branch = input.branch ?? defaultBranch;
     const cacheable =
-      branch === REPO_DEFAULT_BRANCH &&
+      branch === defaultBranch &&
       input.commitOid === undefined &&
       input.exclude === undefined &&
       input.include === undefined;
@@ -513,7 +516,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       // The durable cursor is consulted directly — when it and the tree agree
       // there is NO clone anywhere on this path. When either is missing or
       // stale, ONE materialization (one checkout) refreshes both.
-      const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(REPO_DEFAULT_BRANCH));
+      const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(this.#defaultBranch()));
       const cached = this.ctx.storage.kv.get<string>(REPO_HEAD_TREE_KEY);
       if (isRepoHeadRecord(record) && cached === record.commitOid) return read(cached);
       return read(await this.#materializeHeadTree());
@@ -541,7 +544,7 @@ export class RepoDurableObject extends DurableObject<Env> {
         return createGitWireTransport({ remote: repo.remote, token: repo.token });
       };
       this.#lazyReaderInstance = createLazyRepoReader({
-        branch: REPO_DEFAULT_BRANCH,
+        branch: this.#defaultBranch(),
         store: this.#gitObjectStore,
         wire: {
           fetchObjects: async (request) => (await dial()).fetchObjects(request),
@@ -563,7 +566,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * replaces an endorsed snapshot (that would regress below the pushed floor).
    */
   async #lazyFreshHead(): Promise<{ commitOid: string }> {
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#defaultBranch();
     const reader = this.#lazyReader();
     const stored = reader.head();
     if (
@@ -621,7 +624,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * would poison build-cache identity durably.
    */
   async #publishLazyHeadRecord(expectedCommitOid: string): Promise<void> {
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#defaultBranch();
     const { files, head } = await this.#lazyReader().readHeadSnapshot();
     const contentHash = await repoContentHash(files);
     if (head.commitOid !== expectedCommitOid) return;
@@ -653,7 +656,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       // lane, so both derivations of a head record hash identically.
       files[path] = await readCheckoutTextFile(filesystem, `${REPO_DIR}/${path}`);
     }
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#defaultBranch();
     // The hash is computed BEFORE the authority checks: its await yields the
     // input gate, and a commit landing in that window must win. The checks
     // and both puts below are synchronous, so nothing can interleave them.
@@ -707,7 +710,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const parsed = parseCommitFilesInput(input);
     const repo = await this.gitAccess();
     const branch = parsed.branch ?? repo.defaultBranch;
-    if (branch === REPO_DEFAULT_BRANCH) {
+    if (branch === this.#defaultBranch()) {
       // The lazy attempt's outcome is EXHAUSTIVE. Only "fallback-safe" — a
       // proof the remote did not move (pre-push failure or a provably
       // rejected CAS) — may enter the clone lane below. "indeterminate"
@@ -767,7 +770,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     | { detail: string; kind: "fallback-safe" }
     | { detail: string; kind: "indeterminate"; proposedCommitOid: string }
   > {
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#defaultBranch();
     const reader = this.#lazyReader();
     const command = {
       author: {
@@ -942,7 +945,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const transition = observeExternalPushTransition(this.#branchAuthority(branch), push);
     this.#writeBranchAuthority(branch, transition.authority);
     if (!transition.invalidate) return;
-    if (branch === REPO_DEFAULT_BRANCH) {
+    if (branch === this.#defaultBranch()) {
       this.#headFilesSnapshot.clear();
       this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
@@ -967,7 +970,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(result.branch));
     const beforeCommitOid =
       result.parentCommitOid ?? (isRepoHeadRecord(previous) ? previous.commitOid : null);
-    if (result.branch === REPO_DEFAULT_BRANCH) {
+    if (result.branch === this.#defaultBranch()) {
       this.#headFilesSnapshot.clear();
       // The head moved: the tree sentinel is stale (the write lanes re-record
       // the head RECORD themselves right after this).
@@ -983,7 +986,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   #invalidateArtifactState(branch: string) {
-    if (branch === REPO_DEFAULT_BRANCH) {
+    if (branch === this.#defaultBranch()) {
       this.#headFilesSnapshot.clear();
       this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
     }
@@ -1009,7 +1012,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       const record = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
       if (isRepoHeadRecord(record) && record.commitOid !== rawObserved) {
         this.ctx.storage.kv.delete(repoHeadStorageKey(branch));
-        if (branch === REPO_DEFAULT_BRANCH) {
+        if (branch === this.#defaultBranch()) {
           this.#headFilesSnapshot.clear();
           this.ctx.storage.kv.delete(REPO_HEAD_TREE_KEY);
         }
@@ -1199,7 +1202,12 @@ export class RepoDurableObject extends DurableObject<Env> {
   getGithubLink(): GithubRepoLink | null {
     const stored = this.ctx.storage.kv.get<unknown>(GITHUB_LINK_KV_KEY);
     if (stored === undefined) return null;
-    if (isGithubLinkRecord(stored)) return stored;
+    if (isGithubLinkRecord(stored)) {
+      return {
+        ...stored,
+        defaultBranch: stored.defaultBranch || REPO_DEFAULT_BRANCH,
+      };
+    }
     throw new Error("Stored GitHub link does not satisfy GithubRepoLink.");
   }
 
@@ -1211,6 +1219,12 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   /** Record the GitHub link durably and journal the fact on the repo stream. */
   async configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink> {
+    const defaultBranch = this.#defaultBranch();
+    if (link.defaultBranch !== defaultBranch) {
+      throw new Error(
+        `Cannot link GitHub default branch "${link.defaultBranch}" to repo default branch "${defaultBranch}".`,
+      );
+    }
     await this.#stream.append({
       type: "events.iterate.com/repo/github-link-configured",
       payload: { ...link },
@@ -1250,7 +1264,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async #pushToGithub(input: { force?: boolean }): Promise<{ branch: string; commitOid: string }> {
     const link = this.#requireGithubLink();
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#githubBranch(link);
     let commitOid: string | null = null;
     try {
       const repo = await this.gitAccess();
@@ -1350,7 +1364,7 @@ export class RepoDurableObject extends DurableObject<Env> {
 
   async #syncFromGithub(input: { depth?: number; force?: boolean }): Promise<GithubSyncResult> {
     const link = this.#requireGithubLink();
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#githubBranch(link);
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     const previousCommitOid = githubSyncBaseCommitOid({
       cachedHeadCommitOid: isRepoHeadRecord(previous) ? previous.commitOid : null,
@@ -1406,7 +1420,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // artifact is a fine starting point. A recreated artifact invalidates any
     // token minted against its predecessor — drop the cache (only then; the
     // usual already-exists case keeps the one-token-per-isolate economy).
-    const artifact = await this.getOrCreateArtifact(this.artifactName());
+    const artifact = await this.getOrCreateArtifact(this.artifactName(), branch);
     if (artifact.created) this.#artifactTokenPromise = undefined;
     await this.#transferGithubHistoryInProcess({
       branch,
@@ -1464,7 +1478,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   async #resetFromGithub(input: { depth?: number }): Promise<GithubResetResult> {
     assertGithubHistoryDepth(input.depth, "resetFromGithub");
     const link = this.#requireGithubLink();
-    const branch = REPO_DEFAULT_BRANCH;
+    const branch = this.#githubBranch(link);
     const previous = this.ctx.storage.kv.get<unknown>(repoHeadStorageKey(branch));
     const previousCommitOid = isRepoHeadRecord(previous) ? previous.commitOid : null;
     const token = await this.#mintGithubToken(link);
@@ -1481,6 +1495,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     });
     const artifactName = this.artifactName();
     await replaceArtifactWithEmptyRepo(this.requireArtifacts(), artifactName, {
+      defaultBranch: branch,
       beforeDelete: () => {
         // From this destructive boundary onward, neither a concurrent read nor
         // a failed replacement push may observe/cache the old Artifact head.
@@ -1603,6 +1618,16 @@ export class RepoDurableObject extends DurableObject<Env> {
     return link;
   }
 
+  #githubBranch(link: GithubRepoLink): string {
+    const defaultBranch = this.#defaultBranch();
+    if (link.defaultBranch !== defaultBranch) {
+      throw new Error(
+        `GitHub default branch "${link.defaultBranch}" does not match repo default branch "${defaultBranch}". Re-link the repository to repair it.`,
+      );
+    }
+    return defaultBranch;
+  }
+
   /**
    * Mint a short-lived installation token for the linked installation. Held
    * in memory for one operation only: this is first-party trusted DO code
@@ -1701,7 +1726,7 @@ export class RepoDurableObject extends DurableObject<Env> {
    * self-heals the mirror.
    */
   #scheduleGithubMirrorPush(branch: string): void {
-    if (branch !== REPO_DEFAULT_BRANCH || this.getGithubLink() === null) return;
+    if (branch !== this.#defaultBranch() || this.getGithubLink() === null) return;
     const push = this.#serializeWrite(() => this.#pushToGithub({}));
     this.ctx.waitUntil(
       push.catch((error: unknown) => {
@@ -1710,14 +1735,20 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  private async importPublicGithubArtifact(input: { depth?: number; owner: string; repo: string }) {
+  private async importPublicGithubArtifact(input: {
+    defaultBranch: string;
+    depth?: number;
+    owner: string;
+    repo: string;
+  }) {
     const artifactName = this.artifactName();
+    this.ctx.storage.kv.put(REPO_DEFAULT_BRANCH_KV_KEY, input.defaultBranch);
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     await timedStep("create-timing", timing, "artifact-import", async () => {
       await importGithubArtifactWithInitialPushCapture(
         this.requireArtifacts(),
         {
-          branch: REPO_DEFAULT_BRANCH,
+          branch: input.defaultBranch,
           ...(input.depth === undefined ? {} : { depth: input.depth }),
           name: artifactName,
           owner: input.owner,
@@ -1731,18 +1762,18 @@ export class RepoDurableObject extends DurableObject<Env> {
     });
     return {
       artifactName,
-      defaultBranch: REPO_DEFAULT_BRANCH,
+      defaultBranch: input.defaultBranch,
       remote: this.artifactRemote(artifactName),
     };
   }
 
-  private async createEmptyArtifactRepo() {
+  private async createEmptyArtifactRepo(defaultBranch: string) {
     const artifactName = this.artifactName();
+    this.ctx.storage.kv.put(REPO_DEFAULT_BRANCH_KV_KEY, defaultBranch);
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
     const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
-      this.getOrCreateArtifact(artifactName),
+      this.getOrCreateArtifact(artifactName, defaultBranch),
     );
-    const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
 
     // A prior push is authoritative evidence that an existing Artifact is
@@ -1809,15 +1840,18 @@ export class RepoDurableObject extends DurableObject<Env> {
       },
     );
     return {
-      defaultBranch: REPO_DEFAULT_BRANCH,
+      defaultBranch: this.#defaultBranch(),
       remote: this.artifactRemote(artifactName),
       token: await this.#artifactTokenPromise,
     };
   }
 
-  private async getOrCreateArtifact(name: string): Promise<GetOrCreateArtifactResult> {
+  private async getOrCreateArtifact(
+    name: string,
+    defaultBranch: string,
+  ): Promise<GetOrCreateArtifactResult> {
     return await getOrCreateArtifact(this.requireArtifacts(), name, {
-      defaultBranch: REPO_DEFAULT_BRANCH,
+      defaultBranch,
     });
   }
 
@@ -1830,6 +1864,10 @@ export class RepoDurableObject extends DurableObject<Env> {
       path: this.#name.path,
       projectId: this.#name.projectId,
     });
+  }
+
+  #defaultBranch(): string {
+    return this.ctx.storage.kv.get<string>(REPO_DEFAULT_BRANCH_KV_KEY) || REPO_DEFAULT_BRANCH;
   }
 
   private artifactRemote(artifactName: string) {
@@ -2171,11 +2209,17 @@ function redactGitCredentials(text: string): string {
     .replace(/art_v1_[A-Za-z0-9?=]+/g, "art_v1_***");
 }
 
-function isGithubLinkRecord(value: unknown): value is GithubRepoLink {
+type StoredGithubRepoLink = Omit<GithubRepoLink, "defaultBranch"> & {
+  defaultBranch?: string;
+};
+
+function isGithubLinkRecord(value: unknown): value is StoredGithubRepoLink {
   if (value === null || typeof value !== "object") return false;
-  const record = value as Partial<GithubRepoLink>;
+  const record = value as Partial<StoredGithubRepoLink>;
   return (
     typeof record.connection === "string" &&
+    (record.defaultBranch === undefined ||
+      (typeof record.defaultBranch === "string" && record.defaultBranch !== "")) &&
     typeof record.installationId === "string" &&
     typeof record.owner === "string" &&
     typeof record.repo === "string" &&

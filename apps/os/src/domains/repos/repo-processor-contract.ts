@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/processors";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import { REPO_DEFAULT_BRANCH } from "./repo-branch.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
@@ -53,9 +54,8 @@ export const RepoProcessorContract = defineProcessorContract({
       .default(null)
       .meta({
         description:
-          "The branch whose pushes produce commit-completed and task facts. Set to main the " +
-          "moment create-requested reduces (every creation mode targets main), confirmed by " +
-          "repos/created.",
+          "The branch whose pushes produce commit-completed and task facts. Captured by " +
+          "create-requested before creation starts, then confirmed by repos/created.",
       }),
     github: githubLinkSchema()
       .nullable()
@@ -393,6 +393,10 @@ function repoCreateRequestSchema() {
           .trim()
           .min(1)
           .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+        defaultBranch: z.string().trim().min(1).default(REPO_DEFAULT_BRANCH).meta({
+          description:
+            "GitHub's reported default branch, resolved before the creation saga starts.",
+        }),
         owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
         repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
       })
@@ -409,6 +413,10 @@ function repoCreateRequestSchema() {
           .trim()
           .min(1)
           .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+        defaultBranch: z.string().trim().min(1).default(REPO_DEFAULT_BRANCH).meta({
+          description:
+            "GitHub's reported default branch, resolved before the creation saga starts.",
+        }),
         depth: z.number().int().positive().optional().meta({
           description:
             "Shallow-import depth; omit to let Cloudflare Artifacts import the full history.",
@@ -476,6 +484,10 @@ function githubLinkSchema() {
       .trim()
       .min(1)
       .meta({ description: "The named GitHub connection (App installation) minting tokens." }),
+    defaultBranch: z.string().trim().min(1).default(REPO_DEFAULT_BRANCH).meta({
+      description:
+        "GitHub's default branch at link time; legacy link events without it resolve to main.",
+    }),
     installationId: z
       .string()
       .trim()

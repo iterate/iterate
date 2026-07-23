@@ -21,18 +21,11 @@ export function githubRepoCreateRequest(repo: InstallationRepo, connection: stri
     : ({ ...github, depth: 1, type: "github-public" } as const);
 }
 
-/** Repo creation currently adopts GitHub's `main` history. Reject unsupported
- * selections before committing a durable saga request rather than leaving a
- * seeded repo whose GitHub adoption can never complete. */
+/** Reject empty repositories before committing a durable creation request. */
 export function assertInstallationRepoCanBeCreated(repo: InstallationRepo): void {
   if (repo.pushedAt === null) {
     throw new Error(
       `${repo.fullName} has no commits yet. Create its first commit on GitHub first.`,
-    );
-  }
-  if (repo.defaultBranch !== "main") {
-    throw new Error(
-      `${repo.fullName} uses ${repo.defaultBranch} as its default branch. Repo creation currently supports GitHub repositories whose default branch is main.`,
     );
   }
 }

@@ -105,6 +105,8 @@ export type RepoCommitDetails = RepoLogCommit & {
  */
 export type GithubRepoLink = {
   connection: string;
+  /** GitHub's default branch at link time. */
+  defaultBranch: string;
   installationId: string;
   owner: string;
   repo: string;

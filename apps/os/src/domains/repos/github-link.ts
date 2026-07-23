@@ -22,6 +22,7 @@ import { getConnectionStatus } from "../integrations/connect-flows.ts";
 import { connectionOctokit, normalizeGithubError } from "../integrations/github-api.ts";
 import { integrationStreamStub } from "../integrations/integration-streams.ts";
 import { integrationConnectionStreamPath } from "../integrations/utils.ts";
+import { REPO_DEFAULT_BRANCH } from "./repo-branch.ts";
 import type { GithubRepoLink, LinkGithubResult } from "./types.ts";
 
 /** Whether a failed repo-create was GitHub's 422 "name already exists" — the
@@ -77,6 +78,45 @@ function githubCrossPostSubscriptionEvent(input: {
   };
 }
 
+export async function resolveGithubRepoDefaultBranch(input: {
+  connection: string;
+  owner: string;
+  projectId: string;
+  repo: string;
+  repoPath: string;
+}): Promise<string> {
+  const repoPath = normalizePath(input.repoPath);
+  const owner = input.owner.trim();
+  const repo = input.repo.trim();
+  if (owner === "" || repo === "") {
+    throw new Error("GitHub repo creation requires a non-empty owner and repo.");
+  }
+  const status = await getConnectionStatus({
+    connection: input.connection,
+    projectId: input.projectId,
+    provider: "github",
+  });
+  if (!status.connected || status.externalId === null) {
+    throw new Error(
+      `GitHub connection "${input.connection}" is not connected; use itx.integrations.list() to see connections.`,
+    );
+  }
+  const octokit = connectionOctokit({
+    connection: input.connection,
+    streamContext: { kind: "scope", scopePath: repoPath },
+    projectId: input.projectId,
+  });
+  const response = await octokit.rest.repos.get({ owner, repo }).catch((error: unknown) => {
+    throw normalizeGithubError(error, input.connection);
+  });
+  if (response.data.pushed_at === null) {
+    throw new Error(
+      `GitHub repository ${owner}/${repo} has no commits yet. Create its first commit on GitHub first.`,
+    );
+  }
+  return githubDefaultBranch(response.data.default_branch, `${owner}/${repo}`);
+}
+
 type LinkRepoToGithubOptions = {
   repo?: {
     configureGithubLink(link: GithubRepoLink): Promise<GithubRepoLink>;
@@ -122,9 +162,11 @@ export async function linkRepoToGithub(
     projectId: input.projectId,
   });
   let created = false;
+  let defaultBranch: string;
   let repositoryId: number;
   try {
     const response = await octokit.rest.repos.get({ owner, repo });
+    defaultBranch = githubDefaultBranch(response.data.default_branch, `${owner}/${repo}`);
     repositoryId = githubRepositoryId(response.data.id, `${owner}/${repo}`);
   } catch (error) {
     if ((error as { status?: number }).status !== 404) {
@@ -140,6 +182,11 @@ export async function linkRepoToGithub(
         org: owner,
         private: true,
       });
+      defaultBranch =
+        typeof response.data.default_branch === "string" &&
+        response.data.default_branch.trim() !== ""
+          ? response.data.default_branch
+          : REPO_DEFAULT_BRANCH;
       repositoryId = githubRepositoryId(response.data.id, `${owner}/${repo}`);
       created = true;
     } catch (createError) {
@@ -160,6 +207,7 @@ export async function linkRepoToGithub(
 
   const link: GithubRepoLink = {
     connection: input.connection,
+    defaultBranch,
     installationId: status.externalId,
     owner,
     repo,
@@ -306,4 +354,11 @@ function repoDurableObjectStub(projectId: string, repoPath: string) {
 function githubRepositoryId(value: unknown, fullName: string): number {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
   throw new Error(`GitHub returned no valid repository id for ${fullName}.`);
+}
+
+function githubDefaultBranch(value: unknown, fullName: string): string {
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  throw new Error(
+    `GitHub repository ${fullName} has no default branch. Create its first commit on GitHub first.`,
+  );
 }

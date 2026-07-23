@@ -122,8 +122,9 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
  * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
   const createEmpty = {
+    branches: [] as Array<string | undefined>,
     calls: 0,
-    impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
+    impl: async (_defaultBranch?: string): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
   };
   const importPublic = {
     calls: [] as { depth?: number; owner: string; repo: string }[],
@@ -154,9 +155,10 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
-        createEmptyArtifact: () => {
+        createEmptyArtifact: (...args: any[]) => {
+          createEmpty.branches.push(args[0]);
           createEmpty.calls += 1;
-          return createEmpty.impl();
+          return createEmpty.impl(args[0]);
         },
         importPublicGithubArtifact: (input) => {
           importPublic.calls.push(input);
@@ -246,6 +248,38 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
+  it("creates a public GitHub repo on its resolved non-main default branch", async () => {
+    const h = makeRepoHarness();
+    h.importPublic.impl = async () => ({ ...SEEDED_ARTIFACT, defaultBranch: "master" });
+
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/repos/create-requested",
+        payload: {
+          type: "github-public",
+          connection: "install-789",
+          defaultBranch: "master",
+          owner: "mmkal",
+          repo: "lerna-learning",
+        },
+      },
+    ]);
+
+    expect(h.importPublic.calls).toMatchObject([
+      { defaultBranch: "master", owner: "mmkal", repo: "lerna-learning" },
+    ]);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+      {
+        payload: {
+          defaultBranch: "master",
+          request: { defaultBranch: "master" },
+        },
+      },
+    ]);
+    expect(h.state()).toMatchObject({ defaultBranch: "master" });
+  });
+
   it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {
     const h = makeRepoHarness();
     await h.play([
@@ -268,6 +302,33 @@ describe("RepoProcessor creation saga", () => {
     expect(h.syncPrivate.calls).toBe(1);
     expect(h.importPublic.calls).toEqual([]);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
+  it("seeds a private GitHub repo on its resolved non-main default branch", async () => {
+    const h = makeRepoHarness();
+    h.createEmpty.impl = async (defaultBranch) => ({
+      ...SEEDED_ARTIFACT,
+      defaultBranch: defaultBranch || "wrong",
+    });
+
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/repos/create-requested",
+        payload: {
+          type: "github-private",
+          connection: "install-789",
+          defaultBranch: "master",
+          owner: "mmkal",
+          repo: "lerna-learning",
+        },
+      },
+    ]);
+
+    expect(h.createEmpty.branches).toEqual(["master"]);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+      { payload: { defaultBranch: "master" } },
+    ]);
   });
 
   it("settles a non-retryable Artifacts input failure as create-failed", async () => {
@@ -525,6 +586,7 @@ describe("RepoProcessor reduced state", () => {
     await h.play(["append", CREATE_REQUESTED, CREATED], ["append", GITHUB_LINK_CONFIGURED]);
     expect(h.state().github).toEqual({
       connection: "install-789",
+      defaultBranch: "main",
       installationId: "789",
       owner: "acme",
       repo: "widgets",
@@ -601,7 +663,9 @@ describe("repos/create-requested payload schema", () => {
     { type: "github-public", connection: "install-1", owner: "acme", repo: "public" },
     { type: "github-public", connection: "install-1", depth: 1, owner: "acme", repo: "public" },
   ])("accepts $type", (request) => {
-    expect(requestSchema.parse(request)).toEqual(request);
+    expect(requestSchema.parse(request)).toEqual(
+      request.type === "empty" ? request : { ...request, defaultBranch: "main" },
+    );
   });
 
   it("rejects source fields on an empty repo request", () => {

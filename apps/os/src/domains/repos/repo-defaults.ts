@@ -12,19 +12,68 @@
 // project bootstrap's config repo already has the `cross-post:/` rule that
 // copies every post-setup event onto `/`.
 
-import type { z } from "zod";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { buildDurableObjectProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { REPO_DEFAULT_BRANCH } from "./repo-branch.ts";
+import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
 
-/** Every creation mode targets this branch — commit and task facts, worker
- * builds, and GitHub mirroring all assume it. */
-export const REPO_DEFAULT_BRANCH = "main";
+export { REPO_DEFAULT_BRANCH } from "./repo-branch.ts";
 
 /** The `repos/create-requested` payload — the creation saga's durable intent. */
-export type RepoCreateInput = z.input<
-  (typeof RepoProcessorContract.events)["events.iterate.com/repos/create-requested"]["payloadSchema"]
->;
+export type RepoCreateInput =
+  | { type: "empty" }
+  | { type: "github-private"; connection: string; owner: string; repo: string }
+  | {
+      type: "github-public";
+      connection: string;
+      depth?: number;
+      owner: string;
+      repo: string;
+    };
+
+export function repoCreateInputFromRequest(request: RepoCreateRequest): RepoCreateInput {
+  if (request.type === "empty") return request;
+  if (request.type === "github-private") {
+    return {
+      type: request.type,
+      connection: request.connection,
+      owner: request.owner,
+      repo: request.repo,
+    };
+  }
+  return {
+    type: request.type,
+    connection: request.connection,
+    ...(request.depth === undefined ? {} : { depth: request.depth }),
+    owner: request.owner,
+    repo: request.repo,
+  };
+}
+
+export function parseRepoCreateInput(input: unknown): RepoCreateInput {
+  const requestSchema =
+    RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema;
+  return repoCreateInputFromRequest(requestSchema.parse(input));
+}
+
+/**
+ * Resolve the external creation request into the saga's durable intent.
+ * GitHub's reported default branch is captured before the first event lands,
+ * so every retry and processor consequence uses the same branch.
+ */
+export async function resolveRepoCreateRequest(
+  input: RepoCreateInput,
+  githubDefaultBranch: (input: Exclude<RepoCreateInput, { type: "empty" }>) => Promise<string>,
+): Promise<RepoCreateRequest> {
+  const requestSchema =
+    RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema;
+  const parsed = parseRepoCreateInput(input);
+  if (parsed.type === "empty") return parsed;
+  return requestSchema.parse({
+    ...parsed,
+    defaultBranch: await githubDefaultBranch(parsed),
+  });
+}
 
 /**
  * The atomic creation-request batch for one repo: the `repos/create-requested`
@@ -44,7 +93,7 @@ export function repoCreationEvents(input: {
   /** Repo stream path (normalized), e.g. "/repos/config". */
   path: string;
   /** Creation request; defaults to an empty starter-file repo. */
-  payload?: RepoCreateInput;
+  payload?: RepoCreateRequest;
   /** null addresses the deployment-wide global repo scope. */
   projectId: string | null;
 }) {

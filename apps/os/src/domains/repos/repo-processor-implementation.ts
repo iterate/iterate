@@ -46,8 +46,8 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * `blockProcessorWhile` work: each fact derives from an event that is
  * delivered once, so a dropped append would lose it forever, and the stable
  * keys collapse redeliveries. The default branch is known from the moment
- * create-requested reduces (every creation mode targets main), so a push
- * racing the terminal certificate still lands its facts.
+ * create-requested reduces (GitHub creation resolves it before committing the
+ * request), so a push racing the terminal certificate still lands its facts.
  *
  * GitHub is an ingress lane, not a second source of commit facts. A
  * cross-posted `github/webhook-received` push delivery — provenance-checked
@@ -274,12 +274,12 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   }
 
   async #createRepo(request: RepoCreateRequest) {
-    if (request.type === "empty") return await this.deps.createEmptyArtifact();
+    if (request.type === "empty") return await this.deps.createEmptyArtifact(REPO_DEFAULT_BRANCH);
 
     const artifact =
       request.type === "github-public"
         ? await this.deps.importPublicGithubArtifact(request)
-        : await this.deps.createEmptyArtifact();
+        : await this.deps.createEmptyArtifact(request.defaultBranch);
     await this.deps.linkGithub(request);
     if (request.type === "github-private") await this.deps.syncPrivateGithub();
     return artifact;
@@ -349,10 +349,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         return {
           ...state,
           createRequest: event.payload,
-          // Every creation mode targets main. Record that invariant with the
-          // intent so an Artifact push racing the terminal certificate is
+          // GitHub requests resolve their branch before this durable intent
+          // lands, so an Artifact push racing the terminal certificate is
           // still normalized into durable commit facts.
-          defaultBranch: REPO_DEFAULT_BRANCH,
+          defaultBranch:
+            event.payload.type === "empty" ? REPO_DEFAULT_BRANCH : event.payload.defaultBranch,
         };
       case "events.iterate.com/repos/created":
         // The first certificate wins — same no-op rule as the request.
@@ -436,7 +437,7 @@ type RepoProcessorDeps = {
   /** Seed the backing Cloudflare Artifacts repository with the starter files.
    * Idempotent: leaves an existing branch untouched and gives concurrent
    * first seeds the same commit oid. */
-  createEmptyArtifact(): Promise<{
+  createEmptyArtifact(defaultBranch: string): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;
@@ -444,7 +445,12 @@ type RepoProcessorDeps = {
   /** Have Cloudflare Artifacts clone a public GitHub repository directly —
    * the history never transfers through the Worker. Throws RepoNotSeededError
    * while the import is still materializing. */
-  importPublicGithubArtifact(input: { depth?: number; owner: string; repo: string }): Promise<{
+  importPublicGithubArtifact(input: {
+    defaultBranch: string;
+    depth?: number;
+    owner: string;
+    repo: string;
+  }): Promise<{
     artifactName: string;
     defaultBranch: string;
     remote: string;

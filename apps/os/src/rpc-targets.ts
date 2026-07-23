@@ -109,7 +109,11 @@ import {
   SandboxProcessorContract,
   type SandboxProcessorState,
 } from "./domains/sandboxes/sandbox-processor-contract.ts";
-import { linkRepoToGithub, unlinkRepoFromGithub } from "./domains/repos/github-link.ts";
+import {
+  linkRepoToGithub,
+  resolveGithubRepoDefaultBranch,
+  unlinkRepoFromGithub,
+} from "./domains/repos/github-link.ts";
 import {
   agentWorkspacePath,
   normalizeWorkspacePath,
@@ -372,7 +376,13 @@ import {
 import { EmailProcessorContract } from "./domains/email/email-processor-contract.ts";
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
-import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
+import {
+  parseRepoCreateInput,
+  repoCreateInputFromRequest,
+  repoCreationEvents,
+  resolveRepoCreateRequest,
+  type RepoCreateInput,
+} from "./domains/repos/repo-defaults.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -1186,13 +1196,34 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema;
     const failureSchema =
       RepoProcessorContract.events["events.iterate.com/repos/create-failed"].payloadSchema;
-    const request = requestSchema.parse(payload ?? { type: "empty" });
+    const input = parseRepoCreateInput(payload || { type: "empty" });
     const path = normalizePath(this.props.path);
     const stream = new StreamRpcTarget({
       auth: this.props.auth,
       path,
       projectId: this.props.projectId,
     });
+    const requestIdempotencyKey = `repo-create-requested:${this.props.projectId}:${path}`;
+    const existingRequestEvent = await stream.getEvent({
+      idempotencyKey: requestIdempotencyKey,
+    });
+    const existingRequest =
+      existingRequestEvent === undefined ? null : requestSchema.parse(existingRequestEvent.payload);
+    if (
+      existingRequest !== null &&
+      !jsonValuesEqual(repoCreateInputFromRequest(existingRequest), input)
+    ) {
+      throw new Error(`${path} was already requested with a different creation source.`);
+    }
+    const request =
+      existingRequest ||
+      (await resolveRepoCreateRequest(input, (github) =>
+        resolveGithubRepoDefaultBranch({
+          ...github,
+          projectId: this.#requireProjectId(),
+          repoPath: path,
+        }),
+      ));
     const timing = { projectId: this.props.projectId, path };
     const committed = await timedStep("create-timing", timing, "repo-request-append", () =>
       stream.append(
@@ -1216,7 +1247,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
     // An idempotency hit returns the FIRST request at its old offset — the
     // loud duplicate-create failure is this comparison, not the stream.
     const recordedRequest = requestSchema.parse(committed[0]?.payload);
-    if (!jsonValuesEqual(recordedRequest, request)) {
+    if (!jsonValuesEqual(repoCreateInputFromRequest(recordedRequest), input)) {
       throw new Error(`${path} was already requested with a different creation source.`);
     }
     const terminal = await timedStep("create-timing", timing, "wait-repo-created", () =>

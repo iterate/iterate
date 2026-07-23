@@ -25,10 +25,10 @@ describe("assertInstallationRepoCanBeCreated", () => {
     );
   });
 
-  it("rejects an unsupported default branch before requesting creation", () => {
-    expect(() => assertInstallationRepoCanBeCreated({ ...repo, defaultBranch: "develop" })).toThrow(
-      "default branch is main",
-    );
+  it("accepts a repository whose default branch is not main", () => {
+    expect(() =>
+      assertInstallationRepoCanBeCreated({ ...repo, defaultBranch: "master" }),
+    ).not.toThrow();
   });
 });
 

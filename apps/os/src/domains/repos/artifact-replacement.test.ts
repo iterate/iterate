@@ -30,6 +30,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
     };
 
     await replaceArtifactWithEmptyRepo(artifacts, "repo", {
+      defaultBranch: "master",
       beforeDelete: () => {
         calls.push("invalidate");
       },
@@ -38,7 +39,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
     });
 
     expect(calls).toEqual(["invalidate", "delete", "get:present", "get:missing", "create"]);
-    expect(artifacts.create).toHaveBeenCalledWith("repo", { setDefaultBranch: "main" });
+    expect(artifacts.create).toHaveBeenCalledWith("repo", { setDefaultBranch: "master" });
   });
 
   it("invalidates the caller's old-repository state even when deletion fails", async () => {
@@ -52,7 +53,10 @@ describe("replaceArtifactWithEmptyRepo", () => {
     };
 
     await expect(
-      replaceArtifactWithEmptyRepo(artifacts, "repo", { beforeDelete }),
+      replaceArtifactWithEmptyRepo(artifacts, "repo", {
+        defaultBranch: "main",
+        beforeDelete,
+      }),
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
 
     expect(beforeDelete).toHaveBeenCalledOnce();
@@ -73,6 +77,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
     };
 
     await replaceArtifactWithEmptyRepo(artifacts, "repo", {
+      defaultBranch: "main",
       pollIntervalMs: 17,
       sleep,
     });
@@ -88,7 +93,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
       get: vi.fn<Artifacts["get"]>(),
     };
 
-    await replaceArtifactWithEmptyRepo(artifacts, "repo");
+    await replaceArtifactWithEmptyRepo(artifacts, "repo", { defaultBranch: "main" });
 
     expect(artifacts.get).not.toHaveBeenCalled();
     expect(artifacts.create).toHaveBeenCalledOnce();
@@ -104,7 +109,10 @@ describe("replaceArtifactWithEmptyRepo", () => {
     };
 
     await expect(
-      replaceArtifactWithEmptyRepo(artifacts, "repo", { sleep: async () => {} }),
+      replaceArtifactWithEmptyRepo(artifacts, "repo", {
+        defaultBranch: "main",
+        sleep: async () => {},
+      }),
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     expect(artifacts.create).not.toHaveBeenCalled();
   });
@@ -118,6 +126,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
 
     await expect(
       replaceArtifactWithEmptyRepo(artifacts, "repo", {
+        defaultBranch: "main",
         pollAttempts: 2,
         pollIntervalMs: 0,
         sleep: async () => {},
@@ -139,6 +148,7 @@ describe("replaceArtifactWithEmptyRepo", () => {
 
     await expect(
       replaceArtifactWithEmptyRepo(artifacts, "repo", {
+        defaultBranch: "main",
         pollAttempts: 2,
         pollIntervalMs: 0,
         sleep: async () => {},

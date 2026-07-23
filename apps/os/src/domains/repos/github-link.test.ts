@@ -8,7 +8,11 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { linkRepoToGithub, unlinkRepoFromGithub } from "./github-link.ts";
+import {
+  linkRepoToGithub,
+  resolveGithubRepoDefaultBranch,
+  unlinkRepoFromGithub,
+} from "./github-link.ts";
 
 const network = await vi.hoisted(async () => {
   const { createFakeItxEnv } = await import("../../test/fake-itx-env.ts");
@@ -17,6 +21,7 @@ const network = await vi.hoisted(async () => {
     githubLink: null as Record<string, unknown> | null,
     /** What the fake GitHub API answers: repo exists / missing / create fails. */
     githubRepoExists: true,
+    githubDefaultBranch: "main",
     githubRepoPrivate: false,
     githubRepoPushedAt: "2026-07-20T00:00:00Z" as string | null,
     githubRepositoryId: 101,
@@ -44,6 +49,7 @@ const network = await vi.hoisted(async () => {
       repoCalls.length = 0;
       state.githubLink = null;
       state.githubRepoExists = true;
+      state.githubDefaultBranch = "main";
       state.githubRepoPrivate = false;
       state.githubRepoPushedAt = "2026-07-20T00:00:00Z";
       state.githubRepositoryId = 101;
@@ -64,7 +70,7 @@ const network = await vi.hoisted(async () => {
             if (request.method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(url.pathname)) {
               if (state.githubRepoExists) {
                 return Response.json({
-                  default_branch: "main",
+                  default_branch: state.githubDefaultBranch,
                   full_name: "acme/widgets",
                   id: state.githubRepositoryId,
                   private: state.githubRepoPrivate,
@@ -203,6 +209,7 @@ describe("linkRepoToGithub", () => {
     expect(result).toEqual({
       connection: CONNECTION,
       created: false,
+      defaultBranch: "main",
       initialPush: { commitOid: "abc123", ok: true },
       installationId: "789",
       owner: "acme",
@@ -236,6 +243,16 @@ describe("linkRepoToGithub", () => {
       },
       deliver: "new",
     });
+  });
+
+  test("records an existing GitHub repository's non-main default branch", async () => {
+    seedConnectedFact();
+    network.state.githubDefaultBranch = "master";
+
+    const result = await linkRepoToGithub(linkInput());
+
+    expect(result).toMatchObject({ defaultBranch: "master" });
+    expect(network.state.githubLink).toMatchObject({ defaultBranch: "master" });
   });
 
   test("can link without pushing starter history during a creation saga", async () => {
@@ -457,6 +474,24 @@ describe("linkRepoToGithub", () => {
       },
     });
   });
+});
+
+test("repo creation resolves GitHub's reported default branch before journaling", async () => {
+  seedConnectedFact();
+  network.state.githubDefaultBranch = "master";
+
+  await expect(resolveGithubRepoDefaultBranch(linkInput())).resolves.toBe("master");
+
+  network.reset();
+});
+
+test("repo creation rejects an empty GitHub repository before journaling", async () => {
+  seedConnectedFact();
+  network.state.githubRepoPushedAt = null;
+
+  await expect(resolveGithubRepoDefaultBranch(linkInput())).rejects.toThrow("has no commits yet");
+
+  network.reset();
 });
 
 describe("unlinkRepoFromGithub", () => {

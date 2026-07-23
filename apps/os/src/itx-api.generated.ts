@@ -2969,7 +2969,7 @@ export type RepoCreateInput =
   | {
       type: "github-public";
       connection: string;
-      depth?: number | undefined;
+      depth?: number;
       owner: string;
       repo: string;
     };
@@ -3060,10 +3060,17 @@ export type GithubResetResult = {
 export type RepoProcessorState = {
   createRequest:
     | { type: "empty" }
-    | { type: "github-private"; connection: string; owner: string; repo: string }
+    | {
+        type: "github-private";
+        connection: string;
+        defaultBranch: string;
+        owner: string;
+        repo: string;
+      }
     | {
         type: "github-public";
         connection: string;
+        defaultBranch: string;
         depth?: number | undefined;
         owner: string;
         repo: string;
@@ -3073,10 +3080,17 @@ export type RepoProcessorState = {
     error: string;
     request:
       | { type: "empty" }
-      | { type: "github-private"; connection: string; owner: string; repo: string }
+      | {
+          type: "github-private";
+          connection: string;
+          defaultBranch: string;
+          owner: string;
+          repo: string;
+        }
       | {
           type: "github-public";
           connection: string;
+          defaultBranch: string;
           depth?: number | undefined;
           owner: string;
           repo: string;
@@ -3085,10 +3099,17 @@ export type RepoProcessorState = {
   birthCertificate: {
     request:
       | { type: "empty" }
-      | { type: "github-private"; connection: string; owner: string; repo: string }
+      | {
+          type: "github-private";
+          connection: string;
+          defaultBranch: string;
+          owner: string;
+          repo: string;
+        }
       | {
           type: "github-public";
           connection: string;
+          defaultBranch: string;
           depth?: number | undefined;
           owner: string;
           repo: string;
@@ -3101,6 +3122,7 @@ export type RepoProcessorState = {
   defaultBranch: string | null;
   github: {
     connection: string;
+    defaultBranch: string;
     installationId: string;
     owner: string;
     repo: string;
@@ -3563,6 +3585,8 @@ export type RepoCommitFileChange = {
  */
 export type GithubRepoLink = {
   connection: string;
+  /** GitHub's default branch at link time. */
+  defaultBranch: string;
   installationId: string;
   owner: string;
   repo: string;

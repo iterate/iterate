@@ -32,6 +32,7 @@ test.fails("DESIRED: deletion polling disposes each temporary repository handle"
   };
 
   await replaceArtifactWithEmptyRepo(artifacts, "repo", {
+    defaultBranch: "main",
     pollIntervalMs: 0,
     sleep: async () => {},
   });
@@ -56,6 +57,7 @@ test.fails("DESIRED: cleanup failure does not masquerade as the repository delet
   const sleep = vi.fn(async () => undefined);
 
   await replaceArtifactWithEmptyRepo(artifacts, "repo", {
+    defaultBranch: "main",
     pollIntervalMs: 17,
     sleep,
   });
