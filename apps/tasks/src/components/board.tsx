@@ -208,6 +208,7 @@ function BoardCell({
   return (
     <section
       ref={ref}
+      data-pointer-anchor={`cell:${rowKey}:${state}`}
       className={cn(
         "group/cell flex min-h-36 w-72 flex-none flex-col pb-4 transition-colors",
         isDropTarget && "rounded-lg bg-accent/40",
@@ -295,6 +296,7 @@ function BoardCard({
     <button
       type="button"
       ref={ref}
+      data-pointer-anchor={`card:${task.path}`}
       onClick={() => onOpen(task.path)}
       style={
         touch
