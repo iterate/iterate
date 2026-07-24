@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   approvalBodyForDisplay,
@@ -6,6 +6,10 @@ import {
   deriveRecentResolvedRequests,
   EVENT,
   focusOpenRequest,
+  grantMany,
+  groupHostBreakdown,
+  groupOpenRequests,
+  rejectMany,
   safeHost,
   scriptCodeForApproval,
   type RequestedPayload,
@@ -151,6 +155,143 @@ test("the approval view labels a capped request body as truncated", () => {
   });
 });
 
+test("open requests bucket into Approval Groups by executionId; scope holds and singletons stay flat", () => {
+  const open = deriveOpenRequests([
+    scriptRequested(1, "exec-a"),
+    requested(2, "manual-scope"),
+    scriptRequested(3, "exec-a"),
+    scriptRequested(4, "exec-b"),
+    scriptRequested(5, "exec-a"),
+  ]);
+
+  expect(groupOpenRequests(open)).toMatchObject([
+    {
+      kind: "group",
+      executionId: "exec-a",
+      requests: [{ offset: 1 }, { offset: 3 }, { offset: 5 }],
+    },
+    { kind: "single", request: { offset: 2 } },
+    // A one-member bucket renders exactly as an ungrouped request.
+    { kind: "single", request: { offset: 4 } },
+  ]);
+});
+
+test("a group shrinks back to a flat singleton once only one member is still open", () => {
+  const open = deriveOpenRequests([
+    scriptRequested(1, "exec-a"),
+    scriptRequested(2, "exec-a"),
+    rejected(3, 1),
+  ]);
+
+  expect(groupOpenRequests(open)).toMatchObject([{ kind: "single", request: { offset: 2 } }]);
+});
+
+test("focusing a notification-targeted member floats its whole group to the front", () => {
+  const open = deriveOpenRequests([
+    requested(1, "first"),
+    scriptRequested(2, "exec-a"),
+    scriptRequested(3, "exec-a"),
+  ]);
+
+  expect(groupOpenRequests(focusOpenRequest(open, 3))).toMatchObject([
+    { kind: "group", executionId: "exec-a" },
+    { kind: "single", request: { offset: 1 } },
+  ]);
+});
+
+test("the group header host breakdown counts hosts, busiest first", () => {
+  const open = deriveOpenRequests([
+    scriptRequested(1, "exec-a", "https://api.stripe.com/v1/transfers"),
+    scriptRequested(2, "exec-a"),
+    scriptRequested(3, "exec-a"),
+  ]);
+
+  expect(groupHostBreakdown(open)).toBe("2x gmail.googleapis.com, 1x api.stripe.com");
+});
+
+test("grantMany signs everything up front (one unlock), then appends one ordinary grant per request", async () => {
+  const open = deriveOpenRequests([scriptRequested(1, "exec-a"), scriptRequested(2, "exec-a")]);
+  const appended: any[] = [];
+  const progress: number[] = [];
+  const signMany = vi.fn(async (messages: Uint8Array[]) => ({
+    keyId: "key-1",
+    signatures: messages.map((_, index) => `sig-${index}`),
+  }));
+
+  await grantMany({
+    stream: { append: async (event: any) => void appended.push(event) } as any,
+    projectId: "prj_test",
+    requests: open,
+    signMany,
+    onProgress: (granted) => progress.push(granted),
+  });
+
+  expect(signMany).toHaveBeenCalledTimes(1);
+  expect(signMany.mock.calls[0]![0]).toHaveLength(2);
+  expect(appended).toMatchObject([
+    {
+      type: EVENT.granted,
+      payload: { approvalRequestEventOffset: 1, keyId: "key-1", signature: "sig-0" },
+    },
+    {
+      type: EVENT.granted,
+      payload: { approvalRequestEventOffset: 2, keyId: "key-1", signature: "sig-1" },
+    },
+  ]);
+  expect(progress).toEqual([0, 1, 2]);
+});
+
+test("a mid-batch append failure leaves earlier grants standing and the remainder pending", async () => {
+  const open = deriveOpenRequests([
+    scriptRequested(1, "exec-a"),
+    scriptRequested(2, "exec-a"),
+    scriptRequested(3, "exec-a"),
+  ]);
+  const appended: any[] = [];
+  const progress: number[] = [];
+
+  await expect(
+    grantMany({
+      stream: {
+        append: async (event: any) => {
+          if (appended.length === 1) throw new Error("stream unreachable");
+          appended.push(event);
+        },
+      } as any,
+      projectId: "prj_test",
+      requests: open,
+      signMany: async (messages) => ({
+        keyId: "key-1",
+        signatures: messages.map(() => "sig"),
+      }),
+      onProgress: (granted) => progress.push(granted),
+    }),
+  ).rejects.toThrow("stream unreachable");
+
+  // No rollback exists on a stream: the first grant stands, offsets 2 and 3
+  // stay visibly pending for retry.
+  expect(appended).toMatchObject([{ payload: { approvalRequestEventOffset: 1 } }]);
+  expect(progress).toEqual([0, 1]);
+});
+
+test("rejectMany appends unsigned rejections sequentially with progress", async () => {
+  const open = deriveOpenRequests([scriptRequested(1, "exec-a"), scriptRequested(2, "exec-a")]);
+  const appended: any[] = [];
+  const progress: number[] = [];
+
+  await rejectMany({
+    stream: { append: async (event: any) => void appended.push(event) } as any,
+    requests: open,
+    onProgress: (rejectedCount) => progress.push(rejectedCount),
+  });
+
+  expect(appended).toMatchObject([
+    { type: EVENT.rejected, payload: { approvalRequestEventOffset: 1, reason: "human" } },
+    { type: EVENT.rejected, payload: { approvalRequestEventOffset: 2, reason: "human" } },
+  ]);
+  expect(progress).toEqual([0, 1, 2]);
+});
+
 function requested(
   offset: number,
   ruleKey: string,
@@ -173,6 +314,23 @@ function requested(
       ...overrides,
     },
   };
+}
+
+/** A held request carrying script-execution provenance — an Approval Group member. */
+function scriptRequested(
+  offset: number,
+  executionId: string,
+  url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+): StreamEvent {
+  return requested(offset, "gmail-sends", {
+    url,
+    streamContext: {
+      kind: "script-execution",
+      executionId,
+      scriptRunRequestedEventOffset: 1,
+      streamPath: "/agents/demo",
+    },
+  });
 }
 
 function granted(offset: number, approvalRequestEventOffset: number): StreamEvent {

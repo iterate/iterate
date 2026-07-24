@@ -148,6 +148,55 @@ export async function reject(stream: RpcStub<Stream>, offset: number): Promise<v
   });
 }
 
+/**
+ * Best-effort batch grant for an Approval Group: sign EVERY message first
+ * (one authenticated key retrieval — one Face ID — via approver.ts's
+ * signManyWithApproverKey), then append ordinary per-request grant events one
+ * by one. Grants land on an event stream, so there is no rollback: a
+ * mid-batch append failure propagates with the already-appended grants
+ * standing and the remainder visibly pending for retry. `onProgress` fires
+ * with the count of grants appended so far.
+ */
+export async function grantMany(input: {
+  stream: RpcStub<Stream>;
+  projectId: string;
+  requests: OpenRequest[];
+  signMany: ((messages: Uint8Array[]) => Promise<{ keyId: string; signatures: string[] }>) | null;
+  onProgress: (granted: number) => void;
+}): Promise<void> {
+  const signed = input.signMany
+    ? await input.signMany(
+        input.requests.map((request) =>
+          messageFor(input.projectId, request.offset, request.payload),
+        ),
+      )
+    : null;
+  input.onProgress(0);
+  for (const [index, request] of input.requests.entries()) {
+    await input.stream.append({
+      type: EVENT.granted,
+      payload: {
+        approvalRequestEventOffset: request.offset,
+        ...(signed ? { keyId: signed.keyId, signature: signed.signatures[index]! } : {}),
+      },
+    });
+    input.onProgress(index + 1);
+  }
+}
+
+/** Batch reject, sequential and best-effort like {@link grantMany} — deny needs no signature. */
+export async function rejectMany(input: {
+  stream: RpcStub<Stream>;
+  requests: OpenRequest[];
+  onProgress: (rejected: number) => void;
+}): Promise<void> {
+  input.onProgress(0);
+  for (const [index, request] of input.requests.entries()) {
+    await reject(input.stream, request.offset);
+    input.onProgress(index + 1);
+  }
+}
+
 export type OpenRequest = { offset: number; payload: RequestedPayload; submitted: boolean };
 
 export type ResolvedRequest = {
@@ -158,6 +207,78 @@ export type ResolvedRequest = {
     | { decision: "approved"; upstreamStatus: number | null; deliveryError: string | null }
     | { decision: "rejected"; reason: string };
 };
+
+export type ScriptExecutionContext = Extract<
+  NonNullable<RequestedPayload["streamContext"]>,
+  { kind: "script-execution" }
+>;
+
+/** One row of the approvals list: a flat request exactly as before, or an
+ * Approval Group of 2+ open requests from one Script Execution. */
+export type ApprovalListItem =
+  | { kind: "single"; request: OpenRequest }
+  | {
+      kind: "group";
+      executionId: string;
+      streamContext: ScriptExecutionContext;
+      requests: OpenRequest[];
+    };
+
+/**
+ * Bucket open requests into Approval Groups by Script Execution (CONTEXT.md:
+ * Approval Group). Only script-execution provenance groups; scope/legacy
+ * holds — and buckets with a single open member — stay flat singletons that
+ * render exactly as before. Item order follows each bucket's first request in
+ * the input, so the oldest-first order of deriveOpenRequests sorts a group by
+ * its oldest pending member, and focusOpenRequest's reordering floats a
+ * targeted request's whole group.
+ */
+export function groupOpenRequests(requests: OpenRequest[]): ApprovalListItem[] {
+  const buckets = new Map<string, OpenRequest[]>();
+  for (const request of requests) {
+    const streamContext = request.payload.streamContext;
+    if (streamContext?.kind !== "script-execution") continue;
+    const bucket = buckets.get(streamContext.executionId);
+    if (bucket) bucket.push(request);
+    else buckets.set(streamContext.executionId, [request]);
+  }
+  const items: ApprovalListItem[] = [];
+  const placed = new Set<string>();
+  for (const request of requests) {
+    const streamContext = request.payload.streamContext;
+    if (streamContext?.kind !== "script-execution") {
+      items.push({ kind: "single", request });
+      continue;
+    }
+    if (placed.has(streamContext.executionId)) continue;
+    placed.add(streamContext.executionId);
+    const bucket = buckets.get(streamContext.executionId)!;
+    if (bucket.length === 1) items.push({ kind: "single", request: bucket[0]! });
+    else {
+      items.push({
+        kind: "group",
+        executionId: streamContext.executionId,
+        streamContext,
+        requests: bucket,
+      });
+    }
+  }
+  return items;
+}
+
+/** "3x gmail.googleapis.com, 1x api.stripe.com" — busiest host first, the same
+ * host-only summary shape the server's group push body uses. */
+export function groupHostBreakdown(requests: OpenRequest[]): string {
+  const counts = new Map<string, number>();
+  for (const request of requests) {
+    const host = safeHost(request.payload.url);
+    counts.set(host, (counts.get(host) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([hostA, countA], [hostB, countB]) => countB - countA || hostA.localeCompare(hostB))
+    .map(([host, count]) => `${count}x ${host}`)
+    .join(", ");
+}
 
 /** Put the approval opened from a notification first without disturbing the queue's other items. */
 export function focusOpenRequest(
