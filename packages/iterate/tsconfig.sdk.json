@@ -9,6 +9,7 @@
     "src/node.ts",
     "src/github-ai-linter/index.ts",
     "src/github-ai-linter/worker.ts",
+    "src/todo/index.ts",
     "src/processors/cloudflare.ts",
     "src/processors/index.ts",
     "src/processors/testing.ts",

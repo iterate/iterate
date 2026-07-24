@@ -30,6 +30,7 @@
     "./node": "./src/node.ts",
     "./github-ai-linter": "./src/github-ai-linter/index.ts",
     "./github-ai-linter/worker": "./src/github-ai-linter/worker.ts",
+    "./todo": "./src/todo/index.ts",
     "./processors": "./src/processors/index.ts",
     "./processors/cloudflare": "./src/processors/cloudflare.ts",
     "./processors/testing": "./src/processors/testing.ts",
@@ -66,6 +67,11 @@
         "types": "./dist/github-ai-linter/worker.d.ts",
         "import": "./dist/github-ai-linter/worker.mjs",
         "default": "./dist/github-ai-linter/worker.mjs"
+      },
+      "./todo": {
+        "types": "./dist/todo/index.d.ts",
+        "import": "./dist/todo/index.mjs",
+        "default": "./dist/todo/index.mjs"
       },
       "./processors": {
         "types": "./dist/processors/index.d.ts",
@@ -116,7 +122,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown && tsx scripts/check-github-ai-linter-bundle.ts && tsc -p tsconfig.sdk.json",
+    "build": "tsdown --config tsdown.todo-client.config.ts && tsdown && tsx scripts/check-github-ai-linter-bundle.ts && tsx scripts/check-todo-bundle.ts && tsc -p tsconfig.sdk.json",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
@@ -129,6 +135,7 @@
     "@tanstack/react-query": "^5.101.2",
     "minimatch": "^10.2.4",
     "react": "^19.2.7",
+    "sqlfu": "0.1.1",
     "trpc-cli": "0.15.1",
     "ws": "8.19.0",
     "yaml": "^2.8.3",

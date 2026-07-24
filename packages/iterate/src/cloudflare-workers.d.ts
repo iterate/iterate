@@ -39,6 +39,15 @@ interface DurableObjectStorage {
     get<T = unknown>(key: string): T | undefined;
     put(key: string, value: unknown): void;
   };
+  sql: {
+    exec(
+      query: string,
+      ...bindings: any[]
+    ): {
+      rowsWritten: number;
+      toArray(): unknown[];
+    };
+  };
   getAlarm(): Promise<number | null>;
   setAlarm(scheduledTime: number): Promise<void>;
   deleteAlarm(): Promise<void>;

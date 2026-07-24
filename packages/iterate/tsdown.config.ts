@@ -1,6 +1,45 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "tsdown";
 
+const todoClientSource = readFileSync(new URL("./dist/todo/client.mjs", import.meta.url), "utf8");
+
 export default defineConfig([
+  {
+    // This physical worker carries the Todo Durable Object, sqlfu runtime,
+    // Cap'n Web server, and the separately prebuilt browser client. Config
+    // supplies only its package.json so worker-bundler can resolve this file.
+    entry: {
+      "todo/configured-worker": "src/todo/configured-worker.ts",
+    },
+    format: "esm",
+    fixedExtension: true,
+    platform: "neutral",
+    target: "es2022",
+    plugins: [
+      {
+        name: "todo-client-source",
+        resolveId(source) {
+          if (source === "iterate:todo-client-source") return "\0iterate:todo-client-source";
+        },
+        load(id) {
+          if (id !== "\0iterate:todo-client-source") return;
+          return `export default ${JSON.stringify(todoClientSource)};`;
+        },
+      },
+    ],
+    inputOptions: {
+      resolve: {
+        conditionNames: ["workerd", "worker", "import", "default"],
+      },
+    },
+    deps: {
+      alwaysBundle: ["@iterate-com/capnweb", "sqlfu", "zod"],
+      neverBundle: ["cloudflare:workers"],
+    },
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
   {
     // This is installed as the dynamic worker's PHYSICAL entry point. The
     // worker-bundler host installs the root config repo's dependencies, not
@@ -85,6 +124,7 @@ export default defineConfig([
       sdk: "src/sdk.ts",
       "github-ai-linter/index": "src/github-ai-linter/index.ts",
       "github-ai-linter/worker": "src/github-ai-linter/worker.ts",
+      "todo/index": "src/todo/index.ts",
       processors: "src/processors/index.ts",
       "processors-cloudflare": "src/processors/cloudflare.ts",
       "processors-testing": "src/processors/testing.ts",
