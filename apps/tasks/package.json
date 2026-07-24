@@ -1,28 +1,65 @@
 {
   "name": "@iterate-com/tasks",
-  "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Stateless Kanban vessel for iterate project tasks/ — TanStack Start on Cloudflare Workers, proxied per-project with project-app-session auth",
+  "description": "Project-config connector for Iterate's independently deployed Tasks app",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "apps/tasks"
+  },
+  "homepage": "https://github.com/iterate/iterate/tree/main/apps/tasks#readme",
+  "bugs": {
+    "url": "https://github.com/iterate/iterate/issues"
+  },
+  "exports": {
+    ".": "./src/config-bridge.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist-package/config-bridge.d.ts",
+        "import": "./dist-package/config-bridge.js",
+        "default": "./dist-package/config-bridge.js"
+      }
+    }
+  },
+  "files": [
+    "dist-package",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && tsc --noEmit",
+    "build": "vite build && tsc --noEmit && pnpm build:package",
+    "build:package": "tsc --project tsconfig.package.json",
     "typecheck": "tsc --noEmit",
     "deploy": "vite build && wrangler deploy",
-    "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts"
+    "test": "pnpm build:package && vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
+    "prepack": "pnpm build:package"
   },
-  "dependencies": {
+  "devDependencies": {
     "@codemirror/collab": "^6.1.1",
     "@codemirror/commands": "^6.10.4",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.6",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@dnd-kit/react": "^0.5.0",
     "@iterate-com/ui": "workspace:*",
     "@plannotator/core": "0.22.0",
     "@plannotator/ui": "0.28.0",
+    "@tailwindcss/vite": "^4.3.2",
     "@tanstack/react-router": "^1.170.10",
     "@tanstack/react-start": "^1.168.18",
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
     "capnweb": "npm:@iterate-com/capnweb@^0.10.0",
+    "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz",
     "iterate": "workspace:*",
     "lucide-react": "^0.553.0",
     "partyserver": "^0.5.8",
@@ -32,22 +69,12 @@
     "y-partyserver": "^2.2.0",
     "y-protocols": "^1.0.7",
     "yaml": "^2.8.0",
-    "yjs": "^13.6.31"
-  },
-  "devDependencies": {
-    "@cloudflare/vite-plugin": "catalog:cloudflare",
-    "@cloudflare/workers-types": "catalog:cloudflare",
-    "@tailwindcss/vite": "^4.3.2",
-    "@types/node": "^24.12.4",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
-    "captun": "https://github.com/iterate/captun/releases/download/v0.0.3-websocket.6aa1207/captun-0.0.3.tgz",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.9.2",
     "vite": "^8.0.16",
     "vitest": "^4.1.10",
     "wrangler": "catalog:cloudflare",
-    "ws": "^8.21.1"
+    "ws": "^8.21.1",
+    "yjs": "^13.6.31"
   }
 }
