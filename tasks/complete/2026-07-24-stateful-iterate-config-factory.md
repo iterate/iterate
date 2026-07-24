@@ -15,9 +15,6 @@ the final preview/browser/telemetry proof is healthy.
 
 The packaged GitHub AI linter proved that a config repo can import event-processing behavior from `iterate`. The next harder boundary is a stateful HTTP app: one npm-owned factory must carry a SQLite/sqlfu Durable Object and its browser client without asking config to host the source or install its runtime dependencies.
 
-Decision trail:
-[2026-07-24-stateful-iterate-config-factory.interview.md](./2026-07-24-stateful-iterate-config-factory.interview.md).
-
 ## Public shape
 
 ```ts
@@ -37,7 +34,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
 ## Checklist
 
-- [x] Grill the API, package boundary, state model, and acceptance proof. *Recorded in the adjacent interview log.*
 - [x] Replace the task stub with an implementation-ready spec and explicit guesses. *This file is the agreed Phase 2 handoff.*
 - [x] Add a failing package contract test for `TodoApp.create(env).fetch(request)`. It must assert a real `env.ITX.fetch` dispatch with a private stateful ref, `durableWorkerKey: "app-todo-live"`, and no config-owned Todo source paths. *The red/green contract lives in `packages/iterate/src/todo/todo.test.ts`.*
 - [x] Add a failing build gate for the physical Todo worker artifact. It must reject unsupported bare imports and prove the prebuilt browser client is present. *`check-todo-bundle.ts` first failed on the missing artifact, then caught an external `zod` leak before going green.*
@@ -84,7 +80,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 ## Implementation log
 
 - 2026-07-24: Started from merged `origin/main` after the packaged GitHub AI linter landed.
-- 2026-07-24: `grill-you` selected Todo as the smallest stateful proof and completed four decision rounds.
 - 2026-07-24: Factory TDD proved the `env.ITX.fetch` lane and private `app-todo-live` ref.
 - 2026-07-24: The artifact gate caught both the initially absent build and an external `zod` leak; the final worker bundles sqlfu, Cap'n Web, the migration, and the prebuilt browser client.
 - 2026-07-24: Package build/typecheck/169 tests, config-template typecheck, and 11 focused OS template/seed tests pass.
