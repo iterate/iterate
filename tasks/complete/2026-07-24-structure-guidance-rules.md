@@ -7,8 +7,9 @@ size: small
 
 ## Status summary
 
-Complete in draft PR #2305. The branch contains this task record and the user's exact four path
-changes under `rules/structure/`; no rule wording, filenames, or formatting was edited.
+Complete in draft PR #2305. The branch contains this task record and the user's submitted rule
+contents under `rules/structure/`; no rule wording or formatting was edited. The user subsequently
+corrected the `simplifyy-truthiness-checks.md` path typo.
 
 ## Spec
 
@@ -22,7 +23,8 @@ changes under `rules/structure/`; no rule wording, filenames, or formatting was 
 
 ## Decisions and assumptions
 
-- “Verbatim” means misspellings, punctuation, examples, and formatting are intentional.
+- “Verbatim” applies to rule contents. The user explicitly corrected the
+  `simplifyy-truthiness-checks.md` filename after the first push.
 - Unrelated root-worktree changes are out of scope and will remain untouched.
 
 ## Implementation log
@@ -30,3 +32,4 @@ changes under `rules/structure/`; no rule wording, filenames, or formatting was 
 - Created the branch from `origin/main` at `aad216987`.
 - Committed the task specification before transferring the rule files.
 - Left the root worktree unchanged, including all unrelated staged and unstaged changes.
+- Renamed the truthiness rule to `simplify-truthiness-checks.md` without changing its bytes.
