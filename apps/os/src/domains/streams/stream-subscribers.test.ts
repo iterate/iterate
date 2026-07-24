@@ -882,6 +882,74 @@ describe("StreamSubscribers", () => {
     expect(h.factsOfType(DISCONNECTED)[0]?.payload).toMatchObject({ reason: "idle" });
   });
 
+  it("expires an orphaned wake settlement on the DO alarm and backs off before re-poking", async () => {
+    const h = makeHarness();
+    h.configure(wakePayload(), 0);
+    h.append(evt(1, "a"));
+    let batch: StreamWakeEventBatch | undefined;
+    h.dialImpl.poke = async () => ({
+      checkpointOffset: 0,
+      sink: Object.assign(
+        (delivered: StreamWakeEventBatch) => {
+          batch = delivered;
+        },
+        { [Symbol.dispose]: () => {} },
+      ),
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warningLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      h.subscribers.wake();
+      await h.settle();
+      expect(batch).toBeDefined();
+      expect(h.subscribers.hasConnection("k")).toBe(true);
+      expect(h.armedAlarms).toContain(20_000);
+
+      h.advanceTo(19_999);
+      h.subscribers.onAlarm();
+      await h.settle();
+      expect(h.subscribers.hasConnection("k")).toBe(true);
+
+      h.advanceTo(20_000);
+      h.subscribers.onAlarm();
+      await h.settle();
+
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(warningLog).toHaveBeenCalledWith(
+        "stream durable sink unavailable; backing off before re-poke",
+        expect.objectContaining({
+          subscriptionKey: "k",
+          reason: "delivery-failed",
+          error: expect.objectContaining({
+            name: StreamReceiverUnavailableError.NAME,
+            message: "wake k settlement timed out after 20000ms",
+          }),
+        }),
+      );
+      expect(h.subscribers.hasConnection("k")).toBe(false);
+      expect(h.row("k")).toMatchObject({
+        attempt: 1,
+        lastError: "wake k settlement timed out after 20000ms",
+      });
+      expect(h.row("k")?.nextAttemptAt).toBeGreaterThan(20_000);
+      expect(h.pokes).toHaveLength(1);
+      expect(h.factsOfType(DISCONNECTED).at(-1)?.payload).toMatchObject({
+        subscriptionKey: "k",
+        reason: "delivery-failed",
+      });
+
+      // A successor owns recovery now; an acknowledgement from the orphaned
+      // predecessor cannot clear backoff or mutate the closed connection.
+      batch!.settleDelivery({ outcome: "ok" });
+      await h.settle();
+      expect(h.row("k")?.attempt).toBe(1);
+    } finally {
+      errorLog.mockRestore();
+      warningLog.mockRestore();
+    }
+  });
+
   it("j. a poke failure lands in the same backoff rows as push failures", async () => {
     const h = makeHarness();
     h.configure(wakePayload(), 0);

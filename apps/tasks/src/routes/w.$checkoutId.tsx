@@ -57,6 +57,41 @@ export const Route = createFileRoute("/w/$checkoutId")({
   component: WorkspaceBoardPage,
 });
 
+/** The corner presence strip: everyone with this board open — yourself
+ * included, ringed in your own author color, even when alone. */
+function BoardPresence({
+  self,
+  clients,
+}: {
+  self: { clientId: string; name: string } | null;
+  clients: { clientId: string; name: string }[];
+}) {
+  const everyone = [
+    ...(self !== null && !clients.some((client) => client.clientId === self.clientId)
+      ? [self]
+      : []),
+    ...clients,
+  ];
+  if (everyone.length === 0) return null;
+  return (
+    <div className="mr-1 flex items-center -space-x-1.5">
+      {everyone.slice(0, 6).map((client) => (
+        <span
+          key={client.clientId}
+          title={client.name}
+          style={{ borderColor: authorColor(client.clientId, 1) }}
+          className="flex size-6 items-center justify-center rounded-full border-2 bg-background text-[10px] font-semibold uppercase"
+        >
+          {client.name.trim().slice(0, 1) || "?"}
+        </span>
+      ))}
+      {everyone.length > 6 ? (
+        <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
+      ) : null}
+    </div>
+  );
+}
+
 function WorkspaceBoardPage() {
   const { checkoutId } = Route.useParams();
   const search = Route.useSearch();
@@ -446,6 +481,7 @@ function WorkspaceBoardPage() {
         <SidebarTrigger className="-ml-1 md:hidden" />
         <CheckoutBreadcrumbs repoPath={repoPath} checkoutId={checkoutId} />
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <BoardPresence self={board.self} clients={board.boardClients} />
           <div className="hidden items-center gap-1.5 sm:flex">
             <WithTooltip label="Stream events">
               <Button

@@ -178,6 +178,155 @@ describe("StreamRpcTarget", () => {
     }
   });
 
+  it("replays a keyed append once when its native RPC acknowledgement is orphaned", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const firstDispose = vi.fn();
+    const secondDispose = vi.fn();
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      idempotencyKey: "keyed-orphan",
+      offset: 3,
+      path: "/events",
+      payload: { recovered: true },
+      type: "events.iterate.com/test/keyed-orphan",
+    } satisfies StreamEvent;
+    const firstResult = [{ ...event }];
+    const secondResult = [{ ...event }];
+    Object.defineProperty(firstResult, Symbol.dispose, { value: firstDispose });
+    Object.defineProperty(secondResult, Symbol.dispose, { value: secondDispose });
+    let acquisitions = 0;
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return {
+          append: () => (acquisitions === 1 ? firstAppend.promise : Promise.resolve(secondResult)),
+        } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({
+      idempotencyKey: event.idempotencyKey,
+      payload: event.payload,
+      type: event.type,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(appending).resolves.toEqual([event]);
+      expect(acquisitions).toBe(2);
+      expect(secondDispose).toHaveBeenCalledOnce();
+      expect(info).toHaveBeenCalledWith(
+        "keyed stream append retrying after Durable Object unavailability",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            message: expect.stringContaining("received no response within 10000ms"),
+          }),
+          path: "/events",
+          projectId: "prj_test",
+        }),
+      );
+
+      firstAppend.resolve(firstResult);
+      await vi.runAllTimersAsync();
+      expect(firstDispose).toHaveBeenCalledOnce();
+    } finally {
+      firstAppend.reject(new Error("late keyed append rejection"));
+      await appending.catch(() => undefined);
+      info.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("never deadline-replays an unkeyed append", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const result = [
+      {
+        createdAt: new Date(0).toISOString(),
+        offset: 3,
+        path: "/events",
+        type: "events.iterate.com/test/unkeyed",
+      } satisfies StreamEvent,
+    ];
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { append: () => firstAppend.promise } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/events",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({ type: result[0]!.type });
+    try {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(acquisitions).toBe(1);
+
+      firstAppend.resolve(result);
+      await expect(appending).resolves.toEqual(result);
+    } finally {
+      firstAppend.reject(new Error("late unkeyed append rejection"));
+      await appending.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("never deadline-replays a keyed root append", async () => {
+    vi.useFakeTimers();
+    const firstAppend = Promise.withResolvers<StreamEvent[]>();
+    const result = [
+      {
+        createdAt: new Date(0).toISOString(),
+        idempotencyKey: "root-birth",
+        offset: 3,
+        path: "/",
+        type: "events.iterate.com/test/root-birth",
+      } satisfies StreamEvent,
+    ];
+    let acquisitions = 0;
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get durableObjectStub() {
+        acquisitions += 1;
+        return { append: () => firstAppend.promise } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    const appending = stream.append({
+      idempotencyKey: result[0]!.idempotencyKey,
+      type: result[0]!.type,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(acquisitions).toBe(1);
+
+      firstAppend.resolve(result);
+      await expect(appending).resolves.toEqual(result);
+    } finally {
+      firstAppend.reject(new Error("late keyed root append rejection"));
+      await appending.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
   it("re-acquires when a remote stream waiter is orphaned", async () => {
     vi.useFakeTimers();
     const firstWait = Promise.withResolvers<StreamEvent>();
