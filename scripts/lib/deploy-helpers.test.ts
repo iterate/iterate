@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertWorkerSecretAbsent,
   buildR2ObjectExpiryLifecycleRules,
   ensureR2ObjectExpiryLifecycle,
   PREVIEW_DISPOSABLE_TTL_SECONDS,
@@ -116,53 +115,6 @@ describe("runCloudflareCommandWith429Retry", () => {
   });
 });
 
-describe("assertWorkerSecretAbsent", () => {
-  it("accepts a Worker without the forbidden binding", async () => {
-    const cf = vi.fn(async () => []);
-
-    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).resolves.toBeUndefined();
-
-    expect(cf).toHaveBeenCalledOnce();
-    expect(cf).toHaveBeenCalledWith(listPath);
-  });
-
-  it("accepts a Worker that has not been created yet", async () => {
-    const cf = vi.fn(async () => {
-      throw new CloudflareApiError("GET", listPath, 404, [{ code: 10007 }]);
-    });
-
-    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).resolves.toBeUndefined();
-
-    expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
-  });
-
-  it("fails closed without mutating an existing binding", async () => {
-    const cf = vi.fn(async () => [{ name: secretName, type: "secret_text" }]);
-
-    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toThrow(
-      /Forbidden Worker secret is present/,
-    );
-    expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
-  });
-
-  it("fails closed when Cloudflare returns an unexpected secret-list shape", async () => {
-    const cf = vi.fn(async () => ({ secrets: [] }));
-
-    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toThrow();
-  });
-
-  it("propagates Cloudflare failures other than a missing Worker", async () => {
-    const cloudflareError = new CloudflareApiError("GET", listPath, 503, [{ code: 10000 }]);
-    const cf = vi.fn(async () => {
-      throw cloudflareError;
-    });
-
-    await expect(assertWorkerSecretAbsent({ cf, workerName, secretName })).rejects.toBe(
-      cloudflareError,
-    );
-  });
-});
-
 describe("removeWorkerSecrets", () => {
   const retiredSecretNames = [secretName, "APP_CONFIG_SLACK_BOT_TOKEN"] as const;
 
@@ -211,6 +163,25 @@ describe("removeWorkerSecrets", () => {
     ).resolves.toEqual([]);
 
     expect(cf).toHaveBeenCalledExactlyOnceWith(listPath);
+  });
+
+  it("fails closed when Cloudflare returns an unexpected secret-list shape", async () => {
+    const cf = vi.fn(async () => ({ secrets: [] }));
+
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+    ).rejects.toThrow();
+  });
+
+  it("propagates Cloudflare failures other than a missing Worker", async () => {
+    const cloudflareError = new CloudflareApiError("GET", listPath, 503, [{ code: 10000 }]);
+    const cf = vi.fn(async () => {
+      throw cloudflareError;
+    });
+
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: retiredSecretNames }),
+    ).rejects.toBe(cloudflareError);
   });
 
   it("fails closed when deletion does not remove a retired secret", async () => {

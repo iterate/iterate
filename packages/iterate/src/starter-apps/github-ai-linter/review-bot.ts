@@ -9,9 +9,9 @@
 // fact lives on the agent streams it appends to, keyed so redeliveries
 // collapse.
 import { z } from "zod";
-import { defineProcessorContract, StreamProcessor } from "../processors/index.ts";
-import type { ProcessEventArgs } from "../processors/index.ts";
-import type { Project, StreamEvent, StreamEventInput } from "../sdk.ts";
+import { defineProcessorContract, StreamProcessor } from "../../processors/index.ts";
+import type { ProcessEventArgs } from "../../processors/index.ts";
+import type { Project, StreamEvent, StreamEventInput } from "../../sdk.ts";
 import type { GithubAiLinterConfig } from "./index.ts";
 import { loadGithubAiLinterRules, type GithubAiLinterRules } from "./rules.ts";
 

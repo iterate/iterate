@@ -19,6 +19,7 @@ import {
 } from "iterate/processors";
 import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
+import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import type {
   CoreProcessorState,
   SubscriptionConfiguredPayload,
@@ -523,10 +524,10 @@ describe("StreamSubscribers", () => {
     h.configure(wakePayload(), 0);
     h.append(evt(1, "event"));
     h.dialImpl.poke = async () => {
-      throw Object.assign(
-        new Error('Entry point "github-ai-linter-worker.ts" was not found in files.'),
-        { retryable: false },
-      );
+      throw new WorkerBuildFailedError({
+        kind: "source",
+        message: 'Entry point "github-ai-linter-worker.ts" was not found in files.',
+      });
     };
 
     h.subscribers.wake();

@@ -1,4 +1,4 @@
-import { IterateDurableObject, createProcessorHost } from "../sdk.ts";
+import { IterateDurableObject, createProcessorHost } from "../../sdk.ts";
 import type { GithubAiLinterConfig } from "./index.ts";
 import { ReviewBotProcessor } from "./review-bot.ts";
 

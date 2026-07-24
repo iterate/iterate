@@ -78,7 +78,7 @@ consumes the original connection event and rejects every cross-posted copy.
 ## The userspace router
 
 The router and its host live in
-[`iterate/github-ai-linter`](../../../packages/iterate/src/github-ai-linter/review-bot.ts).
+[`iterate/starter-apps/github-ai-linter`](../../../packages/iterate/src/starter-apps/github-ai-linter/review-bot.ts).
 The package contains the `ReviewBotProcessorContract` (consuming
 `events.iterate.com/github/webhook-received`), the processor, and the
 `handleGithubPullRequestWebhook` router it runs per delivered webhook inside

@@ -1,6 +1,7 @@
-import { GithubAiLinter } from "iterate/github-ai-linter";
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
+import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
-import { guestbookAppRef } from "./apps/guestbook/ref.ts";
+import { TodoApp } from "iterate/starter-apps/todo";
 
 // An iterate project is, in the abstract, just a fetch function.
 // HTTP clients on the internet can send us Requests, and we will send responses and
@@ -20,11 +21,14 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
+  #guestbookApp = GuestbookApp.create(this.env);
+  #todoApp = TodoApp.create(this.env);
 
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
   protected override async processEvent(event: StreamEvent): Promise<void> {
     await this.#aiLintApp.processEvent(event);
+    await this.#guestbookApp.processEvent(event);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -33,23 +37,10 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      return this.fetchDynamicWorker(req, {
-        type: "stateful",
-        className: "TodoApp",
-        // "-live" keeps clear of a retired predecessor's durable identity.
-        durableWorkerKey: "app-todo-live",
-        path: "/",
-        source: {
-          createApp: {
-            client: "apps/todo/client.tsx",
-            files: { type: "repo", repoPath: "/repos/config" },
-            server: "apps/todo/server.tsx",
-          },
-        },
-      });
+      return this.#todoApp.fetch(req);
     }
     if (app === "guestbook") {
-      return this.fetchDynamicWorker(req, guestbookAppRef);
+      return this.#guestbookApp.fetch(req);
     }
     if (app === "tasks") {
       // Member-gated reverse proxy (pages, assets, WebSockets) to the hosted

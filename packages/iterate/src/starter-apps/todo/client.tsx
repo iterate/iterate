@@ -1,11 +1,12 @@
 /**
  * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.
+ * @jsxImportSource react
  */
-import { newWebSocketRpcSession, type RpcStub } from "iterate/sdk/capnweb";
 import React, { type FormEvent, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CapnWebProvider, useCapnWebRoot, useLiveState } from "iterate/sdk/capnweb/react";
-import type { TodoApi } from "./server.tsx";
+import { newWebSocketRpcSession, type RpcStub } from "../../sdk/capnweb/index.ts";
+import { CapnWebProvider, useCapnWebRoot, useLiveState } from "../../sdk/capnweb/react.tsx";
+import type { TodoApi } from "./worker.ts";
 
 function makeConnection() {
   const endpoint = new URL("/api", window.location.href);
@@ -17,15 +18,15 @@ export function TodoClient() {
   const api = useCapnWebRoot<RpcStub<TodoApi>>();
   const { value: state, error: liveError } = useLiveState(
     (session: RpcStub<TodoApi>) => session.liveState,
-    (s) => s,
+    (value) => value,
   );
   const [title, setTitle] = useState("");
   const [actionError, setActionError] = useState("");
   const [pendingMutations, setPendingMutations] = useState(0);
   const mutating = pendingMutations > 0;
 
-  const error = liveError ?? (actionError.length > 0 ? actionError : undefined);
-  const todos = state?.todos ?? [];
+  const error = liveError || (actionError.length > 0 ? actionError : undefined);
+  const todos = state?.todos || [];
 
   const run = async (action: () => Promise<void>) => {
     setActionError("");
@@ -41,7 +42,7 @@ export function TodoClient() {
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
-    if (api == null || title.trim().length === 0) return;
+    if (api === undefined || title.trim().length === 0) return;
     const next = title;
     setTitle("");
     await run(() => api.add(next));
@@ -61,7 +62,7 @@ export function TodoClient() {
           type="text"
           value={title}
         />
-        <button disabled={api == null || mutating} type="submit">
+        <button disabled={api === undefined || mutating} type="submit">
           Add
         </button>
       </form>
@@ -85,7 +86,7 @@ export function TodoClient() {
                 disabled={mutating}
                 onChange={(event) => {
                   const done = event.currentTarget.checked;
-                  if (api == null) return;
+                  if (api === undefined) return;
                   void run(() => api.setDone(todo.id, done));
                 }}
                 type="checkbox"
@@ -94,7 +95,7 @@ export function TodoClient() {
               <button
                 disabled={mutating}
                 onClick={() => {
-                  if (api == null) return;
+                  if (api === undefined) return;
                   void run(() => api.remove(todo.id));
                 }}
                 type="button"
