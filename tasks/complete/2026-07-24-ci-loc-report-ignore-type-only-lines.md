@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
@@ -7,8 +7,8 @@ size: small
 
 ## Status summary
 
-Implementation, local checks, and PR self-report proof are complete. TypeScript source maps remove
-type-only lines without changing source-line counts; CI/review remain.
+Complete in PR #2302. TypeScript source maps remove type-only lines without changing source-line
+counts; local tests and every PR check pass, with no review threads open.
 
 ## Motivation
 
@@ -53,3 +53,5 @@ column.
 - `pnpm --dir scripts typecheck` and all 274 scripts workspace tests pass.
 - Running the changed report over `origin/main...4e5e7fc29` produced +250/−19 raw versus +216/−11
   Significant, exercising TypeScript, tests, docs, and the lockfile together.
+- PR #2302 passed preview, LOC report, lint/typecheck, tests, autofix, package publish, and continuous
+  release checks at `2a6f53131`; repeated review-thread polling found none.
