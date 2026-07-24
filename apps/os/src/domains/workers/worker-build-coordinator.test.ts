@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerBuildArtifact } from "./artifact-store.ts";
 import type { WorkerBuildRequest } from "./worker-build-capability.ts";
-import { WorkerBuildCoordinator } from "./worker-build-coordinator.ts";
+import {
+  WorkerBuildCoordinator,
+  type WorkerBuildCoordinatorEvent,
+} from "./worker-build-coordinator.ts";
 
 const request: WorkerBuildRequest = {
   buildKey: "a".repeat(64),
@@ -45,16 +48,46 @@ describe("WorkerBuildCoordinator", () => {
 
   it("reuses a successful artifact after its flight settles", async () => {
     const execute = vi.fn(async () => artifact);
-    const events: string[] = [];
+    const events: WorkerBuildCoordinatorEvent[] = [];
     const coordinator = new WorkerBuildCoordinator(execute, {
-      observe: (event) => events.push(event.kind),
+      observe: (event) => events.push(event),
     });
 
     await expect(coordinator.build(request)).resolves.toBe(artifact);
     await expect(coordinator.build(request)).resolves.toBe(artifact);
 
     expect(execute).toHaveBeenCalledOnce();
-    expect(events).toEqual(["started", "settled", "reused"]);
+    // Every event names what's building; sizes appear once the bundle exists
+    // ("built" is 5 UTF-8 bytes) and replay unchanged on reuse.
+    const sizes = { assetBytes: 0, assetCount: 0, moduleBytes: 5, moduleCount: 1 };
+    expect(events).toMatchObject([
+      { kind: "started", source: "createWorker:(default entry)" },
+      { kind: "settled", outcome: "built", sizes, source: "createWorker:(default entry)" },
+      { kind: "reused", sizes, source: "createWorker:(default entry)" },
+    ]);
+  });
+
+  it("describes createApp builds by their server and client entries", async () => {
+    const execute = vi.fn(async () => artifact);
+    const events: WorkerBuildCoordinatorEvent[] = [];
+    const coordinator = new WorkerBuildCoordinator(execute, {
+      observe: (event) => events.push(event),
+    });
+
+    await coordinator.build({
+      ...request,
+      source: {
+        createApp: {
+          client: "apps/todo/client.tsx",
+          files: { files: { "worker.ts": "source" }, type: "inline" },
+          server: "apps/todo/server.tsx",
+        },
+      },
+    });
+
+    expect(events[0]).toMatchObject({
+      source: "createApp:server=apps/todo/server.tsx,client=apps/todo/client.tsx",
+    });
   });
 
   it("fans infrastructure failure out and permits a clean retry", async () => {

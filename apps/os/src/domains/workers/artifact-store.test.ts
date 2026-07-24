@@ -3,6 +3,7 @@ import {
   buildFailureMessageFromError,
   KvWorkerBuildArtifactStore,
   WORKER_BUILD_ARTIFACT_SCHEMA_VERSION,
+  workerBuildArtifactSizes,
   type WorkerBuildArtifact,
 } from "./artifact-store.ts";
 
@@ -59,5 +60,23 @@ describe("KvWorkerBuildArtifactStore", () => {
     const huge = buildFailureMessageFromError(new Error("x".repeat(100_000)));
     expect(huge.length).toBeLessThan(3_000);
     expect(huge).toContain("(truncated)");
+  });
+});
+
+describe("workerBuildArtifactSizes", () => {
+  it("weighs every module representation and asset in UTF-8 bytes", () => {
+    expect(
+      workerBuildArtifactSizes({
+        ...artifact,
+        // "é" is 1 UTF-16 code unit but 2 UTF-8 bytes — .length would undercount.
+        assets: { "/client.js": "é" },
+        modules: {
+          "worker.js": "12345",
+          "chunk.js": { cjs: "123", js: "4567" },
+          "notes.txt": { text: "12" },
+          "data.json": { json: { a: 1 } }, // {"a":1} → 7 bytes
+        },
+      }),
+    ).toEqual({ assetBytes: 2, assetCount: 1, moduleBytes: 21, moduleCount: 4 });
   });
 });

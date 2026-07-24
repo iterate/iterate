@@ -1,4 +1,9 @@
-import { isWorkerBuildFailedError, type WorkerBuildArtifact } from "./artifact-store.ts";
+import {
+  isWorkerBuildFailedError,
+  workerBuildArtifactSizes,
+  type WorkerBuildArtifact,
+  type WorkerBuildSizes,
+} from "./artifact-store.ts";
 import type { WorkerBuildRequest } from "./worker-build-capability.ts";
 
 export type WorkerBuildCoordinatorEvent = {
@@ -6,17 +11,35 @@ export type WorkerBuildCoordinatorEvent = {
   durationMs?: number;
   kind: "coalesced" | "reused" | "settled" | "started";
   outcome?: "built" | "infrastructure-failed" | "source-failed";
+  /** Bundle weight, present once a build settles successfully (and on reuses of it). */
+  sizes?: WorkerBuildSizes;
+  /** What's building, human-readable — the buildKey alone is an opaque hash. */
+  source: string;
   waiters: number;
 };
 
 type Flight = {
   buildKey: string;
+  source: string;
   startedAt: number;
   waiters: Set<{
     reject(error: unknown): void;
     resolve(artifact: WorkerBuildArtifact): void;
   }>;
 };
+
+/** `createWorker:worker.ts`-style descriptor of a build request's entry point(s). */
+export function describeWorkerBuildSource(source: WorkerBuildRequest["source"]): string {
+  if ("createWorker" in source) {
+    return `createWorker:${source.createWorker.entryPoint ?? "(default entry)"}`;
+  }
+  const { client, server } = source.createApp;
+  const entries = [
+    ...(server === undefined ? [] : [`server=${server}`]),
+    ...(typeof client === "string" ? [client] : (client ?? [])).map((entry) => `client=${entry}`),
+  ];
+  return `createApp:${entries.join(",") || "(default entry)"}`;
+}
 
 /**
  * In-incarnation scheduling core for one build-key Durable Object.
@@ -32,7 +55,9 @@ export class WorkerBuildCoordinator {
   readonly #now: () => number;
   readonly #observe: (event: WorkerBuildCoordinatorEvent) => void;
   #flight: Flight | undefined;
-  #settled: { artifact: WorkerBuildArtifact; buildKey: string } | undefined;
+  #settled:
+    | { artifact: WorkerBuildArtifact; buildKey: string; sizes: WorkerBuildSizes }
+    | undefined;
 
   constructor(
     execute: (request: WorkerBuildRequest) => Promise<WorkerBuildArtifact>,
@@ -53,6 +78,8 @@ export class WorkerBuildCoordinator {
       this.#observe({
         buildKey: request.buildKey,
         kind: "reused",
+        sizes: settled.sizes,
+        source: describeWorkerBuildSource(request.source),
         waiters: 0,
       });
       return settled.artifact;
@@ -69,6 +96,7 @@ export class WorkerBuildCoordinator {
 
     const flight: Flight = {
       buildKey: request.buildKey,
+      source: describeWorkerBuildSource(request.source),
       startedAt: this.#now(),
       waiters: new Set(),
     };
@@ -76,13 +104,16 @@ export class WorkerBuildCoordinator {
     this.#emit(flight, "started");
     try {
       const artifact = await this.#execute(request);
+      // Sized once here; reuse events replay this value instead of re-encoding
+      // megabytes of module text per call.
+      const sizes = workerBuildArtifactSizes(artifact);
       // One actor owns one immutable build key. Keep its successful result in
       // memory so callers from other OS isolates do not fall back through the
       // eventually-consistent KV cache immediately after the first build.
       // Actor eviction remains the cache eviction policy; after that, the KV
       // write is visible at the coordinator's stable location.
-      this.#settled = { artifact, buildKey: request.buildKey };
-      this.#emit(flight, "settled", "built");
+      this.#settled = { artifact, buildKey: request.buildKey, sizes };
+      this.#emit(flight, "settled", "built", sizes);
       for (const waiter of flight.waiters) waiter.resolve(artifact);
       return artifact;
     } catch (error) {
@@ -108,12 +139,15 @@ export class WorkerBuildCoordinator {
     flight: Flight,
     kind: WorkerBuildCoordinatorEvent["kind"],
     outcome?: WorkerBuildCoordinatorEvent["outcome"],
+    sizes?: WorkerBuildSizes,
   ) {
     this.#observe({
       buildKey: flight.buildKey,
       ...(kind === "settled" ? { durationMs: this.#now() - flight.startedAt } : {}),
       kind,
       ...(outcome === undefined ? {} : { outcome }),
+      ...(sizes === undefined ? {} : { sizes }),
+      source: flight.source,
       waiters: flight.waiters.size,
     });
   }

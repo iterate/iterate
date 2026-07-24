@@ -51,6 +51,40 @@ export type WorkerBuildArtifact = {
   wranglerConfig?: WorkerBuildWranglerConfig;
 };
 
+export type WorkerBuildSizes = {
+  assetBytes: number;
+  assetCount: number;
+  moduleBytes: number;
+  moduleCount: number;
+};
+
+/** Uncompressed UTF-8 weight of one built artifact — the modules Worker Loader
+ * must instantiate and the browser assets OS retains. Derived on demand rather
+ * than stored, so cached artifacts need no schema bump. */
+export function workerBuildArtifactSizes(artifact: WorkerBuildArtifact): WorkerBuildSizes {
+  const encoder = new TextEncoder();
+  const byteLength = (text: string) => encoder.encode(text).byteLength;
+  let moduleBytes = 0;
+  for (const module of Object.values(artifact.modules)) {
+    if (typeof module === "string") {
+      moduleBytes += byteLength(module);
+      continue;
+    }
+    for (const text of [module.cjs, module.js, module.text]) {
+      if (text !== undefined) moduleBytes += byteLength(text);
+    }
+    if (module.json !== undefined) moduleBytes += byteLength(JSON.stringify(module.json));
+  }
+  let assetBytes = 0;
+  for (const content of Object.values(artifact.assets)) assetBytes += byteLength(content);
+  return {
+    assetBytes,
+    assetCount: Object.keys(artifact.assets).length,
+    moduleBytes,
+    moduleCount: Object.keys(artifact.modules).length,
+  };
+}
+
 /** An expected source-build failure; repo, KV, and sidecar transport errors stay distinct. */
 export class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";
