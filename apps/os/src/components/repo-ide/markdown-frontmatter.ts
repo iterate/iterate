@@ -17,9 +17,10 @@ function parseMarkdownFrontmatter(content: string): {
 function markdownFrontmatterRecord(document: Document): Record<string, unknown> {
   try {
     const value: unknown = document.toJS();
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+    // YAML deliberately returns unknown; the guards above prove the record
+    // shape, and copying it would only add work without improving safety.
+    return value as Record<string, unknown>;
   } catch {
     return {};
   }

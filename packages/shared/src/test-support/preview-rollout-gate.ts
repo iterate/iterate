@@ -40,16 +40,16 @@ export async function waitForPreviewRolloutBeforeProjectCreation(input?: {
   nowMs?: number;
   sleep?: (waitMs: number) => Promise<void>;
 }): Promise<void> {
-  const environment = input?.environment ?? process.env;
+  const environment = input?.environment || process.env;
   const waitMs = resolvePreviewRolloutWaitMs({ environment, nowMs: input?.nowMs });
   if (waitMs === 0) return;
 
   const readyAtMs = Number(environment[PREVIEW_APP_ROLLOUT_READY_AT_MS_ENV]);
   await input?.beforeWait?.(waitMs);
-  (input?.log ?? console.log)(
+  (input?.log || console.log)(
     `[preview-rollout] project creation waits ${waitMs}ms until ${new Date(readyAtMs).toISOString()}`,
   );
   await (
-    input?.sleep ?? ((durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs)))
+    input?.sleep || ((durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs)))
   )(waitMs);
 }

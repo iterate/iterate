@@ -163,9 +163,8 @@ const BUILD_FAILURE_MESSAGE_LIMIT = 2_000;
 
 export function buildFailureMessageFromError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.length > BUILD_FAILURE_MESSAGE_LIMIT
-    ? `${message.slice(0, BUILD_FAILURE_MESSAGE_LIMIT)}… (truncated)`
-    : message;
+  if (message.length <= BUILD_FAILURE_MESSAGE_LIMIT) return message;
+  return `${message.slice(0, BUILD_FAILURE_MESSAGE_LIMIT)}… (truncated)`;
 }
 
 function artifactKey(buildKey: string): string {
