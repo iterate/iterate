@@ -16,7 +16,9 @@ feed the same work.
 
 Don't replace a ternary if doing so duplicates shared work, introduces mutation, increases vertical
 space, or turns a clear condition into a negative `&&`. Formatter wrapping alone is not a reason to
-rewrite a ternary. Prefer positive predicates; if neither branch reads clearly, name the condition.
+rewrite a ternary. If Oxfmt insists on wrapping an otherwise clear ternary, don't over-stress about
+the extra lines or add a suppression comment just to force it onto one line. Prefer positive
+predicates; if neither branch reads clearly, name the condition.
 
 Bad — the failure branch is exceptional, so the ternary wastes vertical space:
 
