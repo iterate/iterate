@@ -15,14 +15,14 @@ import {
   isExactOsProjectMiss,
   posthogBuildEnv,
   resolveOsContainerDeployArgs,
-  waitForPreviewIteratePackage,
+  waitForPreviewPackage,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
-describe("preview iterate package prerequisite", () => {
+describe("preview package prerequisite", () => {
   it("polls the exact immutable package with HEAD until it is available", async () => {
-    const packageSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
+    const packageSpec = "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@abc123";
     let now = 0;
     const requests: Array<{ init?: RequestInit; url: string }> = [];
     const responses = [new Response(null, { status: 404 }), new Response(null, { status: 200 })];
@@ -31,7 +31,7 @@ describe("preview iterate package prerequisite", () => {
       return responses.shift() ?? new Response(null, { status: 200 });
     };
 
-    await waitForPreviewIteratePackage(packageSpec, {
+    await waitForPreviewPackage(packageSpec, {
       fetch: fetchPackage,
       now: () => now,
       sleep: async (ms) => {
@@ -47,11 +47,11 @@ describe("preview iterate package prerequisite", () => {
   });
 
   it("fails closed with the missing URL and last response after a bounded wait", async () => {
-    const packageSpec = "https://pkg.pr.new/iterate/iterate/iterate@missing";
+    const packageSpec = "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@missing";
     let now = 0;
 
     await expect(
-      waitForPreviewIteratePackage(packageSpec, {
+      waitForPreviewPackage(packageSpec, {
         fetch: async () => new Response(null, { status: 404 }),
         now: () => now,
         sleep: async (ms) => {
@@ -60,7 +60,7 @@ describe("preview iterate package prerequisite", () => {
         timeoutMs: 2_500,
       }),
     ).rejects.toThrow(
-      `Timed out waiting 2500ms for the preview iterate package ${packageSpec}. Last check: HTTP 404.`,
+      `Timed out waiting 2500ms for the preview package ${packageSpec}. Last check: HTTP 404.`,
     );
     expect(now).toBe(2_500);
   });

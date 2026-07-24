@@ -10,7 +10,11 @@ import {
   type WorkerBuildModule,
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
-import { WORKER_COMPATIBILITY_DATE, WORKER_COMPATIBILITY_FLAGS } from "./build-backend.ts";
+import {
+  WORKER_COMPATIBILITY_DATE,
+  WORKER_COMPATIBILITY_FLAGS,
+  type FirstPartyPackageSpecs,
+} from "./build-backend.ts";
 import { coordinateWorkerBuild, type WorkerBuildRequest } from "./worker-build-capability.ts";
 
 /** Name-based because the error crosses Workers RPC. */
@@ -52,7 +56,10 @@ async function resolveThroughBuild(input: {
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
-  const iteratePackageSpec = env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined;
+  const packageSpecs: FirstPartyPackageSpecs = {
+    iterate: env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined,
+    tasks: env.APP_CONFIG_TASKS_PACKAGE_SPEC?.trim() || undefined,
+  };
   const resolved = await resolveFileSource({
     files:
       "createApp" in input.source ? input.source.createApp.files : input.source.createWorker.files,
@@ -62,7 +69,7 @@ async function resolveThroughBuild(input: {
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     files: resolved,
-    iteratePackageSpec,
+    packageSpecs,
     source: input.source,
   });
   const artifact =
@@ -71,7 +78,7 @@ async function resolveThroughBuild(input: {
       buildBudgetMs: input.buildBudgetMs,
       projectId: input.projectId,
       resolved,
-      iteratePackageSpec,
+      packageSpecs,
       source: input.source,
     }));
   return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
@@ -83,7 +90,7 @@ async function resolveArtifact(
     buildBudgetMs?: number;
     projectId: string;
     resolved: ResolvedWorkerFileSource;
-    iteratePackageSpec?: string;
+    packageSpecs: FirstPartyPackageSpecs;
     source: DynamicWorkerSource;
   },
 ): Promise<ResolvedWorkerSource> {
@@ -93,7 +100,7 @@ async function resolveArtifact(
 
   const request: WorkerBuildRequest = {
     buildKey,
-    iteratePackageSpec: context.iteratePackageSpec,
+    packageSpecs: context.packageSpecs,
     projectId: context.projectId,
     resolved: context.resolved,
     source: context.source,

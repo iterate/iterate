@@ -4,7 +4,8 @@
 # Every push to main and every PR publishes a tarball to pkg.pr.new's CDN
 # (no npm token involved), installable as:
 #
-#   https://pkg.pr.new/iterate/iterate/iterate@main     (latest main SDK build)
+#   https://pkg.pr.new/iterate/iterate@main             (latest main SDK build)
+#   https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main
 #
 # pkg.pr.new prints the scoped @iterate-com/tasks URL; keep the config template
 # pinned to that generated shape rather than deriving it here. Preview deploys

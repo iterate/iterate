@@ -94,6 +94,7 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
+    "@iterate-com/tasks": "workspace:*",
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@microsoft/tui-test": "0.0.4",

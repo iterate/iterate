@@ -39,6 +39,7 @@ test("template ships packaged apps behind a thin router", () => {
   // compile the two Guestbook source-upgrade bridges once before the packaged
   // app removes their WAKE subscription.
   expect(templatePackageJson.dependencies).toMatchObject({
+    "@iterate-com/tasks": expect.any(String),
     iterate: expect.any(String),
     react: expect.any(String),
     zod: expect.any(String),
@@ -52,6 +53,8 @@ test("packaged apps stay behind the thin router", () => {
   expect(worker).not.toContain("pipeline:");
   expect(worker).not.toContain("tanstack");
   expect(worker).toContain('from "iterate/starter-apps/guestbook"');
+  expect(worker).toContain('from "@iterate-com/tasks"');
+  expect(worker).toContain("this.#tasksApp.fetch(req)");
   expect(worker).toContain("this.#guestbookApp.processEvent(event)");
   expect(worker).toContain("this.#guestbookApp.fetch(req)");
   expect(templateFile("apps/guestbook/server.tsx")).toContain(
@@ -77,7 +80,8 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
     dependencies: Record<string, string>;
   };
   expect(templatePackageJson.dependencies).toMatchObject({
-    iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+    iterate: "https://pkg.pr.new/iterate/iterate@main",
   });
 });
 

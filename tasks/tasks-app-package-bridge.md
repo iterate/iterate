@@ -8,9 +8,10 @@ branch: tasks-app-package-bridge
 
 ## Status
 
-The connector, connector-only package artifact, and joint pkg.pr.new workflow
-are implemented and locally green. OS config-template consumption, preview
-pinning, docs, and the companion `iterate/config` update remain.
+The connector, tiny package artifact, seeded config use, preview lockstep
+pinning, and docs are implemented. Repo-wide lint, typecheck, and tests pass.
+Only the companion `iterate/config` PR and published-package install proof
+remain.
 
 ## Goal
 
@@ -82,18 +83,26 @@ Durable Object, or their dependency graph.
 - [x] Publish `packages/iterate` and `apps/tasks` in one locked
       `pkg-pr-new` invocation. _The workflow uses locked `pkg-pr-new@0.0.79`;
       its first CI run will supply the generated scoped-package URL._
-- [ ] Add `@iterate-com/tasks` to the OS project-config template and replace
-      the hand-written Tasks branch with `TasksApp`.
-- [ ] Pin both `iterate` and `@iterate-com/tasks` to the same exact PR SHA in
-      preview-created and preview-rebuilt config repos.
-- [ ] Update Tasks and remote-app docs, including full-origin KV examples.
+- [x] Add `@iterate-com/tasks` to the OS project-config template and replace
+      the hand-written Tasks branch with `TasksApp`. _The generated seed now
+      imports the package and delegates its Tasks route to one configured
+      connector._
+- [x] Pin both `iterate` and `@iterate-com/tasks` to the same exact PR SHA in
+      preview-created and preview-rebuilt config repos. _Seed substitution,
+      dynamic builds, build keys, and deploy readiness checks carry both
+      immutable specs._
+- [x] Update Tasks and remote-app docs, including full-origin KV examples.
+      _The README, vessel landing page, and remote-app guide use `TasksApp`
+      and complete HTTPS KV values._
 - [ ] Open the companion `iterate/config` PR using the published package and
       the same declarative `TasksApp` call.
 - [ ] Prove a fresh minimal config install/typecheck, the normal Tasks app
       build, package contents, member denial, HTTP proxying, KV override
       proxying, and WebSocket forwarding.
-- [ ] Run scoped tests/typechecks/lint/format, then the repo-required validation
-      appropriate to the touched packages.
+- [x] Run scoped tests/typechecks/lint/format, then the repo-required validation
+      appropriate to the touched packages. _`pnpm lint`, `pnpm typecheck`, and
+      `pnpm test` pass; the Tasks build and exact packed-artifact test also
+      pass._
 
 ## Implementation notes
 
@@ -106,3 +115,7 @@ Durable Object, or their dependency graph.
   needs the scoped package URL emitted by `pkg.pr.new`.
 - The structural ITX input type keeps `@iterate-com/tasks` completely
   dependency-free while accepting the platform's real `env.ITX` binding.
+- Publishing both packages in one pkg.pr.new invocation makes the canonical
+  main URLs `https://pkg.pr.new/iterate/iterate@main` and
+  `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main`; the old
+  compact Iterate-only URL is no longer the stream updated by this workflow.

@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 
 test("the published package contains only the config bridge", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "iterate-tasks-package-"));
-  await using cleanup = {
+  await using _cleanup = {
     async [Symbol.asyncDispose]() {
       await rm(directory, { force: true, recursive: true });
     },

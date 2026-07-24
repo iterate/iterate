@@ -117,16 +117,21 @@ const PACKAGE_DEPENDENCY_FIELDS = [
   "peerDependencies",
 ] as const;
 
+export type FirstPartyPackageSpecs = {
+  iterate: string | undefined;
+  tasks: string | undefined;
+};
+
+/** Prepare first-party package specs for worker-bundler. Deployment preview
+ * pins replace every declaration; root declarations are promoted to runtime
+ * dependencies because worker-bundler deliberately ignores devDependencies.
+ * The rewrite is build-local and never changes the repo. */
 type PackageManifest = Record<string, unknown> &
   Partial<Record<(typeof PACKAGE_DEPENDENCY_FIELDS)[number], Record<string, unknown>>>;
 
-/** Prepare declared `iterate` specs for worker-bundler. A deployment preview
- * pin replaces every declaration; the root declaration is always promoted to
- * a runtime dependency because worker-bundler deliberately ignores
- * devDependencies. The rewrite is build-local and never changes the repo. */
-function applyIteratePackageSpecOverride(
+function applyFirstPartyPackageSpecOverrides(
   files: Record<string, string>,
-  iteratePackageSpec: string | undefined,
+  packageSpecs: FirstPartyPackageSpecs,
 ): Record<string, string> {
   const content = files["package.json"];
   if (content === undefined) return files;
@@ -142,33 +147,38 @@ function applyIteratePackageSpecOverride(
   // Safe after the object guard; dependency fields get their own shape checks below.
   const manifest = parsed as PackageManifest;
 
-  let declaredPackageSpec: unknown;
   let changed = false;
-  for (const field of PACKAGE_DEPENDENCY_FIELDS) {
-    const dependencies = manifest[field];
-    if (
-      dependencies === null ||
-      typeof dependencies !== "object" ||
-      Array.isArray(dependencies) ||
-      !Object.hasOwn(dependencies, "iterate")
-    ) {
-      continue;
+  for (const { name, override } of [
+    { name: "iterate", override: packageSpecs.iterate },
+    { name: "@iterate-com/tasks", override: packageSpecs.tasks },
+  ]) {
+    let declaredPackageSpec: unknown;
+    for (const field of PACKAGE_DEPENDENCY_FIELDS) {
+      const dependencies = manifest[field];
+      if (
+        dependencies === null ||
+        typeof dependencies !== "object" ||
+        Array.isArray(dependencies) ||
+        !Object.hasOwn(dependencies, name)
+      ) {
+        continue;
+      }
+      if (declaredPackageSpec === undefined) declaredPackageSpec = dependencies[name];
+      if (override !== undefined && dependencies[name] !== override) {
+        dependencies[name] = override;
+        changed = true;
+      }
     }
-    declaredPackageSpec ??= dependencies.iterate;
-    if (iteratePackageSpec !== undefined && dependencies.iterate !== iteratePackageSpec) {
-      dependencies.iterate = iteratePackageSpec;
+    if (declaredPackageSpec === undefined) continue;
+
+    const runtimeSpec = override === undefined ? declaredPackageSpec : override;
+    if (manifest.dependencies?.[name] !== runtimeSpec) {
+      manifest.dependencies = {
+        ...manifest.dependencies,
+        [name]: runtimeSpec,
+      };
       changed = true;
     }
-  }
-  if (declaredPackageSpec === undefined) return files;
-
-  const runtimeSpec = iteratePackageSpec ?? declaredPackageSpec;
-  if (manifest.dependencies?.iterate !== runtimeSpec) {
-    manifest.dependencies = {
-      ...manifest.dependencies,
-      iterate: runtimeSpec,
-    };
-    changed = true;
   }
   if (!changed) return files;
 
@@ -179,7 +189,7 @@ function applyIteratePackageSpecOverride(
  * isolated compiler sidecar. */
 export async function executeWorkerBuild(input: {
   files: Record<string, string>;
-  iteratePackageSpec?: string;
+  packageSpecs: FirstPartyPackageSpecs;
   source: DynamicWorkerSource;
   workerBundler: Pick<import("../../worker-bundler.ts").default, "createApp" | "createWorker">;
 }): Promise<{
@@ -191,7 +201,7 @@ export async function executeWorkerBuild(input: {
   warnings: string[];
   wranglerConfig?: WorkerBuildWranglerConfig;
 }> {
-  const files = applyIteratePackageSpecOverride(input.files, input.iteratePackageSpec);
+  const files = applyFirstPartyPackageSpecOverrides(input.files, input.packageSpecs);
   if ("createApp" in input.source) {
     const { files: _files, ...options } = input.source.createApp;
     return unwrapBuildResult(

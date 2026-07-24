@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Iterate project worker and packaged full-stack apps.",
   "dependencies": {
-    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+    "iterate": "https://pkg.pr.new/iterate/iterate@main",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "zod": "4.3.6"

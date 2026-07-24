@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { executeWorkerBuild } from "./build-backend.ts";
+import { executeWorkerBuild, type FirstPartyPackageSpecs } from "./build-backend.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
 const createApp = vi.fn();
@@ -25,9 +25,9 @@ function execute(
   source: DynamicWorkerSource = {
     createWorker: { entryPoint: "worker.ts", files: inlineFiles },
   },
-  iteratePackageSpec?: string,
+  packageSpecs: FirstPartyPackageSpecs = { iterate: undefined, tasks: undefined },
 ) {
-  return executeWorkerBuild({ files, iteratePackageSpec, source, workerBundler });
+  return executeWorkerBuild({ files, packageSpecs, source, workerBundler });
 }
 
 describe("executeWorkerBuild", () => {
@@ -115,7 +115,8 @@ describe("executeWorkerBuild", () => {
   });
 
   it("repoints the root iterate declarations and promotes one for installation", async () => {
-    const previewSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
+    const iterateSpec = "https://pkg.pr.new/iterate/iterate@abc123";
+    const tasksSpec = "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@abc123";
     const source: DynamicWorkerSource = {
       createApp: {
         client: "apps/guestbook/client.tsx",
@@ -137,17 +138,21 @@ describe("executeWorkerBuild", () => {
         dependencies: { iterate: "old-app-spec", react: "19.2.4" },
       }),
       "package.json": JSON.stringify({
-        dependencies: { zod: "4.3.6" },
+        dependencies: { "@iterate-com/tasks": "old-tasks-spec", zod: "4.3.6" },
         devDependencies: { iterate: "old-root-spec", typescript: "5.9.3" },
       }),
     };
 
-    await execute(files, source, previewSpec);
+    await execute(files, source, { iterate: iterateSpec, tasks: tasksSpec });
 
     const buildFiles = createApp.mock.calls[0]?.[0].files as Record<string, string>;
     expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
-      dependencies: { iterate: previewSpec, zod: "4.3.6" },
-      devDependencies: { iterate: previewSpec, typescript: "5.9.3" },
+      dependencies: {
+        "@iterate-com/tasks": tasksSpec,
+        iterate: iterateSpec,
+        zod: "4.3.6",
+      },
+      devDependencies: { iterate: iterateSpec, typescript: "5.9.3" },
     });
     expect(JSON.parse(buildFiles["apps/guestbook/package.json"] ?? "null")).toEqual({
       dependencies: { iterate: "old-app-spec", react: "19.2.4" },
@@ -158,7 +163,10 @@ describe("executeWorkerBuild", () => {
   it("promotes an existing root devDependency even without a deployment override", async () => {
     const files = {
       "package.json": JSON.stringify({
-        devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+        devDependencies: {
+          "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+          iterate: "https://pkg.pr.new/iterate/iterate@main",
+        },
       }),
       "worker.ts": "export default {};",
     };
@@ -167,8 +175,14 @@ describe("executeWorkerBuild", () => {
 
     const buildFiles = createWorker.mock.calls[0]?.[0].files as Record<string, string>;
     expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
-      dependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
-      devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
+      dependencies: {
+        "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+        iterate: "https://pkg.pr.new/iterate/iterate@main",
+      },
+      devDependencies: {
+        "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+        iterate: "https://pkg.pr.new/iterate/iterate@main",
+      },
     });
   });
 

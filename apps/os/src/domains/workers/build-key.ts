@@ -1,6 +1,7 @@
 import { stableSha256 } from "./utils.ts";
 import { WORKER_BUILD_ARTIFACT_SCHEMA_VERSION } from "./artifact-store.ts";
 import { WORKER_BUNDLER_VERSION } from "./build-backend.ts";
+import type { FirstPartyPackageSpecs } from "./build-backend.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
 
 /**
@@ -40,7 +41,7 @@ export type WorkerBuildInput = {
   compatibilityDate: string;
   compatibilityFlags: string[];
   files: ResolvedWorkerFileSource;
-  iteratePackageSpec?: string;
+  packageSpecs: FirstPartyPackageSpecs;
   source: DynamicWorkerSource;
 };
 
@@ -78,7 +79,7 @@ export async function workerBuildKey(input: WorkerBuildInput): Promise<string> {
     compatibilityDate: input.compatibilityDate,
     compatibilityFlags: input.compatibilityFlags,
     files: normalizeResolvedSource(input.files),
-    iteratePackageSpec: input.iteratePackageSpec,
+    packageSpecs: input.packageSpecs,
     bundlerVersion: WORKER_BUNDLER_VERSION,
     type: "worker-build-key",
   });

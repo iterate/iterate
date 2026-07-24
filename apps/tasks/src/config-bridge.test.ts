@@ -53,7 +53,7 @@ test("a configured Tasks app applies its project-member gate before proxying", a
 
 test("a project member's request is transparently proxied to the configured origin", async () => {
   const originalFetch = globalThis.fetch;
-  using restoreFetch = {
+  using _restoreFetch = {
     [Symbol.dispose]() {
       globalThis.fetch = originalFetch;
     },
@@ -141,7 +141,7 @@ test("the configured proxy target must be one complete HTTPS origin", () => {
 
 test("a full HTTPS origin in project KV overrides the configured target", async () => {
   const originalFetch = globalThis.fetch;
-  using restoreFetch = {
+  using _restoreFetch = {
     [Symbol.dispose]() {
       globalThis.fetch = originalFetch;
     },
@@ -219,5 +219,40 @@ test("a malformed KV override fails instead of sending project traffic to it", a
 
   await expect(app.fetch(new Request("https://tasks--demo.iterate.app/"))).rejects.toThrowError(
     'Tasks app proxy override from "tasks-app-origin" must be one complete HTTPS origin: http://local-tasks.test',
+  );
+});
+
+test("a non-string KV override fails instead of silently using the configured origin", async () => {
+  const app = TasksApp.create(
+    {
+      ITX: {
+        async get() {
+          return {
+            [Symbol.dispose]() {},
+            auth: {
+              get() {
+                return { async fetch() {} };
+              },
+            },
+            kv: {
+              async get() {
+                return { origin: "https://local-tasks.test" };
+              },
+            },
+          };
+        },
+      },
+    } as any,
+    {
+      auth: { policy: "project-member" },
+      proxy: {
+        origin: "https://tasks.iterate.workers.dev",
+        originOverrideKvKey: "tasks-app-origin",
+      },
+    },
+  );
+
+  await expect(app.fetch(new Request("https://tasks--demo.iterate.app/"))).rejects.toThrowError(
+    'Tasks app proxy override from "tasks-app-origin" must be one complete HTTPS origin: {"origin":"https://local-tasks.test"}',
   );
 });

@@ -17,6 +17,7 @@ const { WorkerBuildCoordinatorDurableObject } =
 
 const request: WorkerBuildRequest = {
   buildKey: "a".repeat(64),
+  packageSpecs: { iterate: undefined, tasks: undefined },
   projectId: "prj_test",
   resolved: { files: { "worker.ts": "source" }, type: "inline" },
   source: {

@@ -20,6 +20,7 @@ const baseInput: WorkerBuildInput = {
     repoPath: "/",
     type: "repo",
   },
+  packageSpecs: { iterate: undefined, tasks: undefined },
   source: buildSource("worker.ts"),
 };
 
@@ -46,7 +47,13 @@ describe("workerBuildKey", () => {
     const variants: WorkerBuildInput[] = [
       { ...baseInput, compatibilityDate: "2026-06-01" },
       { ...baseInput, compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"] },
-      { ...baseInput, iteratePackageSpec: "https://pkg.pr.new/iterate/iterate/iterate@abc123" },
+      {
+        ...baseInput,
+        packageSpecs: {
+          iterate: "https://pkg.pr.new/iterate/iterate@abc123",
+          tasks: "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@abc123",
+        },
+      },
       { ...baseInput, source: buildSource("different.ts") },
       {
         ...baseInput,

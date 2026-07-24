@@ -29,10 +29,16 @@ export const TasksApp = {
           if (denied) return denied;
           const override = await itx.kv.get(options.proxy.originOverrideKvKey);
           let origin = configuredOrigin;
-          if (typeof override === "string") {
+          if (override !== null) {
+            const description = `Tasks app proxy override from "${options.proxy.originOverrideKvKey}"`;
+            if (typeof override !== "string") {
+              throw new Error(
+                `${description} must be one complete HTTPS origin: ${JSON.stringify(override)}`,
+              );
+            }
             origin = parseHttpsOrigin(
               override,
-              `Tasks app proxy override from "${options.proxy.originOverrideKvKey}"`,
+              description,
             );
           }
           const target = new URL(request.url);

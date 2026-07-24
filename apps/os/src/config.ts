@@ -134,6 +134,11 @@ export const AppConfig = z.object({
    * `iterate` revision as OS. Unset (prod, local dev) keeps each repo's spec.
    */
   iterateSdkPackageSpec: z.string().trim().min(1).optional(),
+  /**
+   * npm dependency specifier substituted for `@iterate-com/tasks` alongside
+   * iterateSdkPackageSpec. Preview deploys pin both packages to one PR build.
+   */
+  tasksPackageSpec: z.string().trim().min(1).optional(),
   /** First-party project email (itx.email + the inbound email() door). */
   email: z
     .object({

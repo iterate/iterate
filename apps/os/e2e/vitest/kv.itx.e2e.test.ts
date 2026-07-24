@@ -14,8 +14,8 @@ test("itx.kv round-trips small values, lists by prefix, and is project-scoped", 
 
   expect(await project.kv.get("tasks-app-origin")).toBeNull();
 
-  await project.kv.set("tasks-app-origin", "jonas-tasks.tunnels.iterate.com");
-  expect(await project.kv.get("tasks-app-origin")).toBe("jonas-tasks.tunnels.iterate.com");
+  await project.kv.set("tasks-app-origin", "https://jonas-tasks.tunnels.iterate.com");
+  expect(await project.kv.get("tasks-app-origin")).toBe("https://jonas-tasks.tunnels.iterate.com");
 
   // Values are structured, not just strings.
   await project.kv.set("routing/tasks", { canaryUserIds: ["usr_1"], target: "dev" });
