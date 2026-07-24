@@ -17,7 +17,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     policyVersion: "2",
     rules: {
       glob: "rules/**/*.md",
-      repoPath: "/repos/iterate",
+      repoPath: "/repos/config",
     },
   });
 

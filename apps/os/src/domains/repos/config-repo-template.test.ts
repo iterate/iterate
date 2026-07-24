@@ -120,3 +120,18 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });
+
+test("seeded GitHub AI linter reads editable rules shipped in the config repo", () => {
+  expect(templateFile("worker.ts")).toContain(
+    'glob: "rules/**/*.md",\n      repoPath: "/repos/config"',
+  );
+
+  const rulePaths = PROJECT_REPO_INITIAL_FILES.map((file) => file.path).filter((path) =>
+    path.startsWith("rules/"),
+  );
+  expect(rulePaths).toEqual([
+    "rules/structure/no-small-single-use-helper.md",
+    "rules/typescript/explain-type-cast.md",
+    "rules/typescript/no-inferable-type-annotation.md",
+  ]);
+});

@@ -10,7 +10,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "iterate project config repo — `worker.ts` is the project worker. It handles\n" +
       "HTTP and declares packaged apps such as `GithubAiLinter`; project-owned app\n" +
-      "source lives under `apps/`.\n",
+      "source lives under `apps/`. The packaged linter reads this project's editable\n" +
+      "policy from `rules/`.\n",
   },
   {
     path: "ONBOARDING.md",
@@ -55,7 +56,8 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "iterate project config repo — `worker.ts` is the project worker. It handles\n" +
       "HTTP and declares packaged apps such as `GithubAiLinter`; project-owned app\n" +
-      "source lives under `apps/`.\n",
+      "source lives under `apps/`. The packaged linter reads this project's editable\n" +
+      "policy from `rules/`.\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -784,6 +786,57 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
+    path: "rules/structure/no-small-single-use-helper.md",
+    content:
+      "---\n" +
+      "id: structure/no-small-single-use-helper\n" +
+      "files:\n" +
+      "  [\n" +
+      "    \"**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "  ]\n" +
+      "---\n" +
+      "\n" +
+      "# Avoid small single-use helpers\n" +
+      "\n" +
+      "Do not introduce a small helper used only once when keeping the logic at its call site would be clearer.\n",
+  },
+  {
+    path: "rules/typescript/explain-type-cast.md",
+    content:
+      "---\n" +
+      "id: typescript/explain-type-cast\n" +
+      "files:\n" +
+      "  [\n" +
+      "    \"**/*.{ts,tsx,mts,cts}\",\n" +
+      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "  ]\n" +
+      "---\n" +
+      "\n" +
+      "# Explain type casts\n" +
+      "\n" +
+      "Every type cast must have a nearby explanation of why it is safe and cannot reasonably be avoided.\n",
+  },
+  {
+    path: "rules/typescript/no-inferable-type-annotation.md",
+    content:
+      "---\n" +
+      "id: typescript/no-inferable-type-annotation\n" +
+      "files:\n" +
+      "  [\n" +
+      "    \"**/*.{ts,tsx,mts,cts}\",\n" +
+      "    \"!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}\",\n" +
+      "    \"!**/{__tests__,test,tests,spec,specs}/**\",\n" +
+      "  ]\n" +
+      "---\n" +
+      "\n" +
+      "# Avoid inferable type annotations\n" +
+      "\n" +
+      "Do not declare a type annotation that TypeScript can infer from the value.\n",
+  },
+  {
     path: "tsconfig.json",
     content:
       "{\n" +
@@ -824,7 +877,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    policyVersion: \"2\",\n" +
       "    rules: {\n" +
       "      glob: \"rules/**/*.md\",\n" +
-      "      repoPath: \"/repos/iterate\",\n" +
+      "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
       "\n" +
