@@ -43,9 +43,12 @@ const server = http.createServer((req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
-  const upstream = secure
-    ? tls.connect(targetPort, target.hostname, { servername: target.hostname })
-    : net.connect(targetPort, target.hostname);
+  let upstream;
+  if (secure) {
+    upstream = tls.connect(targetPort, target.hostname, { servername: target.hostname });
+  } else {
+    upstream = net.connect(targetPort, target.hostname);
+  }
   upstream.on(secure ? "secureConnect" : "connect", () => {
     const headers = stamp(req.headers);
     const lines = [`${req.method} ${req.url} HTTP/1.1`];

@@ -4,7 +4,7 @@ import { createIterateAuth, withAuthenticationResponseHeaders } from "@iterate-c
 let authClient: ReturnType<typeof createIterateAuth> | undefined;
 
 function authFromEnv(env: Cloudflare.Env) {
-  return (authClient ??= createIterateAuth({
+  return (authClient ||= createIterateAuth({
     clientId: env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID,
     clientSecret: env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET,
     redirectURI: env.APP_CONFIG_ITERATE_AUTH__REDIRECT_URI,
@@ -19,15 +19,18 @@ app.get("/api/protected", async (c) => {
   const { session, responseHeaders } = await authFromEnv(c.env).authenticateSession({
     headers: c.req.raw.headers,
   });
-  const response = session
-    ? new Response(`Protected route accessed by ${session.user.email}`)
-    : c.text("Unauthorized", 401);
-  return withAuthenticationResponseHeaders(response, responseHeaders);
+  if (!session) {
+    return withAuthenticationResponseHeaders(c.text("Unauthorized", 401), responseHeaders);
+  }
+  return withAuthenticationResponseHeaders(
+    new Response(`Protected route accessed by ${session.user.email}`),
+    responseHeaders,
+  );
 });
 
 export default {
   async fetch(request: Request, env: Cloudflare.Env, executionContext: ExecutionContext) {
     const authResponse = await authFromEnv(env).fetch(request);
-    return authResponse ?? app.fetch(request, env, executionContext);
+    return authResponse || app.fetch(request, env, executionContext);
   },
 };

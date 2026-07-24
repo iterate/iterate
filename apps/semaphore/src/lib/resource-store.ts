@@ -67,10 +67,9 @@ export async function listResourcesFromDb(
   db: D1Database,
   params: { type?: string } = {},
 ): Promise<SemaphoreResourceRecord[]> {
-  const rows = params.type
-    ? await selectResourcesByType(createD1Client(db), { type: params.type })
-    : await selectResources(createD1Client(db));
-  return rows.map(rowToResourceRecord);
+  const client = createD1Client(db);
+  if (!params.type) return (await selectResources(client)).map(rowToResourceRecord);
+  return (await selectResourcesByType(client, { type: params.type })).map(rowToResourceRecord);
 }
 
 export async function findResourceByKey(

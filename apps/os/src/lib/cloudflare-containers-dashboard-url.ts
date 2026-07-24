@@ -17,13 +17,15 @@ export function buildCloudflareContainersDashboardUrl(input: {
 
   const applicationId = input.applicationId?.trim();
   const instanceId = input.instanceId?.trim();
-  const dashboardPath =
+  let dashboardPath = `/${accountId}/workers/containers`;
+  if (
     applicationId &&
     instanceId &&
     cloudflareApplicationIdPattern.test(applicationId) &&
     cloudflareContainerInstanceIdPattern.test(instanceId)
-      ? `/${accountId}/workers/containers/applications/${applicationId}/instances/${instanceId}`
-      : `/${accountId}/workers/containers`;
+  ) {
+    dashboardPath = `/${accountId}/workers/containers/applications/${applicationId}/instances/${instanceId}`;
+  }
   const url = new URL("https://dash.cloudflare.com/");
   url.searchParams.set("to", dashboardPath);
   return url.toString();

@@ -107,10 +107,16 @@ export async function handlePetsRpcRequest(
   context: PetsContext,
   mode: "rpc" | "openapi",
 ): Promise<Response | null> {
-  const { prefix, handler } =
-    mode === "rpc"
-      ? { prefix: "/rpc" as const, handler: rpcHandler }
-      : { prefix: "/api/v2" as const, handler: openapiHandler };
-  const { matched, response } = await handler.handle(request, { prefix, context });
+  if (mode === "rpc") {
+    const { matched, response } = await rpcHandler.handle(request, {
+      prefix: "/rpc",
+      context,
+    });
+    return matched ? response : null;
+  }
+  const { matched, response } = await openapiHandler.handle(request, {
+    prefix: "/api/v2",
+    context,
+  });
   return matched ? response : null;
 }

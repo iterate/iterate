@@ -1,4 +1,5 @@
 import type { Itx } from "iterate/sdk/itx/react";
+import type { RepoCreateInput } from "~/domains/repos/repo-defaults.ts";
 
 const MAX_PAGES = 5;
 
@@ -14,11 +15,13 @@ export type InstallationRepo = {
 /** Translate one installation selection into the durable creation request.
  * The wizard optimizes for a usable current checkout; callers of Repo.create
  * can still omit public depth when they explicitly want full history. */
-export function githubRepoCreateRequest(repo: InstallationRepo, connection: string) {
+export function githubRepoCreateRequest(
+  repo: InstallationRepo,
+  connection: string,
+): RepoCreateInput {
   const github = { connection, owner: repo.owner, repo: repo.name };
-  return repo.private
-    ? ({ ...github, type: "github-private" } as const)
-    : ({ ...github, depth: 1, type: "github-public" } as const);
+  if (repo.private) return { ...github, type: "github-private" };
+  return { ...github, depth: 1, type: "github-public" };
 }
 
 /** Repo creation currently adopts GitHub's `main` history. Reject unsupported

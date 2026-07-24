@@ -23,13 +23,17 @@ export const BrowserFeedContract = defineProcessorContract({
   // and rebuilt rather than adapted.
   stateSchema: z
     .preprocess(
-      (value) =>
-        value !== null &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        Object.keys(value).length === 0
-          ? initialBrowserFeedState()
-          : value,
+      (value) => {
+        if (
+          value !== null &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          Object.keys(value).length === 0
+        ) {
+          return initialBrowserFeedState();
+        }
+        return value;
+      },
       z.custom<BrowserFeedState>(isCurrentBrowserFeedState, {
         message: "browser-feed state is not from the current schema",
       }),

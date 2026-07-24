@@ -40,7 +40,7 @@ function AdminStreamProjectPage() {
           <ArrowLeftIcon data-icon="inline-start" aria-hidden="true" />
           Project
         </Button>
-        {projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : (
+        {projectId !== NULL_DURABLE_OBJECT_PROJECT_ID && (
           <Button
             type="button"
             variant="outline"
