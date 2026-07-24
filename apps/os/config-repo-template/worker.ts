@@ -1,5 +1,6 @@
 import { GithubAiLinter } from "iterate/github-ai-linter";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
+import { TodoApp } from "iterate/todo";
 import { guestbookAppRef } from "./apps/guestbook/ref.ts";
 
 // An iterate project is, in the abstract, just a fetch function.
@@ -20,6 +21,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       repoPath: "/repos/config",
     },
   });
+  #todoApp = TodoApp.create(this.env);
 
   // The base class delivers committed events on ANY stream here at least once and in
   // per-stream order.
@@ -33,20 +35,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       using itx = await this.env.ITX.get();
       const authResponse = await itx.auth.get({ policy: "project-member" }).fetch(req);
       if (authResponse) return authResponse;
-      return this.fetchDynamicWorker(req, {
-        type: "stateful",
-        className: "TodoApp",
-        // "-live" keeps clear of a retired predecessor's durable identity.
-        durableWorkerKey: "app-todo-live",
-        path: "/",
-        source: {
-          createApp: {
-            client: "apps/todo/client.tsx",
-            files: { type: "repo", repoPath: "/repos/config" },
-            server: "apps/todo/server.tsx",
-          },
-        },
-      });
+      return this.#todoApp.fetch(req);
     }
     if (app === "guestbook") {
       return this.fetchDynamicWorker(req, guestbookAppRef);

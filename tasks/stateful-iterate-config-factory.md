@@ -1,5 +1,5 @@
 ---
-status: ready
+status: in-progress
 size: medium
 ---
 
@@ -7,7 +7,7 @@ size: medium
 
 ## Status
 
-About 10% complete. The API, ownership, migration, artifact, and acceptance proof are grilled and recorded; implementation has not started. The goal is to move the seeded Todo runtime out of project config and into a self-contained `iterate/todo` package artifact without changing its route, auth, durable identity, stored rows, or UI.
+About 70% complete. The public factory, self-contained worker/client artifact, sqlfu migration, config template, generated seed, focused tests, package build, and package/OS typechecks are done. Preview migration/E2E/trace proof, the separate config-repo update, and review/CI cleanup remain.
 
 ## Why
 
@@ -36,17 +36,17 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
 - [x] Grill the API, package boundary, state model, and acceptance proof. *Recorded in the adjacent interview log.*
 - [x] Replace the task stub with an implementation-ready spec and explicit guesses. *This file is the agreed Phase 2 handoff.*
-- [ ] Add a failing package contract test for `TodoApp.create(env).fetch(request)`. It must assert a real `env.ITX.fetch` dispatch with a private stateful ref, `durableWorkerKey: "app-todo-live"`, and no config-owned Todo source paths.
-- [ ] Add a failing build gate for the physical Todo worker artifact. It must reject unsupported bare imports and prove the prebuilt browser client is present.
-- [ ] Add the public `iterate/todo` export and declaration/build entries.
-- [ ] Move the Todo Durable Object, HTML, Cap'n Web API, and browser client under `packages/iterate/src/todo/`.
-- [ ] Replace raw SQL with `sqlfu` definitions, migration, and typed queries while preserving the existing `todos(id, title, done, created_at)` table and rows.
-- [ ] Build the browser client at package build time and make the Durable Object serve it at `/apps/todo/client.js` with the current JavaScript content type.
-- [ ] Bundle the Todo worker's full runtime graph, including `sqlfu`, React, React DOM, Cap'n Web, and generated browser code, while leaving only supported workerd built-ins external.
-- [ ] Update `apps/os/config-repo-template/worker.ts` to construct the packaged Todo and delegate after the existing member check; delete config-owned `apps/todo/`.
-- [ ] Regenerate `config-repo-template.generated.ts` and update seeded file-tree assertions which currently require `apps/todo/client.tsx` and `apps/todo/server.tsx`.
-- [ ] Keep `specs/seeded-apps.spec.ts`'s existing Todo assertions unchanged.
-- [ ] Document the `iterate/todo` usage and its package/config ownership boundary.
+- [x] Add a failing package contract test for `TodoApp.create(env).fetch(request)`. It must assert a real `env.ITX.fetch` dispatch with a private stateful ref, `durableWorkerKey: "app-todo-live"`, and no config-owned Todo source paths. *The red/green contract lives in `packages/iterate/src/todo/todo.test.ts`.*
+- [x] Add a failing build gate for the physical Todo worker artifact. It must reject unsupported bare imports and prove the prebuilt browser client is present. *`check-todo-bundle.ts` first failed on the missing artifact, then caught an external `zod` leak before going green.*
+- [x] Add the public `iterate/todo` export and declaration/build entries. *Package exports, publish exports, tsdown entries, and tsc declarations now expose only the factory.*
+- [x] Move the Todo Durable Object, HTML, Cap'n Web API, and browser client under `packages/iterate/src/todo/`. *The config-owned three-file app was deleted after the package artifact built.*
+- [x] Replace raw SQL with `sqlfu` definitions, migration, and typed queries while preserving the existing `todos(id, title, done, created_at)` table and rows. *The idempotent `20260718000001_create_todos` migration keeps the prior table shape.*
+- [x] Build the browser client at package build time and make the Durable Object serve it at `/apps/todo/client.js` with the current JavaScript content type. *A browser-targeted tsdown pass is embedded as a string before the main dist clean.*
+- [x] Bundle the Todo worker's full runtime graph, including `sqlfu`, React, React DOM, Cap'n Web, and generated browser code, while leaving only supported workerd built-ins external. *The 593 kB physical artifact passes the recursive import gate.*
+- [x] Update `apps/os/config-repo-template/worker.ts` to construct the packaged Todo and delegate after the existing member check; delete config-owned `apps/todo/`. *The router now holds `#todoApp = TodoApp.create(this.env)`.*
+- [x] Regenerate `config-repo-template.generated.ts` and update seeded file-tree assertions which currently require `apps/todo/client.tsx` and `apps/todo/server.tsx`. *The generated seed and unit/E2E tree assertions contain only the project-owned guestbook files.*
+- [x] Keep `specs/seeded-apps.spec.ts`'s existing Todo assertions unchanged. *No changes were made to the Playwright acceptance flow.*
+- [x] Document the `iterate/todo` usage and its package/config ownership boundary. *The package README shows routing/auth and states the durable/runtime boundary.*
 - [ ] Run focused package tests, package build and artifact gates, template tests, typecheck, lint, format, and the relevant full test lanes.
 - [ ] Deploy a preview and run the unchanged seeded Todo Playwright flow through real auth, ingress, WebSocket, Durable Object SQLite, mutation, and reload.
 - [ ] Audit preview traces/logs for the Todo flow; classify or fix every error before calling the proof healthy.
@@ -81,3 +81,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
 
 - 2026-07-24: Started from merged `origin/main` after the packaged GitHub AI linter landed.
 - 2026-07-24: `grill-you` selected Todo as the smallest stateful proof and completed four decision rounds.
+- 2026-07-24: Factory TDD proved the `env.ITX.fetch` lane and private `app-todo-live` ref.
+- 2026-07-24: The artifact gate caught both the initially absent build and an external `zod` leak; the final worker bundles sqlfu, Cap'n Web, the migration, and the prebuilt browser client.
+- 2026-07-24: Package build/typecheck/169 tests, config-template typecheck, and 11 focused OS template/seed tests pass.

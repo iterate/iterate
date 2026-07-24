@@ -18,7 +18,7 @@ function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template ships project-owned apps under apps/ and a thin worker router", () => {
+test("template ships project-owned apps under apps/ and packaged apps behind a thin router", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
   // itx.integrations.<slug>), projects grow their own apps/ and
   // integrations/ by editing their repo. Shared apps such as the GitHub
@@ -32,13 +32,10 @@ test("template ships project-owned apps under apps/ and a thin worker router", (
 
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
   expect(appPaths.length).toBeGreaterThan(0);
-  expect(
-    appPaths.every((path) => path.startsWith("apps/todo/") || path.startsWith("apps/guestbook/")),
-  ).toBe(true);
+  expect(appPaths.every((path) => path.startsWith("apps/guestbook/"))).toBe(true);
+  expect(paths.filter((path) => path.startsWith("apps/todo/"))).toEqual([]);
   expect(paths).toEqual(
     expect.arrayContaining([
-      "apps/todo/client.tsx",
-      "apps/todo/server.tsx",
       "apps/guestbook/client.tsx",
       "apps/guestbook/processor.ts",
       "apps/guestbook/ref.ts",
@@ -59,10 +56,9 @@ test("template ships project-owned apps under apps/ and a thin worker router", (
   });
 });
 
-test("browser pairs stay two-file createApp apps behind the thin router", () => {
-  // The todo ref is inlined in worker.ts (one consumer); its rename risk is
-  // covered live by the seeded-apps spec. The guestbook ref is shared with
-  // its wake subscription, so it stays assertable.
+test("the project-owned browser pair stays behind the thin router", () => {
+  // The packaged Todo owns its client and stateful worker. The guestbook ref
+  // is shared with its wake subscription, so it stays assertable here.
   expect(guestbookAppRef.source.createApp).toMatchObject({
     client: "apps/guestbook/client.tsx",
     server: "apps/guestbook/server.tsx",
@@ -112,6 +108,7 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   // in-memory manifest rewrite).
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
   expect(templateFile("worker.ts")).toContain('from "iterate/github-ai-linter"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/todo"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;

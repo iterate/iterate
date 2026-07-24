@@ -9,9 +9,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "AGENTS.md",
     content:
       "iterate project config repo — `worker.ts` is the project worker. It handles\n" +
-      "HTTP and declares packaged apps such as `GithubAiLinter`; project-owned app\n" +
-      "source lives under `apps/`. The packaged linter reads this project's editable\n" +
-      "policy from `rules/`.\n",
+      "HTTP and declares packaged apps such as `GithubAiLinter` and `TodoApp`;\n" +
+      "project-owned app source lives under `apps/`. The packaged linter reads this\n" +
+      "project's editable policy from `rules/`.\n",
   },
   {
     path: "ONBOARDING.md",
@@ -55,9 +55,9 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "README.md",
     content:
       "iterate project config repo — `worker.ts` is the project worker. It handles\n" +
-      "HTTP and declares packaged apps such as `GithubAiLinter`; project-owned app\n" +
-      "source lives under `apps/`. The packaged linter reads this project's editable\n" +
-      "policy from `rules/`.\n",
+      "HTTP and declares packaged apps such as `GithubAiLinter` and `TodoApp`;\n" +
+      "project-owned app source lives under `apps/`. The packaged linter reads this\n" +
+      "project's editable policy from `rules/`.\n",
   },
   {
     path: "apps/guestbook/client.tsx",
@@ -475,294 +475,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "}\n",
   },
   {
-    path: "apps/todo/client.tsx",
-    content:
-      "/**\n" +
-      " * Todo UI — one reconnectable Cap'n Web provider, consumed by useLiveState.\n" +
-      " */\n" +
-      "import { newWebSocketRpcSession, type RpcStub } from \"iterate/sdk/capnweb\";\n" +
-      "import React, { type FormEvent, useState } from \"react\";\n" +
-      "import { createRoot } from \"react-dom/client\";\n" +
-      "import { CapnWebProvider, useCapnWebRoot, useLiveState } from \"iterate/sdk/capnweb/react\";\n" +
-      "import type { TodoApi } from \"./server.tsx\";\n" +
-      "\n" +
-      "function makeConnection() {\n" +
-      "  const endpoint = new URL(\"/api\", window.location.href);\n" +
-      "  endpoint.protocol = endpoint.protocol === \"https:\" ? \"wss:\" : \"ws:\";\n" +
-      "  return newWebSocketRpcSession<TodoApi>(endpoint.toString());\n" +
-      "}\n" +
-      "\n" +
-      "export function TodoClient() {\n" +
-      "  const api = useCapnWebRoot<RpcStub<TodoApi>>();\n" +
-      "  const { value: state, error: liveError } = useLiveState(\n" +
-      "    (session: RpcStub<TodoApi>) => session.liveState,\n" +
-      "    (s) => s,\n" +
-      "  );\n" +
-      "  const [title, setTitle] = useState(\"\");\n" +
-      "  const [actionError, setActionError] = useState(\"\");\n" +
-      "  const [pendingMutations, setPendingMutations] = useState(0);\n" +
-      "  const mutating = pendingMutations > 0;\n" +
-      "\n" +
-      "  const error = liveError ?? (actionError.length > 0 ? actionError : undefined);\n" +
-      "  const todos = state?.todos ?? [];\n" +
-      "\n" +
-      "  const run = async (action: () => Promise<void>) => {\n" +
-      "    setActionError(\"\");\n" +
-      "    setPendingMutations((current) => current + 1);\n" +
-      "    try {\n" +
-      "      await action();\n" +
-      "    } catch (cause) {\n" +
-      "      setActionError(cause instanceof Error ? cause.message : String(cause));\n" +
-      "    } finally {\n" +
-      "      setPendingMutations((current) => current - 1);\n" +
-      "    }\n" +
-      "  };\n" +
-      "\n" +
-      "  const add = async (event: FormEvent) => {\n" +
-      "    event.preventDefault();\n" +
-      "    if (api == null || title.trim().length === 0) return;\n" +
-      "    const next = title;\n" +
-      "    setTitle(\"\");\n" +
-      "    await run(() => api.add(next));\n" +
-      "  };\n" +
-      "\n" +
-      "  return (\n" +
-      "    <>\n" +
-      "      <h1>Todo</h1>\n" +
-      "      <form onSubmit={add}>\n" +
-      "        <input\n" +
-      "          aria-label=\"New todo\"\n" +
-      "          id=\"new-todo\"\n" +
-      "          maxLength={200}\n" +
-      "          onChange={(event) => setTitle(event.currentTarget.value)}\n" +
-      "          placeholder=\"What needs doing?\"\n" +
-      "          required\n" +
-      "          type=\"text\"\n" +
-      "          value={title}\n" +
-      "        />\n" +
-      "        <button disabled={api == null || mutating} type=\"submit\">\n" +
-      "          Add\n" +
-      "        </button>\n" +
-      "      </form>\n" +
-      "      {mutating && (\n" +
-      "        <p aria-live=\"polite\" data-spinner=\"true\" role=\"status\">\n" +
-      "          Saving…\n" +
-      "        </p>\n" +
-      "      )}\n" +
-      "      {error !== undefined && <p role=\"alert\">{error}</p>}\n" +
-      "      {state === undefined ? (\n" +
-      "        <p>Loading…</p>\n" +
-      "      ) : todos.length === 0 ? (\n" +
-      "        <p>No todos yet.</p>\n" +
-      "      ) : (\n" +
-      "        <ul>\n" +
-      "          {todos.map((todo) => (\n" +
-      "            <li key={todo.id}>\n" +
-      "              <input\n" +
-      "                aria-label={`Mark ${todo.title} ${todo.done ? \"not done\" : \"done\"}`}\n" +
-      "                checked={todo.done}\n" +
-      "                disabled={mutating}\n" +
-      "                onChange={(event) => {\n" +
-      "                  const done = event.currentTarget.checked;\n" +
-      "                  if (api == null) return;\n" +
-      "                  void run(() => api.setDone(todo.id, done));\n" +
-      "                }}\n" +
-      "                type=\"checkbox\"\n" +
-      "              />\n" +
-      "              <span className={todo.done ? \"done\" : \"\"}>{todo.title}</span>\n" +
-      "              <button\n" +
-      "                disabled={mutating}\n" +
-      "                onClick={() => {\n" +
-      "                  if (api == null) return;\n" +
-      "                  void run(() => api.remove(todo.id));\n" +
-      "                }}\n" +
-      "                type=\"button\"\n" +
-      "              >\n" +
-      "                Delete\n" +
-      "              </button>\n" +
-      "            </li>\n" +
-      "          ))}\n" +
-      "        </ul>\n" +
-      "      )}\n" +
-      "    </>\n" +
-      "  );\n" +
-      "}\n" +
-      "\n" +
-      "const root = document.getElementById(\"root\");\n" +
-      "if (root === null) throw new Error(\"missing #root\");\n" +
-      "createRoot(root).render(\n" +
-      "  <CapnWebProvider makeConnection={makeConnection}>\n" +
-      "    <TodoClient />\n" +
-      "  </CapnWebProvider>,\n" +
-      ");\n",
-  },
-  {
-    path: "apps/todo/server.tsx",
-    content:
-      "import {\n" +
-      "  LiveState,\n" +
-      "  LiveStateRpcTarget,\n" +
-      "  RpcTarget,\n" +
-      "  newWorkersWebSocketRpcResponse,\n" +
-      "  type LiveStateRpc,\n" +
-      "} from \"iterate/sdk/capnweb\";\n" +
-      "import { IterateDurableObject } from \"iterate/sdk\";\n" +
-      "\n" +
-      "export type Todo = {\n" +
-      "  createdAt: string;\n" +
-      "  done: boolean;\n" +
-      "  id: string;\n" +
-      "  title: string;\n" +
-      "};\n" +
-      "\n" +
-      "type TodoListState = { todos: Todo[] };\n" +
-      "\n" +
-      "/** One createApp Durable Object owns the page, API, persistence, and live value. */\n" +
-      "export class TodoApp extends IterateDurableObject {\n" +
-      "  readonly #live: LiveState<TodoListState>;\n" +
-      "\n" +
-      "  constructor(...args: ConstructorParameters<typeof IterateDurableObject>) {\n" +
-      "    super(...args);\n" +
-      "    this.ctx.storage.sql.exec(`\n" +
-      "      CREATE TABLE IF NOT EXISTS todos (\n" +
-      "        id TEXT PRIMARY KEY,\n" +
-      "        title TEXT NOT NULL,\n" +
-      "        done INTEGER NOT NULL DEFAULT 0,\n" +
-      "        created_at TEXT NOT NULL\n" +
-      "      )\n" +
-      "    `);\n" +
-      "    this.#live = new LiveState<TodoListState>({ todos: this.#load() });\n" +
-      "  }\n" +
-      "\n" +
-      "  #load(): Todo[] {\n" +
-      "    return this.ctx.storage.sql\n" +
-      "      .exec<{ created_at: string; done: number; id: string; title: string }>(\n" +
-      "        \"SELECT id, title, done, created_at FROM todos ORDER BY created_at, id\",\n" +
-      "      )\n" +
-      "      .toArray()\n" +
-      "      .map((row) => ({\n" +
-      "        createdAt: row.created_at,\n" +
-      "        done: row.done !== 0,\n" +
-      "        id: row.id,\n" +
-      "        title: row.title,\n" +
-      "      }));\n" +
-      "  }\n" +
-      "\n" +
-      "  #refresh(): void {\n" +
-      "    this.#live.setState({ todos: this.#load() });\n" +
-      "  }\n" +
-      "\n" +
-      "  add(title: string): void {\n" +
-      "    const trimmed = title.trim().slice(0, 200);\n" +
-      "    if (trimmed.length === 0) return;\n" +
-      "    this.ctx.storage.sql.exec(\n" +
-      "      \"INSERT INTO todos (id, title, done, created_at) VALUES (?, ?, 0, ?)\",\n" +
-      "      crypto.randomUUID(),\n" +
-      "      trimmed,\n" +
-      "      new Date().toISOString(),\n" +
-      "    );\n" +
-      "    this.#refresh();\n" +
-      "  }\n" +
-      "\n" +
-      "  setDone(id: string, done: boolean): void {\n" +
-      "    this.ctx.storage.sql.exec(\"UPDATE todos SET done = ? WHERE id = ?\", done ? 1 : 0, id);\n" +
-      "    this.#refresh();\n" +
-      "  }\n" +
-      "\n" +
-      "  remove(id: string): void {\n" +
-      "    this.ctx.storage.sql.exec(\"DELETE FROM todos WHERE id = ?\", id);\n" +
-      "    this.#refresh();\n" +
-      "  }\n" +
-      "\n" +
-      "  async fetch(request: Request): Promise<Response> {\n" +
-      "    const url = new URL(request.url);\n" +
-      "    if (url.pathname === \"/api\") {\n" +
-      "      return newWorkersWebSocketRpcResponse(request, new TodoApi(this, this.#live));\n" +
-      "    }\n" +
-      "    if (request.method !== \"GET\" || url.pathname !== \"/\") {\n" +
-      "      return new Response(\"not found\", { status: 404 });\n" +
-      "    }\n" +
-      "    return new Response(\n" +
-      "      `<!doctype html>\n" +
-      "<html lang=\"en\">\n" +
-      "  <head>\n" +
-      "    <meta charset=\"utf-8\">\n" +
-      "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
-      "    <title>Todo</title>\n" +
-      "    <style>\n" +
-      "      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }\n" +
-      "      body { margin: 0; padding: 2rem; }\n" +
-      "      main { margin: 0 auto; max-width: 38rem; }\n" +
-      "      form, li { display: flex; gap: .75rem; margin-block: .75rem; }\n" +
-      "      input[type=\"text\"] { flex: 1; padding: .6rem; }\n" +
-      "      button { padding: .45rem .75rem; }\n" +
-      "      .done { text-decoration: line-through; opacity: .65; }\n" +
-      "      [role=\"alert\"] { color: #c33; }\n" +
-      "    </style>\n" +
-      "  </head>\n" +
-      "  <body>\n" +
-      "    <main id=\"root\"><p>Loading…</p></main>\n" +
-      "    <script type=\"module\" src=\"/apps/todo/client.js\"></script>\n" +
-      "  </body>\n" +
-      "</html>`,\n" +
-      "      {\n" +
-      "        headers: {\n" +
-      "          \"content-type\": \"text/html; charset=utf-8\",\n" +
-      "          \"x-content-type-options\": \"nosniff\",\n" +
-      "        },\n" +
-      "      },\n" +
-      "    );\n" +
-      "  }\n" +
-      "}\n" +
-      "\n" +
-      "export class TodoApi extends RpcTarget {\n" +
-      "  readonly #liveState: LiveStateRpcTarget<TodoListState>;\n" +
-      "\n" +
-      "  constructor(\n" +
-      "    private readonly app: TodoApp,\n" +
-      "    live: LiveState<TodoListState>,\n" +
-      "  ) {\n" +
-      "    super();\n" +
-      "    this.#liveState = new LiveStateRpcTarget(live);\n" +
-      "  }\n" +
-      "\n" +
-      "  get liveState(): LiveStateRpc<TodoListState> {\n" +
-      "    return this.#liveState;\n" +
-      "  }\n" +
-      "\n" +
-      "  async add(title: string): Promise<void> {\n" +
-      "    this.app.add(title);\n" +
-      "  }\n" +
-      "\n" +
-      "  async setDone(id: string, done: boolean): Promise<void> {\n" +
-      "    this.app.setDone(id, done);\n" +
-      "  }\n" +
-      "\n" +
-      "  async remove(id: string): Promise<void> {\n" +
-      "    this.app.remove(id);\n" +
-      "  }\n" +
-      "}\n",
-  },
-  {
-    path: "apps/todo/tsconfig.json",
-    content:
-      "{\n" +
-      "  \"compilerOptions\": {\n" +
-      "    \"target\": \"ES2024\",\n" +
-      "    \"module\": \"ESNext\",\n" +
-      "    \"moduleResolution\": \"bundler\",\n" +
-      "    \"strict\": true,\n" +
-      "    \"noEmit\": true,\n" +
-      "    \"skipLibCheck\": true,\n" +
-      "    \"allowImportingTsExtensions\": true,\n" +
-      "    \"jsx\": \"react-jsx\",\n" +
-      "    \"lib\": [\"ES2024\", \"DOM\", \"DOM.Iterable\", \"ESNext.Disposable\"],\n" +
-      "    \"types\": [\"@cloudflare/workers-types\"]\n" +
-      "  },\n" +
-      "  \"include\": [\"*.ts\", \"*.tsx\"]\n" +
-      "}\n",
-  },
-  {
     path: "package.json",
     content:
       "{\n" +
@@ -860,6 +572,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     content:
       "import { GithubAiLinter } from \"iterate/github-ai-linter\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
+      "import { TodoApp } from \"iterate/todo\";\n" +
       "import { guestbookAppRef } from \"./apps/guestbook/ref.ts\";\n" +
       "\n" +
       "// An iterate project is, in the abstract, just a fetch function.\n" +
@@ -880,6 +593,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      repoPath: \"/repos/config\",\n" +
       "    },\n" +
       "  });\n" +
+      "  #todoApp = TodoApp.create(this.env);\n" +
       "\n" +
       "  // The base class delivers committed events on ANY stream here at least once and in\n" +
       "  // per-stream order.\n" +
@@ -893,20 +607,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      using itx = await this.env.ITX.get();\n" +
       "      const authResponse = await itx.auth.get({ policy: \"project-member\" }).fetch(req);\n" +
       "      if (authResponse) return authResponse;\n" +
-      "      return this.fetchDynamicWorker(req, {\n" +
-      "        type: \"stateful\",\n" +
-      "        className: \"TodoApp\",\n" +
-      "        // \"-live\" keeps clear of a retired predecessor's durable identity.\n" +
-      "        durableWorkerKey: \"app-todo-live\",\n" +
-      "        path: \"/\",\n" +
-      "        source: {\n" +
-      "          createApp: {\n" +
-      "            client: \"apps/todo/client.tsx\",\n" +
-      "            files: { type: \"repo\", repoPath: \"/repos/config\" },\n" +
-      "            server: \"apps/todo/server.tsx\",\n" +
-      "          },\n" +
-      "        },\n" +
-      "      });\n" +
+      "      return this.#todoApp.fetch(req);\n" +
       "    }\n" +
       "    if (app === \"guestbook\") {\n" +
       "      return this.fetchDynamicWorker(req, guestbookAppRef);\n" +

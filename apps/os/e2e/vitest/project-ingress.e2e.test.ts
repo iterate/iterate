@@ -177,8 +177,6 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
       "AGENTS.md",
       "apps/guestbook/client.tsx",
       "apps/guestbook/server.tsx",
-      "apps/todo/client.tsx",
-      "apps/todo/server.tsx",
       "package.json",
       "worker.ts",
     ]),
