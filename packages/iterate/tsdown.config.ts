@@ -1,32 +1,43 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "tsdown";
 
+const guestbookClientSource = readFileSync(
+  new URL("./dist/guestbook/client.mjs", import.meta.url),
+  "utf8",
+);
 const todoClientSource = readFileSync(new URL("./dist/todo/client.mjs", import.meta.url), "utf8");
+
+const appClientSourcePlugin = {
+  name: "app-client-sources",
+  resolveId(source: string) {
+    if (source === "iterate:guestbook-client-source") {
+      return "\0iterate:guestbook-client-source";
+    }
+    if (source === "iterate:todo-client-source") return "\0iterate:todo-client-source";
+  },
+  load(id: string) {
+    if (id === "\0iterate:guestbook-client-source") {
+      return `export default ${JSON.stringify(guestbookClientSource)};`;
+    }
+    if (id !== "\0iterate:todo-client-source") return;
+    return `export default ${JSON.stringify(todoClientSource)};`;
+  },
+};
 
 export default defineConfig([
   {
-    // This physical worker carries the Todo Durable Object, sqlfu runtime,
-    // Cap'n Web server, and the separately prebuilt browser client. Config
-    // supplies only its package.json so worker-bundler can resolve this file.
+    // These physical app workers carry their Durable Objects, persistence,
+    // Cap'n Web servers, and separately prebuilt browser clients. Config
+    // supplies only package.json so worker-bundler can resolve these files.
     entry: {
+      "guestbook/configured-worker": "src/guestbook/configured-worker.ts",
       "todo/configured-worker": "src/todo/configured-worker.ts",
     },
     format: "esm",
     fixedExtension: true,
     platform: "neutral",
     target: "es2022",
-    plugins: [
-      {
-        name: "todo-client-source",
-        resolveId(source) {
-          if (source === "iterate:todo-client-source") return "\0iterate:todo-client-source";
-        },
-        load(id) {
-          if (id !== "\0iterate:todo-client-source") return;
-          return `export default ${JSON.stringify(todoClientSource)};`;
-        },
-      },
-    ],
+    plugins: [appClientSourcePlugin],
     inputOptions: {
       resolve: {
         conditionNames: ["workerd", "worker", "import", "default"],
@@ -122,6 +133,8 @@ export default defineConfig([
     // in the build script instead.
     entry: {
       sdk: "src/sdk.ts",
+      "guestbook/index": "src/guestbook/index.ts",
+      "guestbook/worker": "src/guestbook/worker.ts",
       "github-ai-linter/index": "src/github-ai-linter/index.ts",
       "github-ai-linter/worker": "src/github-ai-linter/worker.ts",
       "todo/index": "src/todo/index.ts",
@@ -130,6 +143,7 @@ export default defineConfig([
       "processors-testing": "src/processors/testing.ts",
     },
     format: "esm",
+    plugins: [appClientSourcePlugin],
     deps: {
       neverBundle: ["cloudflare:workers"],
     },
