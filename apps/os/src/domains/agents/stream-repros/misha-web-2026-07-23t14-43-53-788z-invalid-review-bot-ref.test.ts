@@ -1,5 +1,5 @@
 import { createWorker } from "@cloudflare/worker-bundler";
-import { GithubAiLinter } from "iterate/github-ai-linter";
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import type { StreamEvent, StreamEventInput } from "iterate/sdk";
 import { expect, test } from "vitest";
 import { DynamicWorkerRef } from "../../workers/schemas.ts";
@@ -44,7 +44,8 @@ test("worker-bundler accepts the packaged linter's installed entry point", async
   const subscription: any = appended[0]?.events[0];
   const ref = subscription.payload.delivery.expression[1][1];
   const createWorkerOptions = ref.source.createWorker;
-  const installedEntrypoint = "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs";
+  const installedEntrypoint =
+    "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
   const result = await createWorker({
     ...createWorkerOptions,
     // Node can exercise worker-bundler's dependency-install and entry-point

@@ -1,4 +1,4 @@
-import type { ItxBinding, StreamEvent, StreamEventInput } from "../sdk.ts";
+import type { ItxBinding, StreamEvent, StreamEventInput } from "../../sdk.ts";
 import type { GithubAiLinterRuleSource } from "./rules.ts";
 
 export type GithubAiLinterConfig = {
@@ -8,7 +8,7 @@ export type GithubAiLinterConfig = {
 
 const reviewBotSubscriptionConfigVersion = 4;
 const configuredWorkerEntrypoint =
-  "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs";
+  "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
 
 export const GithubAiLinter = {
   create(env: { ITX: ItxBinding }, config: GithubAiLinterConfig) {

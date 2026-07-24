@@ -2,8 +2,8 @@
 // stream at /guestbook into a birth certificate plus an append-only list of
 // entries. The reduce is the whole processor — pure fold, no side effects.
 import { z } from "zod";
-import { defineProcessorContract, StreamProcessor } from "iterate/processors";
-import type { ProcessorState, ReduceArgs } from "iterate/processors";
+import { defineProcessorContract, StreamProcessor } from "../../processors/index.ts";
+import type { ProcessorState, ReduceArgs } from "../../processors/index.ts";
 
 export const GuestbookProcessorContract = defineProcessorContract({
   slug: "guestbook",

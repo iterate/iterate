@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { StreamEvent, StreamEventInput } from "../sdk.ts";
+import type { StreamEvent, StreamEventInput } from "../../sdk.ts";
 import { GithubAiLinter } from "./index.ts";
 
 test("a declared GitHub AI linter subscribes each linked connection without config-owned plumbing", async () => {
@@ -56,7 +56,7 @@ test("a declared GitHub AI linter subscribes each linked connection without conf
   expect(ref).toMatchObject({
     source: {
       createWorker: {
-        entryPoint: "node_modules/iterate/dist/github-ai-linter/configured-worker.mjs",
+        entryPoint: "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs",
         files: {
           include: ["package.json"],
           repoPath: "/repos/config",
