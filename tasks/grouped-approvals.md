@@ -78,3 +78,8 @@ The wrapper prints the collapsed push intent as the window fires, then blocks un
 - Menubar local-notification debounce (Swift-side)
 - "Trust the rest of this run for this rule" — run-scoped standing grant covering future unseen requests (bigger trust-semantics change, deliberately excluded from v1)
 - `tasks/extract-approvals-protocol-to-package.md` would deduplicate approve-core ↔ mobile approvals lib, where the grouping derivation could live once
+
+## Follow-ups spotted during phone trial (pre-existing, not this branch)
+
+- `apps/mobile/src/lib/build-info.ts` `BUILD_TIMESTAMP` is a hardcoded constant (stuck at 2026-07-18) rendered in the app footer — should be stamped at build/bundle time so it actually identifies the running JS.
+- Projects screen with an unreachable server shows only "itx WebSocket closed before connecting" + Retry; the only escape is Sign out (top right), which isn't obviously a server switcher. Consider surfacing "change server" on connection failure.
