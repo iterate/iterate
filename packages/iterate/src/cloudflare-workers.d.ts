@@ -1,3 +1,14 @@
+/**
+ * The `iterate` package is mostly a Node/Bun CLI and browser SDK, so its main
+ * TypeScript program deliberately uses Node and DOM globals. Loading the full
+ * `@cloudflare/workers-types` ambient set here would make those non-Worker
+ * entrypoints compile against workerd's versions of shared web APIs.
+ *
+ * These narrow structural declarations cover only the Worker seams used by
+ * package-owned source. OS builds and checks that source with the official
+ * Cloudflare types, and workerd supplies the real implementations at runtime.
+ * Keep this list minimal rather than treating it as a substitute runtime API.
+ */
 declare module "cloudflare:workers" {
   export abstract class WorkerEntrypoint<Env = unknown, Props = Record<string, unknown>> {
     protected env: Env;
