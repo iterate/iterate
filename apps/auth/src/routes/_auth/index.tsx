@@ -6,13 +6,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { authClient, useSession } from "../../utils/auth-client.ts";
+import { AuthRedirectError } from "../../components/auth-redirect-error.tsx";
 import {
   oauthClientQueryOptions,
   oauthConsentsQueryOptions,
 } from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
 import { InfoRow } from "../../utils/info-row.tsx";
-import { AuthRedirectError } from "../-auth-redirect-error.tsx";
 
 export const Route = createFileRoute("/_auth/")({
   validateSearch: z.looseObject({

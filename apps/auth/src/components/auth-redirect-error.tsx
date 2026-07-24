@@ -17,7 +17,7 @@ export function AuthRedirectError({
   );
 }
 
-function humanizeError(error: string) {
-  const message = error.replaceAll("_", " ").trim();
+function humanizeError(errorCode: string) {
+  const message = errorCode.replaceAll("_", " ").trim();
   return message.charAt(0).toUpperCase() + message.slice(1);
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AuthRedirectError } from "./-auth-redirect-error.tsx";
+import { AuthRedirectError } from "./auth-redirect-error.tsx";
 
 test("renders the OAuth callback error from the screenshot", () => {
   const markup = renderToStaticMarkup(
