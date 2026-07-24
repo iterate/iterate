@@ -217,4 +217,58 @@ describe("executeWorkerBuild", () => {
       warnings: ["This comparison is always false"],
     });
   });
+
+  it.each([
+    // The incident shape: installed package whose entry the import no longer matches.
+    "Failed to resolve 'iterate/live-state' from worker.ts: the installed 'iterate' package does not provide this entry (kept as an external import)",
+    // Never-installed package (not declared in package.json).
+    "Failed to resolve 'lodash' from worker.ts: package 'lodash' is not installed (kept as an external import)",
+    // Scoped package subpath.
+    "Failed to resolve '@acme/sdk/deep' from apps/todo/server.tsx: the installed '@acme/sdk' package does not provide this entry (kept as an external import)",
+    // The transform lane's stock message shape (bundle: false).
+    "Failed to resolve './missing.ts' from main.js: Cannot resolve relative import './missing.ts' from 'main.js'",
+    // A traversed file the transform lane could not read.
+    "File not found: apps/todo/shared/model.ts",
+  ])(
+    "rejects output whose imports would fail at startup with No such module: %s",
+    async (warning) => {
+      createWorker.mockResolvedValueOnce({
+        result: {
+          mainModule: "bundle.js",
+          modules: { "bundle.js": 'import "whatever";' },
+          warnings: [warning],
+        },
+      });
+
+      const error = await execute({ "worker.ts": "source" }).then(
+        () => Promise.reject(new Error("build unexpectedly succeeded")),
+        (thrown: Error) => thrown,
+      );
+      expect(error).toMatchObject({ name: "WorkerBuildFailedError" });
+      expect(error.message).toContain(warning);
+      expect(error.message).toContain("No such module");
+    },
+  );
+
+  it.each([
+    // nodejs_compat provides bare node builtins at runtime — external is correct.
+    "Failed to resolve 'fs' from worker.ts: package 'fs' is not installed (kept as an external import)",
+    "Failed to resolve 'stream/web' from worker.ts: package 'stream' is not installed (kept as an external import)",
+    // Scheme'd specifiers are runtime modules (defense in depth: the patched
+    // resolver does not warn about these in the first place).
+    "Failed to resolve 'cloudflare:workers' from worker.ts: package 'cloudflare:workers' is not installed (kept as an external import)",
+    "Failed to resolve 'node:fs' from worker.ts: package 'node:fs' is not installed (kept as an external import)",
+  ])("keeps runtime-provided externals as ordinary warnings: %s", async (warning) => {
+    createWorker.mockResolvedValueOnce({
+      result: {
+        mainModule: "bundle.js",
+        modules: { "bundle.js": "export default {};" },
+        warnings: [warning],
+      },
+    });
+
+    await expect(execute({ "worker.ts": "source" })).resolves.toMatchObject({
+      warnings: [warning],
+    });
+  });
 });
