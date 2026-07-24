@@ -39,7 +39,14 @@ function Home() {
     void navigate({
       to: "/w/$checkoutId",
       params: { checkoutId: newCheckoutId() },
-      search: { group: "folder", q: "", repo: repoPath, task: "" },
+      search: {
+        annotation: "",
+        group: "folder",
+        q: "",
+        repo: repoPath,
+        task: "",
+        view: "editor",
+      },
     });
   };
 
@@ -94,7 +101,14 @@ function Home() {
                           <Link
                             to="/w/$checkoutId"
                             params={{ checkoutId: entry.checkoutId }}
-                            search={{ group: "folder", q: "", repo: repoPath, task: "" }}
+                            search={{
+                              annotation: "",
+                              group: "folder",
+                              q: "",
+                              repo: repoPath,
+                              task: "",
+                              view: "editor",
+                            }}
                             className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
                           >
                             <span className="truncate font-mono text-sm">{entry.checkoutId}</span>

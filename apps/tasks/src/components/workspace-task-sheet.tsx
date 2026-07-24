@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState } from "react";
+import { ClientOnly } from "@tanstack/react-router";
 import { RotateCcwIcon, Trash2Icon } from "lucide-react";
 import { Input } from "@iterate-com/ui/components/input";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@iterate-com/ui/components/sheet";
@@ -39,6 +40,11 @@ const WorkspaceTaskPreview = lazy(() =>
     default: module.WorkspaceTaskPreview,
   })),
 );
+const WorkspaceTaskReview = lazy(() =>
+  import("./workspace-task-review.tsx").then((module) => ({
+    default: module.WorkspaceTaskReview,
+  })),
+);
 
 /**
  * The task detail sheet on the WORKSPACE lane: the shared collab-editor
@@ -64,6 +70,10 @@ export function WorkspaceTaskSheet({
   onRevert,
   onDelete,
   onClose,
+  view,
+  selectedAnnotationId,
+  onSelectAnnotation,
+  onViewChange,
 }: {
   task: BoardTask | null;
   checkoutId: string;
@@ -79,7 +89,7 @@ export function WorkspaceTaskSheet({
   editorEpoch?: number;
   /** Track changes: the redline layer on the editor (board setting). */
   redline?: boolean;
-  /** Live document text when a session is open (Preview must not lag). */
+  /** Live document text when a session is open (Preview/Review must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
   onLiveContent: (path: string, content: string) => void;
@@ -88,6 +98,10 @@ export function WorkspaceTaskSheet({
   onRevert: () => void;
   onDelete: () => void;
   onClose: () => void;
+  view: "editor" | "preview" | "review";
+  selectedAnnotationId: string | null;
+  onSelectAnnotation: (id: string | null) => void;
+  onViewChange: (view: "editor" | "preview" | "review") => void;
 }) {
   return (
     <Sheet open={task !== null} onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -116,6 +130,10 @@ export function WorkspaceTaskSheet({
             onRevert={onRevert}
             onDelete={onDelete}
             onRequestClose={onClose}
+            view={view}
+            selectedAnnotationId={selectedAnnotationId}
+            onSelectAnnotation={onSelectAnnotation}
+            onViewChange={onViewChange}
           />
         )}
       </SheetContent>
@@ -142,6 +160,10 @@ function SheetBody({
   onRevert,
   onDelete,
   onRequestClose,
+  view,
+  selectedAnnotationId,
+  onSelectAnnotation,
+  onViewChange,
 }: {
   task: BoardTask;
   checkoutId: string;
@@ -157,7 +179,7 @@ function SheetBody({
   editorEpoch?: number;
   /** Track changes: the redline layer on the editor (board setting). */
   redline?: boolean;
-  /** Live document text when a session is open (Preview must not lag). */
+  /** Live document text when a session is open (Preview/Review must not lag). */
   liveSource?: () => string | null;
   editorApiRef?: { current: import("../lib/collab-editor-api.ts").CollabEditorApi | null };
   onLiveContent: (path: string, content: string) => void;
@@ -167,6 +189,10 @@ function SheetBody({
   onDelete: () => void;
   /** Cmd/Ctrl+Enter inside the editor: done editing — close the sheet. */
   onRequestClose: () => void;
+  view: "editor" | "preview" | "review";
+  selectedAnnotationId: string | null;
+  onSelectAnnotation: (id: string | null) => void;
+  onViewChange: (view: "editor" | "preview" | "review") => void;
 }) {
   const [status, setStatus] = useState("connecting…");
   // The path is editable in place; SheetBody is keyed by task.path, so a
@@ -240,102 +266,135 @@ function SheetBody({
           </p>
         )}
       </SheetHeader>
-      <Tabs defaultValue="editor" className="flex min-h-0 flex-1 flex-col gap-0">
-      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">
-        <Select
-          items={columns.map((state) => ({ label: stateLabel(state), value: state }))}
-          value={columnState(task, columns)}
-          onValueChange={(value) => {
-            if (typeof value === "string" && value !== "") onChangeState(value);
-          }}
-        >
-          <SelectTrigger aria-label="Task state" size="sm" className="w-36 shrink-0">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {columns.map((state) => (
-              <SelectItem key={state} value={state}>
-                <span className="flex items-center gap-2">
-                  <TaskStateIcon state={state} />
-                  {stateLabel(state)}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <TagPicker value={task.labels} options={allTags} onChange={onChangeLabels} />
-        <div className="ml-auto flex items-center gap-1">
-          <span className="font-mono text-[11px] text-muted-foreground">{status}</span>
-          {changeStatus === undefined ? null : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-              title="Revert to the base commit's version"
-              onClick={onRevert}
-            >
-              <RotateCcwIcon aria-hidden className="size-3.5" />
-              Revert
-            </Button>
-          )}
-          <AlertDialog>
-            <AlertDialogTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                  title="Delete task"
-                />
-              }
-            >
-              <Trash2Icon aria-hidden className="size-3.5" />
-              Delete
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete {task.title}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Removes {task.path} from the workspace. It stays restorable from the Deleted
-                  strip until someone commits.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={onDelete}>
-                  Delete task
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-          <TabsList className="ml-1 h-8">
-            <TabsTrigger value="editor">Editor</TabsTrigger>
-            <TabsTrigger value="preview">Preview</TabsTrigger>
-          </TabsList>
+      <Tabs
+        value={view}
+        onValueChange={(value) => {
+          if (value === "editor" || value === "preview" || value === "review") {
+            onViewChange(value);
+          }
+        }}
+        className="flex min-h-0 flex-1 flex-col gap-0"
+      >
+        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">
+          <Select
+            items={columns.map((state) => ({ label: stateLabel(state), value: state }))}
+            value={columnState(task, columns)}
+            onValueChange={(value) => {
+              if (typeof value === "string" && value !== "") onChangeState(value);
+            }}
+          >
+            <SelectTrigger aria-label="Task state" size="sm" className="w-36 shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {columns.map((state) => (
+                <SelectItem key={state} value={state}>
+                  <span className="flex items-center gap-2">
+                    <TaskStateIcon state={state} />
+                    {stateLabel(state)}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <TagPicker value={task.labels} options={allTags} onChange={onChangeLabels} />
+          <div className="ml-auto flex items-center gap-1">
+            {view === "review" ? null : (
+              <span className="font-mono text-[11px] text-muted-foreground">{status}</span>
+            )}
+            {changeStatus === undefined ? null : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                title="Revert to the base commit's version"
+                onClick={onRevert}
+              >
+                <RotateCcwIcon aria-hidden className="size-3.5" />
+                Revert
+              </Button>
+            )}
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="Delete task"
+                  />
+                }
+              >
+                <Trash2Icon aria-hidden className="size-3.5" />
+                Delete
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete {task.title}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Removes {task.path} from the workspace. It stays restorable from the Deleted
+                    strip until someone commits.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction variant="destructive" onClick={onDelete}>
+                    Delete task
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            <TabsList className="ml-1 h-8">
+              <TabsTrigger value="editor">Editor</TabsTrigger>
+              <TabsTrigger value="preview">Preview</TabsTrigger>
+              <TabsTrigger value="review">Review</TabsTrigger>
+            </TabsList>
+          </div>
         </div>
-      </div>
         <TabsContent value="preview" className="flex min-h-0 flex-1 flex-col">
           <Suspense fallback={<p className="p-4 text-sm text-muted-foreground">Rendering…</p>}>
             <WorkspaceTaskPreview source={liveSource?.() ?? task.source} />
           </Suspense>
         </TabsContent>
-        <TabsContent value="editor" keepMounted className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden">
-      <Suspense
-        fallback={<p className="p-4 text-sm text-muted-foreground">Loading editor…</p>}
-      >
-        <WorkspaceTaskEditor
-          key={editorEpoch ?? 0}
-          checkoutId={checkoutId}
-          repoPath={repoPath}
-          path={task.path}
-          redline={redline ?? true}
-          focusHeadline={focusHeadline}
-          apiRef={editorApiRef}
-          onLiveContent={onLiveContent}
-          onStatus={setStatus}
-          onRequestClose={onRequestClose}
-        />
-      </Suspense>
+        <TabsContent value="review" className="flex min-h-0 flex-1 flex-col">
+          <ClientOnly
+            fallback={<p className="p-4 text-sm text-muted-foreground">Loading review…</p>}
+          >
+            <Suspense
+              fallback={<p className="p-4 text-sm text-muted-foreground">Loading review…</p>}
+            >
+              <WorkspaceTaskReview
+                checkoutId={checkoutId}
+                repoPath={repoPath}
+                path={task.path}
+                markdown={liveSource?.() ?? task.source}
+                selectedAnnotationId={selectedAnnotationId}
+                onSelectAnnotation={onSelectAnnotation}
+              />
+            </Suspense>
+          </ClientOnly>
+        </TabsContent>
+        <TabsContent
+          value="editor"
+          keepMounted
+          className="flex min-h-0 flex-1 flex-col data-[hidden]:hidden"
+        >
+          <Suspense
+            fallback={<p className="p-4 text-sm text-muted-foreground">Loading editor…</p>}
+          >
+            <WorkspaceTaskEditor
+              key={editorEpoch ?? 0}
+              checkoutId={checkoutId}
+              repoPath={repoPath}
+              path={task.path}
+              redline={redline ?? true}
+              focusHeadline={focusHeadline}
+              apiRef={editorApiRef}
+              onLiveContent={onLiveContent}
+              onStatus={setStatus}
+              onRequestClose={onRequestClose}
+            />
+          </Suspense>
         </TabsContent>
       </Tabs>
     </div>

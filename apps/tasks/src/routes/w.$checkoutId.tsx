@@ -45,15 +45,21 @@ import {
  *   /w/<checkoutId>?repo=/repos/config&task=<path>&q=<filter>&group=none
  */
 export const Route = createFileRoute("/w/$checkoutId")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    group:
-      search.group === "none" || search.group === "label"
-        ? (search.group as "none" | "label")
-        : ("folder" as const),
-    q: typeof search.q === "string" ? search.q : "",
-    repo: typeof search.repo === "string" ? search.repo : DEFAULT_REPO_PATH,
-    task: typeof search.task === "string" ? search.task : "",
-  }),
+  validateSearch: (search: Record<string, unknown>) => {
+    let view: "editor" | "preview" | "review" = "editor";
+    if (search.view === "preview" || search.view === "review") view = search.view;
+    return {
+      annotation: typeof search.annotation === "string" ? search.annotation : "",
+      group:
+        search.group === "none" || search.group === "label"
+          ? (search.group as "none" | "label")
+          : ("folder" as const),
+      q: typeof search.q === "string" ? search.q : "",
+      repo: typeof search.repo === "string" ? search.repo : DEFAULT_REPO_PATH,
+      task: typeof search.task === "string" ? search.task : "",
+      view,
+    };
+  },
   component: WorkspaceBoardPage,
 });
 
@@ -329,7 +335,9 @@ function WorkspaceBoardPage() {
             return current === task.path ? nextPath : current;
           });
           // LIVE check: a sheet closed (or switched) mid-write stays put.
-          if (searchTaskRef.current === task.path) patchSearch({ task: nextPath });
+          if (searchTaskRef.current === task.path) {
+            patchSearch({ annotation: "", task: nextPath });
+          }
         })
         .finally(() => {
           renamingRef.current = false;
@@ -384,7 +392,7 @@ function WorkspaceBoardPage() {
       // and have the arriving template splice over early keystrokes (same
       // rule as the rename lanes).
       void board.writeTask(target, content).then((ok) => {
-        if (ok) patchSearch({ task: target });
+        if (ok) patchSearch({ annotation: "", task: target });
       });
     },
     [board, isTaken, patchSearch],
@@ -416,7 +424,9 @@ function WorkspaceBoardPage() {
         await current.renameTask(path, target, source, (final) => final, () => {
           // A sheet still showing the source (commit keeps it open) follows
           // the moved file; a closed sheet stays closed.
-          if (searchTaskRef.current === path) patchSearch({ task: target });
+          if (searchTaskRef.current === path) {
+            patchSearch({ annotation: "", task: target });
+          }
         });
       } finally {
         renamingRef.current = false;
@@ -465,7 +475,9 @@ function WorkspaceBoardPage() {
               return current === task.path ? nextPath : current;
             });
             // LIVE check — a closed sheet stays closed.
-            if (searchTaskRef.current === task.path) patchSearch({ task: nextPath });
+            if (searchTaskRef.current === task.path) {
+              patchSearch({ annotation: "", task: nextPath });
+            }
           },
         );
       } finally {
@@ -560,7 +572,7 @@ function WorkspaceBoardPage() {
           recentByPath={new Map()}
           onMove={moveTask}
           onAdd={addTask}
-          onOpen={(path) => patchSearch({ task: path })}
+          onOpen={(path) => patchSearch({ annotation: "", task: path })}
         />
       )}
       <StreamEventsSheet
@@ -587,6 +599,10 @@ function WorkspaceBoardPage() {
         onRename={(nextPath) =>
           openTask === null ? Promise.resolve(null) : renameTask(openTask, nextPath)
         }
+        view={search.view}
+        selectedAnnotationId={search.annotation || null}
+        onSelectAnnotation={(id) => patchSearch({ annotation: id || "" })}
+        onViewChange={(view) => patchSearch({ annotation: "", view })}
         editorEpoch={editorEpoch}
         redline={trackChanges}
         editorApiRef={editorApiRef}
@@ -616,7 +632,7 @@ function WorkspaceBoardPage() {
               setDraftPath(null);
               draftFocusRef.current = undefined;
             }
-            patchSearch({ task: "" });
+            patchSearch({ annotation: "", task: "" });
           }
         }}
         onClose={() => {
@@ -632,7 +648,7 @@ function WorkspaceBoardPage() {
               : Promise.resolve();
           setDraftPath(null);
           draftFocusRef.current = undefined;
-          patchSearch({ task: "" });
+          patchSearch({ annotation: "", task: "" });
           if (path !== null) void flushed.then(() => settleDraftRename(path, liveSource));
         }}
       />

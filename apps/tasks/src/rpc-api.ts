@@ -1,5 +1,6 @@
 import { RpcTarget } from "capnweb";
 import { getServerByName } from "partyserver";
+import type { Annotation } from "@plannotator/ui/types";
 import type { AppEnv } from "./env.ts";
 import { ProjectDial } from "./checkout-do.ts";
 import type { CommitResult, TaskChangeSummary } from "./state.ts";
@@ -19,6 +20,13 @@ import type {
   TasksWorkspace,
 } from "./lib/tasks-api.ts";
 import { DEFAULT_REPO_PATH, isCheckoutId, normalizeRepoPath } from "./lib/checkout-shared.ts";
+import {
+  WorkspaceAnnotationJournal,
+  WORKSPACE_ANNOTATION_EVENT_TYPES,
+  type WorkspaceAnnotationAppend,
+  type WorkspaceAnnotationSnapshot,
+} from "./lib/workspace-annotations.ts";
+import { isTaskFilePath } from "./tasks-model.ts";
 
 const AUTH_COOKIE = "iterate-project-auth";
 
@@ -119,6 +127,10 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
   }
 
   async whoami(): Promise<TasksUser> {
+    return this.#verifiedUser();
+  }
+
+  #verifiedUser(): TasksUser {
     if (this.#credential.type !== "project-app-session") {
       return { userId: null, email: null, name: null, image: null };
     }
@@ -163,7 +175,14 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
     if (!isCheckoutId(checkoutId) || normalized === null) {
       throw new Error("bad checkout id or repo path");
     }
-    return new TasksWorkspaceApi(this.#env, this.#projectId, this.#dial, checkoutId, normalized);
+    return new TasksWorkspaceApi(
+      this.#env,
+      this.#projectId,
+      this.#dial,
+      checkoutId,
+      normalized,
+      this.#verifiedUser(),
+    );
   }
 
   [Symbol.dispose](): void {
@@ -325,6 +344,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   readonly #dial: ProjectDial;
   readonly #checkoutId: string;
   readonly #repoPath: string;
+  readonly #user: TasksUser;
   #created = false;
   #indexed = false;
 
@@ -334,6 +354,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     dial: ProjectDial,
     checkoutId: string,
     repoPath: string,
+    user: TasksUser,
   ) {
     super();
     this.#env = env;
@@ -341,6 +362,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     this.#dial = dial;
     this.#checkoutId = checkoutId;
     this.#repoPath = repoPath;
+    this.#user = user;
   }
 
   /**
@@ -499,6 +521,7 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   async subscribeEvents(
     processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
     afterOffset = 0,
+    eventTypes?: string[],
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }> {
     // A real call (see events()) so lazy creation actually runs.
     await this.#withWorkspace((ws) => ws.exists("/"));
@@ -509,10 +532,83 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         }
       ).streams;
       return (await streams.get(this.#workspacePath).subscribe({
+        eventTypes,
         processEventBatch,
         replayAfterOffset: afterOffset,
       })) as { ping?(): Promise<boolean> | boolean; unsubscribe(): void };
     });
+  }
+
+  async annotations(filePath: string): Promise<WorkspaceAnnotationSnapshot> {
+    const path = this.#taskPath(filePath);
+    await this.#withWorkspace((ws) => ws.exists("/"));
+    return this.#annotationJournal().snapshot(path);
+  }
+
+  async addAnnotation(filePath: string, annotation: Annotation): Promise<Annotation> {
+    const path = this.#taskPath(filePath);
+    await this.#withWorkspace((ws) => ws.exists("/"));
+    return this.#annotationJournal().add(path, annotation);
+  }
+
+  async updateAnnotation(
+    filePath: string,
+    id: string,
+    updates: Partial<Annotation>,
+  ): Promise<void> {
+    const path = this.#taskPath(filePath);
+    await this.#withWorkspace((ws) => ws.exists("/"));
+    return this.#annotationJournal().update(path, id, updates);
+  }
+
+  async removeAnnotation(filePath: string, id: string): Promise<void> {
+    const path = this.#taskPath(filePath);
+    await this.#withWorkspace((ws) => ws.exists("/"));
+    return this.#annotationJournal().remove(path, id);
+  }
+
+  #annotationJournal(): WorkspaceAnnotationJournal {
+    const verifiedAuthor = this.#user.name || this.#user.email || this.#user.userId || "agent";
+    return new WorkspaceAnnotationJournal({
+      append: async (...events: WorkspaceAnnotationAppend[]) => {
+        await this.#dial.withProject(async (project) => {
+          const stream = (
+            project as unknown as {
+              streams: {
+                get(path: string): { append(...items: WorkspaceAnnotationAppend[]): Promise<unknown> };
+              };
+            }
+          ).streams.get(this.#workspacePath);
+          await stream.append(...events);
+        });
+      },
+      getEvents: (afterOffset) => this.#workspaceEvents(afterOffset),
+      verifiedAuthor,
+    });
+  }
+
+  async #workspaceEvents(afterOffset: number): Promise<WorkspaceStreamEvent[]> {
+    return this.#dial.withProject(async (project) => {
+      const stream = (
+        project as unknown as {
+          streams: {
+            get(path: string): { getEvents(args: object): Promise<WorkspaceStreamEvent[]> };
+          };
+        }
+      ).streams.get(this.#workspacePath);
+      return stream.getEvents({
+        afterOffset,
+        eventTypes: WORKSPACE_ANNOTATION_EVENT_TYPES,
+        includeEphemeral: false,
+        limit: 500,
+      });
+    });
+  }
+
+  #taskPath(filePath: string): string {
+    const path = filePath.replace(/^\/+/, "");
+    if (!isTaskFilePath(path)) throw new Error("annotations require a task markdown path");
+    return path;
   }
 
   /** Every task file in the merged view, path → content (board seed).

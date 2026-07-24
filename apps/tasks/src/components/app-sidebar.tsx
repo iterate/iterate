@@ -92,7 +92,14 @@ export function AppSidebar() {
     void navigate({
       to: "/w/$checkoutId",
       params: { checkoutId: newCheckoutId() },
-      search: { group: "folder", q: "", repo: repoPath, task: "" },
+      search: {
+        annotation: "",
+        group: "folder",
+        q: "",
+        repo: repoPath,
+        task: "",
+        view: "editor",
+      },
     });
   };
 
@@ -154,7 +161,14 @@ export function AppSidebar() {
                           <Link
                             to="/w/$checkoutId"
                             params={{ checkoutId: entry.checkoutId }}
-                            search={{ group: "folder", q: "", repo: repoPath, task: "" }}
+                            search={{
+                              annotation: "",
+                              group: "folder",
+                              q: "",
+                              repo: repoPath,
+                              task: "",
+                              view: "editor",
+                            }}
                           />
                         }
                       >

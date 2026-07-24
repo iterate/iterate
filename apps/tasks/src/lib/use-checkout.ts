@@ -5,6 +5,7 @@ import { newWebSocketRpcSession } from "capnweb";
 import type { CommitResult } from "../state.ts";
 import type { CheckoutIndexEntry, TasksApi, TasksUser } from "./tasks-api.ts";
 import { registerCollaborator } from "./checkout-shared.ts";
+import { waitForWebSocketOpen } from "./websocket-ready.ts";
 
 /**
  * The browser's end of a collaborative checkout: a stock y-partyserver
@@ -111,11 +112,13 @@ const docVersions = new WeakMap<Y.Doc, number>();
  * token in browser land), shared by every op on the page, and redialed once
  * when a call finds the session broken.
  */
-function dialTasksApi() {
+async function dialTasksApi() {
   const url = new URL("/api", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  const session = newWebSocketRpcSession<TasksApi>(url.toString());
-  return { session, project: session.authenticate() };
+  const socket = new WebSocket(url);
+  await waitForWebSocketOpen(socket);
+  const session = newWebSocketRpcSession<TasksApi>(socket);
+  return { project: session.authenticate(), session, socket };
 }
 
 let liveApi: ReturnType<typeof dialTasksApi> | null = null;
@@ -124,31 +127,43 @@ let liveApi: ReturnType<typeof dialTasksApi> | null = null;
  * best-effort work (teardown flushes) that must never tear down the shared
  * WS under the poll and wait loops riding it. */
 export async function withProjectOnce<T>(
-  operation: (project: ReturnType<typeof dialTasksApi>["project"]) => PromiseLike<T>,
+  operation: (
+    project: Awaited<ReturnType<typeof dialTasksApi>>["project"],
+  ) => PromiseLike<T>,
 ): Promise<T> {
   liveApi ??= dialTasksApi();
-  return operation(liveApi.project);
+  const current = liveApi;
+  let api: Awaited<typeof current>;
+  try {
+    api = await current;
+  } catch (cause) {
+    if (liveApi === current) liveApi = null;
+    throw cause;
+  }
+  return operation(api.project);
 }
 
 export async function withProject<T>(
-  operation: (project: ReturnType<typeof dialTasksApi>["project"]) => PromiseLike<T>,
+  operation: (
+    project: Awaited<ReturnType<typeof dialTasksApi>>["project"],
+  ) => PromiseLike<T>,
 ): Promise<T> {
   liveApi ??= dialTasksApi();
+  const current = liveApi;
+  let api: Awaited<typeof current>;
   try {
-    return await operation(liveApi.project);
-  } catch (firstError) {
-    try {
-      (liveApi.session as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-    } catch {
-      // a broken session may already be gone
-    }
-    liveApi = dialTasksApi();
-    try {
-      return await operation(liveApi.project);
-    } catch (secondError) {
-      liveApi = null;
-      throw secondError ?? firstError;
-    }
+    api = await current;
+  } catch (cause) {
+    if (liveApi === current) liveApi = null;
+    throw cause;
+  }
+  try {
+    return await operation(api.project);
+  } catch (cause) {
+    // Application errors belong to their caller. Only a transport that is
+    // observably no longer OPEN invalidates the shared connection.
+    if (api.socket.readyState !== WebSocket.OPEN && liveApi === current) liveApi = null;
+    throw cause;
   }
 }
 

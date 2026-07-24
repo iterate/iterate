@@ -1,4 +1,6 @@
+import type { Annotation } from "@plannotator/ui/types";
 import type { CommitResult, TaskChangeSummary } from "../state.ts";
+import type { WorkspaceAnnotationSnapshot } from "./workspace-annotations.ts";
 
 /**
  * The vessel's ONE public API: a Cap'n Web WebSocket session at `/api`.
@@ -161,7 +163,13 @@ export interface TasksWorkspace {
   subscribeEvents(
     processEventBatch: (batch: { events: WorkspaceStreamEvent[] }) => unknown,
     afterOffset?: number,
+    eventTypes?: string[],
   ): Promise<{ ping?(): Promise<boolean> | boolean; unsubscribe(): void }>;
+  /** Plannotator review state, durably folded from this workspace's stream. */
+  annotations(filePath: string): Promise<WorkspaceAnnotationSnapshot>;
+  addAnnotation(filePath: string, annotation: Annotation): Promise<Annotation>;
+  updateAnnotation(filePath: string, id: string, updates: Partial<Annotation>): Promise<void>;
+  removeAnnotation(filePath: string, id: string): Promise<void>;
   /** Every task file in the merged view (board seed). */
   files(): Promise<Record<string, string>>;
   /** Filesystem trio with the platform gateway's semantics: live sessions

@@ -1,0 +1,222 @@
+diff --git a/components/InlineMarkdown.tsx b/components/InlineMarkdown.tsx
+index d6b2a3ffcacf83a8f297e9f56f201fe0ec03f2d4..61b5fce9b0a0af9c0e21294fdcb71e1759265023 100644
+--- a/components/InlineMarkdown.tsx
++++ b/components/InlineMarkdown.tsx
+@@ -1,6 +1,6 @@
+ import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
+ import { createPortal } from "react-dom";
+-import hljs from "highlight.js";
++import * as hljs from "highlight.js";
+ import { isCodeFilePath, isCodeFilePathStrict, CODE_PATH_BARE_REGEX, parseCodePath } from "@plannotator/core/code-file";
+ import { transformPlainText } from "../utils/inlineTransforms";
+ import { getImageSrc } from "./ImageThumbnail";
+@@ -9,6 +9,8 @@ import type { ValidationEntry } from "../hooks/useValidatedCodePaths";
+ import { CodeFilePicker } from "./CodeFilePicker";
+ import { normalizeMathTex, renderMathToHtml } from "./blocks/MathBlock";
+ 
++const highlighter = hljs.default;
++
+ export interface DocPreviewResult {
+   contents?: string;
+   filepath?: string;
+@@ -98,8 +100,8 @@ const CodeSnippetPreview: React.FC<{
+     const lines = snippet.split('\n');
+     return lines.map(line => {
+       try {
+-        if (lang) return hljs.highlight(line, { language: lang }).value;
+-        return hljs.highlightAuto(line).value;
++        if (lang) return highlighter.highlight(line, { language: lang }).value;
++        return highlighter.highlightAuto(line).value;
+       } catch {
+         return line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+       }
+diff --git a/components/OpenInAppButton.tsx b/components/OpenInAppButton.tsx
+index 28084e7496e765961f1143fbd1ab18ac7f93e3d0..059d17f042cda44e024c9b7d4fc008187dabcf0f 100644
+--- a/components/OpenInAppButton.tsx
++++ b/components/OpenInAppButton.tsx
+@@ -59,8 +59,8 @@ let openInAppsPromise: Promise<OpenInAppsResponse> | null = null;
+ function loadOpenInApps(): Promise<OpenInAppsResponse> {
+   if (!openInAppsPromise) {
+     openInAppsPromise = fetch('/api/open-in/apps')
+-      .then((r) => r.json())
+-      .then((data: OpenInAppsResponse) => ({
++      .then((r) => r.json() as Promise<OpenInAppsResponse>)
++      .then((data) => ({
+         available: !!data.available,
+         apps: Array.isArray(data.apps) ? data.apps : [],
+       }))
+diff --git a/components/Viewer.tsx b/components/Viewer.tsx
+index 42c24dcf35505d7a8baef0a3955e7d1fdca5b154..4fbf1d0832e43ff701c0ec335396c4018972ec73 100644
+--- a/components/Viewer.tsx
++++ b/components/Viewer.tsx
+@@ -1,6 +1,6 @@
+ import React, { useRef, useState, useEffect, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react';
+ import { createPortal } from 'react-dom';
+-import hljs from 'highlight.js';
++import * as hljs from 'highlight.js';
+ import { AnnotationType, type Block, type Annotation, type EditorMode, type InputMethod, type ImageAttachment, type ActionsLabelMode } from '../types';
+ import { computeListIndices, groupBlocks, type Frontmatter } from '../utils/parser';
+ import { buildHeadingSlugMap } from '../utils/slugify';
+@@ -14,6 +14,8 @@ import { useValidatedCodePaths } from '../hooks/useValidatedCodePaths';
+ import { AnnotationToolbar } from './AnnotationToolbar';
+ import { FloatingQuickLabelPicker } from './FloatingQuickLabelPicker';
+ 
++const highlighter = hljs.default;
++
+ // Debug error boundary to catch silent toolbar crashes
+ class ToolbarErrorBoundary extends React.Component<
+   { children: React.ReactNode },
+@@ -444,7 +446,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
+           const block = blocks.find(b => b.id === codeEl.closest('[data-block-id]')?.getAttribute('data-block-id'));
+           codeEl.removeAttribute('data-highlighted');
+           codeEl.className = `hljs font-mono${block?.language ? ` language-${block.language}` : ''}`;
+-          hljs.highlightElement(codeEl);
++          highlighter.highlightElement(codeEl);
+         }
+       });
+ 
+@@ -987,5 +989,3 @@ const ImageLightbox: React.FC<{ src: string; alt: string; onClose: () => void }>
+ 
+ 
+ 
+-
+-
+diff --git a/components/blocks/CodeBlock.tsx b/components/blocks/CodeBlock.tsx
+index 2a5385c59251f3e2f0c8bdac91369f446d768a64..78efbd568afaca29b19f1e2d481dba999ef261a1 100644
+--- a/components/blocks/CodeBlock.tsx
++++ b/components/blocks/CodeBlock.tsx
+@@ -1,8 +1,10 @@
+ import React, { useState, useRef, useEffect, useCallback } from 'react';
+-import hljs from 'highlight.js';
++import * as hljs from 'highlight.js';
+ import 'highlight.js/styles/github-dark.css';
+ import type { Block } from '../../types';
+ 
++const highlighter = hljs.default;
++
+ interface CodeBlockProps {
+   block: Block;
+   onHover: (element: HTMLElement) => void;
+@@ -21,7 +23,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ block, onHover, onLeave })
+       // Reset any previous highlighting
+       codeRef.current.removeAttribute('data-highlighted');
+       codeRef.current.className = `hljs font-mono${block.language ? ` language-${block.language}` : ''}`;
+-      hljs.highlightElement(codeRef.current);
++      highlighter.highlightElement(codeRef.current);
+     }
+   }, [block.content, block.language]);
+ 
+diff --git a/components/plan-diff/PlanCleanDiffView.tsx b/components/plan-diff/PlanCleanDiffView.tsx
+index fbe3e12929e1c70bad756ed721e99265822316b0..d5faa3ec6e0ae00185a9c98a8e3a245ff6610bd7 100644
+--- a/components/plan-diff/PlanCleanDiffView.tsx
++++ b/components/plan-diff/PlanCleanDiffView.tsx
+@@ -7,7 +7,7 @@
+  */
+ 
+ import React, { useEffect, useRef, useState, useCallback } from "react";
+-import hljs from "highlight.js";
++import * as hljs from "highlight.js";
+ import { parseMarkdownToBlocks, computeListIndices } from "../../utils/parser";
+ import { ListItemBody } from "../ListItemBody";
+ import type { Block, Annotation, EditorMode, ImageAttachment } from "../../types";
+@@ -23,6 +23,8 @@ import { CommentPopover } from "../CommentPopover";
+ import { FloatingQuickLabelPicker } from "../FloatingQuickLabelPicker";
+ import { getIdentity } from "../../utils/identity";
+ 
++const highlighter = hljs.default;
++
+ interface PlanCleanDiffViewProps {
+   blocks: PlanDiffBlock[];
+   annotations?: Annotation[];
+@@ -700,7 +702,7 @@ const SimpleCodeBlock: React.FC<{ block: Block }> = ({ block }) => {
+     if (codeRef.current) {
+       codeRef.current.removeAttribute("data-highlighted");
+       codeRef.current.className = `hljs font-mono${block.language ? ` language-${block.language}` : ""}`;
+-      hljs.highlightElement(codeRef.current);
++      highlighter.highlightElement(codeRef.current);
+     }
+   }, [block.content, block.language]);
+ 
+diff --git a/hooks/useAIChat.ts b/hooks/useAIChat.ts
+index ec85fc28fc9d3df2c9671ac9fba9192d12b13b38..627102a686a029d8cdc28905064a9d01733c9215 100644
+--- a/hooks/useAIChat.ts
++++ b/hooks/useAIChat.ts
+@@ -243,7 +243,7 @@ export function useAIChat({
+       }, signal);
+ 
+       if (!res.ok) {
+-        const data = await res.json().catch(() => ({ error: 'Failed to create AI session' }));
++        const data = await res.json().catch(() => ({ error: 'Failed to create AI session' })) as { error?: string };
+         throw new Error(data.error || `HTTP ${res.status}`);
+       }
+ 
+@@ -334,7 +334,7 @@ export function useAIChat({
+       }, controller.signal);
+ 
+       if (!res.ok || !res.body) {
+-        const data = await res.json().catch(() => ({ error: 'Query failed' }));
++        const data = await res.json().catch(() => ({ error: 'Query failed' })) as { error?: string };
+         throw new Error(data.error || `HTTP ${res.status}`);
+       }
+ 
+diff --git a/hooks/useExternalAnnotations.ts b/hooks/useExternalAnnotations.ts
+index 6e4fe865cceca922fcc3324c243b909196c2f6b3..0c1a9b5bcacda198d485689b6a01e11843ff15f4 100644
+--- a/hooks/useExternalAnnotations.ts
++++ b/hooks/useExternalAnnotations.ts
+@@ -68,7 +68,7 @@ function createDefaultTransport<T extends { id: string; source?: string }>(): Ex
+       const res = await fetch(url);
+       if (res.status === 304) return null; // No changes
+       if (!res.ok) return null;
+-      const data = await res.json();
++      const data = await res.json() as { annotations?: unknown; version?: unknown };
+       // Skip (don't apply) on a malformed 200 — preserves existing annotations
+       // and the version cursor instead of clearing them, matching the
+       // pre-seam fetchSnapshot which only updated on well-formed payloads.
+diff --git a/hooks/useFileBrowser.ts b/hooks/useFileBrowser.ts
+index eb74ecdd145157edb67c04a493bde1c9ede537c0..6648b375eadb0a2dc2dd74676f8e6d497ae16ef3 100644
+--- a/hooks/useFileBrowser.ts
++++ b/hooks/useFileBrowser.ts
+@@ -101,6 +101,12 @@ export interface FileTreeBackend {
+   watchTrees(paths: string[], onChange: (path: string) => void): (() => void) | undefined;
+ }
+ 
++type FileTreeResponse = {
++  error?: string;
++  tree: VaultNode[];
++  workspaceStatus?: WorkspaceStatusPayload;
++};
++
+ const defaultFileTreeBackend: FileTreeBackend = {
+   loadTree(dirPath) {
+     return fetch(`/api/reference/files?dirPath=${encodeURIComponent(dirPath)}`);
+@@ -209,7 +215,7 @@ export function useFileBrowser(): UseFileBrowserReturn {
+ 
+     try {
+       const res = await fileTreeBackend.loadTree(dirPath);
+-      const data = await res.json();
++      const data = await res.json() as FileTreeResponse;
+ 
+       if (!res.ok || data.error) {
+         const error = data.error || "Failed to load";
+@@ -314,7 +320,7 @@ export function useFileBrowser(): UseFileBrowserReturn {
+ 
+     try {
+       const res = await fileTreeBackend.loadVaultTree(vaultPath);
+-      const data = await res.json();
++      const data = await res.json() as FileTreeResponse;
+ 
+       if (!res.ok || data.error) {
+         setDirs((prev) =>
+diff --git a/utils/upload.ts b/utils/upload.ts
+index 317d1ccb8f3e65544b55b18df197b4777a49a736..58694ad8d67ceb76507c215c8ca716bbf57e2b5d 100644
+--- a/utils/upload.ts
++++ b/utils/upload.ts
+@@ -31,7 +31,7 @@ const defaultUploadTransport: UploadTransport = {
+     const formData = new FormData();
+     formData.append('file', file);
+     const res = await fetch('/api/upload', { method: 'POST', body: formData });
+-    const data = await res.json();
++    const data = await res.json() as UploadResult;
+     return { path: data.path, originalName: data.originalName };
+   },
+ };

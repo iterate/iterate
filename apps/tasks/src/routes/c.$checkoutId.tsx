@@ -85,10 +85,12 @@ export const Route = createFileRoute("/c/$checkoutId")({
       throw redirect({
         params,
         search: {
+          annotation: "",
           group: legacy.group === "tags" ? ("label" as const) : ("folder" as const),
           q: legacy.q ?? "",
           repo: legacy.repoPath ?? "/repos/config",
           task: legacy.task ?? "",
+          view: "editor",
         },
         to: "/w/$checkoutId",
       });
@@ -566,4 +568,3 @@ function ReadyCheckout({
 function inFolder(path: string, folder: string | null): string {
   return folder === null || folder === "/" ? path : taskPathInFolder(path, folder);
 }
-
