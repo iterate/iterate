@@ -5,6 +5,7 @@ import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
+import { isWorkerBuildFailedError } from "./artifact-store.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
@@ -238,13 +239,21 @@ export class DynamicWorkerRunner {
         // commits the ref to the stream, while this first real invocation is the
         // point where source loading, version-marker writes, and facet restarts are
         // allowed to mutate durable runtime state.
-        return await this.#statefulWorker(ref).invokeCapability({
-          args,
-          buildBudgetMs,
-          flattenNestedPath,
-          path,
-          ref,
-        });
+        try {
+          return await this.#statefulWorker(ref).invokeCapability({
+            args,
+            buildBudgetMs,
+            flattenNestedPath,
+            path,
+            ref,
+          });
+        } catch (error) {
+          // The hosted Durable Object already restored this verdict after its
+          // coordinator hop, but Workers RPC strips arbitrary properties on
+          // the outer DO hop. Restore it at the caller-side authority boundary.
+          if (isWorkerBuildFailedError(error)) Object.assign(error, { retryable: false });
+          throw error;
+        }
       }
 
       const target = await this.#getStatelessEntrypoint(ref, buildBudgetMs);

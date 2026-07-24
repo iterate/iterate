@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   projectEgressFetcher: vi.fn(() => ({})),
   resolveWorkerSource: vi.fn(),
   statefulFetch: vi.fn(),
+  statefulInvokeCapability: vi.fn(),
   workerGetByName: vi.fn(),
 }));
 
@@ -82,7 +83,13 @@ beforeEach(() => {
     .mockReset()
     .mockRejectedValue(new Error("stop after entering the trace span"));
   h.statefulFetch.mockReset().mockRejectedValue(new Error("stop at stateful fetch"));
-  h.workerGetByName.mockReset().mockReturnValue({ fetch: h.statefulFetch });
+  h.statefulInvokeCapability
+    .mockReset()
+    .mockRejectedValue(new Error("stop at stateful invocation"));
+  h.workerGetByName.mockReset().mockReturnValue({
+    fetch: h.statefulFetch,
+    invokeCapability: h.statefulInvokeCapability,
+  });
 });
 
 it("gives bare fetch and scoped ITX the same host-minted invocation source", () => {
@@ -226,5 +233,28 @@ describe("createApp asset dispatch", () => {
     expect(h.resolveWorkerSource).not.toHaveBeenCalled();
     expect(h.handleAssetRequest).not.toHaveBeenCalled();
     expect(h.workerGetByName).toHaveBeenCalledOnce();
+  });
+});
+
+it("restores the terminal source-build verdict after stateful Worker RPC strips it", async () => {
+  const sourceFailure = new Error('No such module "yaml".');
+  sourceFailure.name = "WorkerBuildFailedError";
+  h.statefulInvokeCapability.mockRejectedValue(sourceFailure);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  const invocation = runner.invokeCapability({
+    path: ["processor", "wakeStreamSubscriber"],
+    ref: statefulRef,
+  });
+
+  await expect(invocation).rejects.toMatchObject({
+    message: 'No such module "yaml".',
+    name: "WorkerBuildFailedError",
+    retryable: false,
   });
 });
