@@ -531,6 +531,14 @@ _Avoid_: Function, tool, provider, execution
 One attempt to run a Script against an itx Handle.
 _Avoid_: Script, execution ID, script ID
 
+**Approval Group**:
+The set of held egress approval requests sharing one Script Execution's
+`executionId`, presented and acted on together in approver surfaces (the
+mobile approvals screen, the collapsed push notification). A held request
+with no Script Execution streamContext is its own singleton Approval Group
+and renders identically to an ungrouped request.
+_Avoid_: Batch, approval batch, notification group
+
 **Provider Bridge**:
 An adapter that exposes an external system, such as OpenAPI or MCP, as an itx
 Capability.
@@ -600,6 +608,12 @@ _Avoid_: Project MCP route, inbound MCP
   handler.
 - Project-scoped MCP tools select one **Project** per invocation before touching
   project-local capabilities.
+- An **Approval Group** is identified by exactly one **Script Execution**'s
+  `executionId`; it is not a new persisted entity, only a grouping computed
+  over held `project/human-approval-requested` events.
+- Approving or rejecting every member of an **Approval Group** still appends
+  one grant/reject event per held request — an **Approval Group** is never
+  signed or decided as a single unit.
 - OS exposes one global MCP resource; it does not expose per-project MCP
   hostnames.
 - The OS Worker classifies every request by **Ingress Hostname** before invoking the **OS App**.
@@ -957,3 +971,4 @@ context while the provider remains connected.
 - "base repo" sounded like a Cloudflare Artifact name or special case. Resolved: the **Iterate Config Base Repo** is a global **Repo Reference** with `projectId: null`.
 - Repo creation source used Artifact names and README bootstrap modes. Resolved: **Repo Creation Source** is only empty repo or fork from a **Repo Reference**; README writes are normal repo writes after creation.
 - The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/project` are child streams under the same Project ID.
+- "batch" implied one signed transaction covering many requests. Resolved: use **Approval Group** for requests presented/acted on together; each member is still an individually signed grant event.
