@@ -26,6 +26,5 @@ if (!loaded.ok) throw workerBuildFailedError(loaded.failure);
 Instead just do:
 
 ```ts
-if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure.message)
+if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure.message);
 ```
-
