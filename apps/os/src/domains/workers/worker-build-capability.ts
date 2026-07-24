@@ -1,7 +1,11 @@
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv as env, type Env } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { KvWorkerBuildArtifactStore, type WorkerBuildArtifact } from "./artifact-store.ts";
+import {
+  KvWorkerBuildArtifactStore,
+  type WorkerBuildArtifact,
+  type WorkerBuildResult,
+} from "./artifact-store.ts";
 import { executeWorkerBuild } from "./build-backend.ts";
 import type { ResolvedWorkerFileSource } from "./build-key.ts";
 import type { DynamicWorkerSource } from "./schemas.ts";
@@ -16,7 +20,7 @@ export type WorkerBuildRequest = {
 };
 
 /** A caller-owned wait on a build whose execution is anchored by the coordinator actor. */
-type WorkerBuildOperation = Promise<WorkerBuildArtifact> & Partial<Disposable>;
+type WorkerBuildOperation = Promise<WorkerBuildResult> & Partial<Disposable>;
 
 /** Route one immutable build to its globally keyed coordinator actor. */
 export function coordinateWorkerBuild(
@@ -43,19 +47,21 @@ export function coordinateWorkerBuild(
 export async function executeCoordinatedWorkerBuild(
   request: WorkerBuildRequest,
   buildEnv: Pick<Env, "REPO" | "WORKER_BUILD_CACHE" | "WORKER_BUNDLER">,
-): Promise<WorkerBuildArtifact> {
+): Promise<WorkerBuildResult> {
   const store = new KvWorkerBuildArtifactStore(buildEnv.WORKER_BUILD_CACHE);
   const cached = await store.get(request.buildKey);
-  if (cached !== null) return cached;
+  if (cached !== null) return { artifact: cached, ok: true };
 
   const files = await resolvedSourceFiles(buildEnv, request.projectId, request.resolved);
-  const built = await executeWorkerBuild({
+  const result = await executeWorkerBuild({
     files,
     iterateRepoPkgRef: request.iterateRepoPkgRef,
     iterateRepoPkgSpecOverrides: request.iterateRepoPkgSpecOverrides,
     source: request.source,
     workerBundler: buildEnv.WORKER_BUNDLER,
   });
+  if (!result.ok) return result;
+  const built = result.output;
   if (built.warnings.length > 0) {
     console.warn("dynamic worker build completed with warnings", {
       buildKey: request.buildKey,
@@ -74,7 +80,7 @@ export async function executeCoordinatedWorkerBuild(
     ...(built.wranglerConfig === undefined ? {} : { wranglerConfig: built.wranglerConfig }),
   };
   await store.put(artifact);
-  return artifact;
+  return { artifact, ok: true };
 }
 
 /** Read source files only after both artifact-cache checks miss. */

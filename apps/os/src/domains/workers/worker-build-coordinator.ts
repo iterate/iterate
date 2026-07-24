@@ -1,4 +1,4 @@
-import { isWorkerBuildFailedError, type WorkerBuildArtifact } from "./artifact-store.ts";
+import type { WorkerBuildArtifact, WorkerBuildResult } from "./artifact-store.ts";
 import type { WorkerBuildRequest } from "./worker-build-capability.ts";
 
 export type WorkerBuildCoordinatorEvent = {
@@ -14,7 +14,7 @@ type Flight = {
   startedAt: number;
   waiters: Set<{
     reject(error: unknown): void;
-    resolve(artifact: WorkerBuildArtifact): void;
+    resolve(result: WorkerBuildResult): void;
   }>;
 };
 
@@ -28,14 +28,14 @@ type Flight = {
  * https://developers.cloudflare.com/workers/observability/errors/#cannot-perform-io-on-behalf-of-a-different-request
  */
 export class WorkerBuildCoordinator {
-  readonly #execute: (request: WorkerBuildRequest) => Promise<WorkerBuildArtifact>;
+  readonly #execute: (request: WorkerBuildRequest) => Promise<WorkerBuildResult>;
   readonly #now: () => number;
   readonly #observe: (event: WorkerBuildCoordinatorEvent) => void;
   #flight: Flight | undefined;
   #settled: { artifact: WorkerBuildArtifact; buildKey: string } | undefined;
 
   constructor(
-    execute: (request: WorkerBuildRequest) => Promise<WorkerBuildArtifact>,
+    execute: (request: WorkerBuildRequest) => Promise<WorkerBuildResult>,
     options: {
       now?: () => number;
       observe?: (event: WorkerBuildCoordinatorEvent) => void;
@@ -46,7 +46,7 @@ export class WorkerBuildCoordinator {
     this.#observe = options.observe ?? (() => {});
   }
 
-  async build(request: WorkerBuildRequest): Promise<WorkerBuildArtifact> {
+  async build(request: WorkerBuildRequest): Promise<WorkerBuildResult> {
     const settled = this.#settled;
     if (settled !== undefined) {
       this.#assertBuildKey(settled.buildKey, request.buildKey);
@@ -55,13 +55,13 @@ export class WorkerBuildCoordinator {
         kind: "reused",
         waiters: 0,
       });
-      return settled.artifact;
+      return { artifact: settled.artifact, ok: true };
     }
 
     const existing = this.#flight;
     if (existing !== undefined) {
       this.#assertBuildKey(existing.buildKey, request.buildKey);
-      return await new Promise<WorkerBuildArtifact>((resolve, reject) => {
+      return await new Promise<WorkerBuildResult>((resolve, reject) => {
         existing.waiters.add({ reject, resolve });
         this.#emit(existing, "coalesced");
       });
@@ -75,22 +75,23 @@ export class WorkerBuildCoordinator {
     this.#flight = flight;
     this.#emit(flight, "started");
     try {
-      const artifact = await this.#execute(request);
+      const result = await this.#execute(request);
+      if (!result.ok) {
+        this.#emit(flight, "settled", "source-failed");
+        for (const waiter of flight.waiters) waiter.resolve(result);
+        return result;
+      }
       // One actor owns one immutable build key. Keep its successful result in
       // memory so callers from other OS isolates do not fall back through the
       // eventually-consistent KV cache immediately after the first build.
       // Actor eviction remains the cache eviction policy; after that, the KV
       // write is visible at the coordinator's stable location.
-      this.#settled = { artifact, buildKey: request.buildKey };
+      this.#settled = { artifact: result.artifact, buildKey: request.buildKey };
       this.#emit(flight, "settled", "built");
-      for (const waiter of flight.waiters) waiter.resolve(artifact);
-      return artifact;
+      for (const waiter of flight.waiters) waiter.resolve(result);
+      return result;
     } catch (error) {
-      this.#emit(
-        flight,
-        "settled",
-        isWorkerBuildFailedError(error) ? "source-failed" : "infrastructure-failed",
-      );
+      this.#emit(flight, "settled", "infrastructure-failed");
       for (const waiter of flight.waiters) waiter.reject(copyError(error));
       throw error;
     } finally {
