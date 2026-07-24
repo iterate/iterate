@@ -25,9 +25,12 @@ function execute(
   source: DynamicWorkerSource = {
     createWorker: { entryPoint: "worker.ts", files: inlineFiles },
   },
-  iteratePackageSpec?: string,
+  overrides: {
+    iterateRepoPkgRef?: string;
+    iterateRepoPkgSpecOverrides?: Record<string, string>;
+  } = {},
 ) {
-  return executeWorkerBuild({ files, iteratePackageSpec, source, workerBundler });
+  return executeWorkerBuild({ files, ...overrides, source, workerBundler });
 }
 
 describe("executeWorkerBuild", () => {
@@ -114,8 +117,8 @@ describe("executeWorkerBuild", () => {
     expect(createWorker).toHaveBeenCalledOnce();
   });
 
-  it("repoints the root iterate declarations and promotes one for installation", async () => {
-    const previewSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
+  it("pins every root pkg.pr.new declaration to the ref and promotes matches for installation", async () => {
+    const sha = "abc123".padEnd(40, "0");
     const source: DynamicWorkerSource = {
       createApp: {
         client: "apps/guestbook/client.tsx",
@@ -134,25 +137,66 @@ describe("executeWorkerBuild", () => {
     });
     const files = {
       "apps/guestbook/package.json": JSON.stringify({
-        dependencies: { iterate: "old-app-spec", react: "19.2.4" },
+        dependencies: {
+          iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+          react: "19.2.4",
+        },
       }),
       "package.json": JSON.stringify({
         dependencies: { zod: "4.3.6" },
-        devDependencies: { iterate: "old-root-spec", typescript: "5.9.3" },
+        devDependencies: {
+          iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
+          // Scoped names are matched by URL shape, never by package name.
+          "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+          typescript: "5.9.3",
+        },
       }),
     };
 
-    await execute(files, source, previewSpec);
+    await execute(files, source, { iterateRepoPkgRef: sha });
 
     const buildFiles = createApp.mock.calls[0]?.[0].files as Record<string, string>;
     expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
-      dependencies: { iterate: previewSpec, zod: "4.3.6" },
-      devDependencies: { iterate: previewSpec, typescript: "5.9.3" },
+      dependencies: {
+        iterate: `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
+        "@iterate-com/tasks": `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${sha}`,
+        zod: "4.3.6",
+      },
+      devDependencies: {
+        iterate: `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
+        "@iterate-com/tasks": `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${sha}`,
+        typescript: "5.9.3",
+      },
     });
+    // Only the root manifest is rewritten; worker-bundler installs from it.
     expect(JSON.parse(buildFiles["apps/guestbook/package.json"] ?? "null")).toEqual({
-      dependencies: { iterate: "old-app-spec", react: "19.2.4" },
+      dependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main", react: "19.2.4" },
     });
-    expect(files["package.json"]).toContain("old-root-spec");
+    expect(files["package.json"]).toContain("@main");
+  });
+
+  it("replaces named specs wholesale via overrides (the local dev tarball lockstep)", async () => {
+    const staleTarball = "http://127.0.0.1:1111/iterate-stale.tgz";
+    const currentTarball = "http://127.0.0.1:2222/iterate-current.tgz";
+    const files = {
+      "package.json": JSON.stringify({
+        dependencies: { iterate: staleTarball, zod: "4.3.6" },
+      }),
+      "worker.ts": "export default {};",
+    };
+
+    await execute(
+      files,
+      { createWorker: { entryPoint: "worker.ts", files: inlineFiles } },
+      { iterateRepoPkgSpecOverrides: { iterate: currentTarball } },
+    );
+
+    // Name-keyed on purpose: a repo seeded with a stale tarball spec (the old
+    // file is deleted on repack) is re-pointed at the current one.
+    const buildFiles = createWorker.mock.calls[0]?.[0].files as Record<string, string>;
+    expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
+      dependencies: { iterate: currentTarball, zod: "4.3.6" },
+    });
   });
 
   it("promotes an existing root devDependency even without a deployment override", async () => {

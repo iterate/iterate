@@ -510,10 +510,16 @@ function localDevBindings() {
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__TRANSPORT: "byok",
       APP_CONFIG_CLOUDFLARE_AI_GATEWAY__RESPONSE_CACHE_TTL_SECONDS: String(7 * 24 * 60 * 60),
       ...(process.env.PORT ? { APP_CONFIG_BASE_URL: `http://localhost:${process.env.PORT}` } : {}),
-      ...(process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim()
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim()
         ? {
-            APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC:
-              process.env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC.trim(),
+            APP_CONFIG_ITERATE_REPO_PKG_REF: process.env.APP_CONFIG_ITERATE_REPO_PKG_REF.trim(),
+          }
+        : {}),
+      // Local dev's SDK tarball lockstep (dev.ts + lib/dev-sdk-tarball.ts).
+      ...(process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES?.trim()
+        ? {
+            APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES:
+              process.env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES.trim(),
           }
         : {}),
       // Local dev trusts forge-minted sessions by deriving the public key from

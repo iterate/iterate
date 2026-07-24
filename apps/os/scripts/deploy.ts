@@ -42,6 +42,8 @@ import {
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
+import { templateIterateRepoPkgSpecs } from "../src/domains/repos/project-repo-seed.ts";
+import { pinIterateRepoPkgRef } from "../src/pkg-pr-new.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
@@ -59,9 +61,9 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
-const PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
-const PREVIEW_ITERATE_PACKAGE_POLL_MS = 1_000;
-const PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
+const PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
+const PREVIEW_PACKAGE_POLL_MS = 1_000;
+const PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
 const RETIRED_QUEUE_PAGE_SIZE = 100;
 const RETIRED_WORKER_QUEUE_CONSUMERS = [
   { label: "Artifact event", suffix: "-events" },
@@ -80,12 +82,22 @@ const RetiredQueueConsumer = z.object({
 });
 
 /**
+ * Every pkg.pr.new URL a preview pinned to `ref` will install: the config
+ * repo template's iterate/iterate specs (project-repo-seed.ts scans the
+ * manifests — name-agnostic, so template packages come and go without deploy
+ * changes), each with its `@<ref>` swapped for the pinned SHA.
+ */
+export function previewPackageSpecsToAwait(ref: string): string[] {
+  return templateIterateRepoPkgSpecs().map((spec) => pinIterateRepoPkgRef(spec, ref)!);
+}
+
+/**
  * pkg.pr.new publishes a PR head in a separate GitHub Actions workflow. The
- * Depot preview can start first, so make the exact immutable tarball an
+ * Depot preview can start first, so make each exact immutable tarball an
  * explicit deployment prerequisite. This runs beside the Vite build and
  * sidecar uploads; the healthy path adds no critical-path work.
  */
-export async function waitForPreviewIteratePackage(
+export async function waitForPreviewPackage(
   packageSpec: string,
   dependencies: {
     fetch?: typeof fetch;
@@ -99,7 +111,7 @@ export async function waitForPreviewIteratePackage(
   const sleep =
     dependencies.sleep ??
     (async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS;
+  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS;
   const deadline = now() + timeoutMs;
   let lastFailure = "No response received.";
 
@@ -110,11 +122,11 @@ export async function waitForPreviewIteratePackage(
         method: "HEAD",
         redirect: "follow",
         signal: AbortSignal.timeout(
-          Math.max(1, Math.min(PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
+          Math.max(1, Math.min(PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
         ),
       });
       if (response.ok) {
-        console.log(`preview iterate package available: ${packageSpec}`);
+        console.log(`preview package available: ${packageSpec}`);
         return;
       }
       lastFailure = `HTTP ${response.status}`;
@@ -122,11 +134,11 @@ export async function waitForPreviewIteratePackage(
       lastFailure = error instanceof Error ? error.message : String(error);
     }
 
-    await sleep(Math.min(PREVIEW_ITERATE_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
+    await sleep(Math.min(PREVIEW_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
   }
 
   throw new Error(
-    `Timed out waiting ${timeoutMs}ms for the preview iterate package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
+    `Timed out waiting ${timeoutMs}ms for the preview package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
   );
 }
 
@@ -339,16 +351,17 @@ export default async function deploy(
       });
 
       // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
-      // so project seeds and every dynamic build use that exact commit's
-      // pkg.pr.new build of `iterate` instead of the template's @main — e2e
-      // tests then exercise the branch tip, pinned (unlike @<pr>/@main, which
-      // are moving refs). The pkg-pr-new GHA workflow publishes under
-      // the PR HEAD sha on every push, so the URL exists by the time anything
-      // npm-installs a seeded repo. Unset everywhere else (prod, local dev,
-      // direct doppler-run deploys), leaving the template untouched.
+      // so project seeds and every dynamic build pin the template's
+      // iterate/iterate pkg.pr.new specs to that exact commit's builds
+      // instead of @main — e2e tests then exercise the branch tip, pinned
+      // (unlike @<pr>/@main, which are moving refs). The pkg-pr-new GHA
+      // workflow publishes every first-party package under the PR HEAD sha on
+      // every push, so the URLs exist by the time anything npm-installs a
+      // seeded repo. Unset everywhere else (prod, direct doppler-run
+      // deploys), leaving each repo's specs untouched.
       const previewHeadSha = process.env.PREVIEW_PULL_REQUEST_HEAD_SHA;
       if (previewHeadSha) {
-        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewHeadSha}`;
+        secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF = previewHeadSha;
       }
 
       assertPreviewPetshopIntegrationConfigured(ctx.name, secretValues);
@@ -425,9 +438,11 @@ export default async function deploy(
           }
         })(),
       ];
-      const packageSpec = secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC;
-      if (packageSpec) {
-        tasks.push(waitForPreviewIteratePackage(packageSpec));
+      const previewPkgRef = secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF;
+      if (previewPkgRef) {
+        tasks.push(
+          ...previewPackageSpecsToAwait(previewPkgRef).map((spec) => waitForPreviewPackage(spec)),
+        );
       }
 
       const results = await Promise.allSettled(tasks);

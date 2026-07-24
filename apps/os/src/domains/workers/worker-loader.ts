@@ -1,5 +1,6 @@
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv as env, workerVersion } from "../../env.ts";
+import { parseIterateRepoPkgSpecOverridesEnv } from "../../pkg-pr-new.ts";
 import { StreamContext } from "../projects/stream-context.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
@@ -52,7 +53,10 @@ async function resolveThroughBuild(input: {
   projectId: string;
   source: DynamicWorkerSource;
 }): Promise<ResolvedWorkerSource> {
-  const iteratePackageSpec = env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined;
+  const iterateRepoPkgRef = env.APP_CONFIG_ITERATE_REPO_PKG_REF?.trim() || undefined;
+  const iterateRepoPkgSpecOverrides = parseIterateRepoPkgSpecOverridesEnv(
+    env.APP_CONFIG_ITERATE_REPO_PKG_SPEC_OVERRIDES,
+  );
   const resolved = await resolveFileSource({
     files:
       "createApp" in input.source ? input.source.createApp.files : input.source.createWorker.files,
@@ -62,7 +66,8 @@ async function resolveThroughBuild(input: {
     compatibilityDate: WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: WORKER_COMPATIBILITY_FLAGS,
     files: resolved,
-    iteratePackageSpec,
+    iterateRepoPkgRef,
+    iterateRepoPkgSpecOverrides,
     source: input.source,
   });
   const artifact =
@@ -71,7 +76,8 @@ async function resolveThroughBuild(input: {
       buildBudgetMs: input.buildBudgetMs,
       projectId: input.projectId,
       resolved,
-      iteratePackageSpec,
+      iterateRepoPkgRef,
+      iterateRepoPkgSpecOverrides,
       source: input.source,
     }));
   return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
@@ -83,7 +89,8 @@ async function resolveArtifact(
     buildBudgetMs?: number;
     projectId: string;
     resolved: ResolvedWorkerFileSource;
-    iteratePackageSpec?: string;
+    iterateRepoPkgRef?: string;
+    iterateRepoPkgSpecOverrides?: Record<string, string>;
     source: DynamicWorkerSource;
   },
 ): Promise<ResolvedWorkerSource> {
@@ -93,7 +100,8 @@ async function resolveArtifact(
 
   const request: WorkerBuildRequest = {
     buildKey,
-    iteratePackageSpec: context.iteratePackageSpec,
+    iterateRepoPkgRef: context.iterateRepoPkgRef,
+    iterateRepoPkgSpecOverrides: context.iterateRepoPkgSpecOverrides,
     projectId: context.projectId,
     resolved: context.resolved,
     source: context.source,

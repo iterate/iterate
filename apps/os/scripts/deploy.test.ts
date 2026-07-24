@@ -14,13 +14,23 @@ import {
   detachRetiredWorkerQueueConsumers,
   isExactOsProjectMiss,
   posthogBuildEnv,
+  previewPackageSpecsToAwait,
   resolveOsContainerDeployArgs,
-  waitForPreviewIteratePackage,
+  waitForPreviewPackage,
 } from "./deploy.ts";
 
 const secretName = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 
-describe("preview iterate package prerequisite", () => {
+describe("preview package prerequisite", () => {
+  it("derives the URLs to await from the template's pkg.pr.new specs", () => {
+    const sha = "f".repeat(40);
+    // Name-agnostic: whatever iterate/iterate packages the template declares
+    // are awaited at their pinned URLs — today that is exactly `iterate`.
+    expect(previewPackageSpecsToAwait(sha)).toEqual([
+      `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
+    ]);
+  });
+
   it("polls the exact immutable package with HEAD until it is available", async () => {
     const packageSpec = "https://pkg.pr.new/iterate/iterate/iterate@abc123";
     let now = 0;
@@ -31,7 +41,7 @@ describe("preview iterate package prerequisite", () => {
       return responses.shift() ?? new Response(null, { status: 200 });
     };
 
-    await waitForPreviewIteratePackage(packageSpec, {
+    await waitForPreviewPackage(packageSpec, {
       fetch: fetchPackage,
       now: () => now,
       sleep: async (ms) => {
@@ -51,7 +61,7 @@ describe("preview iterate package prerequisite", () => {
     let now = 0;
 
     await expect(
-      waitForPreviewIteratePackage(packageSpec, {
+      waitForPreviewPackage(packageSpec, {
         fetch: async () => new Response(null, { status: 404 }),
         now: () => now,
         sleep: async (ms) => {
@@ -60,7 +70,7 @@ describe("preview iterate package prerequisite", () => {
         timeoutMs: 2_500,
       }),
     ).rejects.toThrow(
-      `Timed out waiting 2500ms for the preview iterate package ${packageSpec}. Last check: HTTP 404.`,
+      `Timed out waiting 2500ms for the preview package ${packageSpec}. Last check: HTTP 404.`,
     );
     expect(now).toBe(2_500);
   });
