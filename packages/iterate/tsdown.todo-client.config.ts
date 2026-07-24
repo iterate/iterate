@@ -9,7 +9,7 @@ export default defineConfig({
   platform: "browser",
   target: "es2022",
   deps: {
-    alwaysBundle: ["@iterate-com/capnweb", "react", "react-dom", "scheduler"],
+    alwaysBundle: ["@iterate-com/capnweb", "react", "react/jsx-runtime", "react-dom", "scheduler"],
   },
   dts: false,
   minify: true,

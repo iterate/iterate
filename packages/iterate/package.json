@@ -122,7 +122,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsdown --config tsdown.todo-client.config.ts && tsdown && tsx scripts/check-github-ai-linter-bundle.ts && tsx scripts/check-todo-bundle.ts && tsc -p tsconfig.sdk.json",
+    "build": "tsdown --config tsdown.todo-client.config.ts && tsx scripts/check-todo-client-bundle.ts && tsdown && tsx scripts/check-github-ai-linter-bundle.ts && tsx scripts/check-todo-bundle.ts && tsc -p tsconfig.sdk.json",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run --reporter=default --reporter=../shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
     "prepack": "pnpm build"
