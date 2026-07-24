@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { getLoginRedirectSearch } from "../utils/auth-redirect-error.ts";
 
 // Only user-facing fields cross to the client. The raw better-auth session
 // object also carries `session.token` — the bearer-equivalent of the HttpOnly
@@ -14,7 +15,9 @@ const getSessionUser = createServerFn().handler(({ context }) => {
 export const Route = createFileRoute("/_auth")({
   beforeLoad: async ({ location }) => {
     const session = await getSessionUser();
-    if (!session) throw redirect({ to: "/login", search: { redirect: location.href } });
+    if (!session) {
+      throw redirect({ to: "/login", search: getLoginRedirectSearch(location.href) });
+    }
     return { session };
   },
 });
