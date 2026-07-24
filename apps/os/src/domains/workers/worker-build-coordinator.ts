@@ -29,7 +29,7 @@ type Flight = {
 };
 
 /** `createWorker:worker.ts`-style descriptor of a build request's entry point(s). */
-export function describeWorkerBuildSource(source: WorkerBuildRequest["source"]): string {
+function describeWorkerBuildSource(source: WorkerBuildRequest["source"]): string {
   if ("createWorker" in source) {
     return `createWorker:${source.createWorker.entryPoint ?? "(default entry)"}`;
   }
