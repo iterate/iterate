@@ -144,6 +144,7 @@ const jsExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mt
 const typeScriptExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
 function significantLines(content: string, path: string) {
+  if (/\.d\.(?:ts|mts|cts)$/.test(path)) return "";
   const extension = extname(path);
   let runtimeLines: Set<number> | undefined;
   if (typeScriptExtensions.has(extension)) {

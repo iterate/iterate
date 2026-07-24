@@ -35,6 +35,59 @@ test("type-only TypeScript changes remain in Lines but disappear from Significan
   ]);
 });
 
+test("TypeScript declaration files remain in Lines but contribute no Significant lines", () => {
+  using repo = createGitRepo();
+  const base = repo.commit({
+    "types/index.d.cts": ["export interface User {", "  id: string", "}", ""].join("\n"),
+    "types/index.d.mts": ["export interface User {", "  id: string", "}", ""].join("\n"),
+    "types/index.d.ts": ["export interface User {", "  id: string", "}", ""].join("\n"),
+  });
+  const head = repo.commit({
+    "types/index.d.cts": [
+      "export interface User {",
+      "  id: string",
+      "  displayName: string",
+      "}",
+      "",
+    ].join("\n"),
+    "types/index.d.mts": [
+      "export interface User {",
+      "  id: string",
+      "  displayName: string",
+      "}",
+      "",
+    ].join("\n"),
+    "types/index.d.ts": [
+      "export interface User {",
+      "  id: string",
+      "  displayName: string",
+      "}",
+      "",
+    ].join("\n"),
+  });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    {
+      path: "types/index.d.cts",
+      added: 1,
+      significantAdded: 0,
+      significantRemoved: 0,
+    },
+    {
+      path: "types/index.d.mts",
+      added: 1,
+      significantAdded: 0,
+      significantRemoved: 0,
+    },
+    {
+      path: "types/index.d.ts",
+      added: 1,
+      significantAdded: 0,
+      significantRemoved: 0,
+    },
+  ]);
+});
+
 test("mixed TypeScript changes count only emitted runtime lines as Significant", () => {
   using repo = createGitRepo();
   const base = repo.commit({
