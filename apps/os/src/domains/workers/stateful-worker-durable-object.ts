@@ -7,7 +7,7 @@ import {
   isMissingInvokeCapabilityError,
   replayPath,
 } from "../capability-host/live-capability.ts";
-import { workerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
+import { WorkerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import { takeWorkerFetchDispatch, workerBuildStatus } from "./worker-fetch-dispatch.ts";
 import type { StatefulDynamicWorkerRef } from "./schemas.ts";
 import { withWorkerCommit } from "./worker-serve-info.ts";
@@ -184,7 +184,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
         ? undefined
         : { isRetry: alarmInfo.isRetry, retryCount: alarmInfo.retryCount };
     const loaded = await this.#facet(ref);
-    if (!loaded.ok) throw workerBuildFailedError(loaded.failure);
+    if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
     try {
       // Flattened on purpose: workerd reserves `alarm` as an RPC method name
       // on Durable Object stubs, so the fire rides the worker's own

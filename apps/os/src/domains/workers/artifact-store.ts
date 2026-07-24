@@ -63,19 +63,19 @@ export type WorkerBuildResult =
   | { failure: WorkerBuildFailure; ok: false };
 
 /** An expected source-build failure; repo, KV, and sidecar transport errors stay distinct. */
-class WorkerBuildFailedError extends Error {
+export class WorkerBuildFailedError extends Error {
   override readonly name = "WorkerBuildFailedError";
   readonly retryable = false;
+
+  constructor(failure: WorkerBuildFailure) {
+    super(failure.message);
+  }
 }
 
 export function isWorkerBuildFailedError(
   error: unknown,
 ): error is { name: "WorkerBuildFailedError"; retryable?: false } {
   return (error as { name?: string } | null)?.name === "WorkerBuildFailedError";
-}
-
-export function workerBuildFailedError(failure: WorkerBuildFailure): WorkerBuildFailedError {
-  return new WorkerBuildFailedError(failure.message);
 }
 
 const BUILD_FAILURE_MESSAGE_LIMIT = 2_000;

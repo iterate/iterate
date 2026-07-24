@@ -296,3 +296,28 @@ it("returns a stateful worker's successful value without wrapping its live stubs
     }),
   ).resolves.toBe(returned);
 });
+
+it("returns a bare stateful RPC stub without probing it for a build failure", async () => {
+  const returned = new Proxy(() => {}, {
+    get(target, property, receiver) {
+      if (property === "workerBuildFailure") {
+        throw new Error("bare RPC stub was probed for a build failure");
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  h.statefulInvokeCapability.mockResolvedValue(returned);
+  const runner = new DynamicWorkerRunner({
+    streamContext: { kind: "scope", scopePath: statefulRef.path },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: statefulRef.path,
+  });
+
+  await expect(
+    runner.invokeCapability({
+      path: ["processor", "wakeStreamSubscriber"],
+      ref: statefulRef,
+    }),
+  ).resolves.toBe(returned);
+});

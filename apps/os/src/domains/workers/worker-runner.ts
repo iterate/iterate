@@ -5,7 +5,7 @@ import type { StreamContext } from "../projects/stream-context.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { invokePreferringFlattenedPath, replayPath } from "../capability-host/live-capability.ts";
-import { workerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
+import { WorkerBuildFailedError, type WorkerBuildFailure } from "./artifact-store.ts";
 import type {
   StatefulDynamicWorkerRef,
   StatelessDynamicWorkerRef,
@@ -170,7 +170,7 @@ export class DynamicWorkerRunner {
           projectId: this.#projectId,
           source: ref.source,
         });
-        if (!result.ok) throw workerBuildFailedError(result.failure);
+        if (!result.ok) throw new WorkerBuildFailedError(result.failure);
         resolved = result.source;
         const asset = await env.WORKER_BUNDLER.handleAssetRequest(
           request,
@@ -201,7 +201,7 @@ export class DynamicWorkerRunner {
             projectId: this.#projectId,
             source: ref.source,
           });
-          if (!result.ok) throw workerBuildFailedError(result.failure);
+          if (!result.ok) throw new WorkerBuildFailedError(result.failure);
           resolved = result.source;
         }
         // The serve header is trusted platform output on the fetch lane —
@@ -272,13 +272,32 @@ export class DynamicWorkerRunner {
           path,
           ref,
         });
-        const failure = statefulWorkerBuildFailure(result, buildFailureNonce);
-        if (failure !== undefined) throw workerBuildFailedError(failure);
+        // Workers RPC stubs can be callable proxies: reading an unknown property
+        // from one starts promise pipelining. Inspect only the plain-data shape
+        // emitted by StatefulWorkerDurableObject, leaving every live stub untouched.
+        if (typeof result === "object" && result !== null) {
+          const prototype = Object.getPrototypeOf(result);
+          if (prototype === Object.prototype || prototype === null) {
+            // The hosted DO is the only writer of this nonce-matched envelope,
+            // so this narrow structural view avoids exporting its private type.
+            const envelope = (
+              result as {
+                workerBuildFailure?: {
+                  failure?: WorkerBuildFailure;
+                  nonce?: string;
+                };
+              }
+            ).workerBuildFailure;
+            if (envelope?.nonce === buildFailureNonce && envelope.failure !== undefined) {
+              throw new WorkerBuildFailedError(envelope.failure);
+            }
+          }
+        }
         return result;
       }
 
       const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs);
-      if (!loaded.ok) throw workerBuildFailedError(loaded.failure);
+      if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
       return flattenNestedPath
         ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
         : await replayPath({ args, path, target: loaded.target });
@@ -356,21 +375,6 @@ export class DynamicWorkerRunner {
       return await callback(span);
     });
   }
-}
-
-function statefulWorkerBuildFailure(
-  result: unknown,
-  nonce: string,
-): WorkerBuildFailure | undefined {
-  const envelope = (
-    result as {
-      workerBuildFailure?: {
-        failure?: WorkerBuildFailure;
-        nonce?: string;
-      };
-    } | null
-  )?.workerBuildFailure;
-  return envelope?.nonce === nonce ? envelope.failure : undefined;
 }
 
 /**
