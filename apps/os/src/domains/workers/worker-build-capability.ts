@@ -12,7 +12,8 @@ import type { DynamicWorkerSource } from "./schemas.ts";
 
 export type WorkerBuildRequest = {
   buildKey: string;
-  iteratePackageSpec?: string;
+  iterateRepoPkgRef?: string;
+  iterateRepoPkgSpecOverrides?: Record<string, string>;
   projectId: string;
   resolved: ResolvedWorkerFileSource;
   source: DynamicWorkerSource;
@@ -54,7 +55,8 @@ export async function executeCoordinatedWorkerBuild(
   const files = await resolvedSourceFiles(buildEnv, request.projectId, request.resolved);
   const result = await executeWorkerBuild({
     files,
-    iteratePackageSpec: request.iteratePackageSpec,
+    iterateRepoPkgRef: request.iterateRepoPkgRef,
+    iterateRepoPkgSpecOverrides: request.iterateRepoPkgSpecOverrides,
     source: request.source,
     workerBundler: buildEnv.WORKER_BUNDLER,
   });

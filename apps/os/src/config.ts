@@ -127,13 +127,24 @@ export const AppConfig = z.object({
     .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   /**
-   * npm dependency specifier substituted for the `iterate` package when
-   * seeding project repos and before every dynamic build (the template ships
-   * the pkg.pr.new `@main` URL). Preview deploys set this to the PR's exact
-   * pkg.pr.new build, so new and existing projects compile against the same
-   * `iterate` revision as OS. Unset (prod, local dev) keeps each repo's spec.
+   * pkg.pr.new ref (commit SHA in practice) pinned onto every iterate/iterate
+   * pkg.pr.new dependency spec when seeding project repos and before every
+   * dynamic build — the template ships `@main` specs (src/pkg-pr-new.ts has
+   * the URL grammar). Preview deploys set this to the PR head SHA so projects
+   * compile against the exact packages published for that commit. Unset
+   * (prod) keeps each repo's specs. Name-agnostic on purpose: adding a
+   * first-party package to the template requires no kernel change.
    */
-  iterateSdkPackageSpec: z.string().trim().min(1).optional(),
+  iterateRepoPkgRef: z.string().trim().min(1).optional(),
+  /**
+   * Map of dependency name → replacement spec, applied wholesale when seeding
+   * and before every dynamic build. Local dev's SDK lockstep: dev.ts packs
+   * the worktree's `iterate` package and points its dependants at the local
+   * tarball URL (scripts/lib/dev-sdk-tarball.ts). Name-keyed — unlike the ref
+   * pin above — so a repo already carrying a stale local tarball spec is
+   * still re-pointed at the current one. Unset everywhere deployed.
+   */
+  iterateRepoPkgSpecOverrides: z.record(z.string(), z.string().trim().min(1)).optional(),
   /** First-party project email (itx.email + the inbound email() door). */
   email: z
     .object({
