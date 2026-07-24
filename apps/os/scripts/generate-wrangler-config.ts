@@ -83,8 +83,9 @@ export const OPTIONAL_SECRETS = [
 
 /**
  * Secrets removed from the OS deployment contract. Wrangler preserves omitted
- * secrets, so deploy.ts rejects Workers that still carry these names and the
- * explicit erase/handover path deletes them before a slot changes owners.
+ * secrets, so deploy.ts deletes these from any Worker that still carries them
+ * (verified removed; deploy scripts are the only Worker-secret writers) and
+ * the explicit erase/handover path deletes them before a slot changes owners.
  */
 export const RETIRED_AUTH_SERVICE_TOKEN = "APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN";
 export const RETIRED_WORKER_SECRETS = [
@@ -92,8 +93,8 @@ export const RETIRED_WORKER_SECRETS = [
   "APP_CONFIG_GEMINI_API_KEY",
   // Replaced by APP_CONFIG_ITERATE_REPO_PKG_REF (name-agnostic pkg.pr.new
   // ref pinning, src/pkg-pr-new.ts). Only preview slots ever carried it, and
-  // every slot acquire erases before deploying, so the stale binding heals
-  // itself on the next lease.
+  // every pre-pinning preview deploy actively wrote it, so deploy-side
+  // deletion (not slot-erase alone) is what keeps renewed leases healthy.
   "APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC",
   "APP_CONFIG_LOGS",
   "APP_CONFIG_SLACK_BOT_TOKEN",

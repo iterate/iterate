@@ -7,8 +7,9 @@
 import { describe, expect, it } from "vitest";
 import {
   assertDopplerSecretAbsent,
-  assertWorkerSecretAbsent,
+  removeWorkerSecrets,
 } from "../../../scripts/lib/deploy-helpers.ts";
+import { RETIRED_WORKER_SECRETS } from "./generate-wrangler-config.ts";
 import {
   assertPreviewPetshopIntegrationConfigured,
   detachRetiredWorkerQueueConsumers,
@@ -246,7 +247,7 @@ describe("PostHog source-map build credentials", () => {
   );
 });
 
-describe("forbidden auth service-token invariants (secret-leak protection)", () => {
+describe("retired secret invariants (secret-leak protection)", () => {
   it("refuses when the resolved Doppler config carries the retired secret", () => {
     expect(() =>
       assertDopplerSecretAbsent({
@@ -267,23 +268,45 @@ describe("forbidden auth service-token invariants (secret-leak protection)", () 
     ).not.toThrow();
   });
 
-  it("refuses while the live Worker still binds the secret (omitted secrets survive uploads)", async () => {
+  // Worker-side retirement converges instead of failing closed: deploy
+  // scripts are the only writers of Worker secrets, so a lingering retired
+  // binding only ever means "last deployed by older code" — and an assert
+  // proved sticky for previews, where a failed deploy renews the slot lease
+  // and so never reaches the erase-on-acquire that removes retired secrets.
+  it("deletes a lingering retired Worker secret and verifies removal (omitted secrets survive uploads)", async () => {
     const workerName = "os-preview-4";
-    await expect(
-      assertWorkerSecretAbsent({
-        cf: async () => [{ name: secretName, type: "secret_text" }],
-        workerName,
-        secretName,
-      }),
-    ).rejects.toThrow(/Forbidden Worker secret is present/);
+    const staleSecret = "APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC";
+    expect(RETIRED_WORKER_SECRETS).toContain(staleSecret);
+
+    const calls: Array<{ init?: RequestInit; path: string }> = [];
+    let bindings = [
+      { name: staleSecret, type: "secret_text" },
+      { name: "APP_CONFIG_OPEN_AI_API_KEY", type: "secret_text" },
+    ];
+    const cf = async <T>(path: string, init?: RequestInit): Promise<T> => {
+      calls.push({ init, path });
+      if (init?.method === "DELETE") {
+        bindings = bindings.filter((binding) => !path.endsWith(`/${binding.name}`));
+        return {} as T;
+      }
+      return bindings as T;
+    };
 
     await expect(
-      assertWorkerSecretAbsent({
-        cf: async () => [{ name: "SOME_OTHER_SECRET", type: "secret_text" }],
-        workerName,
-        secretName,
-      }),
-    ).resolves.toBeUndefined();
+      removeWorkerSecrets({ cf, workerName, secretNames: RETIRED_WORKER_SECRETS }),
+    ).resolves.toEqual([staleSecret]);
+    expect(calls).toContainEqual({
+      init: { method: "DELETE" },
+      path: `/workers/scripts/${workerName}/secrets/${staleSecret}`,
+    });
+    expect(bindings).toEqual([{ name: "APP_CONFIG_OPEN_AI_API_KEY", type: "secret_text" }]);
+
+    // Already-converged Workers are a read-only no-op.
+    calls.length = 0;
+    await expect(
+      removeWorkerSecrets({ cf, workerName, secretNames: RETIRED_WORKER_SECRETS }),
+    ).resolves.toEqual([]);
+    expect(calls).toEqual([{ init: undefined, path: `/workers/scripts/${workerName}/secrets` }]);
   });
 });
 

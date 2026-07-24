@@ -2,7 +2,7 @@
 status: done-pending-review
 size: medium
 branch: pkg-pr-new-generic-pinning
-base: tasks-app-package-bridge
+base: main
 ---
 
 # Name-agnostic pkg.pr.new ref pinning
@@ -10,8 +10,10 @@ base: tasks-app-package-bridge
 ## Status
 
 Implemented and verified (typecheck, lint, format, full apps/os unit suite,
-shared package suite all green). Stacked on tasks-app-package-bridge
-(PR #2304); retarget to main when that merges. PR: #2307.
+shared package suite all green). #2304 merged, so this now targets main
+directly; its preview ran clean on os-preview-5 (including the retired-secret
+path). Bugbot review handled: merge-artifact comment dedupe + switching the
+retired-Worker-secret assert to a verified delete. PR: #2307.
 
 Main pieces: a single URL-grammar module (`apps/os/src/pkg-pr-new.ts`), the
 two knobs (`iterateRepoPkgRef` preview ref + `iterateRepoPkgSpecOverrides`
@@ -71,11 +73,17 @@ require zero kernel changes.
 - **The brief's "previews rewrite secrets atomically" isn't quite true** —
   `wrangler deploy --secrets-file` deliberately preserves omitted secrets, so
   removed env vars linger on preview Workers (and would trip the config
-  parser's loud unknown-key warning). The repo already has the mechanism for
-  this: `APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC` is added to
-  `RETIRED_WORKER_SECRETS`, which deploy asserts absent and the slot-acquire
-  erase removes. Every preview acquire erases before deploying, so stale
-  bindings heal on the next lease; prod never carried the var.
+  parser's loud unknown-key warning). `APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC`
+  is added to `RETIRED_WORKER_SECRETS`, and — per bugbot's correct
+  high-severity catch — deploy now DELETES retired Worker secrets (loudly,
+  verified) instead of assert-failing. The original assert-only version was
+  sticky: lease RENEWALS deliberately skip the erase-on-acquire, and every
+  failed deploy renews the lease, so an open PR whose slot carried the old
+  binding would have failed `assertWorkerSecretAbsent` forever. Deploy
+  scripts are the only writers of Worker secrets, so a lingering retired name
+  can only mean "last deployed by older code" — convergence is safe. The
+  Doppler-side retirement (`assertDopplerSecretAbsent`) stays fail-closed
+  because Doppler is human-edited. Prod never carried the var.
 - The shared config env parser (`packages/shared/src/config.ts`) threw when
   an env override carried an object value for a non-`z.object` field, which
   breaks `z.record` config fields. Treating `z.record` as "any keys OK" in
@@ -142,3 +150,12 @@ require zero kernel changes.
   `waitForPreviewPackage` (messages now name the spec, not "iterate").
 - Discovered `--secrets-file` preserves omitted secrets → retired the old
   env name via `RETIRED_WORKER_SECRETS` instead of assuming atomic rewrite.
+- Post-review (#2304 merged, PR retargeted to main): fixed a duplicated
+  comment block in pkg-pr-new.yml from the main merge, and — after bugbot's
+  high-severity catch about lease renewals skipping the erase — switched
+  deploy from asserting retired Worker secrets absent to deleting them
+  (shared `removeWorkerSecrets` helper, same one erase-data uses;
+  `assertWorkerSecretAbsent` deleted as now-unused). Coverage lives with the
+  helper (`scripts/lib/deploy-helpers.test.ts`, incl. new shape/error
+  propagation cases) plus a deploy-kernel convergence test in
+  `deploy.test.ts` (present → deleted+verified; absent → read-only no-op).

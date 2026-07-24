@@ -20,10 +20,12 @@
  *      steady-state redeploy are all the same single command).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
- *   5. Before touching any deployed resource, assert that retired secret
- *      bindings are absent from the live Worker and that the removed auth
- *      service token is absent from Doppler too. After deploy, force an
- *      uncached project-directory lookup through AUTH.
+ *   5. Before touching any deployed resource, delete retired secret bindings
+ *      still carried by the live Worker (deploy scripts are their only
+ *      writer, so lingering ones are just stale deploys — verified removed)
+ *      and assert the removed auth service token is absent from Doppler
+ *      (human-edited: fail closed). After deploy, force an uncached
+ *      project-directory lookup through AUTH.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
@@ -36,7 +38,7 @@ import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import {
   assertDopplerSecretAbsent,
-  assertWorkerSecretAbsent,
+  removeWorkerSecrets,
   runAsync,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
@@ -325,22 +327,28 @@ export default async function deploy(
     optionalSecrets: OPTIONAL_SECRETS,
     buildEnv: (ctx) => posthogBuildEnv(ctx.name, ctx.secrets),
     prepare: async (ctx, secretValues) => {
-      // These are permanent fail-closed invariants, not a migration path.
-      // Omitted Wrangler secrets survive code uploads, so check the current
-      // Worker before any sidecar or OS version can be deployed.
+      // Doppler is human-edited, so a retired secret reappearing there is
+      // config drift that needs a human: fail closed, never auto-fix.
       assertDopplerSecretAbsent({
         project: "os",
         config: ctx.env.dopplerConfig,
         secretName: RETIRED_AUTH_SERVICE_TOKEN,
         secrets: ctx.secrets,
       });
-      for (const secretName of RETIRED_WORKER_SECRETS) {
-        await assertWorkerSecretAbsent({
-          cf: ctx.cf,
-          workerName: ctx.env.osWorkerName,
-          secretName,
-        });
-      }
+      // Worker secrets have exactly one writer — this deploy pipeline (and
+      // the erase/handover flows). Omitted secrets survive `--secrets-file`
+      // uploads, so the only way a retired name can linger is a Worker last
+      // deployed by older code; deleting it here (loudly, verified) converges
+      // every deploy to the current contract. An assert instead of a delete
+      // proved sticky for previews: a lease RENEWAL deliberately skips the
+      // erase-on-acquire, and each failed deploy renews the lease, so a slot
+      // carrying a retired binding could never reach the erase that would
+      // have healed it.
+      await removeWorkerSecrets({
+        cf: ctx.cf,
+        workerName: ctx.env.osWorkerName,
+        secretNames: RETIRED_WORKER_SECRETS,
+      });
 
       // Derive Auth's public key locally from the shared Doppler private key.
       // The private half never ships to OS, and this deploy never waits on Auth.
