@@ -59,7 +59,13 @@ describe("WorkerBuildCoordinator", () => {
     expect(execute).toHaveBeenCalledOnce();
     // Every event names what's building; sizes appear once the bundle exists
     // ("built" is 5 UTF-8 bytes) and replay unchanged on reuse.
-    const sizes = { assetBytes: 0, assetCount: 0, moduleBytes: 5, moduleCount: 1 };
+    const sizes = {
+      assetBytes: 0,
+      assetCount: 0,
+      breakdown: { "worker.js": 5 },
+      moduleBytes: 5,
+      moduleCount: 1,
+    };
     expect(events).toMatchObject([
       { kind: "started", source: "createWorker:(default entry)" },
       { kind: "settled", outcome: "built", sizes, source: "createWorker:(default entry)" },

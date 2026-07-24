@@ -78,3 +78,21 @@ a follow-up: the template `worker.ts` imports every starter-app connector
 top-level, and the `iterate` sdk itself may not tree-shake well (single
 `sdk.ts` barrel). Now that the sizes are on every build event, that
 investigation has numbers to steer by.
+
+### Follow-up: per-package breakdown (same PR)
+
+After the zod discovery, Misha asked for the broken-down stats on the events
+themselves. `sizes` now includes `breakdown`: module bytes bucketed by npm
+package (via esbuild `// <path>` section comments; pnpm-store paths resolve to
+their package name) or source path, largest first, top 8 with an `(other)`
+rollup. Comment-less/minified text falls back to the module's own name. Live:
+
+```
+source=createWorker:worker.ts
+  breakdown={ zod: 516551, '@iterate-com/capnweb': 84041, iterate: 13309,
+              'virtual:worker.ts': 3114, 'bundle.js': 1720 }
+```
+
+Prebundled dist entries collapse into their package bucket (guestbook →
+`{ iterate: 585958 }`) — attribution can only be as fine as the input's
+section comments.

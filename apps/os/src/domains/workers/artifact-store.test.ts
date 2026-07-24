@@ -77,6 +77,46 @@ describe("workerBuildArtifactSizes", () => {
           "data.json": { json: { a: 1 } }, // {"a":1} → 7 bytes
         },
       }),
-    ).toEqual({ assetBytes: 2, assetCount: 1, moduleBytes: 21, moduleCount: 4 });
+    ).toEqual({
+      assetBytes: 2,
+      assetCount: 1,
+      breakdown: { "chunk.js": 7, "data.json": 7, "notes.txt": 2, "worker.js": 5 },
+      moduleBytes: 21,
+      moduleCount: 4,
+    });
+  });
+
+  it("attributes bundled code to packages via esbuild section comments", () => {
+    const bundle = [
+      '"use strict";', // before any section comment → the module's own bucket
+      "// worker.ts",
+      "const app = 1;",
+      "// node_modules/zod/v4/core/schemas.js",
+      "class Schema {}",
+      "const parse = () => new Schema();",
+      "// ../.store/x@1/node_modules/@scope/pkg/index.mjs",
+      "export {};",
+    ].join("\n");
+    // Section-comment lines weigh into the section they open; the pnpm-store
+    // path still resolves to its scoped package name.
+    expect(
+      workerBuildArtifactSizes({ ...artifact, assets: {}, modules: { "bundle.js": bundle } })
+        .breakdown,
+    ).toEqual({
+      "@scope/pkg": 61,
+      "bundle.js": 14,
+      "worker.ts": 28,
+      zod: 89,
+    });
+  });
+
+  it("rolls buckets past the cap into (other), largest kept", () => {
+    const modules = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [`chunk-${i}.js`, "x".repeat(i + 1)]),
+    );
+    const { breakdown } = workerBuildArtifactSizes({ ...artifact, assets: {}, modules });
+    expect(Object.keys(breakdown)).toHaveLength(8);
+    expect(breakdown["chunk-11.js"]).toBe(12);
+    expect(breakdown["(other)"]).toBe(1 + 2 + 3 + 4 + 5); // the five smallest
   });
 });
