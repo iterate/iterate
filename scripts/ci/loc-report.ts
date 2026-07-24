@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, matchesGlob } from "node:path";
 
+import { decode } from "@jridgewell/sourcemap-codec";
+import ts from "typescript";
+
 import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { isMainModule } from "../../packages/shared/src/dev/is-main-module.ts";
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
@@ -47,7 +50,7 @@ export type ChangedFile = {
   /** Raw diff counts, straight from `git diff --numstat`. */
   added: number;
   removed: number;
-  /** Counts after dropping blank lines and (for JS-ish files) comments. */
+  /** Counts after dropping blank lines, JS comments, and type-only TypeScript lines. */
   significantAdded: number;
   significantRemoved: number;
   binary: boolean;
@@ -86,25 +89,30 @@ const gitMaxBuffer = 64 * 1024 * 1024;
 /**
  * Changed files between merge-base(base, head) and head. Raw added/removed come
  * from numstat; significant counts additionally drop blank lines and (for
- * JS-ish files) line/block comments, computed by diffing the stripped
- * before/after contents so multiline comment blocks and comment-only changes
- * fall out naturally.
+ * JS-ish files) line/block comments. TypeScript's source map identifies source
+ * lines with runtime output, so type-only lines also fall out before the
+ * stripped before/after contents are diffed.
  */
-export function getChangedFiles(baseRef: string, headRef: string): ChangedFile[] {
+export function getChangedFiles(baseRef: string, headRef: string, cwd: string): ChangedFile[] {
   const raw = execFileSync("git", ["diff", "--numstat", "-z", "-M", `${baseRef}...${headRef}`], {
+    cwd,
     encoding: "utf8",
     maxBuffer: gitMaxBuffer,
   });
   const mergeBase = execFileSync("git", ["merge-base", baseRef, headRef], {
+    cwd,
     encoding: "utf8",
   }).trim();
   const files = parseNumstat(raw);
-  const generated = linguistGeneratedPaths(files.map((file) => file.path));
+  const generated = linguistGeneratedPaths(
+    files.map((file) => file.path),
+    cwd,
+  );
   return files.map((file) => {
     const marked = { ...file, generated: generated.has(file.path) };
     if (marked.binary) return marked;
-    const before = significantLines(gitShow(mergeBase, file.previousPath), file.previousPath);
-    const after = significantLines(gitShow(headRef, file.path), file.path);
+    const before = significantLines(gitShow(mergeBase, file.previousPath, cwd), file.previousPath);
+    const after = significantLines(gitShow(headRef, file.path, cwd), file.path);
     const counts = slocDiffCounts(before, after);
     return { ...marked, significantAdded: counts.added, significantRemoved: counts.removed };
   });
@@ -115,10 +123,11 @@ export function getChangedFiles(baseRef: string, headRef: string): ChangedFile[]
  * same source of truth GitHub uses to collapse generated files in diffs.
  * One batched `git check-attr` call; output is path/attr/value triplets.
  */
-function linguistGeneratedPaths(paths: string[]): Set<string> {
+function linguistGeneratedPaths(paths: string[], cwd: string): Set<string> {
   const generated = new Set<string>();
   if (paths.length === 0) return generated;
   const out = execFileSync("git", ["check-attr", "--stdin", "-z", "linguist-generated"], {
+    cwd,
     encoding: "utf8",
     input: paths.join("\0"),
     maxBuffer: gitMaxBuffer,
@@ -132,19 +141,53 @@ function linguistGeneratedPaths(paths: string[]): Set<string> {
 }
 
 const jsExtensions = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"]);
+const typeScriptExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
 
 function significantLines(content: string, path: string) {
-  const stripped = jsExtensions.has(extname(path)) ? stripJsComments(content) : content;
+  if (/\.d\.(?:ts|mts|cts)$/.test(path)) return "";
+  const extension = extname(path);
+  let runtimeLines: Set<number> | undefined;
+  if (typeScriptExtensions.has(extension)) {
+    const transpiled = ts.transpileModule(content, {
+      fileName: path,
+      compilerOptions: {
+        jsx: ts.JsxEmit.Preserve,
+        module: ts.ModuleKind.ESNext,
+        sourceMap: true,
+        target: ts.ScriptTarget.ESNext,
+      },
+    });
+    if (!transpiled.sourceMapText) throw new Error(`TypeScript emitted no source map for ${path}`);
+    const sourceMap: unknown = JSON.parse(transpiled.sourceMapText);
+    if (
+      typeof sourceMap !== "object" ||
+      sourceMap === null ||
+      !("mappings" in sourceMap) ||
+      typeof sourceMap.mappings !== "string"
+    ) {
+      throw new Error(`TypeScript emitted an invalid source map for ${path}`);
+    }
+    runtimeLines = new Set(
+      decode(sourceMap.mappings).flatMap((line) =>
+        line.flatMap((segment) => {
+          const sourceLine = segment[2];
+          return typeof sourceLine === "number" ? [sourceLine] : [];
+        }),
+      ),
+    );
+  }
+  const stripped = jsExtensions.has(extension) ? stripJsComments(content) : content;
   return stripped
     .split("\n")
-    .filter((line) => line.trim() !== "")
+    .filter((line, index) => line.trim() !== "" && (!runtimeLines || runtimeLines.has(index)))
     .join("\n");
 }
 
 /** Contents of `path` at `ref`, or "" when it doesn't exist there (added/deleted files). */
-function gitShow(ref: string, path: string) {
+function gitShow(ref: string, path: string, cwd: string) {
   try {
     return execFileSync("git", ["show", `${ref}:${path}`], {
+      cwd,
       encoding: "utf8",
       maxBuffer: gitMaxBuffer,
       stdio: ["ignore", "pipe", "ignore"],
@@ -276,10 +319,11 @@ export function computeReport(files: ChangedFile[]) {
 /**
  * Renders the report as a markdown table mimicking GitHub's own diffstat.
  * Two diff columns per group: raw line counts, then significant counts (blank
- * lines and JS comments excluded) so comment-heavy churn is visible at a
- * glance. The five-square bar rides the Significant column - it's the primary
- * signal - filling proportionally to the group's share of the largest group's
- * significant churn, split green/red by its add/remove ratio.
+ * lines, JS comments, and type-only TypeScript lines excluded) so supporting
+ * churn is visible at a glance. The five-square bar rides the Significant
+ * column - it's the primary signal - filling proportionally to the group's
+ * share of the largest group's significant churn, split green/red by its
+ * add/remove ratio.
  */
 export function renderTable(report: ReturnType<typeof computeReport>) {
   // Always signed, even +0/-0, matching GitHub's own diffstat.
@@ -318,7 +362,7 @@ export function renderBodySection(
   return [
     renderTable(report),
     "",
-    `<sub>Lines counts every changed line; Significant ignores blank lines and JS comments. Between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
+    `<sub>Lines counts every changed line; Significant ignores blank lines, JS comments, and TypeScript lines with no runtime output. Between ${baseSha.slice(0, 7)} and ${headSha.slice(0, 7)}, bucketed first-match-wins into the groups defined in \`scripts/ci/loc-report.ts\`.</sub>`,
   ].join("\n");
 }
 
@@ -338,7 +382,7 @@ export async function postLocReport() {
     const baseRef = process.argv[2] || "origin/main";
     const headRef = process.argv[3] || "HEAD";
     console.log(`No pull request context - printing report for ${baseRef}...${headRef}\n`);
-    const report = computeReport(getChangedFiles(baseRef, headRef));
+    const report = computeReport(getChangedFiles(baseRef, headRef, process.cwd()));
     console.log(renderTable(report));
     return;
   }
@@ -347,7 +391,7 @@ export async function postLocReport() {
   const headSha = pullRequest.head.sha;
   ensureCommitAvailable(baseSha);
   ensureCommitAvailable(headSha);
-  const report = computeReport(getChangedFiles(baseSha, headSha));
+  const report = computeReport(getChangedFiles(baseSha, headSha, process.cwd()));
   const section = renderBodySection(report, baseSha, headSha);
   console.log(section);
 
