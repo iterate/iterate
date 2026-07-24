@@ -21,6 +21,11 @@
 # iterate/config), which install it from the @main URL above. Keeping it out
 # of the seeded template keeps the OS kernel free of any tasks-app knowledge.
 #
+# @iterate-com/tasks is the config-side connector for the Tasks app. OS itself
+# never depends on it — it exists for external project config repos (e.g.
+# iterate/config), which install it from the @main URL above. Keeping it out
+# of the seeded template keeps the OS kernel free of any tasks-app knowledge.
+#
 # This lives in .github/workflows (real GitHub Actions, like
 # claude-assistant.yml) rather than .depot/workflows: pkg.pr.new's backend
 # verifies each publish against the GitHub Actions API via its GitHub App,

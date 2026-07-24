@@ -10,7 +10,9 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@iterate-com/ui/component
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { AuthRedirectError } from "../components/auth-redirect-error.tsx";
 import { parseConfig } from "../config.ts";
+import { getLoginRedirectSearch } from "../utils/auth-redirect-error.ts";
 import { authClient } from "../utils/auth-client.ts";
 import { AccountChooser } from "./-login-account-chooser.tsx";
 
@@ -42,13 +44,40 @@ export const Route = createFileRoute("/login")({
     login_hint: z.enum(["email", "google"]).optional().catch(undefined),
     account_chooser_method: z.literal("email").optional().catch(undefined),
     sig: z.string().optional(),
+    error: z.string().optional(),
+    error_description: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
+    const normalizedRedirect = search.redirect
+      ? getLoginRedirectSearch(search.redirect)
+      : undefined;
+    if (normalizedRedirect?.error && !isOAuthProviderFlowSearch(search)) {
+      throw redirect({
+        to: "/login",
+        replace: true,
+        search: {
+          ...search,
+          ...normalizedRedirect,
+          error: search.error || normalizedRedirect.error,
+          error_description: search.error_description || normalizedRedirect.error_description,
+        },
+      });
+    }
+
     const loginState = await getLoginState();
     // Already signed in and not inside an OAuth authorization flow: nothing
     // to do here, go where the caller wanted. (In the OAuth flow we stay and
     // render "continue as this account" instead.)
     if (loginState.user && !isOAuthProviderFlowSearch(search)) {
+      if (search.error) {
+        throw redirect({
+          to: "/",
+          search: {
+            error: search.error,
+            error_description: search.error_description,
+          },
+        });
+      }
       // `href`, not `to`: the target is a runtime-arbitrary same-origin path
       // (already sanitized by safeRedirectPath), while `to` is typed against
       // the route tree. A path-only href stays a client-side navigation:
@@ -89,6 +118,11 @@ function RouteComponent() {
             </p>
           </div>
         </div>
+        {search.error ? (
+          <div className="mb-4">
+            <AuthRedirectError error={search.error} errorDescription={search.error_description} />
+          </div>
+        ) : null}
         {signedInUser ? (
           <AccountChooser
             currentUser={signedInUser}
@@ -423,6 +457,8 @@ function getPostLoginRedirectUrl(fallbackRedirect: string) {
   searchParams.delete("exp");
   searchParams.delete("sig");
   searchParams.delete("account_chooser_method");
+  searchParams.delete("error");
+  searchParams.delete("error_description");
   const remainingPrompts = searchParams
     .get("prompt")
     ?.split(" ")
