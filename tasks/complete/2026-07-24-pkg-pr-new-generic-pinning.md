@@ -1,5 +1,5 @@
 ---
-status: done-pending-review
+status: done
 size: medium
 branch: pkg-pr-new-generic-pinning
 base: main
