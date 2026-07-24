@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 branch: tasks-app-package-bridge
 ---
@@ -112,10 +112,15 @@ Durable Object, or their dependency graph.
       _The README, vessel landing page, and remote-app guide use `TasksApp`
       and complete HTTPS KV values._
 - [ ] Open the companion `iterate/config` PR using the published package and
-      the same declarative `TasksApp` call.
+      the same declarative `TasksApp` call. _Post-merge follow-up: draft
+      iterate/config#20 exists; it lands after this merges, once the tasks
+      package's `@main` channel starts publishing._
 - [ ] Prove a fresh minimal config install/typecheck, the normal Tasks app
       build, package contents, member denial, HTTP proxying, KV override
-      proxying, and WebSocket forwarding.
+      proxying, and WebSocket forwarding. _Post-merge follow-up, via
+      iterate/config#20 against the `@main` channel. Install/typecheck was
+      already proven pre-reshape on the PR channel; the packed artifact is
+      unchanged since apart from the `if (override)` fallback tweak._
 - [x] Run scoped tests/typechecks/lint/format, then the repo-required validation
       appropriate to the touched packages.
 
