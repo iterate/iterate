@@ -6,19 +6,13 @@
 // rebuilds a seeded worker, and the seeded-apps/github-review flows exercise
 // the template live.
 import { expect, test } from "vitest";
-import {
-  guestbookAppRef,
-  guestbookCreationEvents,
-} from "../../../config-repo-template/apps/guestbook/ref.ts";
-import { GuestbookProcessorContract } from "../../../config-repo-template/apps/guestbook/processor.ts";
-import { GuestbookApp } from "../../../config-repo-template/apps/guestbook/server.tsx";
 import { PROJECT_REPO_INITIAL_FILES } from "./config-repo-template.generated.ts";
 
 function templateFile(path: string): string {
   return PROJECT_REPO_INITIAL_FILES.find((file) => file.path === path)!.content;
 }
 
-test("template ships project-owned apps under apps/ and a thin worker router", () => {
+test("template ships packaged apps behind a thin router", () => {
   // Vendor SDK surfaces are NOT seeded (built-ins live at
   // itx.integrations.<slug>), projects grow their own apps/ and
   // integrations/ by editing their repo. Shared apps such as the GitHub
@@ -31,27 +25,19 @@ test("template ships project-owned apps under apps/ and a thin worker router", (
   expect(paths.filter((path) => path.startsWith("apps/review-bot/"))).toEqual([]);
 
   const appPaths = paths.filter((path) => path.startsWith("apps/"));
-  expect(appPaths.length).toBeGreaterThan(0);
-  expect(
-    appPaths.every((path) => path.startsWith("apps/todo/") || path.startsWith("apps/guestbook/")),
-  ).toBe(true);
-  expect(paths).toEqual(
-    expect.arrayContaining([
-      "apps/todo/client.tsx",
-      "apps/todo/server.tsx",
-      "apps/guestbook/client.tsx",
-      "apps/guestbook/processor.ts",
-      "apps/guestbook/ref.ts",
-      "apps/guestbook/server.tsx",
-    ]),
-  );
+  expect(appPaths).toEqual([
+    "apps/guestbook/client.tsx",
+    "apps/guestbook/server.tsx",
+    "apps/guestbook/tsconfig.json",
+  ]);
+  expect(paths.filter((path) => path.startsWith("apps/todo/"))).toEqual([]);
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
   };
-  // Worker builds npm-install from the ROOT manifest (the platform rewrites
-  // its `iterate` spec in-memory per deploy), so every project-owned app's
-  // runtime deps live here, never in per-app manifests the rewrite would miss.
+  // React and zod remain temporarily because old persisted createApp refs may
+  // compile the two Guestbook source-upgrade bridges once before the packaged
+  // app removes their WAKE subscription.
   expect(templatePackageJson.dependencies).toMatchObject({
     iterate: expect.any(String),
     react: expect.any(String),
@@ -59,49 +45,21 @@ test("template ships project-owned apps under apps/ and a thin worker router", (
   });
 });
 
-test("browser pairs stay two-file createApp apps behind the thin router", () => {
-  // The todo ref is inlined in worker.ts (one consumer); its rename risk is
-  // covered live by the seeded-apps spec. The guestbook ref is shared with
-  // its wake subscription, so it stays assertable.
-  expect(guestbookAppRef.source.createApp).toMatchObject({
-    client: "apps/guestbook/client.tsx",
-    server: "apps/guestbook/server.tsx",
-  });
+test("packaged apps stay behind the thin router", () => {
   const worker = templateFile("worker.ts");
   expect(worker).not.toContain("rootDir");
   expect(worker).not.toContain("clientEntryPoint");
   expect(worker).not.toContain("pipeline:");
   expect(worker).not.toContain("tanstack");
-});
-
-test("guestbook wake subscription names the hosted processor", () => {
-  const subscription = guestbookCreationEvents()[1];
-  expect(subscription).toMatchObject({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      subscriptionKey: "app-guestbook#guestbook",
-      delivery: {
-        mode: "wake",
-        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamSubscriber"],
-        // ref.ts is dependency-free, so it repeats the slug as a string;
-        // this is the drift guard.
-        processorSlug: GuestbookProcessorContract.slug,
-      },
-    },
-  });
-});
-
-test("modular createApp refs point at apps/ entrypoints, not the root worker file", () => {
-  expect("createApp" in guestbookAppRef.source).toBe(true);
-});
-
-test("app modules load and export the classes their refs name", () => {
-  // Importing every entry module HERE keeps the whole set in the vitest load
-  // path (they must evaluate under the cloudflare:workers shim) and pins each
-  // ref's entrypoint/className string to the class the entry module actually
-  // exports — a rename can never strand a persisted ref or wake expression
-  // pointing at a class the build no longer exports.
-  expect(guestbookAppRef.className).toBe(GuestbookApp.name);
+  expect(worker).toContain('from "iterate/starter-apps/guestbook"');
+  expect(worker).toContain("this.#guestbookApp.processEvent(event)");
+  expect(worker).toContain("this.#guestbookApp.fetch(req)");
+  expect(templateFile("apps/guestbook/server.tsx")).toContain(
+    'from "iterate/starter-apps/guestbook/configured-worker"',
+  );
+  expect(templateFile("apps/guestbook/client.tsx")).toContain(
+    'import "iterate/starter-apps/guestbook/client"',
+  );
 });
 
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
@@ -111,7 +69,9 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   // latest build from main; preview deploys pin their PR's build through the
   // in-memory manifest rewrite).
   expect(templateFile("worker.ts")).toContain('from "iterate/sdk"');
-  expect(templateFile("worker.ts")).toContain('from "iterate/github-ai-linter"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/github-ai-linter"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/guestbook"');
+  expect(templateFile("worker.ts")).toContain('from "iterate/starter-apps/todo"');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;

@@ -190,7 +190,7 @@ Project workers can configure the packaged pull-request linter and call it
 explicitly from their event hook:
 
 ```ts
-import { GithubAiLinter } from "iterate/github-ai-linter";
+import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
@@ -219,6 +219,33 @@ Do not declare a type annotation that TypeScript can infer from the value.
 
 The package owns GitHub event routing and the durable processor. Rules are read
 from one pinned repository commit for each webhook.
+
+## Stateful Todo app
+
+Project workers can route authenticated HTTP to the packaged Todo app:
+
+```ts
+import { TodoApp } from "iterate/starter-apps/todo";
+import { IterateWorkerEntrypoint } from "iterate/sdk";
+
+export default class ProjectWorker extends IterateWorkerEntrypoint {
+  #todoApp = TodoApp.create(this.env);
+
+  async fetch(request: Request): Promise<Response> {
+    using itx = await this.env.ITX.get();
+    const denied = await itx.auth.get({ policy: "project-member" }).fetch(request);
+    if (denied) return denied;
+    return this.#todoApp.fetch(request);
+  }
+}
+```
+
+`TodoApp.create(env)` keeps the stateful worker ref private and forwards over
+the fetch lane, so WebSocket upgrades reach the Durable Object. The physical
+package artifact contains the sqlfu-backed SQLite runtime and browser client;
+the project config does not carry Todo source or install Todo dependencies.
+Its durable identity remains `app-todo-live`, so moving an existing project to
+the factory preserves its rows.
 
 ## Publishing (maintainers)
 

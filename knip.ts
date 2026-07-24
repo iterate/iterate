@@ -162,11 +162,16 @@ function makeIterateCliWorkspace(): WorkspaceConfig {
       "src/worker.ts",
       "src/cli.ts",
       "bin/iterate.js",
+      "scripts/*.ts",
+      "tsdown.app-clients.config.ts",
       "tsdown.config.ts",
       "vitest.config.ts",
+      // tsdown reads these entrypoint paths as data; Knip cannot follow them
+      // from the config object into the two standalone browser programs.
+      "src/starter-apps/{guestbook,todo}/client.tsx",
       "src/**/*.test.{ts,tsx}",
     ],
-    project: ["src/**/*.{ts,tsx}", "bin/**/*.js"],
+    project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "scripts/**/*.ts", "tsdown*.ts"],
     // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
     // the "cloudflare" package — same posture as the app workspaces.
     ignoreDependencies: ["cloudflare"],
