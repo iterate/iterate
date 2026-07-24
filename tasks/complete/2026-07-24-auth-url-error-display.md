@@ -35,11 +35,12 @@ normal visits without an error remain unchanged.
 - [x] Add a failing UI-level regression test for the screenshot URL. _A server-rendered component test reproduces the missing notice for the exact error value._
 - [x] Render `error_description`, falling back to a humanized `error` code. _The signed-in home validates both search fields and renders a destructive alert._
 - [x] Verify arbitrary query text is rendered as text and the no-error state is unchanged. _The regression test covers escaped markup and the empty render._
-- [x] Run Auth tests, typecheck, lint, and formatting checks. _All 78 Auth tests pass, including the UI and redirect cases; Auth typecheck and touched-file lint/format checks pass._
+- [x] Run Auth tests, typecheck, lint, and formatting checks. _All 79 Auth tests pass, including the UI and redirect cases; Auth typecheck and touched-file lint/format checks pass._
 - [x] Verify the error notice against a production-shaped preview. _Auth Preview 2 renders the screenshot error and prefers a supplied `error_description`._
 - [x] Update the draft PR with browser proof. _PR #2291 includes the exact preview URL and an inline screenshot._
 - [x] Show redirect errors immediately on the public login page. _The protected-route handoff and legacy nested redirects now put the error fields directly on `/login`, which renders the shared notice._
 - [x] Remove handled error fields from the post-login destination while preserving its other path, query, and hash. _A pure redirect regression test covers the screenshot URL plus a destination with unrelated query and hash state._
+- [x] Keep malformed redirect input from crashing login. _Invalid URL syntax is explicitly classified and left for the existing safe redirect guard, with a regression for `http://[::1`._
 - [x] Verify both signed-in and signed-out error paths against the preview. _Preview 2 shows the notice on public login with `redirect=/`, normalizes a legacy nested link, and forwards a signed-in login error to the account home._
 
 ## Implementation notes
@@ -56,6 +57,9 @@ normal visits without an error remain unchanged.
 - The correct hypothesis was that one redirect carried two kinds of state:
   user-facing failure details and the post-login destination. Separating them
   makes the failure visible immediately and leaves the destination clean.
+- Bugbot follow-up found that parsing a malformed user-provided `redirect`
+  could throw before the existing open-redirect guard. The parser now
+  classifies that expected `TypeError` while rethrowing unexpected failures.
 - The original clipboard URL used Preview 14; PR #2291 was assigned Preview 2.
   Verifying the allocated slot avoided mistaking Preview 14's old build for a
   regression in the new route.

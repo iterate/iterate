@@ -30,3 +30,9 @@ test("leaves ordinary protected-page redirects unchanged", () => {
     redirect: "/projects/example?tab=settings#members",
   });
 });
+
+test("leaves malformed redirect input for the login route safety guard", () => {
+  assert.deepEqual(getLoginRedirectSearch("http://[::1"), {
+    redirect: "http://[::1",
+  });
+});

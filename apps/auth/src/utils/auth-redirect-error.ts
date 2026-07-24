@@ -5,7 +5,14 @@ export type LoginRedirectSearch = {
 };
 
 export function getLoginRedirectSearch(href: string): LoginRedirectSearch {
-  const destination = new URL(href, "https://iterate-auth.local");
+  let destination: URL;
+  try {
+    destination = new URL(href, "https://iterate-auth.local");
+  } catch (error) {
+    if (error instanceof TypeError) return { redirect: href };
+    throw error;
+  }
+
   const error = destination.searchParams.get("error") || undefined;
   if (!error) return { redirect: href };
 
