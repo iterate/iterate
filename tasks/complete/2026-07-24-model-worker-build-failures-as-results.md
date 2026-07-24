@@ -1,9 +1,9 @@
-status: in-progress
+status: complete
 size: medium
 
 # Model worker source-build failures as results
 
-Status: Implementation and local verification are complete. Source failures now stay as plain data through both RPC hops; preview CI is the only remaining check.
+Status: Complete. Source failures stay as plain data through both RPC hops, successful live capabilities pass through untouched, and all local and preview checks pass.
 
 ## Plan
 
@@ -14,7 +14,7 @@ Status: Implementation and local verification are complete. Source failures now 
 - [x] Prove a source failure parks its stream subscription on attempt one with the exact compiler message. _Runner and delivery-spine tests cover the final error and immediate park._
 - [x] Prove an infrastructure failure still enters bounded delivery backoff. _Coordinator and existing delivery tests retain the throwing path._
 - [x] Preserve timeout/alarm terminal-failure receipts and successful build coalescing. _Focused coordinator tests cover timeout, eviction, receipt replay, coalescing, and retry._
-- [ ] Run focused worker/stream tests, OS typecheck and lint, then production-shaped preview CI. _159 focused tests, all 2,337 OS unit tests, typecheck, and lint pass locally; preview CI pending._
+- [x] Run focused worker/stream tests, OS typecheck and lint, then production-shaped preview CI. _Focused tests, all 2,337 OS unit tests, typecheck, lint, Knip, and preview deploy/e2e pass._
 
 ## Design notes
 
