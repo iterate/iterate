@@ -21,17 +21,25 @@ export function GuestbookClient() {
     (session: RpcStub<GuestbookApi>) => session.liveState,
     (s) => s,
   );
-  const [signError, sign, signing] = useActionState(async (_: string, form: FormData) => {
-    if (api == null) return "Guestbook connection is not ready";
-    try {
-      await api.sign(String(form.get("name") || ""), String(form.get("message") || ""));
-      return "";
-    } catch (cause) {
-      return cause instanceof Error ? cause.message : String(cause);
-    }
-  }, "");
+  const [signState, sign, signing] = useActionState(
+    async (_: { error: string; message: string; name: string }, form: FormData) => {
+      const name = String(form.get("name") || "");
+      const message = String(form.get("message") || "");
+      // React resets uncontrolled fields after a form action resolves. Failed
+      // submissions become the new defaults so that reset preserves the draft.
+      if (api == null) return { error: "Guestbook connection is not ready", message, name };
+      try {
+        await api.sign(name, message);
+        return { error: "", message: "", name };
+      } catch (cause) {
+        const error = cause instanceof Error ? cause.message : String(cause);
+        return { error, message, name };
+      }
+    },
+    { error: "", message: "", name: "" },
+  );
 
-  const error = liveError || (signError.length > 0 ? signError : undefined);
+  const error = liveError || (signState.error.length > 0 ? signState.error : undefined);
   const entries = state?.entries || [];
   // Only claim the configured title once reduced state has arrived — the
   // seeded-apps heading wait must not pass on the HTML shell alone.
@@ -43,9 +51,16 @@ export function GuestbookClient() {
       <h1>{title}</h1>
       <form action={sign}>
         <label htmlFor="name">Name</label>
-        <input id="name" maxLength={80} name="name" required />
+        <input defaultValue={signState.name} id="name" maxLength={80} name="name" required />
         <label htmlFor="message">Message</label>
-        <textarea id="message" maxLength={500} name="message" required rows={4} />
+        <textarea
+          defaultValue={signState.message}
+          id="message"
+          maxLength={500}
+          name="message"
+          required
+          rows={4}
+        />
         <button disabled={api == null || signing} type="submit">
           Sign guestbook
         </button>
