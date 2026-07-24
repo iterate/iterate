@@ -248,7 +248,7 @@ export class NotificationProcessor extends StreamProcessor<
  * or platform-shaped, so unit tests drive the debounce with a virtual clock
  * and a spy alarm.
  */
-export type NotificationProcessorDeps = {
+type NotificationProcessorDeps = {
   /** Injectable clock. Only alarm derivation and fire-time reads use it — reduce never does. */
   now: () => number;
   /**
@@ -268,7 +268,7 @@ export type NotificationProcessorDeps = {
 };
 
 // -----------------------------------------------------------------------------
-// Pure helpers — the debounce arithmetic unit tests exercise directly.
+// Pure helpers for the debounce arithmetic.
 // -----------------------------------------------------------------------------
 
 /** Debounce window per Approval Group: opens on the first hold, extended by
@@ -281,7 +281,7 @@ export const APPROVAL_GROUP_DEBOUNCE_CAP_MS = 10_000;
 type ApprovalGroup = NotificationProcessorState["approvalGroups"][string];
 
 /** When an un-fired window is due: the last hold's debounce, capped from the window's opening. */
-export function approvalGroupFireAtMs(window: NonNullable<ApprovalGroup["window"]>): number {
+function approvalGroupFireAtMs(window: NonNullable<ApprovalGroup["window"]>): number {
   return Math.min(
     window.lastHeldAtMs + APPROVAL_GROUP_DEBOUNCE_WINDOW_MS,
     window.opensAtMs + APPROVAL_GROUP_DEBOUNCE_CAP_MS,
@@ -295,7 +295,7 @@ export function approvalGroupFireAtMs(window: NonNullable<ApprovalGroup["window"
  * a fired intent not yet reduced — so it re-arms one debounce window out (a
  * bounded re-check) instead of hot-looping an immediate alarm.
  */
-export function nextApprovalGroupWakeAtMs(
+function nextApprovalGroupWakeAtMs(
   state: NotificationProcessorState,
   nowMs: number,
 ): number | null {
@@ -311,7 +311,7 @@ export function nextApprovalGroupWakeAtMs(
 
 /** "Script run waiting: 12 requests (10x gmail.googleapis.com, 2x api.stripe.com)" —
  * host-only lock-screen privacy, busiest host first. */
-export function approvalGroupPushBody(members: { host: string }[]): string {
+function approvalGroupPushBody(members: { host: string }[]): string {
   const counts = new Map<string, number>();
   for (const member of members) counts.set(member.host, (counts.get(member.host) || 0) + 1);
   const breakdown = [...counts.entries()]
