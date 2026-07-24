@@ -9,7 +9,7 @@ import {
 } from "../sdk/capnweb/index.ts";
 import { IterateDurableObject } from "../sdk.ts";
 
-export type Todo = {
+type Todo = {
   createdAt: string;
   done: boolean;
   id: string;
