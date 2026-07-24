@@ -11,7 +11,7 @@ short extendable window (3s, capped at 10s) before appending one
 members.
 
 We considered relying on APNs `thread-id` grouping so iOS visually collapses
-the pushes client-side — rejected because it doesn't reduce push *volume*,
+the pushes client-side — rejected because it doesn't reduce push _volume_,
 only presentation; the user still gets N buzzes. We considered a batch
 signature covering all N requests — rejected because per-request grant events
 remain the unit of record on the stream (see the Approval Group term in

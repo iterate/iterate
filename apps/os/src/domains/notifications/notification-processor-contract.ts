@@ -53,11 +53,9 @@ export const NotificationProcessorContract = defineProcessorContract({
                     "— the only request detail the summary push body ever carries.",
                 }),
                 ruleKey: z.string().meta({ description: "The rule that caught the request." }),
-                ruleDescription: z
-                  .string()
-                  .meta({
-                    description: "The matched rule's explanation, snapshotted at gate time.",
-                  }),
+                ruleDescription: z.string().meta({
+                  description: "The matched rule's explanation, snapshotted at gate time.",
+                }),
                 expiresAtMs: z.number().meta({
                   description: "Epoch-ms copy of the hold's own expiry horizon, never `now`.",
                 }),

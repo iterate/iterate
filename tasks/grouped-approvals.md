@@ -1,5 +1,5 @@
 ---
-status: ready
+status: implemented
 size: medium
 ---
 
@@ -7,7 +7,7 @@ size: medium
 
 ## Status summary
 
-Spec complete (grill-you interview: `tasks/grouped-approvals.interview.md`). Implementation not started. Design: debounced one-push-per-run in NotificationProcessor, grouped mobile approvals UI with one-Face-ID approve-all, per-request grant events unchanged.
+Implemented end to end; PR #2309. Server: NotificationProcessor debounces script-scoped holds into one `approvals-group` push per window (unit-tested with virtual time, plus one real-time e2e smoke that passed against a live dev server). Mobile: grouped cards with Approve-all behind one Face ID, batch progress, deep link. Demo CLI: `pnpm cli demo-grouped-approvals run`. Remaining: on-device phone trial (one-unlock-covers-N confirmation) — needs Misha's phone; a pre-existing local-env failure of the *unrelated* WebSocket-egress e2e is noted below.
 
 ## Problem
 
@@ -24,16 +24,32 @@ Enabling a `hold` egress rule (e.g. gmail) floods the approver: a script run doi
 
 ## Checklist
 
-- [ ] NotificationProcessor: consume `human-approval-granted/rejected/settled`; per-executionId reduced state `{windowOpensAt, heldOffsets[], notifiedThroughOffset}`; alarm scheduling; window-close handler as a plain unit-testable function (no real sleeps — hard requirement)
-- [ ] Group push intent: summary body (counts by host), `approvals-group` destination kind (additive union member), idempotency key `notification/approval-group@<executionId>:<firstWindowOffset>`
-- [ ] Suppress-if-empty at fire time + state pruning
-- [ ] Mobile: bucket by executionId in `deriveOpenRequests` (or alongside), grouped header UI, expand/collapse, per-request escape hatch
-- [ ] Mobile: `signManyWithApproverKey` in `approver.ts` / `approver-core.ts`; best-effort append loop with progress + retry-pending UI
-- [ ] Mobile: route `approvals-group` deep link → expand + highlight group; keep `approvals` kind working
-- [ ] Unit tests: window open/extend/cap, late-arrival new window, suppress-if-empty, pruning, full-open-set counting across windows
-- [ ] e2e: at most one real-time smoke of a grouped burst (extend `egress-approvals.e2e.test.ts` pattern)
-- [ ] Demo recipe: hold rule on disposable echo host + itx script doing `Promise.all` of ~12 POSTs; PR body gets phone-trial instructions (metro + OS dev server over tailscale; captun fallback)
-- [ ] Verify (not change) CLI `iterate approve` and menubar behave sanely on a grouped burst
+- [x] NotificationProcessor: consume `human-approval-granted/rejected/settled`; per-executionId reduced state `{windowOpensAt, heldOffsets[], notifiedThroughOffset}`; alarm scheduling; window-close handler as a plain unit-testable function (no real sleeps — hard requirement) _`approvalGroups` in `notification-processor-contract.ts` (members record carries per-offset host/ruleKey/resolved); `fireDueApprovalGroupWindows()` + pure helpers (`approvalGroupFireAtMs`, `nextApprovalGroupWakeAtMs`, `approvalGroupPushBody`) in `notification-processor-implementation.ts`; project DO arms a "notification" alarm slice and calls the fire handler from `alarm()`_
+- [x] Group push intent: summary body (counts by host), `approvals-group` destination kind (additive union member), idempotency key `notification/approval-group@<executionId>:<firstWindowOffset>` _destination union member in `notification-intent-contract.ts`; itx-api regenerated_
+- [x] Suppress-if-empty at fire time + state pruning _fire handler skips empty open sets; reduce prunes an entry once every member is resolved-or-expired (per the reducing event's createdAt — pure fold), which also covers all-resolved-before-fire; past-due unclosable windows re-check on a bounded cadence instead of hot-looping_
+- [x] Mobile: bucket by executionId in `deriveOpenRequests` (or alongside), grouped header UI, expand/collapse, per-request escape hatch _`groupOpenRequests`/`groupHostBreakdown` in `apps/mobile/src/lib/approvals.ts`; `ApprovalGroupCard` in `approvals.tsx` (header count = pending only, expand renders individual `ApprovalCard`s, singletons unchanged)_
+- [x] Mobile: `signManyWithApproverKey` in `approver.ts` / `approver-core.ts`; best-effort append loop with progress + retry-pending UI _one authenticated Keychain read → N @noble signatures (`approver.ts`; `signWithApproverKey` now delegates); `grantMany`/`rejectMany` append sequentially with progress; the group header shows "granting 3/12…" from a query-cache progress entry_
+- [x] Mobile: route `approvals-group` deep link → expand + highlight group; keep `approvals` kind working _`notification-routing.ts` maps `{kind: "approvals-group", executionId}` → approvals screen `approvalGroupExecutionId` param; the screen floats/expands/highlights that group; `approvals` untouched_
+- [x] Unit tests: window open/extend/cap, late-arrival new window, suppress-if-empty, pruning, full-open-set counting across windows _7 new specs in `notification-processor.test.ts`, all on the virtual-clock harness with direct fire calls (plus crashed-wake observe-and-skip and independent concurrent executions)_
+- [x] e2e: at most one real-time smoke of a grouped burst (extend `egress-approvals.e2e.test.ts` pattern) _one smoke: 4-POST burst → one `approvals-group` intent one debounce window later, grants release the script; passed against a live local dev server_
+- [x] Demo recipe: hold rule on disposable echo host + itx script doing `Promise.all` of ~12 POSTs; PR body gets phone-trial instructions (metro + OS dev server over tailscale; captun fallback) _`apps/os/scripts/demo-grouped-approvals.ts`, registered as `pnpm cli demo-grouped-approvals run`; commands below_
+- [x] Verify (not change) CLI `iterate approve` and menubar behave sanely on a grouped burst _verified by inspection: `approve-core.ts:191` watches only the four `human-approval-*` types (never notification intents), so a burst is just N ordinary requests to it; the menubar (`Iterate.swift:320-344`) drives its own per-request local banners from the same unchanged vocabulary — its banner flood remains the named follow-up. Zero code changes._
+
+## Demo recipe (local dev)
+
+```bash
+# 0. dev server running in this worktree
+pnpm dev start --detach
+
+# 1. a disposable project to demo against (its egress rules get REPLACED)
+doppler run --config dev -- pnpm cli itx run -e 'return (await itx.projects.get("grouped-approvals-demo").create({})).__describe()'
+
+# 2. fire the burst (starts its own localhost echo; default 12 POSTs)
+cd apps/os
+doppler run --config dev -- pnpm cli demo-grouped-approvals run --project prj_… [--requests 12]
+```
+
+The command prints the collapsed push intent as the window fires, then blocks until the holds are decided. Phone side (Misha's setup): phone on the tailnet, dev client + metro running, app pointed at this dev server's base URL over tailscale (captun as fallback for a public URL), device enrolled for push + approval key on the project. Expect ONE push ~3s after the burst; tapping it deep-links to the expanded group; Approve all = one Face ID; the script then resolves with twelve 200s. Laptop-only fallback: `iterate approve` grants them individually.
 
 ## Out of scope
 
@@ -43,11 +59,18 @@ Enabling a `hold` egress rule (e.g. gmail) floods the approver: a script run doi
 
 ## Guesses and assumptions
 
-- 3s/10s debounce numbers are taste — tunable constants `[guess]`
-- One SecureStore retrieval → one Face ID prompt covers N signatures (confirm on device) `[guess]`
+- 3s/10s debounce numbers are taste — tunable constants `[guess]` _shipped as `APPROVAL_GROUP_DEBOUNCE_WINDOW_MS`/`APPROVAL_GROUP_DEBOUNCE_CAP_MS`_
+- One SecureStore retrieval → one Face ID prompt covers N signatures (confirm on device) `[guess]` _still needs the on-device confirmation — JS-only change, runs on the existing dev client_
 - Script source is the approver's real trust signal, so surface it from the group header `[guess]`
-- Pruning on all-resolved-or-expired suffices; no separate GC sweep `[guess]`
-- CLI/menubar need verification only, zero code changes `[guess]`
+- Pruning on all-resolved-or-expired suffices; no separate GC sweep `[guess]` _held: reduce prunes on resolved-or-expired per event createdAt; the only residual is a group whose expiry rejections never land, which re-checks on a bounded alarm cadence_
+- CLI/menubar need verification only, zero code changes `[guess]` _confirmed, see checklist_
+
+## Implementation log
+
+- Debounce state machine, contract, DO alarm-slice wiring, unit tests: commit `bc7d5f53c`. Mobile lib (`groupOpenRequests`, `signManyWithApproverKey`, `grantMany`): `1c03cc15d`. Grouped UI + deep link: `04962347a`. Demo CLI + e2e smoke: `199ac3379`.
+- Design deviation (small): pruning does NOT wait for the window to fire — a group whose members are all resolved/expired has nothing left to push, so the suppress-if-empty outcome is reached by pruning early; the alarm's fire pass then finds no due group. Same observable behavior, simpler fold.
+- The summary intent closes its window by being consumed back through the processor (it's in `consumes`), keeping the whole state machine a pure fold; a fire-time crash replays into an observe-and-skip on the idempotency key.
+- Pre-existing, unrelated: `egress-approvals.e2e.test.ts` › "approved worker WebSocket egress stays on the fetch-native transport" fails on THIS laptop's local dev servers ("WebSocket echo failed") — reproduced identically at the merge-base commit `109a5714c` in a clean control worktree, so not introduced by this branch.
 
 ## For the next pass (follow-ups)
 
