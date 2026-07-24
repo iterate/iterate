@@ -94,10 +94,10 @@ export async function waitForPreviewIteratePackage(
     timeoutMs?: number;
   } = {},
 ): Promise<void> {
-  const fetchPackage = dependencies.fetch ?? fetch;
-  const now = dependencies.now ?? Date.now;
+  const fetchPackage = dependencies.fetch || fetch;
+  const now = dependencies.now || Date.now;
   const sleep =
-    dependencies.sleep ??
+    dependencies.sleep ||
     (async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const timeoutMs = dependencies.timeoutMs ?? PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS;
   const deadline = now() + timeoutMs;

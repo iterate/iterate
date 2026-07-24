@@ -62,21 +62,16 @@ export function parseSandboxCreateForm(input: SandboxCreateFormValues): {
   path: string;
 } {
   const parsed = SandboxCreateFormSchema.parse(input);
-  const path = sandboxPathFor(parsed.name);
-  if (parsed.keepAlive) {
-    return {
-      path,
-      input: {
-        instanceType: parsed.instanceType,
-        keepAlive: true,
-      },
-    };
-  }
   return {
-    path,
-    input: {
-      instanceType: parsed.instanceType,
-      sleepAfter: parsed.sleepAfter,
-    },
+    path: sandboxPathFor(parsed.name),
+    input: parsed.keepAlive
+      ? {
+          instanceType: parsed.instanceType,
+          keepAlive: true,
+        }
+      : {
+          instanceType: parsed.instanceType,
+          sleepAfter: parsed.sleepAfter,
+        },
   };
 }

@@ -20,8 +20,8 @@ export function githubRepoCreateRequest(
   connection: string,
 ): RepoCreateInput {
   const github = { connection, owner: repo.owner, repo: repo.name };
-  if (repo.private) return { ...github, type: "github-private" };
-  return { ...github, depth: 1, type: "github-public" };
+  // oxfmt-ignore
+  return repo.private ? { ...github, type: "github-private" } : { ...github, depth: 1, type: "github-public" };
 }
 
 /** Repo creation currently adopts GitHub's `main` history. Reject unsupported
