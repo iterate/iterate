@@ -4,9 +4,9 @@ import { StreamContext } from "../projects/stream-context.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { DynamicWorkerSource, WorkerFileSource } from "./schemas.ts";
 import {
-  isWorkerBuildFailedError,
   KvWorkerBuildArtifactStore,
   type WorkerBuildArtifact,
+  type WorkerBuildFailure,
   type WorkerBuildModule,
 } from "./artifact-store.ts";
 import { workerBuildKey, type ResolvedWorkerFileSource } from "./build-key.ts";
@@ -29,6 +29,9 @@ export type ResolvedWorkerSource = {
   modules: Record<string, WorkerBuildModule>;
   wranglerConfig: WorkerBuildArtifact["wranglerConfig"];
 };
+export type ResolvedWorkerSourceResult =
+  | { ok: true; source: ResolvedWorkerSource }
+  | { failure: WorkerBuildFailure; ok: false };
 export type WorkerBindings = Record<string, unknown>;
 
 const resolvedArtifactMemo = new Map<string, ResolvedWorkerSource>();
@@ -43,7 +46,7 @@ export async function resolveWorkerSource({
   buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
-}): Promise<ResolvedWorkerSource> {
+}): Promise<ResolvedWorkerSourceResult> {
   return await resolveThroughBuild({ buildBudgetMs, projectId, source });
 }
 
@@ -51,7 +54,7 @@ async function resolveThroughBuild(input: {
   buildBudgetMs?: number;
   projectId: string;
   source: DynamicWorkerSource;
-}): Promise<ResolvedWorkerSource> {
+}): Promise<ResolvedWorkerSourceResult> {
   const iteratePackageSpec = env.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC?.trim() || undefined;
   const resolved = await resolveFileSource({
     files:
@@ -65,16 +68,23 @@ async function resolveThroughBuild(input: {
     iteratePackageSpec,
     source: input.source,
   });
-  const artifact =
-    resolvedArtifactMemo.get(buildKey) ??
-    (await resolveArtifact(buildKey, {
-      buildBudgetMs: input.buildBudgetMs,
-      projectId: input.projectId,
-      resolved,
-      iteratePackageSpec,
-      source: input.source,
-    }));
-  return resolved.type === "repo" ? { ...artifact, commitOid: resolved.commitOid } : artifact;
+  const memoized = resolvedArtifactMemo.get(buildKey);
+  const built =
+    memoized === undefined
+      ? await resolveArtifact(buildKey, {
+          buildBudgetMs: input.buildBudgetMs,
+          projectId: input.projectId,
+          resolved,
+          iteratePackageSpec,
+          source: input.source,
+        })
+      : { ok: true as const, source: memoized };
+  if (!built.ok) return built;
+  return {
+    ok: true,
+    source:
+      resolved.type === "repo" ? { ...built.source, commitOid: resolved.commitOid } : built.source,
+  };
 }
 
 async function resolveArtifact(
@@ -86,10 +96,10 @@ async function resolveArtifact(
     iteratePackageSpec?: string;
     source: DynamicWorkerSource;
   },
-): Promise<ResolvedWorkerSource> {
+): Promise<ResolvedWorkerSourceResult> {
   const store = new KvWorkerBuildArtifactStore(env.WORKER_BUILD_CACHE);
   const artifact = await store.get(buildKey);
-  if (artifact !== null) return memoizeArtifact(artifact);
+  if (artifact !== null) return { ok: true, source: memoizeArtifact(artifact) };
 
   const request: WorkerBuildRequest = {
     buildKey,
@@ -99,16 +109,12 @@ async function resolveArtifact(
     source: context.source,
   };
   const operation = coordinateWorkerBuild(request, context.buildBudgetMs);
-  let built: WorkerBuildArtifact | undefined;
+  let built: Awaited<typeof operation> | undefined;
   try {
     built = await operation;
-    return memoizeArtifact(built);
-  } catch (error) {
-    // Workers RPC preserves the error name but not arbitrary properties. Add
-    // the stream delivery verdict after the coordinator hop so a deterministic
-    // source failure parks its subscriber instead of entering backoff.
-    if (isWorkerBuildFailedError(error)) Object.assign(error, { retryable: false });
-    throw error;
+    return built.ok
+      ? { ok: true, source: memoizeArtifact(built.artifact) }
+      : { failure: built.failure, ok: false };
   } finally {
     // RPC adds a disposal group to object results even when they contain only
     // data today. Memoization copied the fields we retain, so release it now.
