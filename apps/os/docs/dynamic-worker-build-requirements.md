@@ -89,6 +89,13 @@ KV stores one complete modules/assets JSON record per successful key with a
 distinguish deterministic source failures from transient registry or runtime
 failures; a later request tries again.
 
+Expected compiler rejection crosses the build coordinator as a JSON-safe
+result (`{ ok: false, failure: { kind: "source", message } }`). Repo, KV,
+sidecar transport, and programming failures still throw. Stateful capability
+dispatch keeps the source-failure result as data through its outer Durable
+Object hop, then creates the public terminal error locally; this avoids
+depending on custom `Error` properties, which Workers RPC does not preserve.
+
 KV is only the immutable result cache, never a lock: [its eventually
 consistent model](https://developers.cloudflare.com/kv/concepts/how-kv-works/#consistency)
 has no atomic lease primitive. After the caller's fast KV read misses, every

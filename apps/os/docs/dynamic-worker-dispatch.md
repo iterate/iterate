@@ -129,6 +129,12 @@ RPC calls wait for the build and receive the named error instead. There is no
 stale artifact, last-good pointer, distributed build lock, or background
 refresh policy.
 
+That named error is created at the public caller boundary. Internally, source
+failure remains a plain discriminated result through the coordinator and, for
+stateful workers, the hosting Durable Object. Infrastructure failures remain
+exceptions. This keeps delivery policy intact across Workers RPC without
+reconstructing properties stripped from serialized errors.
+
 Ingress itself answers through one serve envelope
 (`serveProjectResponse`, domains/workers/project-serve.ts): budget, the
 stand-in pages, the overlay, and a catch-all — any serve failure that is not

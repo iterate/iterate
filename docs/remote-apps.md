@@ -20,30 +20,17 @@ the whole integration. Delete them and the app knows nothing.
 ## The front door: a few lines in your config worker
 
 ```ts
-// worker.ts in /repos/config — the "tasks" app branch.
-if (app === "tasks") {
-  // (a) Platform auth: login redirect for strangers, denial for
-  // non-members, null for a current project member. Local token
-  // verification — no per-request auth-worker hop.
-  const denied = await itx.auth.get({ policy: "project-member" }).fetch(request);
-  if (denied) return denied;
+import { TasksApp } from "@iterate-com/tasks";
 
-  // (b) Transparent proxy to the externally deployed vessel. The platform
-  // ingress already stamped x-itx-project-id; the user's session rides the
-  // iterate-project-auth cookie. HTTP responses and WebSocket 101s both
-  // tunnel straight through.
-  const url = new URL(request.url);
-  url.protocol = "https:";
-  url.host = "tasks.iterate.workers.dev";
-  return fetch(
-    new Request(url, {
-      method: request.method,
-      headers: request.headers,
-      body: request.body,
-      redirect: "manual",
-    }),
-  );
-}
+const tasksApp = TasksApp.create(this.env, {
+  auth: { policy: "project-member" },
+  proxy: {
+    origin: "https://tasks.iterate.workers.dev",
+    originOverrideKvKey: "tasks-app-origin",
+  },
+});
+
+if (app === "tasks") return tasksApp.fetch(request);
 ```
 
 Commit that and `https://tasks--<slug>.iterate.app` works: sign-in is the
@@ -111,7 +98,7 @@ wherever a human is present, and rotate the key with an ordinary
 
 ## Developing your app against a live project
 
-The proxy target is just a hostname your config worker computes, which makes
+The proxy origin is just a URL your config worker computes, which makes
 "run the vessel on my laptop, use it with my production project" a two-piece
 trick: a tunnel, and a knob.
 
@@ -131,19 +118,14 @@ CAPTUN_TUNNEL_NAME=jonas-tasks CAPTUN_TOKEN=… pnpm dev
 
 **The knob** is `itx.kv` — the small durable project key-value store
 (Workers KV, project-scoped, no Durable Object in the read path, so the
-config worker can consult it on every request for microseconds). Make the
-proxy target dynamic with prod as the fallback:
-
-```ts
-const target =
-  ((await itx.kv.get("tasks-app-origin")) as string | null) ?? "tasks.iterate.workers.dev";
-url.host = target;
-```
+connector can consult it on every request for microseconds). The
+`originOverrideKvKey` option above makes its value override the configured
+production origin. Both values are complete HTTPS origins.
 
 Flip to your laptop and back with one CLI call — no commit, no rebuild:
 
 ```bash
-pnpm cli itx run --context prj_… -e 'await itx.kv.set("tasks-app-origin", "jonas-tasks.tunnels.iterate.com")'
+pnpm cli itx run --context prj_… -e 'await itx.kv.set("tasks-app-origin", "https://jonas-tasks.tunnels.iterate.com")'
 pnpm cli itx run --context prj_… -e 'await itx.kv.delete("tasks-app-origin")'
 ```
 
@@ -158,7 +140,11 @@ const actor = await itx.auth
   .authenticate(req, { type: "from-server-cookie" });
 const devOrigin =
   actor.userId === MY_USER_ID ? await itx.kv.get(`dev-origin:${actor.userId}`) : null;
-url.host = (devOrigin as string | null) ?? "tasks.iterate.workers.dev";
+const origin = new URL(
+  typeof devOrigin === "string" ? devOrigin : "https://tasks.iterate.workers.dev",
+);
+url.protocol = origin.protocol;
+url.host = origin.host;
 ```
 
 The security posture is unchanged: the tunnel URL is public but the vessel

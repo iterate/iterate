@@ -20,10 +20,12 @@
  *      steady-state redeploy are all the same single command).
  *   4. Smoke-probe the deployed base URL; exit nonzero unless the env is
  *      actually serving.
- *   5. Before touching any deployed resource, assert that retired secret
- *      bindings are absent from the live Worker and that the removed auth
- *      service token is absent from Doppler too. After deploy, force an
- *      uncached project-directory lookup through AUTH.
+ *   5. Before touching any deployed resource, delete retired secret bindings
+ *      still carried by the live Worker (deploy scripts are their only
+ *      writer, so lingering ones are just stale deploys — verified removed)
+ *      and assert the removed auth service token is absent from Doppler
+ *      (human-edited: fail closed). After deploy, force an uncached
+ *      project-directory lookup through AUTH.
  *
  * The worker script is never deleted and routes are ensure-only, so a deploy
  * can never strand the env's hostnames (the old zombie-route/522 class).
@@ -36,12 +38,14 @@ import { bakeStaticAuthJwks } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import {
   assertDopplerSecretAbsent,
-  assertWorkerSecretAbsent,
+  removeWorkerSecrets,
   runAsync,
   smokeResponse,
 } from "../../../scripts/lib/deploy-helpers.ts";
 import { ensureContainerClasses } from "../../../scripts/lib/do-reset.ts";
 import { parseConfig } from "../src/config.ts";
+import { templateIterateRepoPkgSpecs } from "../src/domains/repos/project-repo-seed.ts";
+import { pinIterateRepoPkgRef } from "../src/pkg-pr-new.ts";
 import {
   SANDBOX_INSTANCE_TYPE_BINDINGS,
   SANDBOX_INSTANCE_TYPES,
@@ -59,9 +63,9 @@ import { ensureR2Bucket } from "./ensure-resources.ts";
 import { ensureInboundEmailRouting } from "./email-routing-resources.ts";
 
 const PREVIEW_PETSHOP_CONFIG = "APP_CONFIG_INTEGRATIONS__PETSHOP";
-const PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
-const PREVIEW_ITERATE_PACKAGE_POLL_MS = 1_000;
-const PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
+const PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS = 120_000;
+const PREVIEW_PACKAGE_POLL_MS = 1_000;
+const PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS = 10_000;
 const RETIRED_QUEUE_PAGE_SIZE = 100;
 const RETIRED_WORKER_QUEUE_CONSUMERS = [
   { label: "Artifact event", suffix: "-events" },
@@ -80,12 +84,22 @@ const RetiredQueueConsumer = z.object({
 });
 
 /**
+ * Every pkg.pr.new URL a preview pinned to `ref` will install: the config
+ * repo template's iterate/iterate specs (project-repo-seed.ts scans the
+ * manifests — name-agnostic, so template packages come and go without deploy
+ * changes), each with its `@<ref>` swapped for the pinned SHA.
+ */
+export function previewPackageSpecsToAwait(ref: string): string[] {
+  return templateIterateRepoPkgSpecs().map((spec) => pinIterateRepoPkgRef(spec, ref)!);
+}
+
+/**
  * pkg.pr.new publishes a PR head in a separate GitHub Actions workflow. The
- * Depot preview can start first, so make the exact immutable tarball an
+ * Depot preview can start first, so make each exact immutable tarball an
  * explicit deployment prerequisite. This runs beside the Vite build and
  * sidecar uploads; the healthy path adds no critical-path work.
  */
-export async function waitForPreviewIteratePackage(
+export async function waitForPreviewPackage(
   packageSpec: string,
   dependencies: {
     fetch?: typeof fetch;
@@ -99,7 +113,7 @@ export async function waitForPreviewIteratePackage(
   const sleep =
     dependencies.sleep ||
     (async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_ITERATE_PACKAGE_AVAILABILITY_TIMEOUT_MS;
+  const timeoutMs = dependencies.timeoutMs ?? PREVIEW_PACKAGE_AVAILABILITY_TIMEOUT_MS;
   const deadline = now() + timeoutMs;
   let lastFailure = "No response received.";
 
@@ -110,11 +124,11 @@ export async function waitForPreviewIteratePackage(
         method: "HEAD",
         redirect: "follow",
         signal: AbortSignal.timeout(
-          Math.max(1, Math.min(PREVIEW_ITERATE_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
+          Math.max(1, Math.min(PREVIEW_PACKAGE_REQUEST_TIMEOUT_MS, deadline - now())),
         ),
       });
       if (response.ok) {
-        console.log(`preview iterate package available: ${packageSpec}`);
+        console.log(`preview package available: ${packageSpec}`);
         return;
       }
       lastFailure = `HTTP ${response.status}`;
@@ -122,11 +136,11 @@ export async function waitForPreviewIteratePackage(
       lastFailure = error instanceof Error ? error.message : String(error);
     }
 
-    await sleep(Math.min(PREVIEW_ITERATE_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
+    await sleep(Math.min(PREVIEW_PACKAGE_POLL_MS, Math.max(0, deadline - now())));
   }
 
   throw new Error(
-    `Timed out waiting ${timeoutMs}ms for the preview iterate package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
+    `Timed out waiting ${timeoutMs}ms for the preview package ${packageSpec}. Last check: ${lastFailure}. The pkg.pr.new GitHub Actions publish must succeed before this preview can deploy.`,
   );
 }
 
@@ -313,22 +327,28 @@ export default async function deploy(
     optionalSecrets: OPTIONAL_SECRETS,
     buildEnv: (ctx) => posthogBuildEnv(ctx.name, ctx.secrets),
     prepare: async (ctx, secretValues) => {
-      // These are permanent fail-closed invariants, not a migration path.
-      // Omitted Wrangler secrets survive code uploads, so check the current
-      // Worker before any sidecar or OS version can be deployed.
+      // Doppler is human-edited, so a retired secret reappearing there is
+      // config drift that needs a human: fail closed, never auto-fix.
       assertDopplerSecretAbsent({
         project: "os",
         config: ctx.env.dopplerConfig,
         secretName: RETIRED_AUTH_SERVICE_TOKEN,
         secrets: ctx.secrets,
       });
-      for (const secretName of RETIRED_WORKER_SECRETS) {
-        await assertWorkerSecretAbsent({
-          cf: ctx.cf,
-          workerName: ctx.env.osWorkerName,
-          secretName,
-        });
-      }
+      // Worker secrets have exactly one writer — this deploy pipeline (and
+      // the erase/handover flows). Omitted secrets survive `--secrets-file`
+      // uploads, so the only way a retired name can linger is a Worker last
+      // deployed by older code; deleting it here (loudly, verified) converges
+      // every deploy to the current contract. An assert instead of a delete
+      // proved sticky for previews: a lease RENEWAL deliberately skips the
+      // erase-on-acquire, and each failed deploy renews the lease, so a slot
+      // carrying a retired binding could never reach the erase that would
+      // have healed it.
+      await removeWorkerSecrets({
+        cf: ctx.cf,
+        workerName: ctx.env.osWorkerName,
+        secretNames: RETIRED_WORKER_SECRETS,
+      });
 
       // Derive Auth's public key locally from the shared Doppler private key.
       // The private half never ships to OS, and this deploy never waits on Auth.
@@ -339,16 +359,17 @@ export default async function deploy(
       });
 
       // Preview deploys pass their PR head sha (scripts/preview/preview.ts)
-      // so project seeds and every dynamic build use that exact commit's
-      // pkg.pr.new build of `iterate` instead of the template's @main — e2e
-      // tests then exercise the branch tip, pinned (unlike @<pr>/@main, which
-      // are moving refs). The pkg-pr-new GHA workflow publishes under
-      // the PR HEAD sha on every push, so the URL exists by the time anything
-      // npm-installs a seeded repo. Unset everywhere else (prod, local dev,
-      // direct doppler-run deploys), leaving the template untouched.
+      // so project seeds and every dynamic build pin the template's
+      // iterate/iterate pkg.pr.new specs to that exact commit's builds
+      // instead of @main — e2e tests then exercise the branch tip, pinned
+      // (unlike @<pr>/@main, which are moving refs). The pkg-pr-new GHA
+      // workflow publishes every first-party package under the PR HEAD sha on
+      // every push, so the URLs exist by the time anything npm-installs a
+      // seeded repo. Unset everywhere else (prod, direct doppler-run
+      // deploys), leaving each repo's specs untouched.
       const previewHeadSha = process.env.PREVIEW_PULL_REQUEST_HEAD_SHA;
       if (previewHeadSha) {
-        secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC = `https://pkg.pr.new/iterate/iterate/iterate@${previewHeadSha}`;
+        secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF = previewHeadSha;
       }
 
       assertPreviewPetshopIntegrationConfigured(ctx.name, secretValues);
@@ -425,9 +446,11 @@ export default async function deploy(
           }
         })(),
       ];
-      const packageSpec = secretValues.APP_CONFIG_ITERATE_SDK_PACKAGE_SPEC;
-      if (packageSpec) {
-        tasks.push(waitForPreviewIteratePackage(packageSpec));
+      const previewPkgRef = secretValues.APP_CONFIG_ITERATE_REPO_PKG_REF;
+      if (previewPkgRef) {
+        tasks.push(
+          ...previewPackageSpecsToAwait(previewPkgRef).map((spec) => waitForPreviewPackage(spec)),
+        );
       }
 
       const results = await Promise.allSettled(tasks);
