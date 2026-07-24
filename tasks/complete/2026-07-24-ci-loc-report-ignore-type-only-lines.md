@@ -60,3 +60,5 @@ column.
   release checks at `2a6f53131`; repeated review-thread polling found none.
 - Bugbot caught that `transpileModule` throws for declaration filenames. A red integration case
   reproduced all three declaration extensions; the early empty representation makes them raw-only.
+- Bugbot's re-review caught an unexplained source-map JSON cast. The compiler boundary now validates
+  `mappings` from `unknown` and fails clearly on malformed output, with no cast.

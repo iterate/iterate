@@ -158,7 +158,15 @@ function significantLines(content: string, path: string) {
       },
     });
     if (!transpiled.sourceMapText) throw new Error(`TypeScript emitted no source map for ${path}`);
-    const sourceMap = JSON.parse(transpiled.sourceMapText) as { mappings: string };
+    const sourceMap: unknown = JSON.parse(transpiled.sourceMapText);
+    if (
+      typeof sourceMap !== "object" ||
+      sourceMap === null ||
+      !("mappings" in sourceMap) ||
+      typeof sourceMap.mappings !== "string"
+    ) {
+      throw new Error(`TypeScript emitted an invalid source map for ${path}`);
+    }
     runtimeLines = new Set(
       decode(sourceMap.mappings).flatMap((line) =>
         line.flatMap((segment) => {
